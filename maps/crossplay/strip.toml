@@ -42,7 +42,7 @@ cells."22,3" = { kind = "fence" }
 cells."23,3" = { kind = "fence" }
 cells."1,5" = { kind = "pickup", pickup = "health" }
 cells."4,5" = { kind = "start" }
-cells."6,5" = { kind = "frog" }
+cells."6,5" = { kind = "bong" }
 cells."11,5" = { kind = "road" }
 cells."12,5" = { kind = "road" }
 cells."13,5" = { kind = "road" }

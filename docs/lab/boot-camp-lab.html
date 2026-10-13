@@ -151,7 +151,7 @@ pre .s { color: var(--amber); }
   <header>
     <div class="eyebrow">Concept lab · level 0 · before Lotus Lagoon</div>
     <h1>BOOT CAMP</h1>
-    <p>A first training stage that teaches driving, crates, firing, the frog and the first enemy in about three minutes, with your frog as the only guide. Drive it below with <kbd>ARROWS</kbd> or <kbd>WASD</kbd> and <kbd>SPACE</kbd>. Switch KEYS / TOUCH on the right to hear how the frog's words change. Nothing here is engine code yet.</p>
+    <p>A first training stage that teaches driving, crates, firing, the bong and the first enemy in about three minutes, with your bong as the only guide. Drive it below with <kbd>ARROWS</kbd> or <kbd>WASD</kbd> and <kbd>SPACE</kbd>. Switch KEYS / TOUCH on the right to hear how the bong's words change. Nothing here is engine code yet.</p>
   </header>
 
   <div class="lab">
@@ -171,7 +171,7 @@ pre .s { color: var(--amber); }
       </div>
       <div class="under">
         <span class="clock" id="clock">0:00</span>
-        <span>A 48 x 13 field map: the camera follows you. A red arrow at the edge points to a tank off screen, a green one to the frog.</span>
+        <span>A 48 x 13 field map: the camera follows you. A red arrow at the edge points to a tank off screen, a green one to the bong.</span>
       </div>
     </div>
 
@@ -179,7 +179,7 @@ pre .s { color: var(--amber); }
       <div class="group">
         <h3>DECIDED</h3>
         <ul class="decided">
-          <li><b>Frog guide only.</b> No signs, paint or HUD card.</li>
+          <li><b>Bong guide only.</b> No signs, paint or HUD card.</li>
           <li><b>Short lines, no name.</b> Eight words or fewer once enemies are out.</li>
           <li><b>Level 0, skippable.</b> Tile 0 in the level select.</li>
           <li><b>All six beats.</b> About three minutes.</li>
@@ -192,7 +192,7 @@ pre .s { color: var(--amber); }
           <button type="button" id="m-keys" aria-pressed="true">KEYS</button>
           <button type="button" id="m-touch" aria-pressed="false">TOUCH</button>
         </div>
-        <small style="color:var(--chalk-dim);font-size:13px;line-height:1.35">The game already flips its words between keys and taps (<code>hud::Hints</code>). The frog's lines follow the same switch.</small>
+        <small style="color:var(--chalk-dim);font-size:13px;line-height:1.35">The game already flips its words between keys and taps (<code>hud::Hints</code>). The bong's lines follow the same switch.</small>
       </div>
       <div class="group">
         <h3>BEATS</h3>
@@ -208,21 +208,21 @@ pre .s { color: var(--amber); }
     <p class="lede">Each pen teaches one idea and the gate out of it opens only when the player has done it once. Nothing is read before it is needed, and every lesson is something the player does rather than something they are told.</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>BEAT</th><th>TEACHES</th><th>DONE WHEN</th><th>FROG SAYS</th><th>ENGINE</th></tr></thead>
+        <thead><tr><th>BEAT</th><th>TEACHES</th><th>DONE WHEN</th><th>BONG SAYS</th><th>ENGINE</th></tr></thead>
         <tbody id="beat-table"></tbody>
       </table>
     </div>
   </section>
 
   <section>
-    <div class="eyebrow">02 · The frog's voice</div>
+    <div class="eyebrow">02 · The bong's voice</div>
     <h2>Rules for every line</h2>
-    <p class="lede">With signs and the HUD card out, the frog carries every rule. These keep it readable in a fight and cheap to translate.</p>
+    <p class="lede">With signs and the HUD card out, the bong carries every rule. These keep it readable in a fight and cheap to translate.</p>
     <div class="cards">
       <article class="card"><span class="k">LENGTH</span><h3>Eight words, then less</h3><p>A line is at most eight words, and in beats 5 and 6 four or fewer. The bubble reveals word by word and stays up for as long as the line needs to be read.</p></article>
       <article class="card"><span class="k">INPUT</span><h3>Keys or taps, never both</h3><p>A line that names a control has a keys and a touch version, picked by the input last used (<code>hud::Hints</code>). <kbd>SPACE</kbd> becomes "tap the right half".</p></article>
-      <article class="card"><span class="k">NUDGE</span><h3>Repeat the point when stuck</h3><p>After 14 seconds with nothing said, the frog repeats the one thing the beat needs ("The ammo crate is up north."). This replaces the signs a lost player would have reread.</p></article>
-      <article class="card"><span class="k">OFF SCREEN</span><h3>A green arrow to the frog</h3><p>When the frog is out of view, a green arrow at the edge points to it and carries a FROG tag while it talks. It's the same arrow kind the indicators already draw for frogs.</p></article>
+      <article class="card"><span class="k">NUDGE</span><h3>Repeat the point when stuck</h3><p>After 14 seconds with nothing said, the bong repeats the one thing the beat needs ("The ammo crate is up north."). This replaces the signs a lost player would have reread.</p></article>
+      <article class="card"><span class="k">OFF SCREEN</span><h3>A green arrow to the bong</h3><p>When the bong is out of view, a green arrow at the edge points to it and carries a BONG tag while it talks. It's the same arrow kind the indicators already draw for bongs.</p></article>
     </div>
   </section>
 
@@ -231,10 +231,10 @@ pre .s { color: var(--amber); }
     <h2>Ideas parked for later</h2>
     <ul class="ideas">
       <li><b>Ghost demo tank</b><span>A translucent tank drives the pen's lesson once (a slide into a turn, a shot at the wall), then fades. Shows momentum better than words.</span></li>
-      <li><b>No failure, only a gate</b><span>Down in training puts you back at the last gate with full health, as here. A lost frog replays the beat, not the course.</span></li>
+      <li><b>No failure, only a gate</b><span>Down in training puts you back at the last gate with full health, as here. A lost bong replays the beat, not the course.</span></li>
       <li><b>Par time and a medal</b><span>The round clock already exists. A bronze, silver and gold time gives returning players a reason to replay level 0.</span></li>
-      <li><b>Signs later</b><span>If the frog alone proves too little, signposts are the cheapest add-on: a map cell and a card, and the builder could place them too.</span></li>
-      <li><b>Dummy tanks</b><span>The first enemy shoots only at the frog and never at the player, so the first fight is about protecting rather than surviving.</span></li>
+      <li><b>Signs later</b><span>If the bong alone proves too little, signposts are the cheapest add-on: a map cell and a card, and the builder could place them too.</span></li>
+      <li><b>Dummy tanks</b><span>The first enemy shoots only at the bong and never at the player, so the first fight is about protecting rather than surviving.</span></li>
       <li><b>Hide in the grass</b><span>A bonus pen with tall grass and an enemy that loses sight of you. Teaches concealment, which no level spells out today.</span></li>
       <li><b>Couch and online</b><span>Two seats share the course; each gate waits for both tanks. Online, the room runs the script and signs travel as map cells.</span></li>
     </ul>
@@ -245,13 +245,13 @@ pre .s { color: var(--amber); }
     <h2>Engine sketch</h2>
     <div class="two">
       <div style="display:grid;gap:12px">
-        <p class="lede">Training is a field map like any other, plus a short script. Most of what the course needs exists: crates, air drops, gates, the frog, waves, the follow camera, the Hints switch. New are beat triggers, doors that open on a beat, a scripted frog path and its speech bubble.</p>
+        <p class="lede">Training is a field map like any other, plus a short script. Most of what the course needs exists: crates, air drops, gates, the bong, waves, the follow camera, the Hints switch. New are beat triggers, doors that open on a beat, a scripted bong path and its speech bubble.</p>
         <ul class="qs" style="padding-left:18px">
           <li><b>Map cell:</b> <code>door</code>, an iron run bound to a beat that slides open when the beat is done.</li>
-          <li><b>Script:</b> a <code>[training]</code> list of beats, each a trigger (<code>flags</code>, <code>collect</code>, <code>destroy</code>, <code>heal_frog</code>, <code>kill</code>) and what it starts (open a door, drop a crate, roll a tank in through a gate).</li>
+          <li><b>Script:</b> a <code>[training]</code> list of beats, each a trigger (<code>flags</code>, <code>collect</code>, <code>destroy</code>, <code>heal_bong</code>, <code>kill</code>) and what it starts (open a door, drop a crate, roll a tank in through a gate).</li>
           <li><b>Mission:</b> <code>Mission::Training</code>, so the end screen says TRAINING COMPLETE and leads to level 1. First in <code>levels.toml</code> as <code>boot-camp</code>; a progress file already past level 1 opens on Lotus Lagoon.</li>
-          <li><b>Frog:</b> each beat names a spot; the frog hops there through the open doors and says the beat's lines (<code>say</code>, with <code>keys</code>/<code>touch</code> variants and a <code>nudge</code>). The bubble is a new painter beside the HUD.</li>
-          <li><b>Words:</b> <code>frog-*</code> keys in <code>lang/en.ftl</code> and <code>sl.ftl</code>, held to the bubble's width by the existing budget test.</li>
+          <li><b>Bong:</b> each beat names a spot; the bong hops there through the open doors and says the beat's lines (<code>say</code>, with <code>keys</code>/<code>touch</code> variants and a <code>nudge</code>). The bubble is a new painter beside the HUD.</li>
+          <li><b>Words:</b> <code>bong-*</code> keys in <code>lang/en.ftl</code> and <code>sl.ftl</code>, held to the bubble's width by the existing budget test.</li>
           <li><b>Determinism:</b> triggers are pure checks on round state, no RNG, so a seeded replay and the probe still hold.</li>
         </ul>
       </div>
@@ -266,14 +266,14 @@ beat = <span class="s">"drive"</span>
 [[training.beat]]
 id = <span class="s">"drive"</span>
 done = { flags = 3 }
-frog = [5, 4]
-say = [<span class="s">"frog-hello"</span>, <span class="s">"frog-drive"</span>, <span class="s">"frog-flags"</span>]
-nudge = <span class="s">"frog-drive-nudge"</span>
+bong = [5, 4]
+say = [<span class="s">"bong-hello"</span>, <span class="s">"bong-drive"</span>, <span class="s">"bong-flags"</span>]
+nudge = <span class="s">"bong-drive-nudge"</span>
 
 [[training.beat]]
-id = <span class="s">"frog"</span>
-start = { shoot_frog = <span class="s">"east"</span>, drop = <span class="s">"frog_health"</span> }
-done = { heal_frog = true }
+id = <span class="s">"bong"</span>
+start = { shoot_bong = <span class="s">"east"</span>, drop = <span class="s">"bong_health"</span> }
+done = { heal_bong = true }
 
 [[training.beat]]
 id = <span class="s">"enemy"</span>
@@ -286,9 +286,9 @@ done = { kill = 1 }</pre>
     <div class="eyebrow">05 · Next</div>
     <h2>Before the engine work</h2>
     <ol class="qs">
-      <li><b>Play the lab.</b> Check the frog alone is enough, especially beat 3 (no sign says why the wall matters).</li>
+      <li><b>Play the lab.</b> Check the bong alone is enough, especially beat 3 (no sign says why the wall matters).</li>
       <li><b>Write the spec.</b> <code>docs/training-stage.md</code>: the beats, the lines, the triggers, the map.</li>
-      <li><b>Build in order:</b> doors and triggers, then the frog path and bubble, then the map and its lines, then level 0 in <code>levels.toml</code>.</li>
+      <li><b>Build in order:</b> doors and triggers, then the bong path and bubble, then the map and its lines, then level 0 in <code>levels.toml</code>.</li>
     </ol>
   </section>
 </div>
@@ -301,9 +301,9 @@ const IMG = {
   glyphs: "../../static/pickup_glyphs.png",
   walls: "../../static/walls_sheet.png",
   props: "../../static/props_sheet.png",
-  frogIdle: "../../static/toxic_frog/green_blue/idle.png",
-  frogHop: "../../static/toxic_frog/green_blue/hop.png",
-  frogHurt: "../../static/toxic_frog/green_blue/hurt.png",
+  bongIdle: "../../static/bongs/spike/idle.png",
+  bongHop: "../../static/bongs/spike/hop.png",
+  bongHurt: "../../static/bongs/spike/hurt.png",
 };
 
 // ---- palette (tools/punypalette.py) ----
@@ -331,37 +331,37 @@ const BEATS = [
   { id: "drive", title: "DRIVE", short: "Drive",
     sign: { keys: "[ARROWS] drive. Four directions and real weight: ease off before a turn.", touch: "[STICK] Drag your left thumb to drive. Ease off before a turn." },
     goals: ["Roll over the three flags"],
-    frog: ["Hi! I'm your frog.", { keys: "[ARROWS] to drive. Ease off before turns.", touch: "[STICK] Drag your left thumb to drive." }, "Roll over the three flags."],
+    bong: ["Hi! I'm your bong.", { keys: "[ARROWS] to drive. Ease off before turns.", touch: "[STICK] Drag your left thumb to drive." }, "Roll over the three flags."],
     nudge: "Three flags. Then the gate opens.",
     done: "Three flags crossed", teach: "Four-way movement with momentum, sliding into turns", engine: ["have:movement", "new:flags trigger", "new:door"] },
   { id: "supply", title: "SUPPLY", short: "Crates",
     sign: { keys: "Drive into a crate to open it. You start with no shells.", touch: "Drive into a crate to open it. You start with no shells." },
     goals: ["Open the ammo crate", "Patch up with the red cross (optional)"],
-    frog: ["No shells yet? Bump the crates.", "The red cross fixes your hull."],
+    bong: ["No shells yet? Bump the crates.", "The red cross fixes your hull."],
     nudge: "The ammo crate is up north.",
     done: "Ammo crate collected", teach: "Crates open on contact; ammo, health, speed", engine: ["have:crates", "new:collect trigger"] },
   { id: "fire", title: "FIRE", short: "Fire",
     sign: { keys: "[SPACE] fires where your gun points. Wood breaks fast, brick takes a few hits, iron never.", touch: "[TAP] Tap the right half to fire. Wood breaks fast, brick takes a few, iron never." },
     goals: ["Break through the brick wall", "Try the minigun crate: hold fire (optional)"],
-    frog: [{ keys: "[SPACE] fires where your gun points.", touch: "[TAP] the right half to fire." }, "Wood breaks fast. Brick takes a few.", "Iron never breaks. Shoot the brick wall!"],
+    bong: [{ keys: "[SPACE] fires where your gun points.", touch: "[TAP] the right half to fire." }, "Wood breaks fast. Brick takes a few.", "Iron never breaks. Shoot the brick wall!"],
     nudge: { keys: "Face the brick wall, press [SPACE].", touch: "Face the brick wall and [TAP]." },
     done: "Through the brick wall", teach: "Aiming by facing, materials, special weapons queue", engine: ["have:materials", "have:minigun", "new:destroy trigger"] },
-  { id: "frog", title: "YOUR FROG", short: "Frog",
-    sign: { keys: "The frog is the heart of every round. If it goes down, the round is lost.", touch: "The frog is the heart of every round. If it goes down, the round is lost." },
-    goals: ["Heal the frog with the frog kit"],
-    frog: ["Ow! That came from the east!", "Grab my kit, quick!"],
+  { id: "bong", title: "YOUR BONG", short: "Bong",
+    sign: { keys: "The bong is the heart of every round. If it goes down, the round is lost.", touch: "The bong is the heart of every round. If it goes down, the round is lost." },
+    goals: ["Heal the bong with the bong kit"],
+    bong: ["Ow! That came from the east!", "Grab my kit, quick!"],
     nudge: "My kit! The green crate!",
-    done: "Frog back to full health", teach: "The frog matters; frog health crate; air drops", engine: ["have:frog health", "have:air drop", "new:scripted shot"] },
+    done: "Bong back to full health", teach: "The bong matters; bong health crate; air drops", engine: ["have:bong health", "have:air drop", "new:scripted shot"] },
   { id: "enemy", title: "ENEMY", short: "First enemy",
-    sign: { keys: "Red-ringed tanks roll in through gates and go for the frog. Line up and fire.", touch: "Red-ringed tanks roll in through gates and go for the frog. Line up and fire." },
-    goals: ["Stop the tank before it hurts the frog"],
-    frog: ["Here it comes!", "Line up and fire!"],
+    sign: { keys: "Red-ringed tanks roll in through gates and go for the bong. Line up and fire.", touch: "Red-ringed tanks roll in through gates and go for the bong. Line up and fire." },
+    goals: ["Stop the tank before it hurts the bong"],
+    bong: ["Here it comes!", "Line up and fire!"],
     nudge: "Get in line with it!",
-    done: "First tank destroyed", teach: "Enemies, gates, lining up, the frog bites back", engine: ["have:gates", "have:roll-in", "new:dummy AI"] },
+    done: "First tank destroyed", teach: "Enemies, gates, lining up, the bong bites back", engine: ["have:gates", "have:roll-in", "new:dummy AI"] },
   { id: "wave", title: "SHIELD", short: "Shield & wave",
     sign: { keys: "A shield soaks hits for a few seconds. Grab it, then take the last tank.", touch: "A shield soaks hits for a few seconds. Grab it, then take the last tank." },
     goals: ["Grab the shield (optional)", "Destroy the second tank"],
-    frog: ["Shield first.", "This one shoots back!"],
+    bong: ["Shield first.", "This one shoots back!"],
     nudge: "Last one. You've got this.",
     done: "Second tank destroyed", teach: "Shield, enemies that fire back, respawn at the gate", engine: ["have:shield", "have:waves", "new:kill trigger"] },
 ];
@@ -399,7 +399,7 @@ function newWorld() {
   // firing range targets
   for (const [c, r] of [[24, 9], [25, 9], [24, 10], [25, 10], [25, 2], [26, 2]]) put(c, r, "wood", 2);
   for (const [c, r] of [[22, 8], [22, 4]]) put(c, r, "brick", 3);
-  // frog pen: pond and sandbag cover
+  // bong pen: pond and sandbag cover
   for (let c = 33; c <= 37; c++) for (let r = 1; r <= 2; r++) put(c, r, "water");
   for (const [c, r] of [[41, 3], [42, 3], [41, 9], [42, 9], [38, 4], [38, 8]]) put(c, r, "sandbag", 3);
   // decorative fences in pen 1 and 2
@@ -415,11 +415,11 @@ function newWorld() {
       { kind: 3, x: cx(20), y: cx(10) },
     ].map((k) => ({ ...k, gone: false, drop: 0 })),
     player: { x: cx(2), y: cx(6), vx: 0, vy: 0, dir: 90, vis: 90, hp: 60, max: 100, shells: 0, mini: 0, shield: 0, shieldT: 0, speedT: 0, cool: 0, kick: 0, frame: 0, dead: 0, flash: 0, ring: 0 },
-    frog: { x: cx(5), y: cx(4), hp: 100, face: 1, path: [], hop: 0, hurt: 0, anim: 0, bite: 0 },
+    bong: { x: cx(5), y: cx(4), hp: 100, face: 1, path: [], hop: 0, hurt: 0, anim: 0, bite: 0 },
     enemies: [], shots: [], parts: [], wrecks: [], debris: [],
     lines: [], line: null, lineT: 0, said: {},
     toast: null, introShot: false, enemiesSent: 0, shieldDropped: false, respawn: null,
-    camX: 0, frogSpot: [[5, 4], [13, 4], [23, 6], [34, 6], [34, 6], [34, 6]],
+    camX: 0, bongSpot: [[5, 4], [13, 4], [23, 6], [34, 6], [34, 6], [34, 6]],
   };
 }
 
@@ -465,9 +465,9 @@ function heldDir() {
 }
 
 // ---- beats ----
-function frogGo(beat) {
-  const [c, r] = S.frogSpot[beat];
-  const tx = cx(c), ty = cx(r), f = S.frog, path = [];
+function bongGo(beat) {
+  const [c, r] = S.bongSpot[beat];
+  const tx = cx(c), ty = cx(r), f = S.bong, path = [];
   for (const g of [...PEN_GATES, WALL_COL]) {
     const gx = cx(g);
     if ((f.x < gx && tx > gx)) { path.push({ x: gx - 40, y: cx(6) }, { x: gx + 40, y: cx(6) }); }
@@ -483,7 +483,7 @@ function say(lines, key) {
 const lineText = (l) => (typeof l === "string" ? l : l[opts.mode]);
 function startBeat(i) {
   S.beat = i; S.beatT = 0;
-  if (i < BEATS.length) { frogGo(i); say(i === 3 ? ["This is my pad. Come on in."] : BEATS[i].frog, "beat" + i); }
+  if (i < BEATS.length) { bongGo(i); say(i === 3 ? ["This is my pad. Come on in."] : BEATS[i].bong, "beat" + i); }
   if (i === 1) S.gates[0].target = 1;
   if (i === 2) S.gates[1].target = 1;
   renderBeats();
@@ -499,7 +499,7 @@ function beatGoals(i) {
   if (i === 0) { const n = S.flags.filter((f) => f.got).length; g.push({ t: "Roll over the flags " + n + "/3", ok: n === 3 }); }
   if (i === 1) { g.push({ t: "Open the ammo crate", ok: S.crates[0].gone }); g.push({ t: "Red cross: health", ok: S.crates[1].gone, opt: true }); }
   if (i === 2) { g.push({ t: "Break through the brick wall", ok: wallBroken() }); g.push({ t: "Minigun crate: hold fire", ok: S.crates[3].gone, opt: true }); }
-  if (i === 3) g.push({ t: "Heal the frog " + Math.round(S.frog.hp) + "%", ok: S.frog.hp >= 100 && S.introShot });
+  if (i === 3) g.push({ t: "Heal the bong " + Math.round(S.bong.hp) + "%", ok: S.bong.hp >= 100 && S.introShot });
   if (i === 4) g.push({ t: "Stop the tank", ok: false });
   if (i === 5) { const sc = S.crates.find((c) => c.kind === 7); g.push({ t: "Grab the shield", ok: !!(sc && sc.gone), opt: true }); g.push({ t: "Destroy the second tank", ok: false }); }
   return g;
@@ -507,7 +507,7 @@ function beatGoals(i) {
 function wallBroken() { return GATE_ROWS.some((r) => !S.tiles[r][WALL_COL]); }
 
 function tickBeat(dt) {
-  const p = S.player, f = S.frog;
+  const p = S.player, f = S.bong;
   S.beatT += dt;
   switch (S.beat) {
     case 0: if (S.flags.every((g) => g.got)) completeBeat(); break;
@@ -516,7 +516,7 @@ function tickBeat(dt) {
     case 3:
       if (!S.introShot && f.path.length === 0 && p.x > (WALL_COL + 1) * CELL + 20) {
         S.introShot = true;
-        S.shots.push({ x: W + 10, y: f.y, vx: -520, vy: 0, kind: "shell", team: "enemy", dmg: 65, frogOnly: true, ghost: true, life: 3 });
+        S.shots.push({ x: W + 10, y: f.y, vx: -520, vy: 0, kind: "shell", team: "enemy", dmg: 65, bongOnly: true, ghost: true, life: 3 });
         S.gates[2].target = 1; setTimeout(() => { if (S && S.gates[2]) S.gates[2].target = 0; }, 900);
       }
       if (S.introShot && f.hp < 100 && !S.crates.some((c) => c.kind === 9)) {
@@ -543,7 +543,7 @@ function sendEnemy(kind) {
 }
 
 // ---- crates & flags ----
-const CRATE_NAMES = ["HEALTH", "AMMO +12", "LASER", "MINIGUN", "PLASMA", "MISSILES", "SPEED UP", "SHIELD", "FLAMER", "FROG KIT", "TOWER", "HEAT"];
+const CRATE_NAMES = ["HEALTH", "AMMO +12", "LASER", "MINIGUN", "PLASMA", "MISSILES", "SPEED UP", "SHIELD", "FLAMER", "BONG KIT", "TOWER", "HEAT"];
 function collect(c) {
   const p = S.player;
   c.gone = true; c.goneT = 0;
@@ -554,7 +554,7 @@ function collect(c) {
   if (c.kind === 6) p.speedT = 8;
   if (c.kind === 3) { p.mini = 40; say(["Hold fire. It eats ammo fast."], "mini"); }
   if (c.kind === 7) { p.shield = 50; p.shieldT = 8; }
-  if (c.kind === 9) { S.frog.hp = 100; say(["Better! If I go down, we lose."], "healed"); }
+  if (c.kind === 9) { S.bong.hp = 100; say(["Better! If I go down, we lose."], "healed"); }
 }
 function floatText(x, y, t) { S.parts.push({ x, y, vx: 0, vy: -26, life: 1.1, max: 1.1, text: t }); }
 function toast(t) { S.toast = { t, life: 1.8 }; }
@@ -574,7 +574,7 @@ function fire(t, team, ang, kind) {
   const r = (ang * Math.PI) / 180, dx = Math.sin(r), dy = -Math.cos(r);
   const sp = kind === "bullet" ? 640 : 420;
   const x = t.x + dx * 22, y = t.y + dy * 22;
-  S.shots.push({ x, y, vx: dx * sp, vy: dy * sp, kind, team, dmg: kind === "bullet" ? 0.25 : 1, life: 2.5, frogOnly: t.kind === 1 });
+  S.shots.push({ x, y, vx: dx * sp, vy: dy * sp, kind, team, dmg: kind === "bullet" ? 0.25 : 1, life: 2.5, bongOnly: t.kind === 1 });
   t.kick = 0.12;
   burst(x, y, kind === "bullet" ? 2 : 6, FIRE.slice(0, 4), 60, 0.18);
   if (team === "player" && kind === "shell") { t.vx -= dx * 40; t.vy -= dy * 40; }
@@ -590,25 +590,25 @@ function damageTile(c, r, dmg, x, y) {
   if (t.hp <= 0) {
     S.tiles[r][c] = null; burst(cx(c), cx(r), 18, dust, 80, 0.8); burst(cx(c), cx(r), 6, SMOKE, 25, 1.1);
     S.debris.push({ c, r, t: t.t, v: Math.floor(hash(c, r) * 8) });
-    if (t.t === "brick" && c === WALL_COL && S.beat === 2) frogGo(3), say(["Nice shot! Follow me."], "wall");
+    if (t.t === "brick" && c === WALL_COL && S.beat === 2) bongGo(3), say(["Nice shot! Follow me."], "wall");
   }
 }
 
 function tickShots(dt) {
-  const p = S.player, f = S.frog;
+  const p = S.player, f = S.bong;
   for (const s of S.shots) {
     const steps = 3;
     for (let k = 0; k < steps && s.life > 0; k++) {
       s.x += (s.vx * dt) / steps; s.y += (s.vy * dt) / steps;
       const c = Math.floor(s.x / CELL), r = Math.floor(s.y / CELL);
       if (!s.ghost && shotSolid(c, r)) { damageTile(c, r, s.dmg, s.x, s.y); s.life = 0; break; }
-      if (s.ghost) { if (s.x < EAST * CELL && Math.abs(s.x - f.x) < 18) { hitFrog(s); s.life = 0; break; } continue; }
+      if (s.ghost) { if (s.x < EAST * CELL && Math.abs(s.x - f.x) < 18) { hitBong(s); s.life = 0; break; } continue; }
       if (s.team === "player") {
         for (const e of S.enemies) if (e.state !== "enter" && Math.abs(s.x - e.x) < 16 && Math.abs(s.y - e.y) < 16) { e.hp -= s.dmg; e.flash = 0.12; e.state = "hunt"; burst(s.x, s.y, 8, FIRE, 80, 0.35); s.life = 0; if (e.kind === 1 && !S.said.dummyhit) say(["It only wants me. Keep firing!"], "dummyhit"); break; }
       } else {
-        if (!s.ghost && Math.abs(s.x - f.x) < 15 && Math.abs(s.y - f.y) < 15 && f.hp > 0) { hitFrog(s); s.life = 0; break; }
-        if (!s.frogOnly && p.dead <= 0 && Math.abs(s.x - p.x) < 15 && Math.abs(s.y - p.y) < 15) { hitPlayer(s.kind === "shell" ? 14 : 4); burst(s.x, s.y, 8, FIRE, 80, 0.35); s.life = 0; break; }
-        if (s.frogOnly && p.dead <= 0 && Math.abs(s.x - p.x) < 15 && Math.abs(s.y - p.y) < 15) { hitPlayer(4); burst(s.x, s.y, 6, FIRE, 70, 0.3); s.life = 0; break; }
+        if (!s.ghost && Math.abs(s.x - f.x) < 15 && Math.abs(s.y - f.y) < 15 && f.hp > 0) { hitBong(s); s.life = 0; break; }
+        if (!s.bongOnly && p.dead <= 0 && Math.abs(s.x - p.x) < 15 && Math.abs(s.y - p.y) < 15) { hitPlayer(s.kind === "shell" ? 14 : 4); burst(s.x, s.y, 8, FIRE, 80, 0.35); s.life = 0; break; }
+        if (s.bongOnly && p.dead <= 0 && Math.abs(s.x - p.x) < 15 && Math.abs(s.y - p.y) < 15) { hitPlayer(4); burst(s.x, s.y, 6, FIRE, 70, 0.3); s.life = 0; break; }
       }
     }
     s.life -= dt;
@@ -616,11 +616,11 @@ function tickShots(dt) {
   }
   S.shots = S.shots.filter((s) => s.life > 0 && s.x > -40 && s.x < W + 60);
 }
-function hitFrog(s) {
-  const f = S.frog; if (f.hp <= 0) return; f.hp = Math.max(0, f.hp - (s.dmg > 5 ? s.dmg : 10)); f.hurt = 0.5;
+function hitBong(s) {
+  const f = S.bong; if (f.hp <= 0) return; f.hp = Math.max(0, f.hp - (s.dmg > 5 ? s.dmg : 10)); f.hurt = 0.5;
   burst(f.x, f.y, 12, [P.greenBright, P.greenLt, P.white], 70, 0.4);
-  if (s.ghost) say(BEATS[3].frog, "ow");
-  if (f.hp <= 0) { explode(f.x, f.y, false); toast("FROG DOWN · BEAT AGAIN"); setTimeout(() => jumpTo(S.beat), 1300); f.hp = 0; }
+  if (s.ghost) say(BEATS[3].bong, "ow");
+  if (f.hp <= 0) { explode(f.x, f.y, false); toast("BONG DOWN · BEAT AGAIN"); setTimeout(() => jumpTo(S.beat), 1300); f.hp = 0; }
 }
 function hitPlayer(d) {
   const p = S.player;
@@ -640,7 +640,7 @@ function los(a, b) {
   return true;
 }
 function tickEnemy(e, dt) {
-  const p = S.player, f = S.frog;
+  const p = S.player, f = S.bong;
   e.cool -= dt; e.kick = Math.max(0, e.kick - dt); e.flash = Math.max(0, e.flash - dt);
   if (e.state === "enter") {
     moveTank(e, -1, 0, dt, 70, true); e.dir = 270;
@@ -674,7 +674,7 @@ function tickEnemy(e, dt) {
   }
   e.vis = lerpAngle(e.vis, e.dir, 1 - Math.exp(-dt * 14));
   if (Math.hypot(e.vx, e.vy) > 8) e.frame = (e.frame + dt * 10) % 4;
-  // the frog bites what comes close
+  // the bong bites what comes close
   if (f.hp > 0 && dist(e, f) < 46 && e.state !== "enter") { e.hp -= dt * 0.7; f.bite = 0.3; if (Math.random() < 0.3) burst(e.x, e.y, 2, [P.greenBright, P.white], 50, 0.25); say(["Chomp!"], "chomp"); }
   if (e.hp <= 0) {
     explode(e.x, e.y, true);
@@ -687,7 +687,7 @@ function tickEnemy(e, dt) {
 function update(dt) {
   if (!S) return;
   S.t += dt; if (!S.finished) S.clock += dt; else S.finishT += dt;
-  const p = S.player, f = S.frog;
+  const p = S.player, f = S.bong;
   // gates
   for (const g of S.gates) g.open += clamp(g.target - g.open, -dt * 1.6, dt * 1.6);
   // player
@@ -714,7 +714,7 @@ function update(dt) {
   if (p.shieldT > 0) { p.shieldT -= dt; if (p.shieldT <= 0 || p.shield <= 0) { p.shield = 0; p.shieldT = 0; burst(p.x, p.y, 14, [P.bluePale, P.blueBright], 90, 0.4); } }
   p.ring = Math.max(0, p.ring - dt);
   for (const c of S.crates) if (c.drop > 0) { c.drop -= dt; if (c.drop <= 0) burst(c.x, c.y + 10, 10, [P.sandPale, P.sandMd, P.stoneLt], 60, 0.5); }
-  // frog
+  // bong
   f.anim += dt; f.hurt = Math.max(0, f.hurt - dt); f.bite = Math.max(0, f.bite - dt);
   if (f.path.length) {
     const w = f.path[0], dx = w.x - f.x, dy = w.y - f.y, d = Math.hypot(dx, dy);
@@ -731,10 +731,10 @@ function update(dt) {
   for (const w of S.wrecks) w.life -= dt;
   S.wrecks = S.wrecks.filter((w) => w.life > 0);
   if (S.toast) { S.toast.life -= dt; if (S.toast.life <= 0) S.toast = null; }
-  // frog lines
+  // bong lines
   if (!S.line && S.lines.length) { S.line = S.lines.shift(); S.lineT = 0; }
   if (S.line) { S.lineT += dt; if (S.lineT > 1.6 + lineText(S.line).length * 0.055) S.line = null; }
-  // the frog repeats the point when a beat has gone quiet for too long
+  // the bong repeats the point when a beat has gone quiet for too long
   if (!S.line && !S.lines.length && !S.finished) { S.quiet = (S.quiet || 0) + dt; if (S.quiet > 14 && BEATS[S.beat] && BEATS[S.beat].nudge) say([BEATS[S.beat].nudge], null); }
   if (!S.finished) tickBeat(dt);
 }
@@ -797,9 +797,9 @@ function drawPaint() {
   ctx.beginPath(); ctx.arc(WALL_COL * CELL - 22, cx(6), 13, 0, Math.PI * 2); ctx.stroke();
   blk(WALL_COL * CELL - 23, cx(6) - 19, 2, 12, P.stonePale); blk(WALL_COL * CELL - 23, cx(6) + 7, 2, 12, P.stonePale);
   ctx.fillText(opts.mode === "keys" ? "SPACE" : "TAP", cx(16), cx(8) + 4);
-  // pen 4: the frog pad and the hazard at the gate
+  // pen 4: the bong pad and the hazard at the gate
   ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.arc(cx(25), cx(6), 30, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-  ctx.fillText("FROG", cx(25), cx(6) + 46);
+  ctx.fillText("BONG", cx(25), cx(6) + 46);
   ctx.globalAlpha = 0.65;
   for (const r of GATE_ROWS) for (let i = 0; i < 4; i++) { ctx.fillStyle = i % 2 ? P.black : P.goldBright; ctx.fillRect((EAST - 1) * CELL + i * 8, r * CELL, 8, CELL); }
   ctx.restore();
@@ -917,15 +917,15 @@ function drawWrecks() {
   }
 }
 
-function drawFrog() {
-  const f = S.frog; if (f.hp <= 0) return;
+function drawBong() {
+  const f = S.bong; if (f.hp <= 0) return;
   const x = Math.round(f.x), y = Math.round(f.y);
-  let sheet = img.frogIdle, frames = 8, fr = Math.floor(f.anim * 8) % 8;
-  if (f.hurt > 0) { sheet = img.frogHurt; frames = 4; fr = Math.floor((0.5 - f.hurt) * 8) % 4; }
-  else if (f.path.length) { sheet = img.frogHop; frames = 7; fr = Math.floor(f.hop * 10) % 7; }
+  let sheet = img.bongIdle, frames = 8, fr = Math.floor(f.anim * 8) % 8;
+  if (f.hurt > 0) { sheet = img.bongHurt; frames = 4; fr = Math.floor((0.5 - f.hurt) * 8) % 4; }
+  else if (f.path.length) { sheet = img.bongHop; frames = 7; fr = Math.floor(f.hop * 10) % 7; }
   ctx.globalAlpha = 0.3; ctx.fillStyle = P.black; ctx.beginPath(); ctx.ellipse(x, y + 12, 12, 4, 0, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
   if (sheet) { ctx.save(); ctx.translate(x, y); ctx.scale(f.face, 1); ctx.drawImage(sheet, fr * 48, 0, 48, 48, -24, -30, 48, 48); ctx.restore(); }
-  // the frog's gauge, a little arc under it
+  // the bong's gauge, a little arc under it
   ctx.lineWidth = 2; ctx.strokeStyle = "rgba(0,0,0,.4)"; ctx.beginPath(); ctx.arc(x, y + 2, 16, Math.PI * 0.15, Math.PI * 0.85); ctx.stroke();
   ctx.strokeStyle = f.hp < 50 ? P.redBright : P.greenBright; ctx.beginPath(); ctx.arc(x, y + 2, 16, Math.PI * 0.85 - Math.PI * 0.7 * (f.hp / 100), Math.PI * 0.85); ctx.stroke();
 }
@@ -1028,7 +1028,7 @@ function drawSignCards() {
 }
 function drawBubble() {
   if (!S.line) return;
-  const f = S.frog; if (f.hp <= 0) return;
+  const f = S.bong; if (f.hp <= 0) return;
   const text = lineText(S.line), words = text.split(" ");
   const shown = words.slice(0, Math.max(1, Math.floor(S.lineT * 9))).join(" ");
   const size = 11, w = Math.min(220, 28 + text.length * 7.2), lay = layoutRich(shown, w - 16, size);
@@ -1044,13 +1044,13 @@ function drawBubble() {
   if (above) for (let i = 0; i < 4; i++) { blk(tx + i * 2 - 2, y + h + i * 2, 8 - i * 2 + 2, 2, P.black); blk(tx + i * 2, y + h + i * 2 - 2, 6 - i * 2, 2, P.white); }
   drawRich(lay, x + 8, y + 16, size, "#241d14", 15);
 }
-function drawFrogTag() {
-  const f = S.frog; if (f.hp <= 0) return;
+function drawBongTag() {
+  const f = S.bong; if (f.hp <= 0) return;
   if (f.x > S.camX - 8 && f.x < S.camX + view.w + 8) return;
   const right = f.x > S.camX + view.w, ax = right ? view.w - 16 : 16, ay = clamp(f.y, 70, H - 20);
   ctx.fillStyle = P.black; ctx.beginPath(); ctx.moveTo(ax + (right ? 12 : -12), ay); ctx.lineTo(ax, ay - 10); ctx.lineTo(ax, ay + 10); ctx.fill();
   ctx.fillStyle = P.greenBright; ctx.beginPath(); ctx.moveTo(ax + (right ? 9 : -9), ay); ctx.lineTo(ax + (right ? 1 : -1), ay - 7); ctx.lineTo(ax + (right ? 1 : -1), ay + 7); ctx.fill();
-  if (S.line) txt("FROG", ax + (right ? -24 : 24), ay + 4, 9, P.greenBright, "center", true);
+  if (S.line) txt("BONG", ax + (right ? -24 : 24), ay + 4, 9, P.greenBright, "center", true);
 }
 function drawCoach() {
   if (!opts.coach || S.finished) return;
@@ -1110,14 +1110,14 @@ function render() {
   ctx.setTransform(view.scale, 0, 0, view.scale, -Math.round(S.camX) * view.scale, 0);
   drawGround(); drawDebris();
   drawFlags(); drawTiles(); drawGates(); drawCrates(); drawWrecks();
-  drawFrog();
+  drawBong();
   if (p.dead <= 0) drawTank(p, 20, "player");
   for (const e of S.enemies) drawTank(e, e.row, "enemy");
   drawPlayerExtras(); drawShots(); drawParts();
   drawBubble();
   // screen space
   ctx.setTransform(view.scale, 0, 0, view.scale, 0, 0);
-  drawHud(); drawEdgeArrows(); drawFrogTag(); drawOverlay();
+  drawHud(); drawEdgeArrows(); drawBongTag(); drawOverlay();
 }
 
 // ---- loop ----
@@ -1140,10 +1140,10 @@ function jumpTo(i) {
   if (i >= 4) { S.introShot = true; S.crates.push({ kind: 9, x: cx(31), y: cx(10), gone: true, drop: 0 }); p.x = cx(31); }
   if (i >= 5) { S.enemiesSent = 1; }
   p.y = cx(6);
-  const [fc, fr] = S.frogSpot[i]; S.frog.x = cx(fc); S.frog.y = cx(fr);
+  const [fc, fr] = S.bongSpot[i]; S.bong.x = cx(fc); S.bong.y = cx(fr);
   for (let k = 0; k < i; k++) S.said["beat" + k] = true;
   if (i >= 4) S.said.ow = S.said.healed = true;
-  startBeat(i); S.frog.path = [];
+  startBeat(i); S.bong.path = [];
   S.camX = clamp(p.x - view.w / 2, 0, W - view.w);
 }
 
@@ -1162,7 +1162,7 @@ function renderBeats() {
 }
 function renderTable() {
   const tb = document.getElementById("beat-table");
-  tb.innerHTML = BEATS.map((b, i) => "<tr><td class='b'>" + (i + 1) + " " + b.title + "</td><td>" + b.teach + "</td><td>" + b.done + "</td><td><q>" + b.frog.map(lineText).join(" ").replace(/\[(\w+)\]/g, "<kbd>$1</kbd>") + "</q></td><td>" + b.engine.map((e) => { const [k, v] = e.split(":"); return "<span class='tag " + k + "'>" + (k === "have" ? "HAVE " : "NEW ") + v.toUpperCase() + "</span>"; }).join("") + "</td></tr>").join("");
+  tb.innerHTML = BEATS.map((b, i) => "<tr><td class='b'>" + (i + 1) + " " + b.title + "</td><td>" + b.teach + "</td><td>" + b.done + "</td><td><q>" + b.bong.map(lineText).join(" ").replace(/\[(\w+)\]/g, "<kbd>$1</kbd>") + "</q></td><td>" + b.engine.map((e) => { const [k, v] = e.split(":"); return "<span class='tag " + k + "'>" + (k === "have" ? "HAVE " : "NEW ") + v.toUpperCase() + "</span>"; }).join("") + "</td></tr>").join("");
 }
 
 // ---- input ----

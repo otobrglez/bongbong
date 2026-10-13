@@ -75,9 +75,9 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
   over the field: on a run too short for the stripe and its lead, both
   shrink to fit (`gun_burst`, `bombs`). It flies on off the far edge; about
   five seconds on the field.
-- **Friendly fire.** None on hulls and frogs: every hit is
+- **Friendly fire.** None on hulls and bongs: every hit is
   `side_blast`/`explosion_hit`, which spare `Owner::same_side` - the seats
-  and the players' frog. Tiles take damage whoever's they are
+  and the players' bong. Tiles take damage whoever's they are
   (`damage_obstacle` with falloff) and crates break, as for a missile, so a
   player's own tower next to what is struck takes the splash - it is never
   aimed at.

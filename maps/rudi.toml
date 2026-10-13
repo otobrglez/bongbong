@@ -400,7 +400,7 @@ kind = "wall"
 material = "brick"
 
 [cells."8,12"]
-kind = "frog"
+kind = "bong"
 
 [cells."9,13"]
 kind = "wall"

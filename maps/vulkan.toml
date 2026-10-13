@@ -11,12 +11,13 @@
 # the bottom - each a burning ford crossed at a wade, with a stone crossing
 # on each (a road cell) where the roads meet them.
 #
-# The players start in the south-east by the frog's sandbag ring. Three
+# The players start in the south-east by the bong's sandbag ring. Three
 # heat shields lie by the rivers; trees on the banks catch fire when an
 # eruption's surge comes past. A sonic hammer waits west of the start, near
 # the southern river's stone crossing, to shove a tank into the lava.
 
 version = 1
+bong = "spike"
 tanks = 5
 tank = "warden"
 tank2 = "scout"
@@ -809,7 +810,7 @@ pickup = "sonic_hammer"
 kind = "sandbag"
 
 [cells."45,27"]
-kind = "frog"
+kind = "bong"
 
 [cells."47,27"]
 kind = "sandbag"

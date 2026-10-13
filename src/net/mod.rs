@@ -60,7 +60,7 @@
 //! holding one frame cannot know.
 //!
 //! Measured on the snapshot the PRD sizes (eight tanks, twenty-four
-//! shells, both frogs, a fresh field; `delta::tests::sizes_of_the_prd_snapshot`
+//! shells, both bongs, a fresh field; `delta::tests::sizes_of_the_prd_snapshot`
 //! prints them under `--nocapture`): a full snapshot is 487 B (about 20 B
 //! per tank and 11 B per shell); the delta for an interval in which every
 //! hull and shell moved is 172 B, one in which two hulls were also hit,
@@ -114,7 +114,7 @@ pub mod wire;
 /// variant index), a change to a `codec::kind` tag or to a quantisation
 /// scale. A new optional field in a `Lobby` message (JSON, `serde(default)`)
 /// needs no bump.
-pub const PROTOCOL_VERSION: u16 = 31;
+pub const PROTOCOL_VERSION: u16 = 32;
 
 /// This build's version, the `bongbong` crate's: what a client reports
 /// about itself in `wire::ClientInfo` and the room server labels its

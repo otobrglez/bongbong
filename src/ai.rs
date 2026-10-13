@@ -226,7 +226,7 @@ pub struct RodPick {
     /// The seat the call is used on, for a seat's pick: what
     /// `Ai::shot_at_seat` records at the release.
     pub at_seat: Option<u8>,
-    /// "camper", "lead", "tower" or "frog": the trace's word.
+    /// "camper", "lead", "tower" or "bong": the trace's word.
     pub why: &'static str,
 }
 
@@ -243,7 +243,7 @@ pub struct FpvSense {
     /// The nearest seat it knows of that *is* under a tree's crown, and the
     /// centre of that tree: a drone dived into the crown breaks the cover.
     pub canopy: Option<(u8, Position)>,
-    /// A hunter's quarry - the players' frog, alive, within its sight, not
+    /// A hunter's quarry - the players' bong, alive, within its sight, not
     /// under a crown.
     pub quarry: Option<Position>,
     /// The seat it would launch at has a line of sight to it.
@@ -304,11 +304,11 @@ pub struct GaussLane {
     pub seats: u8,
     /// Standing player towers it would go through.
     pub towers: u8,
-    /// The players' frog it would go through, and how far along - read
+    /// The players' bong it would go through, and how far along - read
     /// only for a hunter, whose quarry it is.
     pub quarry: Option<f32>,
     /// The nearest live fellow enemy, standing enemy tower or the enemies'
-    /// own frog it would go through, and how far along: nothing fires this
+    /// own bong it would go through, and how far along: nothing fires this
     /// way at a target beyond it.
     pub friend: Option<f32>,
     /// `at_seat` stands inside its sight box and this tank's sight by
@@ -574,7 +574,7 @@ pub struct HammerAim {
     /// A seat in the cone within `sonic_ai_breaker_px`.
     pub breaker: Option<u8>,
     /// A hunter's quarry in the cone, not stunned.
-    pub frog: bool,
+    pub bong: bool,
     /// A live fellow enemy in the cone: nothing fires this way.
     pub friend: bool,
 }
@@ -726,10 +726,10 @@ struct Grudge {
 }
 
 /// A guard's beat (see `Role::Guard`): the annulus `keep_off..=radius`
-/// around `anchor`, its own frog. The inner radius keeps the guard out of
-/// the frog's hop range - the frog is a solid body that hops away from any
+/// around `anchor`, its own bong. The inner radius keeps the guard out of
+/// the bong's hop range - the bong is a solid body that hops away from any
 /// tank, its guard included, so crowding it walks it off its post. It does
-/// not bite its own side (`frog::Side::bites`).
+/// not bite its own side (`bong::Side::bites`).
 #[derive(Clone, Copy, Debug)]
 struct Leash {
     anchor: Position,
@@ -746,7 +746,7 @@ impl Leash {
 
 /// What an enemy is for this round - rolled once at spawn by `Game::init`
 /// from the mission's hunter share (docs/maps-to-levels.md "AI roles").
-/// `think`'s `target`/`frog_target` parameters are what the simulation
+/// `think`'s `target`/`bong_target` parameters are what the simulation
 /// resolves from the role each frame; the tree reads the role itself only
 /// for the two role-specific tiers (`build`'s snipe and guard).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
@@ -755,11 +755,11 @@ pub enum Role {
     /// Fights the player: the engagement ring is around the player.
     #[default]
     Player,
-    /// Drives at and shoots the player's frog through a second ring around
+    /// Drives at and shoots the player's bong through a second ring around
     /// it; shoots the player only when already lined up within attack
-    /// range. Behaves as `Player` once that frog is dead.
+    /// range. Behaves as `Player` once that bong is dead.
     Hunter,
-    /// Stays within `guard_leash_px` of its own frog: engages the player
+    /// Stays within `guard_leash_px` of its own bong: engages the player
     /// like `Player` while the player is inside that leash, otherwise
     /// wanders inside it and heads back whenever it finds itself outside.
     Guard,
@@ -783,8 +783,8 @@ pub struct Ai {
     pub role: Role,
     /// A training dummy (docs/training-stage.md): it never fires at a
     /// seat (`Brain::may_fire_at_seat`), so with the hunter's role it goes
-    /// only for the frog. False for every other tank.
-    pub frog_only: bool,
+    /// only for the bong. False for every other tank.
+    pub bong_only: bool,
     /// Roaming target used while patrolling.
     waypoint: Position,
     /// Seconds until we pick a fresh patrol waypoint (avoids per-frame jitter).
@@ -832,7 +832,7 @@ pub struct Ai {
     yield_timer: f32,
     /// Seconds until a hunter may take another opportunistic shot at the
     /// player - set by `act_snipe` when it fires, so one snipe never
-    /// becomes a standing duel that forgets the frog.
+    /// becomes a standing duel that forgets the bong.
     snipe_cooldown: f32,
     /// True while backing off to recharge ammo. Latched between
     /// ENEMY_AMMO_LOW and ENEMY_AMMO_RESUME (see `wants_retreat`) so the tank
@@ -887,7 +887,7 @@ pub struct Ai {
     hit_alert_timer: f32,
     /// The seat it fights was in sight at the last `think`: within its
     /// sight by `sees` and not hidden from it. Never set for a hunter's
-    /// frog, which is no seat. The latch `sees` holds past the edge of its
+    /// bong, which is no seat. The latch `sees` holds past the edge of its
     /// sight, which `build`'s chase tier and the engagement ring
     /// (`simulation::engage_status`) read.
     in_sight: bool,
@@ -923,7 +923,7 @@ pub struct Ai {
     last_intent: Intent,
     /// The seat the last `think`'s trigger pull was aimed at: set when it
     /// fires at the seat it fights (the attack tier, a hunter's snipe),
-    /// `None` when it fired at a frog, a tower or a tile or did not fire.
+    /// `None` when it fired at a bong, a tower or a tile or did not fire.
     /// Inspection only, like `last_action` - the probe's `offbox-fire`
     /// check reads it (`TankSnapshot::shot_at_seat`).
     shot_at_seat: Option<u8>,
@@ -1090,12 +1090,12 @@ pub(crate) struct FieldMind {
     /// (`Game::reroll_stragglers`).
     pub(crate) wave: bool,
     /// Seconds a wave tank has gone without a live seat, or the players'
-    /// frog, within its sight: counted from its arrival and back to zero
+    /// bong, within its sight: counted from its arrival and back to zero
     /// whenever one is (`field::mind`). How long it has been lost to the
     /// fight.
     pub(crate) lost: f32,
     /// Something has reached it - an alert, a hit, a call, a seat within
-    /// `enemy_far_px`, a frog to hunt. A far tank that was never woken
+    /// `enemy_far_px`, a bong to hunt. A far tank that was never woken
     /// does not think at all; once woken it stays so.
     pub(crate) awake: bool,
     /// Seconds since its last think while far thinking skips ticks: the
@@ -1172,7 +1172,7 @@ impl Default for Ai {
     fn default() -> Self {
         Self {
             role: Role::Player,
-            frog_only: false,
+            bong_only: false,
             waypoint: Position::default(),
             retarget_timer: 0.0,
             fire_timer: tuning().enemy_fire_interval,
@@ -1297,7 +1297,7 @@ impl Ai {
     /// lying (`Game::keep_off_cells`), sorted: its routes go round them
     /// (`Grid::route_ahead_keeping_off`) at `route_crate_cost` a cell.
     /// `line_of_sight` is whether this tank's straight line to `target` is
-    /// currently unobstructed by terrain (any obstacle, or a frog other than
+    /// currently unobstructed by terrain (any obstacle, or a bong other than
     /// the target itself) - computed in `simulation` (see
     /// `hits::Terrain::line_of_sight`) against the real, un-margined
     /// obstacle geometry a shot would actually resolve against,
@@ -1306,21 +1306,21 @@ impl Ai {
     /// shell's, so reusing it here rejected plenty of geometrically clear
     /// shots on denser maps and left engaged enemies unable to ever find a
     /// firing solution. Gates `act_attack`'s fire decision so an enemy
-    /// aligned through a wall it can't destroy (or with a frog in the way)
+    /// aligned through a wall it can't destroy (or with a bong in the way)
     /// doesn't just fire into it forever. For a hunter it is the line of
-    /// *fire* to the frog instead (`hits::Terrain::line_of_fire_to_frog`):
-    /// only iron or another frog blocks it, so a walled-in frog is shot at
+    /// *fire* to the bong instead (`hits::Terrain::line_of_fire_to_bong`):
+    /// only iron or another bong blocks it, so a walled-in bong is shot at
     /// through its destructible walls until they fall. `player_line_of_sight` is the
     /// same test toward the player, for a hunter's opportunistic shot
     /// (`build`'s snipe tier); identical to `line_of_sight` whenever the
     /// player *is* the target.
     /// `target` is the point this tank fights - the player's position, or
-    /// for a `Role::Hunter` the player's frog while it lives - the thing
-    /// `act_chase`/`act_attack` close on and aim at. `frog_target` is the
-    /// frog this role is anchored to, while it lives: a hunter's quarry
-    /// (the player's frog, so `Some` means `target` is that frog; `None`
+    /// for a `Role::Hunter` the player's bong while it lives - the thing
+    /// `act_chase`/`act_attack` close on and aim at. `bong_target` is the
+    /// bong this role is anchored to, while it lives: a hunter's quarry
+    /// (the player's bong, so `Some` means `target` is that bong; `None`
     /// once it is dead, and the hunter fights the player like everyone
-    /// else) or a guard's own frog (the leash anchor). `None` for
+    /// else) or a guard's own bong (the leash anchor). `None` for
     /// `Role::Player`.
     /// `walls_ahead` is, per `Dir` (indexed by `Dir::index`), the tile a
     /// shot fired that way would hit within breach reach
@@ -1338,7 +1338,7 @@ impl Ai {
         me: &Tank,
         player: &Tank,
         target: Position,
-        frog_target: Option<Position>,
+        bong_target: Option<Position>,
         width: f32,
         height: f32,
         dt: f32,
@@ -1462,11 +1462,11 @@ impl Ai {
         self.near_fight = me.position.distance_to(target) <= tuning().enemy_attack_range;
         // A seat lost in cover is lost: the hold past its sight is only
         // for one it can see. Losing it starts the search. The hold is a
-        // seat's alone: a hunter's frog is chased from anywhere, and the
-        // seat a hunter turns to between frogs is seen afresh.
+        // seat's alone: a hunter's bong is chased from anywhere, and the
+        // seat a hunter turns to between bongs is seen afresh.
         let had_in_sight = self.in_sight;
-        let on_frog = self.role == Role::Hunter && frog_target.is_some();
-        self.in_sight = !on_frog && !target_concealed && self.sees(me.position.distance_to(target), sight);
+        let on_bong = self.role == Role::Hunter && bong_target.is_some();
+        self.in_sight = !on_bong && !target_concealed && self.sees(me.position.distance_to(target), sight);
         self.lost_timer = if self.in_sight {
             0.0
         } else if had_in_sight {
@@ -1478,7 +1478,7 @@ impl Ai {
             me,
             player,
             target,
-            frog_target,
+            bong_target,
             width,
             height,
             dt,
@@ -1974,11 +1974,11 @@ impl Ai {
     /// "reached"/"timer expired" cases) converges within a handful of
     /// frames given how much of the battlefield is normally open ground.
     ///
-    /// `leash` confines the waypoint to a guard's beat around its frog (see
+    /// `leash` confines the waypoint to a guard's beat around its bong (see
     /// `Leash`): candidates are sampled from the beat's bounding box
     /// (clipped to the margin) and kept only inside the annulus, and a
     /// waypoint that falls outside it - left over from an unleashed wander,
-    /// or overtaken by a frog hop - is resampled at once.
+    /// or overtaken by a bong hop - is resampled at once.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     fn wander(
         &mut self,
@@ -2528,7 +2528,7 @@ impl Ai {
     }
 
     /// Whether its last think kept a guard's beat (`Role::Guard`'s tier):
-    /// the seat it would fight is far from the frog it guards.
+    /// the seat it would fight is far from the bong it guards.
     pub(crate) fn holds_beat(&self) -> bool {
         self.last_action == Some("guard")
     }
@@ -2767,8 +2767,8 @@ struct Brain<'a> {
     player: &'a Tank,
     /// What this tank fights - see `think`'s `target` parameter.
     target: Position,
-    /// The frog this role is anchored to - see `think`'s `frog_target`.
-    frog_target: Option<Position>,
+    /// The bong this role is anchored to - see `think`'s `bong_target`.
+    bong_target: Option<Position>,
     width: f32,
     height: f32,
     dt: f32,
@@ -2987,16 +2987,16 @@ impl Brain<'_> {
         !self.player.is_wreck()
     }
 
-    /// Whether `target` is still worth fighting: a hunter's frog while it
-    /// lives (`frog_target` is `Some`), otherwise the player.
+    /// Whether `target` is still worth fighting: a hunter's bong while it
+    /// lives (`bong_target` is `Some`), otherwise the player.
     fn target_alive(&self) -> bool {
-        self.hunting_frog() || self.player_alive()
+        self.hunting_bong() || self.player_alive()
     }
 
     /// True while this tank is a hunter whose quarry is alive - i.e. while
-    /// `target` is the player's frog rather than the player.
-    fn hunting_frog(&self) -> bool {
-        self.ai.role == Role::Hunter && self.frog_target.is_some()
+    /// `target` is the player's bong rather than the player.
+    fn hunting_bong(&self) -> bool {
+        self.ai.role == Role::Hunter && self.bong_target.is_some()
     }
 
     /// Still looking for the seat it just lost (`Ai::lost_timer`), with an
@@ -3006,7 +3006,7 @@ impl Brain<'_> {
         self.ai.lost_timer > 0.0 && self.alert.is_some() && self.target_alive()
     }
 
-    /// The guard's beat around its own frog for a guard whose frog is
+    /// The guard's beat around its own bong for a guard whose bong is
     /// alive, `None` for every other role. The outer radius is
     /// `guard_leash_px` less a hull, so a waypoint on the rim never carries
     /// the hull over the line; the inner one `guard_keep_off_px`, capped
@@ -3015,7 +3015,7 @@ impl Brain<'_> {
         if self.ai.role != Role::Guard {
             return None;
         }
-        let anchor = self.frog_target?;
+        let anchor = self.bong_target?;
         let radius = (tuning().guard_leash_px - self.me.size()).max(self.me.size());
         let keep_off = tuning().guard_keep_off_px.min(radius * 0.75);
         Some(Leash { anchor, radius, keep_off })
@@ -3066,7 +3066,7 @@ impl Brain<'_> {
     }
 
     /// Whether a guard should hold its beat rather than fight: the player
-    /// is dead or outside `guard_leash_px` of its frog.
+    /// is dead or outside `guard_leash_px` of its bong.
     fn guard_holds(&self) -> bool {
         self.leash().is_some_and(|l| {
             !self.player_alive() || self.player.position.distance_to(l.anchor) > tuning().guard_leash_px
@@ -3076,11 +3076,11 @@ impl Brain<'_> {
     /// Whether a hunter can take the opportunistic shot at the player this
     /// tick: the player is alive, within attack range, in clear sight,
     /// already lined up on one of this tank's firing axes - so no
-    /// repositioning away from the frog is ever spent on it - with this
+    /// repositioning away from the bong is ever spent on it - with this
     /// tank inside the player's sight box (`may_fire_at_seat`), and the
     /// last snipe's `hunter_snipe_cooldown_seconds` have passed.
     fn can_snipe_player(&self) -> bool {
-        if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
+        if !self.hunting_bong() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
             return false;
         }
         // A weapon its own rule fires is no sniper's: holding for a shot
@@ -3104,9 +3104,9 @@ impl Brain<'_> {
     /// never held back by it; up and down it is shorter, and a tank lined
     /// up on a column closes in before it fires.
     ///
-    /// A training dummy (`Ai::frog_only`) never may.
+    /// A training dummy (`Ai::bong_only`) never may.
     fn may_fire_at_seat(&self) -> bool {
-        !self.ai.frog_only && in_sight_box(self.player.position, self.me.position)
+        !self.ai.bong_only && in_sight_box(self.player.position, self.me.position)
     }
 
     /// Back away from the seat this tank fights, for the flee and retreat
@@ -3362,7 +3362,7 @@ impl Brain<'_> {
     /// `range` px ahead - the aligned half of `act_attack`, shared with the
     /// hunter's snipe and the grudge shot. Holds fire (mostly) when a
     /// teammate is in the way. `at_seat` is the seat the shot is aimed at,
-    /// `None` for a frog or a tower; the caller has already held the tank
+    /// `None` for a bong or a tower; the caller has already held the tank
     /// to that seat's sight box (`may_fire_at_seat`), and a shot taken
     /// records it in `Ai::shot_at_seat`.
     fn hold_and_fire(&mut self, fire_dir: Dir, range: f32, at_seat: Option<u8>) {
@@ -3562,7 +3562,7 @@ pub fn in_sight_box_of((half_w, half_h): (f32, f32), seat: Position, at: Positio
 ///   6. Patrol otherwise.
 ///
 /// "Target" is the player for `Role::Player`/`Role::Guard` and the
-/// player's frog for a `Role::Hunter` while it lives (`think`'s `target`).
+/// player's bong for a `Role::Hunter` while it lives (`think`'s `target`).
 /// The tree is rebuilt each tick (cheap: a handful of enum nodes) for clarity.
 fn build<'a>() -> Node<Brain<'a>> {
     selector(vec![
@@ -3664,13 +3664,13 @@ fn build<'a>() -> Node<Brain<'a>> {
         ]),
         // 3.5. A hunter that happens to be lined up on the player within
         // attack range, inside the player's sight box, shoots the player
-        // this tick instead of the frog - an opportunity taken, never a
+        // this tick instead of the bong - an opportunity taken, never a
         // detour (see `Brain::can_snipe_player`).
         sequence(vec![
             condition(|b: &mut Brain| b.can_snipe_player()),
             action("snipe", act_snipe),
         ]),
-        // 3.6. A guard whose player is nowhere near its frog stays on its
+        // 3.6. A guard whose player is nowhere near its bong stays on its
         // beat instead of chasing - see `Role::Guard`.
         sequence(vec![
             condition(|b: &mut Brain| b.guard_holds()),
@@ -3686,8 +3686,8 @@ fn build<'a>() -> Node<Brain<'a>> {
                     // `act_attack`'s unaligned branch repositions toward the
                     // target, so a tank that cannot shoot still closes until
                     // it is near enough to see through the grass. A hunter
-                    // is aiming at the frog, not the player, so it is exempt.
-                    && (b.hunting_frog() || !b.target_concealed || b.ai.hit_alert_timer > 0.0)
+                    // is aiming at the bong, not the player, so it is exempt.
+                    && (b.hunting_bong() || !b.target_concealed || b.ai.hit_alert_timer > 0.0)
             }),
             action("attack", act_attack),
         ]),
@@ -3695,7 +3695,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // tank has recently taken a hit - see `Ai::notify_hit`/
         // `ENEMY_HIT_ALERT_SECONDS`'s own doc comment: a shot landing from
         // outside normal awareness range shouldn't just be shrugged off. A
-        // hunter's frog is an objective, not a sighting: it is chased from
+        // hunter's bong is an objective, not a sighting: it is chased from
         // anywhere on the map. In sight is `Ai::in_sight`, held
         // `enemy_sight_hold_px` past the edge of its sight: a chase route
         // that bends out past the edge (round a wall) would otherwise hand
@@ -3704,7 +3704,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.target_alive()
-                    && (b.hunting_frog()
+                    && (b.hunting_bong()
                         // Concealment breaks the chase (`in_sight` is false
                         // while the target is concealed), which is what
                         // makes hiding mean anything: without it the tier
@@ -3960,7 +3960,7 @@ fn well_rule(b: &Brain, sense: &WellSense) -> Option<SpecialUse> {
             _ => SpecialUse::Hold { face: facing, why: "orb" },
         });
     }
-    if b.ai.frog_only || b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0 {
+    if b.ai.bong_only || b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0 {
         return None;
     }
     let plan = sense.plan?;
@@ -3985,7 +3985,7 @@ fn act_pull(b: &mut Brain) -> Status {
         b.ai.pull_why = Some("brace");
         b.ai.pull_escape = None;
         let (fire_dir, off_axis, in_front) = b.aim_alignment();
-        let at_seat = !b.hunting_frog();
+        let at_seat = !b.hunting_bong();
         if fire_dir == face && off_axis <= tuning().enemy_fire_align_px && in_front && b.line_of_sight && (!at_seat || b.may_fire_at_seat()) {
             let range = b.dist_to_target();
             // Its aim settles across the ticks it stays lined up, as the
@@ -4017,7 +4017,7 @@ fn act_pull(b: &mut Brain) -> Status {
 /// a tank whose fire timer runs; a pick starts the reticle toward its cell.
 /// Draws no RNG.
 fn rod_rule(b: &Brain, sense: &RodSense) -> Option<SpecialUse> {
-    if b.ai.frog_only {
+    if b.ai.bong_only {
         return None;
     }
     let cooling = b.me.fire_cooldown > 0.0 || b.ai.fire_timer > 0.0;
@@ -4180,13 +4180,13 @@ fn rod_aim_rule(b: &Brain, face: Dir) -> SpecialUse {
 /// air, one exposed to the seat it would launch at moves to cover first -
 /// the two for at most `fpv_ai_cover_seconds` together (`Ai::place_waited`),
 /// a place it cannot get to being none -, then it launches - at that seat, else into the crown over a seat hiding
-/// under a tree, else (a hunter) at the players' frog (`FpvSense::quarry`,
+/// under a tree, else (a hunter) at the players' bong (`FpvSense::quarry`,
 /// set for a hunter alone) - one at a time, the
 /// fire timer (`fpv_enemy_gap_seconds`) spacing them; with one in the air
 /// it holds where it stands while it works. Draws no RNG.
 fn fpv_rule(b: &Brain, sense: &FpvSense) -> Option<SpecialUse> {
     let t = tuning();
-    if b.ai.frog_only {
+    if b.ai.bong_only {
         return None;
     }
     let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds();
@@ -4219,7 +4219,7 @@ fn fpv_rule(b: &Brain, sense: &FpvSense) -> Option<SpecialUse> {
             return Some(SpecialUse::Launch { want: crate::fpv::AirWant::Point(crown), at_seat: Some(seat), why: "canopy" });
         }
         if quarry.is_some() {
-            return Some(SpecialUse::Launch { want: crate::fpv::AirWant::Frog, at_seat: None, why: "frog" });
+            return Some(SpecialUse::Launch { want: crate::fpv::AirWant::Bong, at_seat: None, why: "bong" });
         }
         return None;
     }
@@ -4245,7 +4245,7 @@ fn act_air(b: &mut Brain) -> Status {
     let face = Dir::toward(me, threat.drone);
     // A training dummy never fires toward a seat, and flak at a drone is
     // fire toward the seat that sent it (`Brain::may_fire_at_seat`).
-    if b.me.active_weapon() == ActiveWeapon::Minigun && threat.may_shoot && !b.ai.frog_only {
+    if b.me.active_weapon() == ActiveWeapon::Minigun && threat.may_shoot && !b.ai.bong_only {
         b.intent.face = Some(face);
         b.ai.commit(face);
         b.intent.move_dir = None;
@@ -4313,7 +4313,7 @@ fn act_air(b: &mut Brain) -> Status {
 /// facing it has and then `Dir::ALL` order - starts a charge. Draws no
 /// RNG.
 fn gauss_rule(b: &Brain, sense: &GaussSense) -> Option<SpecialUse> {
-    if b.ai.frog_only || b.me.fire_cooldown > 0.0 {
+    if b.ai.bong_only || b.me.fire_cooldown > 0.0 {
         return None;
     }
     let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
@@ -4363,7 +4363,7 @@ fn gauss_charge_rule(b: &Brain, face: Dir, sense: Option<&GaussSense>) -> Specia
 /// matched while the fire timer runs holds (`act_special`). Draws no RNG.
 fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
     let t = tuning();
-    if b.ai.frog_only || sense.off_box {
+    if b.ai.bong_only || sense.off_box {
         return None;
     }
     let facing = Dir::from_rotation(b.me.rotation).unwrap_or(Dir::Up);
@@ -4377,7 +4377,7 @@ fn emp_rule(b: &Brain, sense: &EmpSense) -> Option<SpecialUse> {
         }
         return Some(SpecialUse::Fire { face: facing, at_seat: sense.at_seat, why: "pulse" });
     }
-    let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds() && !b.hunting_frog();
+    let free = b.me.damage < t.enemy_flee_damage && !b.guard_holds() && !b.hunting_bong();
     // A seat hidden from it in tall grass is none to go after, unless it
     // was just shot by it (the attack tier's rule).
     let seen = !b.target_concealed || b.ai.hit_alert_timer > 0.0;
@@ -4481,7 +4481,7 @@ fn windup_rule(b: &Brain, windup: crate::tank::Windup) -> Option<SpecialUse> {
 /// shout down glass in its way at once; then, each way it could face - its
 /// own facing first, then `Dir::ALL`, never a way a fellow enemy stands -
 /// shove a seat into trouble, throw a drum onto one, flush the grass round
-/// a hidden seat's alert, break a seat in its face, pin a hunter's frog;
+/// a hidden seat's alert, break a seat in its face, pin a hunter's bong;
 /// then a closer closes in to its spot (`HammerSense::spot`) and waits
 /// there facing the seat.
 /// A fire arm that matched while the fire timer runs holds facing it
@@ -4504,7 +4504,7 @@ fn hammer_rule(b: &Brain, sense: &HammerSense) -> Option<SpecialUse> {
         ("drum", |a| a.drum.map(Some)),
         ("flush", |a| a.flush.map(Some)),
         ("breaker", |a| a.breaker.map(Some)),
-        ("frog", |a| a.frog.then_some(None)),
+        ("bong", |a| a.bong.then_some(None)),
     ];
     for (why, arm) in arms {
         if let Some((face, at_seat)) = aims.iter().find_map(|(d, a)| arm(a).map(|seat| (*d, seat))) {
@@ -4708,7 +4708,7 @@ fn act_seek_shield(b: &mut Brain) -> Status {
 /// than the box reaches, the tank keeps closing in.
 fn act_attack(b: &mut Brain) -> Status {
     let (fire_dir, off_axis, in_front) = b.aim_alignment();
-    let at_seat = !b.hunting_frog();
+    let at_seat = !b.hunting_bong();
     // A geometrically on-axis spot the AI can't actually shoot from (a wall
     // in the way) is treated the same as not being aligned at all, so the
     // tank repositions instead of settling in and holding a shot it can
@@ -4764,7 +4764,7 @@ fn act_snipe(b: &mut Brain) -> Status {
     Status::Success
 }
 
-/// A guard's beat while the player is away from its frog (see
+/// A guard's beat while the player is away from its bong (see
 /// `Brain::guard_holds`): head back to the beat when outside it, otherwise
 /// wander within it.
 fn act_guard(b: &mut Brain) -> Status {
@@ -4772,8 +4772,8 @@ fn act_guard(b: &mut Brain) -> Status {
     b.reset_aim();
     let me = b.me.position;
     if me.distance_to(leash.anchor) > leash.radius {
-        // Aim for the beat's inner rim on the line back to the frog, not
-        // the frog itself: it is a solid body in a blocked nav cell, so a
+        // Aim for the beat's inner rim on the line back to the bong, not
+        // the bong itself: it is a solid body in a blocked nav cell, so a
         // route *to* it never exists. A committed heading still pointing
         // away from home is dropped so the turn happens now - the
         // hold/margin gate is blind to a straight reversal by design, and
@@ -4949,7 +4949,7 @@ mod role_tests {
     /// One open-field `think` tick for an enemy of `role` at `me`, the
     /// player at `player`, fighting `target` (see `Ai::think`), with a
     /// clear line of sight everywhere.
-    fn tick(ai: &mut Ai, me: Position, player: Position, target: Position, frog_target: Option<Position>) -> Intent {
+    fn tick(ai: &mut Ai, me: Position, player: Position, target: Position, bong_target: Option<Position>) -> Intent {
         let mut me_tank = Tank::default();
         me_tank.position = me;
         let mut player_tank = Tank::default();
@@ -4964,7 +4964,7 @@ mod role_tests {
             &me_tank,
             &player_tank,
             target,
-            frog_target,
+            bong_target,
             1280.0,
             720.0,
             1.0 / 60.0,
@@ -5047,19 +5047,19 @@ mod role_tests {
     }
 
     #[test]
-    fn a_hunter_closes_on_its_frog_and_reverts_to_the_player_without_one() {
+    fn a_hunter_closes_on_its_bong_and_reverts_to_the_player_without_one() {
         let mut ai = Ai::with_role(Role::Hunter);
         assert_eq!(ai.snapshot().role, "hunter");
         let me = Position::new(600.0, 300.0);
         let player = Position::new(200.0, 600.0);
-        let frog = Position::new(1100.0, 300.0);
-        // Quarry alive: the frog is the target, so the tank heads east
+        let bong = Position::new(1100.0, 300.0);
+        // Quarry alive: the bong is the target, so the tank heads east
         // toward it rather than south-west toward the player.
-        let intent = tick(&mut ai, me, player, frog, Some(frog));
+        let intent = tick(&mut ai, me, player, bong, Some(bong));
         assert_eq!(intent.move_dir, Some(Dir::Right), "{:?}", ai.snapshot().last_action);
         assert_eq!(ai.snapshot().last_action, Some("chase"));
         // Quarry dead: the simulation hands it the player as target and
-        // no frog, and it chases the player like any other enemy.
+        // no bong, and it chases the player like any other enemy.
         let mut ai = Ai::with_role(Role::Hunter);
         let intent = tick(&mut ai, me, player, player, None);
         assert!(
@@ -5074,14 +5074,14 @@ mod role_tests {
     fn a_hunter_lined_up_on_the_player_in_range_snipes_instead() {
         let mut ai = Ai::with_role(Role::Hunter);
         let me = Position::new(600.0, 300.0);
-        let frog = Position::new(1100.0, 300.0);
+        let bong = Position::new(1100.0, 300.0);
         // The player sits straight below, well inside attack range.
         let player = Position::new(600.0, 300.0 + tuning().enemy_attack_range * 0.5);
         // Snipe holds and settles its aim until the shot goes off.
         let settle = (tuning().enemy_aim_settle * 60.0) as u32 + 2;
         let mut fired = false;
         for _ in 0..settle + 60 {
-            let intent = tick(&mut ai, me, player, frog, Some(frog));
+            let intent = tick(&mut ai, me, player, bong, Some(bong));
             assert_eq!(ai.snapshot().last_action, Some("snipe"));
             assert_eq!(intent.move_dir, None, "a snipe holds position");
             assert_eq!(intent.face, Some(Dir::Down));
@@ -5092,68 +5092,68 @@ mod role_tests {
         }
         assert!(fired, "never fired at the player");
         // One shot is the opportunity: still lined up, the hunter goes
-        // back to the frog until the snipe cooldown has run out.
+        // back to the bong until the snipe cooldown has run out.
         assert!(ai.snapshot().snipe_cooldown > 0.0, "the shot starts the cooldown");
-        tick(&mut ai, me, player, frog, Some(frog));
-        assert_eq!(ai.snapshot().last_action, Some("chase"), "back to the frog after the shot");
+        tick(&mut ai, me, player, bong, Some(bong));
+        assert_eq!(ai.snapshot().last_action, Some("chase"), "back to the bong after the shot");
         let cooldown = (tuning().hunter_snipe_cooldown_seconds * 60.0) as u32 + 2;
         for _ in 0..cooldown {
-            tick(&mut ai, me, player, frog, Some(frog));
+            tick(&mut ai, me, player, bong, Some(bong));
         }
         assert_eq!(ai.snapshot().last_action, Some("snipe"), "may snipe again once the cooldown is over");
-        // Off-axis, the same player in range is ignored for the frog.
+        // Off-axis, the same player in range is ignored for the bong.
         let mut ai = Ai::with_role(Role::Hunter);
         let player = Position::new(700.0, 450.0);
-        tick(&mut ai, me, player, frog, Some(frog));
+        tick(&mut ai, me, player, bong, Some(bong));
         assert_eq!(ai.snapshot().last_action, Some("chase"));
     }
 
     /// A snipe is a shot at a seat, so it is taken only from inside the
     /// player's sight box: lined up and in attack range but further out on
     /// the player's column than the box reaches, the hunter goes on after
-    /// the frog.
+    /// the bong.
     #[test]
     fn a_hunter_snipes_only_from_inside_the_players_sight_box() {
         let (_, half_h) = tuning().sight_box_half_px();
         let me = Position::new(600.0, 300.0);
-        let frog = Position::new(1100.0, 300.0);
+        let bong = Position::new(1100.0, 300.0);
         let action_with_player_below = |below: f32| {
             let mut ai = Ai::with_role(Role::Hunter);
-            tick(&mut ai, me, Position::new(me.x, me.y + below), frog, Some(frog));
+            tick(&mut ai, me, Position::new(me.x, me.y + below), bong, Some(bong));
             ai.snapshot().last_action
         };
         assert!(half_h + 30.0 < tuning().enemy_attack_range, "the defaults this is about");
-        assert_eq!(action_with_player_below(half_h + 30.0), Some("chase"), "outside the box: back to the frog");
+        assert_eq!(action_with_player_below(half_h + 30.0), Some("chase"), "outside the box: back to the bong");
         assert_eq!(action_with_player_below(half_h - 30.0), Some("snipe"));
     }
 
     #[test]
     fn a_guard_holds_its_beat_until_the_player_comes_close() {
-        let frog = Position::new(1100.0, 300.0);
+        let bong = Position::new(1100.0, 300.0);
         let leash = tuning().guard_leash_px;
-        // Player far from the frog, guard outside the leash: head home.
+        // Player far from the bong, guard outside the leash: head home.
         let mut ai = Ai::with_role(Role::Guard);
-        let intent = tick(&mut ai, Position::new(600.0, 300.0), Position::new(200.0, 600.0), Position::new(200.0, 600.0), Some(frog));
+        let intent = tick(&mut ai, Position::new(600.0, 300.0), Position::new(200.0, 600.0), Position::new(200.0, 600.0), Some(bong));
         assert_eq!(ai.snapshot().last_action, Some("guard"));
         assert_eq!(intent.move_dir, Some(Dir::Right));
         // Guard inside the leash: wanders, but only to waypoints on its
-        // beat - inside the leash and clear of the frog itself.
+        // beat - inside the leash and clear of the bong itself.
         let mut ai = Ai::with_role(Role::Guard);
         let keep_off = tuning().guard_keep_off_px;
         for _ in 0..600 {
-            let intent = tick(&mut ai, Position::new(1000.0, 300.0), Position::new(200.0, 600.0), Position::new(200.0, 600.0), Some(frog));
+            let intent = tick(&mut ai, Position::new(1000.0, 300.0), Position::new(200.0, 600.0), Position::new(200.0, 600.0), Some(bong));
             assert_eq!(ai.snapshot().last_action, Some("guard"));
             assert!(intent.move_dir.is_some());
             let s = ai.snapshot();
             let wp = Position::new(s.waypoint_x, s.waypoint_y);
-            let d = wp.distance_to(frog);
-            assert!(d <= leash && d >= keep_off.min(leash * 0.5), "waypoint {wp:?} is {d} px from the frog");
+            let d = wp.distance_to(bong);
+            assert!(d <= leash && d >= keep_off.min(leash * 0.5), "waypoint {wp:?} is {d} px from the bong");
         }
         // Player inside the leash (and in the guard's view): fights like
         // everyone else.
         let mut ai = Ai::with_role(Role::Guard);
-        let player = Position::new(frog.x - leash * 0.5, frog.y);
-        tick(&mut ai, Position::new(400.0, 300.0), player, player, Some(frog));
+        let player = Position::new(bong.x - leash * 0.5, bong.y);
+        tick(&mut ai, Position::new(400.0, 300.0), player, player, Some(bong));
         assert_eq!(ai.snapshot().last_action, Some("chase"));
     }
 }
@@ -5843,7 +5843,7 @@ mod separation_tests {
     /// aggression, not to this test.
     #[test]
     fn enemies_pull_up_short_instead_of_ramming() {
-        let map = "version = 1\ntanks = 5\ncells.\"2,2\" = { kind = \"frog\" }\ncells.\"20,11\" = { kind = \"start\" }\n";
+        let map = "version = 1\ntanks = 5\ncells.\"2,2\" = { kind = \"bong\" }\ncells.\"20,11\" = { kind = \"start\" }\n";
         let (mut pair, mut into_player) = (0, 0);
         for seed in 0..4u64 {
             let mut game = Game::default();
@@ -5925,7 +5925,7 @@ mod hammer_tests {
             ("drum", HammerAim { drum: Some(0), ..HammerAim::default() }),
             ("flush", HammerAim { flush: Some(0), ..HammerAim::default() }),
             ("breaker", HammerAim { breaker: Some(0), ..HammerAim::default() }),
-            ("frog", HammerAim { frog: true, ..HammerAim::default() }),
+            ("bong", HammerAim { bong: true, ..HammerAim::default() }),
         ];
         for (why, aim) in arms {
             let mut ai = ready();
@@ -6111,7 +6111,7 @@ mod emp_rule_tests {
         ];
         for (why, s, dummy) in cases {
             let mut ai = ready();
-            ai.frog_only = dummy;
+            ai.bong_only = dummy;
             for _ in 0..60 {
                 let intent = think(&mut ai, &emp_tank(), SpecialSense::Emp(s), &[], seat);
                 assert!(!intent.fire, "{why}: {intent:?}");

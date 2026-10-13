@@ -20,7 +20,7 @@
 //!   of a seat or takes a hit (`FieldMind::called`) - the walk the gate was
 //!   chosen for.
 //! - **Far enemies think less** (`mind`): farther than `enemy_far_px` from
-//!   every live seat and the players' frog, a tank thinks every
+//!   every live seat and the players' bong, a tank thinks every
 //!   `enemy_far_think_ticks` ticks, staggered by owner slot, and coasts on
 //!   its last intent in between; one nothing has woken yet does not think
 //!   at all.
@@ -64,14 +64,14 @@ pub(super) enum Mind {
 
 /// How the tank at `position` in owner slot `slot` spends tick `frame`:
 /// a near tank - within `enemy_far_px` of one of `anchors`, the live seats
-/// and the players' frog - thinks every tick; a far one thinks when
+/// and the players' bong - thinks every tick; a far one thinks when
 /// `frame + slot` falls on `enemy_far_think_ticks` and coasts otherwise;
-/// a far one nothing has woken sleeps. `hunting` is a hunter with a frog
+/// a far one nothing has woken sleeps. `hunting` is a hunter with a bong
 /// to hunt, which an objective keeps awake wherever it is.
 ///
 /// Also where the tank's home is set, the first tick it stands on the
 /// field, and where it wakes: an alert, a hit, a call to the fight, a
-/// frog to hunt or a seat within `enemy_far_px` - and once awake it stays
+/// bong to hunt or a seat within `enemy_far_px` - and once awake it stays
 /// so. And where a wave tank counts how long it has been lost to the
 /// fight (`FieldMind::lost`): no anchor within `sight`, what it sees.
 #[allow(clippy::too_many_arguments)] // one tank's perception, passed by value
@@ -120,7 +120,7 @@ pub(super) fn thinks(ai: &Ai, position: Position, slot: usize, anchors: &[Positi
 /// `mind`'s rule: whether the tank thinks this tick - near one of
 /// `anchors`, or awake (already, or woken now) on its slot's tick of
 /// `enemy_far_think_ticks` - and whether something wakes it: a seat or the
-/// players' frog within `enemy_far_px`, a frog to hunt, a hit, a call to
+/// players' bong within `enemy_far_px`, a bong to hunt, a hit, a call to
 /// the fight or an alert.
 fn choice(ai: &Ai, position: Position, slot: usize, anchors: &[Position], hunting: bool, frame: u64) -> (bool, bool) {
     let t = tuning();

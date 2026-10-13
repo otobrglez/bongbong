@@ -12,7 +12,7 @@
 
 use hecs::Entity;
 
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::gauss::{self, ChargeEndFx, Pierce, Pierced, RailSlug};
 use crate::math::Vec2;
 use crate::obstacle::{Material, Obstacle};
@@ -24,7 +24,7 @@ use crate::{MAX_DAMAGE, Position};
 
 use super::hits::{self, ShellTarget};
 use super::props::DamageCause;
-use super::{Event, Footing, Frame, Game, HitCause, HitTarget, SHOCK_FROG, Spectacle, laser_reach, portals};
+use super::{Event, Footing, Frame, Game, HitCause, HitTarget, SHOCK_BONG, Spectacle, laser_reach, portals};
 
 /// A slug released this frame, waiting for `resolve_rails` to trace it.
 pub(super) struct PendingRail {
@@ -310,7 +310,7 @@ impl Game {
             ShellTarget::Obstacle(e) => {
                 f.terrain.obstacle(e).is_some_and(|b| b.material.is_permanent() && (!overcharged || b.material != Material::Iron))
             }
-            ShellTarget::Tank(_) | ShellTarget::Frog(_) => false,
+            ShellTarget::Tank(_) | ShellTarget::Bong(_) => false,
         }
     }
 
@@ -318,13 +318,13 @@ impl Game {
     /// far (`full` at its start): a tank takes it whole through
     /// `take_damage` - a seat's slug through a teammate scaled by
     /// `friendly_fire_damage_factor`, a rainbow shield soaking it - and the
-    /// slug keeps `gauss_pierce_keep` of it; a frog takes
-    /// `gauss_frog_damage` times what the slug has kept, and the same;
+    /// slug keeps `gauss_pierce_keep` of it; a bong takes
+    /// `gauss_bong_damage` times what the slug has kept, and the same;
     /// a tower takes it (`DamageCause::Pierce`), and the same; every other
     /// tile dies outright and the slug keeps `gauss_tile_keep` (iron an
     /// overcharged slug cuts is untouched; a tile already burning or with
     /// a fuse lit is passed through untouched). No knockback, no hop, no
-    /// roll. What it was, for the picture; `None` for a wreck, a dead frog
+    /// roll. What it was, for the picture; `None` for a wreck, a dead bong
     /// and a tile already gone.
     #[allow(clippy::too_many_arguments)]
     fn pierce_hit(&mut self, f: &mut Frame, target: ShellTarget, at: Position, damage: &mut f32, full: f32, shooter: Owner, dir: Vec2) -> Option<Pierced> {
@@ -363,24 +363,24 @@ impl Game {
                 *damage *= t.gauss_pierce_keep;
                 Some(what)
             }
-            ShellTarget::Frog(entity) => {
+            ShellTarget::Bong(entity) => {
                 let keep = if full > 0.0 { *damage / full } else { 0.0 };
                 let (dead, pos) = {
-                    let mut q = self.world.query_one::<&mut Frog>(entity);
-                    let frog = q.get().ok()?;
-                    if frog.is_dead() {
+                    let mut q = self.world.query_one::<&mut Bong>(entity);
+                    let bong = q.get().ok()?;
+                    if bong.is_dead() {
                         return None;
                     }
-                    let d = t.gauss_frog_damage * keep;
-                    frog.damage(d);
-                    f.events.push(Event::Hit { target: HitTarget::Frog { side: frog.side }, damage: d, killed: frog.is_dead(), x: at.x, y: at.y, cause: HitCause::Rail });
-                    (frog.is_dead(), frog.position)
+                    let d = t.gauss_bong_damage * keep;
+                    bong.damage(d);
+                    f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: HitCause::Rail });
+                    (bong.is_dead(), bong.position)
                 };
                 if dead {
-                    f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
+                    f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
                 }
                 *damage *= t.gauss_pierce_keep;
-                Some(Pierced::Frog)
+                Some(Pierced::Bong)
             }
             ShellTarget::Obstacle(entity) => {
                 let (material, standing) = {
@@ -527,7 +527,7 @@ impl Game {
     /// tank's sight under the sky and not hidden from it.
     ///
     /// A lane is traced only where a target could be on it: one holding
-    /// neither a seat that counts nor, for a hunter, the players' frog is
+    /// neither a seat that counts nor, for a hunter, the players' bong is
     /// worth nothing whatever else it would go through (`GaussLane::counts`),
     /// so it is left `GaussLane::default` unless the box of one of those
     /// reaches its band (`SlugBand`, the test the trace itself holds every
@@ -548,7 +548,7 @@ impl Game {
         // Each seat's boxes as a trace grows them, read once for every tank.
         let seat_boxes: Vec<[(Position, Position); 2]> =
             seats.iter().map(|s| super::with_tank(&self.world, s.entity, |tank| hits::slug_boxes(tank, pad))).collect();
-        let quarry_box = self.frog.and_then(|frog| terrain.frog_box(frog, t.gauss_half_width));
+        let quarry_box = self.bong.and_then(|bong| terrain.bong_box(bong, t.gauss_half_width));
         let armed: Vec<(Entity, Owner, Position)> = self
             .world
             .query::<(Entity, &Tank, &Ai)>()
@@ -563,7 +563,7 @@ impl Game {
             // Whether a seat counts for this tank does not hang on the lane.
             let counts = |seat: &GaussSeat| {
                 seat.live
-                    && !ai.frog_only
+                    && !ai.bong_only
                     && crate::ai::in_sight_box_of((half_w, half_h), seat.pos, me)
                     && me.distance_to(seat.pos) <= seat.sight
                     && !(seat.concealed && !ai.is_hit_alerted())
@@ -607,10 +607,10 @@ impl Game {
                                 lane.friend.get_or_insert(along);
                             }
                         },
-                        ShellTarget::Frog(e) => {
-                            if Some(e) == self.enemy_frog {
+                        ShellTarget::Bong(e) => {
+                            if Some(e) == self.enemy_bong {
                                 lane.friend.get_or_insert(along);
-                            } else if hunter && Some(e) == self.frog && lane.quarry.is_none() {
+                            } else if hunter && Some(e) == self.bong && lane.quarry.is_none() {
                                 lane.quarry = Some(along);
                             }
                         }
@@ -619,7 +619,7 @@ impl Game {
                                 && o.material.is_tower()
                                 && !o.destroyed
                             {
-                                if crate::tower::side_of_variant(o.variant) == crate::frog::Side::Player {
+                                if crate::tower::side_of_variant(o.variant) == crate::bong::Side::Player {
                                     lane.towers += 1;
                                 } else {
                                     lane.friend.get_or_insert(along);

@@ -2,7 +2,7 @@
 //! fills every family the PRD's table lists as travelling, `welcome` wraps
 //! one in the round's parameters. Reads the round through
 //! `simulation::replica`'s accessors and the entities' own quantised
-//! readings (`Tank::hull_points`, `Frog::clip_phase`,
+//! readings (`Tank::hull_points`, `Bong::clip_phase`,
 //! `Obstacle::lean_strength`), so what goes on the wire is exactly what
 //! `Game::drawable_state` compares. Pure: no RNG, nothing written back.
 //!
@@ -17,10 +17,10 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    AirState, BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    AirState, BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, bong_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::map;
 use crate::obstacle::Obstacle;
 use crate::pickup::Pickup;
@@ -91,7 +91,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         missiles: missiles(game),
         grenades: grenades(game),
         drones: drones(game),
-        frogs: frogs(game),
+        bongs: bongs(game),
         pickups: 0,
         bonus_pickups: Vec::new(),
         tiles: tiles(game, cols),
@@ -363,26 +363,26 @@ fn drones(game: &Game) -> Vec<DroneState> {
         .collect()
 }
 
-fn frogs(game: &Game) -> Vec<FrogState> {
+fn bongs(game: &Game) -> Vec<BongState> {
     game.world
-        .query::<&Frog>()
+        .query::<&Bong>()
         .iter()
         .map(|f| {
             let hopping = f.hop_timer > 0.0;
             let mut state = 0;
             for (on, bit) in [
-                (f.is_dead(), frog_flags::DEAD),
-                (hopping, frog_flags::HOPPING),
-                (f.hurt_timer > 0.0, frog_flags::HURT),
-                (f.attack_timer > 0.0, frog_flags::BITING),
-                (f.is_stunned(), frog_flags::STUNNED),
-                (f.pulled, frog_flags::PULLED),
+                (f.is_dead(), bong_flags::DEAD),
+                (hopping, bong_flags::HOPPING),
+                (f.hurt_timer > 0.0, bong_flags::HURT),
+                (f.attack_timer > 0.0, bong_flags::BITING),
+                (f.is_stunned(), bong_flags::STUNNED),
+                (f.pulled, bong_flags::PULLED),
             ] {
                 if on {
                     state |= bit;
                 }
             }
-            FrogState {
+            BongState {
                 side: f.side,
                 x: quantise_pos(f.position.x),
                 y: quantise_pos(f.position.y),

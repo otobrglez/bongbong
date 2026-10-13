@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use hecs::Entity;
 
 use crate::canvas::{Canvas, Sheet};
-use crate::frog::Side;
+use crate::bong::Side;
 use crate::math::{Color, Rectangle, Vec2};
 use crate::obstacle::Material;
 use crate::shell::Owner;

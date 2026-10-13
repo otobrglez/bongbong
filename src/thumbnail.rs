@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 
 /// The round seed a thumbnail uses unless told otherwise, so a batch is
 /// stable from run to run and machine to machine. It only picks cosmetics:
-/// ground and grass tiles, the frog's colour, a rolled chassis.
+/// ground and grass tiles, the bong's colour, a rolled chassis.
 pub const DEFAULT_SEED: u64 = 0xB0B5;
 
 /// What the thumbnail leaves out of `paint_standing`: the locate ripple is
@@ -61,7 +61,7 @@ impl Default for ThumbnailOptions {
 
 /// A fresh round on `map` at its first frame: no intro banner, no
 /// enemies (the spawn plan is forced to Band so the zero count is
-/// honoured whatever the map says), pickups and frogs in place, the
+/// honoured whatever the map says), pickups and bongs in place, the
 /// player start tank(s) with their ring settled on the hull.
 pub fn stage_round(map: MapFile, opts: &ThumbnailOptions) -> Game {
     let mut game = Game::default();
@@ -166,30 +166,30 @@ mod tests {
     /// tuning change, never to go green.
     #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 24] = [
-        ("default", 0x55de_4383_13a6_0d5f),
-        ("default-desert", 0x18e5_7df0_d13c_ee86),
-        ("hunt-basic", 0x22d1_0372_23a7_c2d8),
+        ("default", 0xc35e_5595_2de6_4cd3),
+        ("default-desert", 0x78a1_5549_3c52_88f9),
+        ("hunt-basic", 0x433e_19fc_5107_45bc),
         ("waves-basic", 0x3a19_a312_0b59_7fc1),
-        ("portals", 0xa7ce_43c1_fa77_12a0),
-        ("towers", 0x5985_4558_8f64_3572),
-        ("longwater", 0x0ed3_0d75_6180_16ee),
-        ("armory", 0x8a35_679f_709b_673d),
-        ("lotus-lagoon", 0x39c5_d444_7c99_256d),
-        ("vulkan", 0xdc6a_90c6_52e3_a888),
-        ("hedge-maze", 0x437b_84ba_61b5_5332),
-        ("oasis-bazaar", 0x35d3_7d9f_2fe3_0fad),
-        ("castle-moat", 0xbc0e_ebe1_ebd6_b0d0),
-        ("archipelago", 0x2b07_a9b6_7366_459c),
+        ("portals", 0x4339_ad71_265d_1078),
+        ("towers", 0x5be8_d484_6f04_af4a),
+        ("longwater", 0x81c7_dd5f_ddce_9c7e),
+        ("armory", 0xbbcd_7d06_53c7_cd1d),
+        ("lotus-lagoon", 0x9aed_0de0_dea9_af7a),
+        ("vulkan", 0x187d_1427_5c66_27b8),
+        ("hedge-maze", 0xc954_49b8_7e29_a3c3),
+        ("oasis-bazaar", 0x9fd4_404b_7d4e_5b61),
+        ("castle-moat", 0x409a_b1b1_6c81_3664),
+        ("archipelago", 0x457b_7d4e_693d_6d82),
         ("black-gold", 0x5982_660d_ca83_4f36),
-        ("harbor-lights", 0x8aa4_5fa0_6166_c023),
+        ("harbor-lights", 0x7851_0905_9e3f_ccd2),
         ("carnival", 0x598d_0c0b_1e33_789e),
-        ("jungle-temple", 0xa958_b2b7_93bc_fbc3),
-        ("serpent-river", 0xe5f5_9be0_388a_d138),
+        ("jungle-temple", 0xb446_4b07_ae74_0292),
+        ("serpent-river", 0xfb39_4486_7e46_0ef9),
         ("no-mans-land", 0xb130_5fc4_0881_9ab5),
-        ("glasshouses", 0x5a87_baa9_3ee0_01c7),
+        ("glasshouses", 0x2fda_8bc0_d144_e270),
         ("scrapyard", 0x4103_57a1_4c93_bba9),
-        ("grand-campaign", 0x1c0d_9816_2b5c_2409),
-        ("boot-camp", 0xef00_4ce4_9645_a149),
+        ("grand-campaign", 0xee89_f6f6_937d_9311),
+        ("boot-camp", 0x973a_9707_e1bf_7b2d),
     ];
 
     /// Decoding the sheets is raylib's job, so this and the next test run

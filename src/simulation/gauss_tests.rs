@@ -411,18 +411,18 @@ fn a_rainbow_shield_soaks_one_slug_and_the_slug_flies_on() {
     assert!(pierced.is_some_and(|p| p.iter().any(|&(_, _, w)| w == Pierced::Shield)));
 }
 
-/// A frog in the lane takes `gauss_frog_damage` and does not hop.
+/// A bong in the lane takes `gauss_bong_damage` and does not hop.
 #[test]
-fn a_frog_in_the_lane_takes_frog_damage_and_does_not_hop() {
-    let mut game = round_as("cells.\"9,6\" = { kind = \"frog\" }\n", 1, Mission::Protect, None);
-    let frog = game.frog.expect("a frog");
+fn a_bong_in_the_lane_takes_bong_damage_and_does_not_hop() {
+    let mut game = round_as("cells.\"9,6\" = { kind = \"bong\" }\n", 1, Mission::Protect, None);
+    let bong = game.bong.expect("a bong");
     let (before, at) = {
-        let f = game.world.get::<&crate::frog::Frog>(frog).unwrap();
+        let f = game.world.get::<&crate::bong::Bong>(bong).unwrap();
         (f.health, f.position)
     };
     charge(&mut game, full_ticks());
-    let f = game.world.get::<&crate::frog::Frog>(frog).unwrap();
-    assert!((before - f.health - tuning().gauss_frog_damage).abs() < 0.01, "{} -> {}", before, f.health);
+    let f = game.world.get::<&crate::bong::Bong>(bong).unwrap();
+    assert!((before - f.health - tuning().gauss_bong_damage).abs() < 0.01, "{} -> {}", before, f.health);
     assert!(f.position.distance_to(at) < 1.0, "no hop");
 }
 
@@ -843,7 +843,7 @@ fn the_rail_prefers_a_lane_with_two_seats() {
 fn a_training_dummy_never_charges() {
     let mut game = round("");
     let enemy = rail_enemy(&mut game, Position::new(400.0, 192.0));
-    game.world.get::<&mut Ai>(enemy).unwrap().frog_only = true;
+    game.world.get::<&mut Ai>(enemy).unwrap().bong_only = true;
     let events = watch(&mut game, enemy);
     assert!(!charged(&events, slot_of(&game, enemy)));
 }
@@ -883,10 +883,10 @@ fn an_enemy_never_rails_a_seat_from_outside_its_sight_box() {
     assert!(!charged(&events, slot_of(&game, enemy)), "300 px down a column, past the box's 240");
 }
 
-/// A hunter rails its quarry, the players' frog.
+/// A hunter rails its quarry, the players' bong.
 #[test]
 fn a_hunter_rails_its_quarry() {
-    let mut game = round_as("cells.\"20,12\" = { kind = \"frog\" }\n", 1, Mission::Protect, None);
+    let mut game = round_as("cells.\"20,12\" = { kind = \"bong\" }\n", 1, Mission::Protect, None);
     let s = seat(&game);
     game.place_tank(s, Position::new(96.0, 448.0), Some(90.0)).unwrap();
     let slot = game.debug_spawn_enemy(Position::new(640.0, 192.0), Some(1), Some(Role::Hunter)).unwrap();
@@ -896,11 +896,11 @@ fn a_hunter_rails_its_quarry() {
         t.disarm();
         t.gauss_slugs = 4;
     });
-    let frog = game.frog.unwrap();
-    let before = game.world.get::<&crate::frog::Frog>(frog).unwrap().health;
+    let bong = game.bong.unwrap();
+    let before = game.world.get::<&crate::bong::Bong>(bong).unwrap().health;
     let events = watch(&mut game, enemy);
-    assert!(fired(&events, slot), "the frog in its column");
-    assert!(game.world.get::<&crate::frog::Frog>(frog).unwrap().health < before);
+    assert!(fired(&events, slot), "the bong in its column");
+    assert!(game.world.get::<&crate::bong::Bong>(bong).unwrap().health < before);
 }
 
 /// Enemies step out of a charging seat's lane and do not step back while

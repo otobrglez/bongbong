@@ -20,8 +20,8 @@
 # crosses it and every shell does. It is crossed at a shallow ford at each
 # end and by two causeways either side of the fort, which stands on its
 # south shore: iron towers, a brick curtain, a walled basin on the water
-# whose moles look north across the lake, the barracks, and the frog's
-# garden with its two ponds behind them. Shield, frog health, ammo and
+# whose moles look north across the lake, the barracks, and the bong's
+# garden with its two ponds behind them. Shield, bong health, ammo and
 # health inside the walls.
 #
 # North of the water, from west to east: the west woods, cut by the ride
@@ -47,6 +47,7 @@
 # there is only ammo, and the depot's flamethrower, which no enemy wants.
 
 version = 1
+bong = "gloop"
 size = [112, 63]
 tank = "longbow"
 tank2 = "ravager"
@@ -2904,7 +2905,7 @@ cells."39,46" = { kind = "road" }
 cells."40,46" = { kind = "road" }
 cells."41,46" = { kind = "road" }
 cells."46,46" = { kind = "pickup", pickup = "shield" }
-cells."66,46" = { kind = "pickup", pickup = "frog_health" }
+cells."66,46" = { kind = "pickup", pickup = "bong_health" }
 cells."71,46" = { kind = "road" }
 cells."72,46" = { kind = "road" }
 cells."73,46" = { kind = "road" }
@@ -3257,7 +3258,7 @@ cells."78,55" = { kind = "pickup", pickup = "shield" }
 cells."42,56" = { kind = "wall", material = "brick" }
 cells."52,56" = { kind = "water" }
 cells."53,56" = { kind = "water" }
-cells."56,56" = { kind = "frog" }
+cells."56,56" = { kind = "bong" }
 cells."59,56" = { kind = "water" }
 cells."60,56" = { kind = "water" }
 cells."70,56" = { kind = "wall", material = "brick" }

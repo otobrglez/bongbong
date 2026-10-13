@@ -1,7 +1,7 @@
 # frontier - a 96 x 54 study map for docs/large-maps-follow-camera.md.
 # Not shipped and not a level: under the same-area rule a phone shows about
 # 35 x 16 cells of it, so it is three screens wide and three tall and needs
-# the follow camera that document describes. A walled fort with the frog in
+# the follow camera that document describes. A walled fort with the bong in
 # the centre-south, a town of brick, iron and glass to the north-east, a
 # river out of the northern hills into a lake, forests north-west, south-west
 # and east, ruins to the west, a fenced oil depot with fuel drums and an oil
@@ -613,7 +613,7 @@ cells."37,30" = { kind = "water" }
 cells."38,30" = { kind = "water" }
 cells."44,30" = { kind = "wall", material = "brick" }
 cells."47,30" = { kind = "pickup", pickup = "shield" }
-cells."55,30" = { kind = "pickup", pickup = "frog_health" }
+cells."55,30" = { kind = "pickup", pickup = "bong_health" }
 cells."58,30" = { kind = "wall", material = "brick" }
 cells."70,30" = { kind = "road" }
 cells."71,30" = { kind = "pickup", pickup = "speedup" }
@@ -652,7 +652,7 @@ cells."19,33" = { kind = "wall", material = "iron" }
 cells."20,33" = { kind = "wall", material = "iron" }
 cells."38,33" = { kind = "water" }
 cells."44,33" = { kind = "road" }
-cells."51,33" = { kind = "frog" }
+cells."51,33" = { kind = "bong" }
 cells."70,33" = { kind = "road" }
 cells."80,33" = { kind = "tree" }
 cells."84,33" = { kind = "tree" }

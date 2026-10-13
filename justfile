@@ -14,7 +14,7 @@ probe-sweep:
     cargo run --bin probe -- --scenario afk --mission protect --spawn band --enemies 4 --frames 1800 --rounds 30 --heatmap --budget offbox-fire=0
 
 # Waves spawn plan health check: the maps/missions/ waves fixture, Destroy
-# mission (no frog, so an AFK player only loses to gunfire), 30 seeded
+# mission (no bong, so an AFK player only loses to gunfire), 30 seeded
 # rounds. Rolling-in tanks are exempt from the anomaly checks until they
 # arrive. See docs/maps-to-levels.md.
 probe-waves:
@@ -43,7 +43,7 @@ probe-waves:
 # totals came back exactly, so those differences were the stream, not the
 # hunters. Then after hunters learned to shoot through destructible walls
 # (line of fire), got a snipe cooldown and a ring slot even when alone:
-# jitter 2 -> 6 and churn 7 -> 10. frog-block carries the jitter=6 (and
+# jitter 2 -> 6 and churn 7 -> 10. bong-block carries the jitter=6 (and
 # churn=3, clustering=4) and every one of them is a hunter - the totals are
 # 0/0/4 with the share zeroed; traced frame by frame they are the normal
 # diagonal-slot approach (right/down legs each held the full commitment
@@ -150,7 +150,7 @@ probe-fixtures *args:
 # (5 -> 8, tanks circling its islands' shores); clustering=10 is hedge-maze
 # (5 -> 10; the old ceiling, 6, was archipelago's, now 3); stall=1 is
 # archipelago (round 7, 0x3ef: a hunter standing to fire at the players'
-# frog, a hold the probe mutes only for a seat); low-progress=1 is
+# bong, a hold the probe mutes only for a seat); low-progress=1 is
 # archipelago (round 7 again: a tank pressed for three seconds against
 # another's hull, on a route of its own the margin still steers, before its
 # stuck escape). border-stuck=3 (hedge-maze, 3 -> 3: enemies spawned in the
@@ -188,7 +188,7 @@ probe-fixtures *args:
 # third again as long); spin=9 and churn=39 are hedge-maze (2 -> 9 and
 # 12 -> 39: its walks run longer, and a tank with nobody in sight wanders
 # more of them); wall-grind=1 is harbor-lights (0 -> 1: in round 0x3ef a
-# tank pressed toward the frog against the pier beside it on the beach).
+# tank pressed toward the bong against the pier beside it on the beach).
 # Every other ceiling stands: jitter 24 on hedge-maze (from 30) and 20 on
 # harbor-lights (from 28), clustering=10 on both, pile-up 5 on hedge-maze
 # (from 6). The fight comes later on the larger fields: longwater about
@@ -225,7 +225,7 @@ probe-fields *args:
 
 # The perfect defence (docs/large-maps-follow-camera.md section 12): the
 # probe's `defend` scenario - every enemy destroyed the moment it comes
-# within 400 px of a live seat or the players' frog, so nobody is ever
+# within 400 px of a live seat or the players' bong, so nobody is ever
 # attacked - on the two maps that need the follow camera, ten seven-minute
 # rounds each at a pinned seed. A round lasts exactly as long as its last
 # straggler keeps it waiting, and never-arrived counts one still out. Every

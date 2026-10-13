@@ -60,4 +60,4 @@ cells."27,14" = { kind = "wall", material = "iron" }
 cells."28,14" = { kind = "wall", material = "iron" }
 cells."29,14" = { kind = "wall", material = "iron" }
 cells."30,14" = { kind = "wall", material = "iron" }
-cells."20,19" = { kind = "frog" }
+cells."20,19" = { kind = "bong" }

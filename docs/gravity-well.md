@@ -15,7 +15,7 @@ seconds everything within four and a half cells falls toward it: tanks of both s
 tracks bite sideways, so a scout is dragged and a titan braces; shells,
 bullets, plasma bolts, missiles and drones curve toward the core and what
 reaches it is swallowed; grenades roll in and orbit on the ring; drums are
-lifted out of their cells and circle the core; crates and the frog slide in.
+lifted out of their cells and circle the core; crates and the bong slide in.
 Then the well collapses: everything it holds is flung outward, the other
 side takes a hit, and the drums it gathered go off together. The field
 looks like it is going down a drain - tread marks are scrubbed into a swirl and the
@@ -31,7 +31,7 @@ trigger kinds, air targets, **zones**, the probe's `--crate`, the spawn
 swap, `spawn_pickup` and the armory. This PR adds the **well field** (§3.3):
 a sum of pulls, a pure function of the wells standing at a round tick and a
 point, which the drive, the projectiles' fixed-step loop, the grenades, the
-missiles, the drones, the frog, the crates and the cosmetic layers read, and
+missiles, the drones, the bong, the crates and the cosmetic layers read, and
 which the client's sandbox, its provisional shots and its incoming fire read
 on the same ticks the room does - so a bent shot is drawn where the room
 flies it and a pulled hull is predicted where the room accepts it.
@@ -58,7 +58,7 @@ flies it and a pulled hull is predicted where the room accepts it.
   sweep (`Terrain::sweep_rewound`, half extent `well_orb_half_px` (6), a
   seat's rewind as every seat's shot has it) enters - a live tank's hull or
   turret of either side but its shooter's (a seat's orb grows an enemy's
-  boxes by `player_shot_hit_pad_px`, as a seat's shell does), a frog, a tile
+  boxes by `player_shot_hit_pad_px`, as a seat's shell does), a bong, a tile
   that blocks sight (`Material::blocks_sight`: every wall, glass, trees,
   towers, drums, a volcano's cone, a training door) or the field's edge. It
   floats over sandbags and fences (knee-high, the gun tower's rule) and
@@ -258,11 +258,11 @@ keeps its slot: whoever touches it where it now is takes it, the slot
 respawns as ever, and the map's slots and the round's respawn draws are
 untouched. It does not break.
 
-**Frogs** (either side's, alive): a frog in the pull is **pinned** - it
+**Bongs** (either side's, alive): a bong in the pull is **pinned** - it
 neither hops (its evasive hop, its training walk) nor hops back - and slides
-toward the core at `well_frog_speed * s(d)` (50 px/s) wherever
-`Terrain::frog_fits` lets it (its static collider moved with it, as a hop
-moves it). It bites as ever. `Frog::pulled` is the flag.
+toward the core at `well_bong_speed * s(d)` (50 px/s) wherever
+`Terrain::bong_fits` lets it (its static collider moved with it, as a hop
+moves it). It bites as ever. `Bong::pulled` is the flag.
 
 **Fish** in a lake the pull reaches swim to the deep cell nearest the
 core while it pulls (an attractor among `fish.rs`'s scares; cosmetic).
@@ -308,12 +308,12 @@ centre this tick), `Game::collapse_well` walks, in this order:
    `well_collapse_damage` (10) times `1 - d/R`, no roll, through
    `Tank::take_damage` (a rainbow shield soaks it), credited to the owner,
    `Event::Hit { cause: HitCause::Well }`; its own side is flung unhurt.
-3. **Frogs hop out**: a frog in `R` hops along the line out from the centre
-   `max(1, round(well_fling_frog_cells * (1 - d/R)))` cells
-   (`well::frog_fling_target`: the farthest cell on the line it fits, walked
-   back a cell at a time, no jitter) through `Frog::start_hop`; the frog of
+3. **Bongs hop out**: a bong in `R` hops along the line out from the centre
+   `max(1, round(well_fling_bong_cells * (1 - d/R)))` cells
+   (`well::bong_fling_target`: the farthest cell on the line it fits, walked
+   back a cell at a time, no jitter) through `Bong::start_hop`; the bong of
    the side opposing the owner takes the collapse damage too
-   (`Frog::damage`).
+   (`Bong::damage`).
 4. **Grenades are thrown out in a ring**: every grenade the well holds
    leaves the ring along its own radial at `well_fling_grenade_speed` (220)
    with a lob (`climb` = `well_fling_grenade_climb`), its fuse as it was.
@@ -359,7 +359,7 @@ a pulling well bends, and is swallowed if it falls in.
 `player_phase` and `enemy_phase` do not run, the physics does not step and
 nothing is driven, so no hull moves. Orbs in flight fly on and anchor as a
 show; wells form, swirl and collapse as shows (`Game::well_phase(f, false)`):
-no drum is lifted, no frog or crate pulled, nobody flung or hurt; the drums
+no drum is lifted, no bong or crate pulled, nobody flung or hurt; the drums
 a well already holds go off at its collapse - or where a fuse runs out - as
 blasts that hurt nobody (`explosions(f, false)`), as every blast on the end
 screen does. What still flies keeps the projectiles' damage-free end-screen
@@ -371,8 +371,8 @@ them out with whatever flies in its reach.
 
 | File | What |
 |---|---|
-| `src/well.rs` (new) | The weapon's headless half. `Orb` (the shot: id, owner, position, prev, velocity, rotation, state, timer, flown, done - a `Projectile`), `OrbState` (`Launch`, `Flying`; `col`/`from_col`), `WellZone` (stage, the anchor's `AnchorBy`, the shooter's seat, `emp_collapse`), `WellStage` (`Forming`, `Pulling`), `AnchorBy`; **the field** (§3.3): `strength(d)`, `WellSource`, `WellField` (`at`, `pull`, `hull_pull`, `shot_accel`, `core_hit`), `bend(velocity, accel, dt)`, `HullPull` and its axis split; `HeldDrum` and `held_at`, `GrenadeOrbit` and `orbit_at`, `frog_fling_target`, `holds_broadside`, `escape_dir`, `curved_streak`; the composers `compose_orb`, `compose_snap`, `compose_well`, `compose_swirl`, `compose_collapse`, `compose_swallow`, `compose_held_drum_glow` (pure, `pyro::Shape`s); `module_cell` |
-| `src/simulation/well.rs` (new) | The world half. `fire_well` (the dispatch arm's launch), `take_anchor_press` (the press while an orb flies), `place_orbs`, `anchor_orb`, `advance_orbs`, `resolve_orbs` (contact, range, swallowed), `well_phase(f, live)` (stages, the drums' lift, the frogs and the crates, held fuses, the marks and the grass, every collapse), `collapse_well`, `pull_air` (missiles and drones), `chain_held_drums`, `fizzle_orb`, `well_anchor_show`, `well_collapse_show`, `swallow_show`, `show_well_anchor` and `flash_seat_well` (the cosmetic halves, which a replica's events and a client's own press call too), `lean_grass`, `present_wells`, `well_senses` and `pull_senses` (§4), `seat_orb`, `debug_well` |
+| `src/well.rs` (new) | The weapon's headless half. `Orb` (the shot: id, owner, position, prev, velocity, rotation, state, timer, flown, done - a `Projectile`), `OrbState` (`Launch`, `Flying`; `col`/`from_col`), `WellZone` (stage, the anchor's `AnchorBy`, the shooter's seat, `emp_collapse`), `WellStage` (`Forming`, `Pulling`), `AnchorBy`; **the field** (§3.3): `strength(d)`, `WellSource`, `WellField` (`at`, `pull`, `hull_pull`, `shot_accel`, `core_hit`), `bend(velocity, accel, dt)`, `HullPull` and its axis split; `HeldDrum` and `held_at`, `GrenadeOrbit` and `orbit_at`, `bong_fling_target`, `holds_broadside`, `escape_dir`, `curved_streak`; the composers `compose_orb`, `compose_snap`, `compose_well`, `compose_swirl`, `compose_collapse`, `compose_swallow`, `compose_held_drum_glow` (pure, `pyro::Shape`s); `module_cell` |
+| `src/simulation/well.rs` (new) | The world half. `fire_well` (the dispatch arm's launch), `take_anchor_press` (the press while an orb flies), `place_orbs`, `anchor_orb`, `advance_orbs`, `resolve_orbs` (contact, range, swallowed), `well_phase(f, live)` (stages, the drums' lift, the bongs and the crates, held fuses, the marks and the grass, every collapse), `collapse_well`, `pull_air` (missiles and drones), `chain_held_drums`, `fizzle_orb`, `well_anchor_show`, `well_collapse_show`, `swallow_show`, `show_well_anchor` and `flash_seat_well` (the cosmetic halves, which a replica's events and a client's own press call too), `lean_grass`, `present_wells`, `well_senses` and `pull_senses` (§4), `seat_orb`, `debug_well` |
 | `src/simulation/well_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::GravityWell` dispatch arm; `Projectile::bend` (a default for every shot kind: turn the velocity, keep the speed, set the rotation) and `Projectile::swallowed`; `advance_projectiles` taking the frame's field |
 | `src/simulation/mod.rs` | `Frame::{wells, pending_orbs}`; `Game::{held_drums, anchor_grace}`; `well_field` built after `tick_timers`; `well_phase` after `resolve_zones` (the rod's), before `step_world`, and `well_phase(f, false)` on the end screen; `resolve_orbs` after `shell_vs_shell`; `Footing::well` and the axis split in `drive_tank_with`, the skid branch in the whole current; `Footing::pulled` in `drive_player`, the enemy apply pass and `predict_seat_with`; the anchor press before the cooldown gate in `drive_player` and `enemy_trigger`; `resolve_projectiles`' swallow; `accept_seat_pose`'s well drift; `tick_presentation` (the wells' stages, held drums, marks, grass); `Event::{WellAnchored, WellCollapsed, Swallowed, OrbFizzled}`, `HitCause::Well`; the swap's table entry |
@@ -386,10 +386,10 @@ them out with whatever flies in its reach.
 | `src/simulation/engage.rs` | The herd built round a well's centre (`EngageCtx::herd`, the rod's) |
 | `src/simulation/command.rs` | `command::Busy::{Pulled, Anchoring}` |
 | `src/simulation/present.rs` | `PresentWorld::wells` (the field on this client's present ticks); `ProvisionalShot::advance` bending on the tick grid and swallowed; the incoming carry stepped through the field; `Game::{draw_press_show}`'s anchor arm, `add_provisional_zone` for a well, `seat_orb` |
-| `src/simulation/replica.rs` | `DrawableZone`'s stage, `DrawableHeldDrum`, `DrawableCrate::drift`, `DrawableFrog::pulled` |
+| `src/simulation/replica.rs` | `DrawableZone`'s stage, `DrawableHeldDrum`, `DrawableCrate::drift`, `DrawableBong::pulled` |
 | `src/tank.rs` | `wells`, `orb`, `well_flash`; `ActiveWeapon::GravityWell` (`name`, `full_load`, `tell_seconds` none, `trigger` `Press`), `SPECIAL_WEAPONS`; `kick_well`, `anchor_press`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; the module's cells in `module_cols` |
 | `src/pickup.rs` | `PickupKind::GravityWell` (`gravity_well`, row 18, its ink, spills); `Pickup::{drift, slide, at}` |
-| `src/frog.rs` | `Frog::pulled`, the gate in `can_hop` |
+| `src/bong.rs` | `Bong::pulled`, the gate in `can_hop` |
 | `src/grass.rs`, `src/wear.rs` + `src/simulation/wear.rs` | The lean into the drain (`GrassTuft::drain`), the marks' scrub (`WearGrid::scrub`, `Game::drain_marks`) |
 | `src/fish.rs` | The attractor (a well's core among the scares, reversed) |
 | `src/ai.rs` | `SpecialSense::Well(WellSense)`, `WellPlan`, `well_rule`, `SpecialUse::{Orb, Anchor}`, `generic_fire(GravityWell)`; `PullSense`, the `pull` tier, `act_pull`, `Ai::{well_plan, pull_escape, bracing}`; `special_rule` and the `air` tier yielding inside a pull; `Brain::seek` and `nearest_pickup` leaving a crate inside a pull alone; `SEEK_SPECIALS` gains the well; `AiSnapshot::{well, pull}` |
@@ -402,13 +402,13 @@ them out with whatever flies in its reach.
 | `src/weather.rs` | The ring's and the orb's light |
 | `src/fx.rs`, `src/burst.rs` | Particles within a pull spiralling in; a well `Hit` draws its flash and violet motes, no fire; the swallow's pop (`WellFx`, `WellFxKind::Swallow`, on `Game::well_fx`) |
 | `src/pyro.rs` | The `VOID` ramp |
-| `src/net/wire.rs` | `WeaponKind::GravityWell`, `ShotKind::Orb`, `ZoneState`'s well kind and stages, `WellDrumState`, `Snapshot::well_drums`, `CrateState::{dx, dy}`, `frog_flags::PULLED`, `HitCause::Well`, `AirStrike::Well`, `well::Swallow` |
+| `src/net/wire.rs` | `WeaponKind::GravityWell`, `ShotKind::Orb`, `ZoneState`'s well kind and stages, `WellDrumState`, `Snapshot::well_drums`, `CrateState::{dx, dy}`, `bong_flags::PULLED`, `HitCause::Well`, `AirStrike::Well`, `well::Swallow` |
 | `src/net/delta.rs` | `well_drums`, `well_drums_gone` |
 | `src/net/events.rs` | `WireEvent::{WellAnchored, WellCollapsed, Swallowed, OrbFizzled}` |
 | `src/net/encode.rs`, `src/net/apply.rs` | The family, the fields, the shows; `Show::OwnShotsDrawn`'s anchor claim by orb id |
 | `src/net/predict.rs`, `src/net/round.rs`, `src/net/interp.rs` | `ProvisionalKind::Orb`, the anchor press, the sandbox's field on the room's tick, the provisional well paired by id; a crate's drift blended between snapshots |
 | `src/net/authority.rs` | Nothing new: the validator's allowance is `accept_seat_pose`'s |
-| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `wells`; the snapshot's `wells`, `orb`, `held_drums`, a crate's `drift`, a frog's `pulled`, `pull` and `bracing`, an enemy's `well` plan; `spawn_pickup {kind: "gravity_well"}`; the `well_at` tool (§3.4) |
+| `src/simulation/debug.rs`, `src/devserver.rs` | `set_tank`'s `wells`; the snapshot's `wells`, `orb`, `held_drums`, a crate's `drift`, a bong's `pulled`, `pull` and `bracing`, an enemy's `well` plan; `spawn_pickup {kind: "gravity_well"}`; the `well_at` tool (§3.4) |
 | `src/bin/probe.rs` | The tank line's `well=`, the fire tuple; `OUT_OF_ITS_HANDS` gains `pulled`, `HOLDS` gains `bracing` |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::GravityWell)` (`gravity_well`) |
 | `maps/armory.toml` | Its crates and a grenade crate (§3.4) |
@@ -650,7 +650,7 @@ pub fn bend(velocity: Vec2, accel: Vec2, dt: f32) -> Vec2;
   collapse falls on this tick does not: it flings): the drive (`Footing::pulled`), the
   fixed-step loop (`Projectile::bend` for shells, bullets, plasma and orbs;
   `Missile::drag`; `Drone::drag`), `roll_grenades`, `well_phase` (the
-  frog, the crates, the marks, the grass), `fx.rs` (particles,
+  bong, the crates, the marks, the grass), `fx.rs` (particles,
   presentation), `fish.rs` (cosmetic).
 - **Arithmetic only**: square roots and divisions, and a hull's mass factor
   raised to the exponent once per hull (the hammer's shove's own `powf`);
@@ -708,7 +708,7 @@ The rest it needs is there: **the drum column** (oil 23,8 and 23,12, fuel
 23,10, two cells apart) - a well anchored by it lifts all three and they go
 off together at its core - with **the oil trail** (24..26,10) their blasts
 light; **the lava ford** (34,2..9) and **the lake** (21..28 x 15..19, deep
-in the middle) an enemy's well pulls a seat toward; **the players' frog**
+in the middle) an enemy's well pulls a seat toward; **the players' bong**
 (4,14), four and a half cells from the start (6,10), which an enemy's well
 pulls its guard off; **the iron** (22..23 x 5..6, 35..36 x 10..11) and
 **brick** an orb anchors against; **the grass** (13..17 x 13..17) that leans
@@ -726,7 +726,7 @@ member, refused off the field or inside a solid cell; replies `{id, x, y,
 pulls_at}`), so a pull, a capture and a collapse are tried in lockstep without
 steering an orb. `status`/`snapshot` carry each tank's `wells` and `orb`
 (its orb's id and how far it has flown), every zone's well stage, the held
-drums (id, well, position), each crate's `drift`, each frog's `pulled`, each
+drums (id, well, position), each crate's `drift`, each bong's `pulled`, each
 tank's `pull` (the current and side pull on it) and `bracing`, and an
 enemy's `well` plan (`AiSnapshot::well`: the arm, the facing, the anchor
 distance).
@@ -754,8 +754,8 @@ pass, only when some live enemy on the field carries an online well or has
 an orb out. It gathers once: every seat on the field (position, hull box,
 concealed, hit-alerted for each enemy, `Game::sight_on` at it, its facing
 and whether its trigger's weapon could reach this far - the shield arm's),
-the players' frog (position, alive), every live enemy (slot, hull box,
-velocity), the enemies' frog, the standing drums (cell), the trouble cells
+the players' bong (position, alive), every live enemy (slot, hull box,
+velocity), the enemies' bong, the standing drums (cell), the trouble cells
 (heat at or over `heat_hurt_from` - lava and its banks -, burning ground,
 ooze, water of any depth, every live rod call's kill circle), the live
 wells (centre), the frame's `Terrain` and the field. Then, in owner-slot
@@ -791,10 +791,10 @@ every chassis - held by
 `the_nearest_anchor_clears_its_own_pull_on_every_chassis`; the breaker,
 its muzzle at its hull's front, is why `well_radius_px` stops at 140) to the first of
 `well_orb_range_px` and the orb's own stopper on that line (the first tile
-that blocks sight, the field's edge, a live hull or a frog - the orb's
+that blocks sight, the field's edge, a live hull or a bong - the orb's
 sweep, `Terrain::sweep`), the stopper's anchor point itself included. Each
 candidate `P` is a well centre; "in the pull" means a hull box's nearest
-point within `well_radius_px` of `P` (a frog's centre).
+point within `well_radius_px` of `P` (a bong's centre).
 
 **Who counts.** A seat counts only if it is in the pull, live, on the
 field, not hidden from this tank (`concealed` and not hit-alerted - the
@@ -804,7 +804,7 @@ is used on a seat from off its box. An ally is every live enemy - this one
 included, any role, disabled or not - in the pull now or where its velocity
 carries it by the time the pull would start (the orb's flight to `P` plus
 `well_form_seconds`), with `well_ai_friend_margin_px` (16) added to the
-radius; and the enemies' own frog in the pull.
+radius; and the enemies' own bong in the pull.
 
 **An anchor qualifies** by the first of these arms, in priority order:
 
@@ -814,11 +814,11 @@ radius; and the enemies' own frog in the pull.
    (sampled every 8 px, the hammer's `SONIC_TROUBLE_STEP_PX`) crosses a
    trouble cell, or a standing drum lies in the pull - a seat pulled into
    drums, lava, the water or a rod's circle.
-3. **Guard** (`"guard"`): the players' frog is alive, a seat counts that
-   stands within `well_ai_guard_px` (160) of it, the frog is out of the pull
+3. **Guard** (`"guard"`): the players' bong is alive, a seat counts that
+   stands within `well_ai_guard_px` (160) of it, the bong is out of the pull
    (its centre farther than `well_radius_px + well_ai_friend_margin_px` from
-   `P`) and `P` is farther from the frog than that seat - a seat pulled off
-   the frog it is guarding.
+   `P`) and `P` is farther from the bong than that seat - a seat pulled off
+   the bong it is guarding.
 4. **Shield** (`"shield"`): this tank is hit-alerted (`Ai::is_hit_alerted`:
    it is being shot at), a seat counts by the rules above but for the pull -
    it is lined up on this tank (on its row or column within
@@ -841,7 +841,7 @@ and passes every one of:
   this frame is not counted again.
 
 The first qualifying anchor in arm order, then facing order, then nearest
-candidate, is the plan. A training dummy (`Ai::frog_only`) gets none. No
+candidate, is the plan. A training dummy (`Ai::bong_only`) gets none. No
 RNG anywhere: fixed priority, the facing it has, `Dir::ALL` order, distance,
 the lower seat, the lower slot.
 
@@ -1049,7 +1049,7 @@ rim - is drawn in the glowing pass, unlit, so it reads at night and in fog
   fused one with its fuse's glow; a grenade on the ring is drawn as every
   grenade is, rolling round.
 - **What the pull moves** is drawn where it is: a hull, a crate at
-  `Pickup::at()`, a frog sliding in its hurt clip held on its first frame
+  `Pickup::at()`, a bong sliding in its hurt clip held on its first frame
   (pinned, flailing), a missile or a drone dragged. Nothing is drawn moved
   that is not.
 - **The drain** (the "at 11"): tread marks and tufts drawn as ever, where
@@ -1073,7 +1073,7 @@ rim - is drawn in the glowing pass, unlit, so it reads at night and in fog
     reach to the reach and leaning with the wind, gone in 0.8 s; the
     ground's dust (`DUST`, `SMOKE` over lava, `BLUE_PALE` chop over water,
     white over snow);
-  - the drums' fireballs, the hulls' skid dust, the frogs' hops, the fish
+  - the drums' fireballs, the hulls' skid dust, the bongs' hops, the fish
     and the grass are their own shows.
   No ripple, flash or shake under reduced motion, and all of it scaled by
   `screen_fx_intensity`.
@@ -1194,7 +1194,7 @@ enemies' group:
 | `well_orbit_speed` | 3.0 | 0..=20 | How fast they circle it (rad/s, clockwise). |
 | `well_capture_seconds` | 0.8 | 0.05..=4 | How long a lifted drum takes to spiral from its cell to the ring. |
 | `well_crate_speed` | 60 | 0..=400 | How fast a crate slides in at the strongest point (px/s). |
-| `well_frog_speed` | 50 | 0..=400 | How fast a frog slides in at the strongest point (px/s). |
+| `well_bong_speed` | 50 | 0..=400 | How fast a bong slides in at the strongest point (px/s). |
 | `well_fling_speed` | 400 | 0..=508 | The collapse's shove at the centre (px/s, chassis-free mass), falling to nothing at the reach. |
 | `well_fling_max_speed` | 480 | 0..=508 | The most any fling gives; the wire's shove reaches 508. |
 | `well_fling_mass_exponent` | 1.5 | 0..=4 | How hard a heavy chassis resists the fling. |
@@ -1203,7 +1203,7 @@ enemies' group:
 | `well_fling_grenade_climb` | 160 | 0..=2000 | And how high it lobs it (the grenade's `climb`). |
 | `well_fling_crate_speed` | 240 | 0..=1000 | How fast it slides a crate out at the centre. |
 | `well_crate_friction` | 600 | 1..=5000 | How hard a sliding crate brakes (px/s²). |
-| `well_fling_frog_cells: i32` | 3 | 1..=8 | How far it hops a frog out from the centre, falling off with distance, at least one. |
+| `well_fling_bong_cells: i32` | 3 | 1..=8 | How far it hops a bong out from the centre, falling off with distance, at least one. |
 | `well_fish_throw_max: i32` | 6 | 0..=32 | Fish in its reach thrown onto the bank at the collapse, nearest first. |
 | `wear_well_scrub` | 1.2 | 0..=20 | Tread marks in its reach fade at this rate at the strongest point (a second; cosmetic, in the `wear` group). |
 | `well_grass_lean_px` | 6 | 0..=16 | Tall grass in its reach leans into it by this at the strongest point (cosmetic). |
@@ -1215,7 +1215,7 @@ enemies' group:
 | `well_light` | 0.6 | 0..=2 | The light the ring throws at night, against a headlight's. |
 | `well_ai_fire_interval` | 8 | 0.1..=60 | Seconds between an enemy's decisions to launch. |
 | `well_ai_min_px` | 160 | 64..=1000 | The nearest an enemy anchors a well, from its gun line's muzzle - past its own pull and the friend margin -, and where its shield stands. |
-| `well_ai_guard_px` | 160 | 0..=480 | A seat this close to the players' frog is its guard, which an enemy pulls off it. |
+| `well_ai_guard_px` | 160 | 0..=480 | A seat this close to the players' bong is its guard, which an enemy pulls off it. |
 | `well_ai_friend_margin_px` | 16 | 0..=128 | Added to the reach when an enemy counts the allies a pull would drag. |
 | `well_ai_heavy_mass` | 1.2 | 0.1..=5 | A chassis this heavy (mass factor) braces broadside in a pull while its tracks hold. |
 | `well_ai_route_cost: usize` | 24 | 0..=255 | Extra route cost on every cell of a forming or pulling well; 0 switches it off. |
@@ -1296,7 +1296,7 @@ Protocol 21 (from the rod's 20), once in the PR.
   crate is listed while it is not whole **or drifted**. The interpolator
   blends a listed crate's drift between snapshots (keyed by its cell), so a
   slide is smooth.
-- **`frog_flags::PULLED`** (bit 5): a replica holds `Frog::pulled` while it
+- **`bong_flags::PULLED`** (bit 5): a replica holds `Bong::pulled` while it
   is set.
 - `GrenadeState`, `MissileState` and `DroneState` need nothing: a captured
   grenade's, a dragged missile's and a dragged drone's positions travel as
@@ -1320,7 +1320,7 @@ Protocol 21 (from the rod's 20), once in the PR.
   `WellAnchored`, `well_anchor_show` and the module's anchor cell; on
   `WellCollapsed`, `well_collapse_show` and the fish thrown
   (`fish::throw_from`); on `Swallowed` and `OrbFizzled`, the pop. The
-  drums' blasts, the hits, the shoves, the frogs' hops and the tile deaths
+  drums' blasts, the hits, the shoves, the bongs' hops and the tile deaths
   come from their own events and state, as every blast's do.
 - **What is drawn at once** (decision 3 of BB-36, the hammer's §3.3):
   - *the orb, on the press*: `Predictor::pull_trigger`'s well arm, on the
@@ -1391,7 +1391,7 @@ Protocol 21 (from the rod's 20), once in the PR.
     trip of pull it undoes.
 - **What stays the room's**: the orb's flight and what it meets, where and
   when it anchors, the stages, every capture, every swallow, the collapse
-  and all it does (`Hit`, `Wreck`, `Shoved` with skids, `Blast`, the frogs'
+  and all it does (`Hit`, `Wreck`, `Shoved` with skids, `Blast`, the bongs'
   hops, the crates' drifts), the drums' blasts.
 - `delta.rs`: the family's two lists; its random snapshots fill it and the
   crates' drift, and the size bounds are re-measured.
@@ -1402,13 +1402,13 @@ Protocol 21 (from the rod's 20), once in the PR.
   its sweep rolls nothing (no pass-over, no deflection); the anchor is a
   position; the field, the bend and every drag are arithmetic; a capture is
   a distance; the lift and the orbit are functions of the round clock; the
-  collapse's damage has no roll; the fling is a knock; a frog's hop out is
-  computed (`frog_fling_target`), with no jitter. What it sets off draws as
+  collapse's damage has no roll; the fling is a knock; a bong's hop out is
+  computed (`bong_fling_target`), with no jitter. What it sets off draws as
   it always does: a held drum's blast its damage rolls and its pool's
   chance, a grenade's burst its rolls - where they go off.
 - **Fixed walks**: wells in id order, the field's sources in id order; a
   collapse's walk as §1 (drums by id; hulls - seats by index, then enemies
-  by slot; frogs, the players' then the enemies'; grenades, shots (shells,
+  by slot; bongs, the players' then the enemies'; grenades, shots (shells,
   bullets, plasma, orbs), missiles by id; drones by key; crates by cell);
   the lift in cell order; ties to the lower well.
 - **Rapier's order.** The pull adds no body, no collider and no call of its
@@ -1416,8 +1416,8 @@ Protocol 21 (from the rod's 20), once in the PR.
   each tick (`drive_tank_with`'s `apply_impulse`), worked out in one
   expression, in the drive's fixed order (seats by index in `player_phase`,
   then the enemies' apply pass by slot). The collapse's knocks go through
-  `knock` in `knock_from`'s walk (seats, then enemies by slot). A frog's
-  collider moves by `set_position` in `well_phase`, frogs in their fixed
+  `knock` in `knock_from`'s walk (seats, then enemies by slot). A bong's
+  collider moves by `set_position` in `well_phase`, bongs in their fixed
   order. Rapier's step is deterministic for the same sequence of calls on
   the same world - its sets are arenas, its islands and its solver iterate
   in insertion order - and impulses on different bodies commute, so the
@@ -1461,7 +1461,7 @@ orb):
   muzzle), `a_second_press_anchors_the_orb_where_it_is` (the zone at the
   orb's point, `WellAnchored { by: Press }`, no well spent),
   `the_anchor_press_is_not_held_back_by_the_reload`,
-  `an_orb_anchors_on_the_first_wall_tank_or_frog_it_meets_and_floats_over_sandbags_and_fences`
+  `an_orb_anchors_on_the_first_wall_tank_or_bong_it_meets_and_floats_over_sandbags_and_fences`
   (backed off its half width; `by: Contact`; the shooter's own hull never
   met), `an_orb_never_anchored_anchors_itself_at_its_range`,
   `a_press_just_after_an_orb_anchored_itself_fires_nothing`,
@@ -1507,8 +1507,8 @@ orb):
   `crates_slide_in_and_out_and_keep_their_slot` (taken where it lies; the
   slot respawns; `respawn_from_slots` draws what it drew),
   `a_crate_stops_at_a_wall_deep_water_and_the_edge`,
-  `the_frog_slides_in_cannot_hop_and_is_flung_out` (no jitter: the hop's
-  target `frog_fling_target`'s), `a_wreck_a_tile_and_a_lantern_are_left_alone`.
+  `the_bong_slides_in_cannot_hop_and_is_flung_out` (no jitter: the hop's
+  target `bong_fling_target`'s), `a_wreck_a_tile_and_a_lantern_are_left_alone`.
 - The collapse: `the_collapse_flings_hulls_hurts_only_the_other_side_and_skids`
   (a seat's fling on `Frame::shoves` with its skid),
   `a_shield_soaks_the_collapse_not_the_fling`,
@@ -1519,7 +1519,7 @@ orb):
 - The drain: `tread_marks_are_scrubbed_away` and the grass's lean (deterministic, on
   the room and through `tick_presentation` alike).
 - Determinism: `the_well_draws_no_rng` (the RNG's state after a well that
-  pulls hulls, bends shots and collapses, with no drum, frog or grenade:
+  pulls hulls, bends shots and collapses, with no drum, bong or grenade:
   unchanged), `a_round_with_the_well_replays_bit_for_bit`,
   `the_spawn_swap_hands_out_the_well_by_its_share_and_draws_nothing`,
   `an_enemy_takes_the_crate_only_with_no_special`.
@@ -1532,10 +1532,10 @@ and scenario tests on a whole round):
 
 - `an_enemy_anchors_where_two_seats_are_pulled_together`,
   `an_enemy_anchors_to_pull_a_seat_into_drums_lava_or_water`,
-  `an_enemy_anchors_to_pull_a_guard_off_its_frog`,
+  `an_enemy_anchors_to_pull_a_guard_off_its_bong`,
   `an_enemy_under_fire_shields_itself_on_the_seats_line`,
   `an_enemy_never_anchors_where_its_pull_drags_more_allies_than_seats`
-  (itself, a fellow enemy, one driving in, the enemies' frog),
+  (itself, a fellow enemy, one driving in, the enemies' bong),
   `an_enemy_presses_the_anchor_at_its_planned_distance` (released the
   ticks between, so the anchor is an edge),
   `one_well_per_seat_and_never_twice_on_a_spot`,
@@ -1559,7 +1559,7 @@ Shared path and presentation:
   `core_hit_meets_the_core_between_ticks`, `hull_pull_splits_by_the_axis`,
   `holds_broadside_is_the_drives_grip`,
   `escape_dir_is_across_on_the_hulls_side`, `held_at_spirals_in_then_circles`,
-  `orbit_at_is_on_the_ring`, `frog_fling_target_walks_back_to_a_fit`,
+  `orbit_at_is_on_the_ring`, `bong_fling_target_walks_back_to_a_fit`,
   `curved_streak_follows_the_bend`; the composers
   `the_orb_is_on_the_grid_and_pure`, `the_well_draws_its_stages`,
   `the_swirl_is_hashed_and_spirals_in`, `the_collapse_is_gone_by_its_end`.
@@ -1569,7 +1569,7 @@ Shared path and presentation:
 - `pickup`: `name`/`parse`; `weapon`; `at_is_position_plus_drift`.
 - `tank` (`weapon_inventory_tests`): the well in `take_weapon`, `full_load`,
   `special`, its trigger; `anchor_press`; the module's cells.
-- `frog`: `a_pulled_frog_cannot_hop`. `fish::tests`:
+- `bong`: `a_pulled_bong_cannot_hop`. `fish::tests`:
   `a_well_draws_the_fish_in_its_reach_to_its_core`, `an_orb_scares_the_fish`.
 - `weather`: `the_ring_throws_violet_light_and_the_core_none`.
 - `hud_tests`: the well's slot, colour and glyph;
@@ -1597,7 +1597,7 @@ Wire:
   `an_orb_reaches_the_replica_as_a_shot`,
   `an_anchor_this_client_drew_is_not_drawn_again` (`OwnShotsDrawn` with the
   orb's id: no snap, not handed on; without: drawn),
-  `a_pulled_frog_and_a_drifted_crate_reach_the_replica`.
+  `a_pulled_bong_and_a_drifted_crate_reach_the_replica`.
 - `predict.rs`: `the_orb_is_drawn_on_the_press`,
   `the_anchor_is_drawn_on_the_second_press_where_the_rooms_will_be` (within
   a tick's flight), `a_provisional_shot_bends_as_the_rooms_copy_does` (the
@@ -1627,7 +1627,7 @@ Wire:
   enemies that carry no special collect the crate and use it on the AFK
   seat - no clump against one seat, so the trouble arm where the seat stands
   by water, lava or drums, the guard arm on the Protect maps (the seat
-  starts by its frog), and the shield arm when the seat's shells come their
+  starts by its bong), and the shield arm when the seat's shells come their
   way (an AFK seat fires none: rarely).
 - **Armed enemies**: the same sweeps with `--tuning armed.json`,
   `{"enemy_special_weapon_chance": 1.0, "enemy_special_weapon_well_share":
@@ -1746,9 +1746,9 @@ Fields (the seven of `just probe-fields`, 3600 frames):
   never-arrived on the fields (4 lines against 1). In the maps' own missions the
   armed pack's clustering (20.5 against 16.4) and pile-up (15.1 against
   11.1) are higher on the fields: a pack that never fires keeps every
-  enemy alive and closing on the seat and its frog for the whole ten
+  enemy alive and closing on the seat and its bong for the whole ten
   minutes, `harbor-lights` and `hedge-maze` carrying most of it, and
-  `destroy` - the same pack against a seat with no frog to close on -
+  `destroy` - the same pack against a seat with no bong to close on -
   brings both back to the yardstick's. Only 7 of 733 field lines and none
   of 283 fixture lines follow a pull.
 - **What a pull leaves.** Across every armed run the tagged lines are
@@ -1781,10 +1781,10 @@ Fields (the seven of `just probe-fields`, 3600 frames):
   or plasma (`enemy_special_weapon_well_share` 0); on `harbor-lights` in
   its Protect mission (seed 0x3ec, `ENEMY#4` along x = 1712) it is a
   hunter carrying any BB-36 special, which fights the seat rather than the
-  frog - the same 400 frames under the sonic hammer, the EMP and the rod.
+  bong - the same 400 frames under the sonic hammer, the EMP and the rod.
   A follow-up for the field AI. At night the
   `harbor-lights` lines are band tanks wandering their leash, the seat
-  never seen in the dark, in rounds a shells pack ends on the frog in half
+  never seen in the dark, in rounds a shells pack ends on the bong in half
   a minute. On `hedge-maze` and the fixtures the rest are tanks the
   enemy-pair ram has worn down fleeing into a corridor or the border, as
   in the yardstick.
@@ -1811,7 +1811,7 @@ Fields (the seven of `just probe-fields`, 3600 frames):
   build's to the count. The `/pull` lines are jitter, clustering, three
   spins - a tank escaping across a pull, then the attack tier's route
   round the well closing the loop (`choke` 0x3ea, `maze` 0x3eb,
-  `frog-block` 0x3f1 with two seats) -, a border-stuck, a pile-up and a
+  `bong-block` 0x3f1 with two seats) -, a border-stuck, a pile-up and a
   tank-grind (`harbor-lights` 0x3ee: hulls the pull drew together still
   pressed together after it); no stall, low-progress or never-arrived.
 
@@ -1832,7 +1832,7 @@ Fields (the seven of `just probe-fields`, 3600 frames):
 | Night, storm, fog | The orb, the snap, the ring, the swirl and the rim are drawn unlit, the ring throws violet light and the core stays black; the AI counts a seat within its sight under the sky |
 | Lamp posts, lanterns | Stand: a post is a tile, a lantern a fixture the pull leaves alone |
 | Towers | Never moved; their bullets bend (a gun tower's burst curves round a well); the tesla arcs drones in a pull as ever; an offline tower is no different |
-| Frogs | Either side's slides in pinned, hops out at the collapse; the opposing side's takes the collapse's damage; Hunt's enemy frog counts as an ally to the AI's rule |
+| Bongs | Either side's slides in pinned, hops out at the collapse; the opposing side's takes the collapse's damage; Hunt's enemy bong counts as an ally to the AI's rule |
 | Crates | Slide in and out, keep their slot, never break by the pull; with `crate_breakable` a held drum's blast breaks them as any blast |
 | Drums, oil, fires | Drums lifted and set off together; oil and fires stay, and the drums' blasts light a trail in reach |
 | Trees, grass | Trees stand and stop the orb; grass leans in (cosmetic) and hides as ever |
@@ -1930,7 +1930,7 @@ Fields (the seven of `just probe-fields`, 3600 frames):
    orb as the zone's first stage; zones are neither interpolated nor
    predicted.
 3. **It anchors on contact and at its range**: walls, glass, trees, towers,
-   hulls of either side, frogs and the field's edge stop it; it floats over
+   hulls of either side, bongs and the field's edge stop it; it floats over
    knee-high props; no roll. Fired at an enemy, it sticks to it - a slow
    sticky singularity, the counter to it being the slowness.
 4. **The anchor press is never held back by the reload**, and a press just
@@ -1959,7 +1959,7 @@ Fields (the seven of `just probe-fields`, 3600 frames):
     a ring** - the armory's combo, built.
 11. **Crates drift and keep their slot**: the slots, the respawn and the
     wire's slot bitmask stay as they are; only an offset moves.
-12. **The frog is pinned and slides**, hopping out at the collapse by a
+12. **The bong is pinned and slides**, hopping out at the collapse by a
     computed hop with no jitter.
 13. **The collapse hurts the side opposing the owner a little** (10 at the
     core), so a well alone pays something; the fling is blind. *For Oto*:
@@ -2167,7 +2167,7 @@ record of the build.
 - **The dev tools**: `snapshot` carries each tank's `wells`, `orb`, `pull`
   (`[current x, y, side x, y]`) and `bracing`, each zone's `kind` and
   `stage`, the `orbs` and `held_drums`, each pickup's `drift` and each
-  frog's `pulled`, and an enemy's `AiSnapshot::pull` and `::well` (the
+  bong's `pulled`, and an enemy's `AiSnapshot::pull` and `::well` (the
   arm, the facing, the anchor's distance); the engage overlay draws a
   well's reach and, round an enemy's, the herd's ring.
 - **The curved tracer** is a shell's and a bullet's (`well::curved_streak`,

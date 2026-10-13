@@ -682,7 +682,7 @@ kind = "wall"
 material = "iron"
 
 [cells."13,16"]
-kind = "frog"
+kind = "bong"
 
 [cells."15,17"]
 kind = "wall"

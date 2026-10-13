@@ -20,8 +20,8 @@ here.
 
 Two recurring gameplay-quality problems have no systematic detection today:
 
-1. **Tanks getting stuck** — against obstacle clusters, the frog, walls, or
-   each other; every historical instance (boxed-in spawn spinning, frog-cell
+1. **Tanks getting stuck** — against obstacle clusters, the bong, walls, or
+   each other; every historical instance (boxed-in spawn spinning, bong-cell
    routing, corner heading flip-flop, engagement pile-ups) was found by
    probe traces *after* someone noticed something looked wrong in play.
 2. **Tanks hitting obstacles too much** — scraping/grinding along terrain
@@ -46,7 +46,7 @@ isn't machine-readable or budget-gated for CI.
   obstacles too much" and "trying to move but failing" are direct
   observations, not inferences.
 - **Exhaustive static verification**: for every supported map, *prove* (not
-  sample) connectivity, reachability of pickups/frog, spawn-band viability,
+  sample) connectivity, reachability of pickups/bong, spawn-band viability,
   and consistency between the pathfinding grid and the physics colliders —
   in `cargo test`, in milliseconds.
 - **Task-level e2e**: assert "an enemy that has a path to the player
@@ -124,9 +124,9 @@ The five gaps, with the evidence:
 3. **No static map verification.** Since the procedural battlefield was
    removed, `maps/*.toml` is the only terrain source, authored by hand in
    the editor — and nothing checks that a map is connected, that pickups/
-   frog are reachable, or that the pathfind grid and the physics colliders
+   bong are reachable, or that the pathfind grid and the physics colliders
    agree about what fits where. The grid/physics mismatch class is exactly
-   what produced the "stuck near the frog" bug (see the grid-build comment
+   what produced the "stuck near the bong" bug (see the grid-build comment
    in `Game::update`).
 4. **No navigation assertion.** All scenarios exercise combat emergently;
    nothing fails when an enemy with a perfectly good path simply never
@@ -159,7 +159,7 @@ pub seed_override: Option<u64>,
 /// fresh), so callers can report/replay it — see `round_seed()`.
 round_seed: u64,
 /// The round's single RNG stream, seeded in `init`. `None` only before
-/// the first `init` call — same convention as `player`/`frog`. Held as an
+/// the first `init` call — same convention as `player`/`bong`. Held as an
 /// Option so `update` can `take()` it into a local and put it back at the
 /// end, keeping every existing `&mut rng` call site untouched and
 /// sidestepping partial-borrow conflicts entirely.
@@ -208,7 +208,7 @@ Current inventory (re-grep before starting: `grep -rn "ThreadRng" src/`):
 - `battlefield.rs`: `sample_clear_position`, `spawn_from_map`
 - `ai.rs`: `Ai::think`, the two act/wander helpers taking `rng`, and the
   `Brain.rng: &'a mut ThreadRng` field
-- `simulation.rs`: the ~10 free helpers (`frog_hop_target`,
+- `simulation.rs`: the ~10 free helpers (`bong_hop_target`,
   `respawn_from_slots`, `roll_track_distortion`, `explosion_hit_obstacle`,
   the fire/spawn helpers, …)
 
@@ -241,7 +241,7 @@ also be pinned:
    Fix at the source so every consumer is covered at once:
    `MapFile::iter_cells` collects and sorts by `(row, col)` before
    yielding. Maps are a few hundred cells; the collect+sort cost is
-   irrelevant, and it also makes `frog_cell`/`start_cell`
+   irrelevant, and it also makes `bong_cell`/`start_cell`
    ("first match wins" over a hand-edited file with duplicates) and
    `spawn_from_map`'s `road_cells` order stable. Do **not** switch `cells`
    to `BTreeMap` instead — the keys are `"col,row"` strings and would sort
@@ -251,7 +251,7 @@ also be pinned:
 2. **hecs iteration order** is deterministic *given the same sequence of
    spawn/despawn operations* — which (1) restores. After that, every
    per-frame `world.query()` loop that consumes RNG per entity (the enemy
-   `Ai::think` loop, track distortion, frog logic) draws in a reproducible
+   `Ai::think` loop, track distortion, bong logic) draws in a reproducible
    order.
 
 Audit of the remaining `HashMap`/`HashSet` uses on the simulation path,
@@ -271,7 +271,7 @@ or breaks ties — sort first.**
   with a constant `DT = 1/60` equal to `PHYSICS_FIXED_DT`, so the
   accumulator fires exactly one physics step per frame.
 - windowed ↔ probe, same seed: **identical round setup** (map terrain,
-  ground cosmetics, spawn positions, chassis/speed rolls, frog placement)
+  ground cosmetics, spawn positions, chassis/speed rolls, bong placement)
   but divergent evolution over time, because the windowed game feeds real
   render `dt` into `update` and AI timers/physics stepping quantize
   differently. This is still the payoff that matters: watch the exact
@@ -390,11 +390,11 @@ into it:
 | `u-trap.toml` | a cul-de-sac opening toward the enemy spawn band | stuck-escape / committed-heading overrides |
 | `choke.toml` | one corridor (barely above clearance) dividing the field | funneling, pile-ups, `clustering` |
 | `tight-corridors.toml` | long corridors exactly at clearance width | wall-grind (Phase 4's target metric) |
-| `frog-block.toml` | frog parked in a corridor mouth | the grid-didn't-know-about-the-frog stuck bug |
+| `bong-block.toml` | bong parked in a corridor mouth | the grid-didn't-know-about-the-bong stuck bug |
 | `maze.toml` | dense right-angle maze | heading jitter vs. legitimate weaving (the known `jitter` blind spot) |
 | `pockets.toml` | almost-sealed pockets in the spawn band | `boxed_in` spawns / `relocate_unusable_spawns` |
 
-Conventions: every fixture places an explicit `Start` cell and a `Frog`
+Conventions: every fixture places an explicit `Start` cell and a `Bong`
 cell (so nothing about its terrain depends on random fallback placement),
 and sets the map's `tanks` count so runs are comparable. `maps/` is not
 bundled into releases (`dist-workspace.toml` includes only `static/`;
@@ -442,14 +442,14 @@ ends, drove its single open grid row, and finished an AFK player at frame
   | u-trap | 6/10 | stale-start=4 stall=1 jitter=3 churn=1 clustering=1 |
   | choke | 6/10 | stale-start=3 border-stuck=1 jitter=2 churn=4 |
   | tight-corridors | 2/10 | churn=1 clustering=6 |
-  | frog-block | 5/10 | stale-start=1 jitter=2 churn=2 clustering=6 |
+  | bong-block | 5/10 | stale-start=1 jitter=2 churn=2 clustering=6 |
   | maze | 8/10 | stall=1 jitter=9 spin=3 churn=17 clustering=17 |
   | pockets | 6/10 | stale-start=4 jitter=2 churn=2 |
 
   Zero `invariant` hits anywhere. Each fixture provokes a distinct
   signature matching its intent (maze → weaving jitter/spin/churn plus
   entrance funneling — it's also the loudest map for the two new
-  detectors; tight-corridors/frog-block → clustering at the choke;
+  detectors; tight-corridors/bong-block → clustering at the choke;
   u-trap/pockets → spawn-adjacent stale-starts). The stale-starts and
   stalls across u-trap/choke/pockets are the standing AI findings to
   chase with these seeds, not fixture defects.
@@ -467,7 +467,7 @@ sample. This is the "mathematical" layer of the tooling.
 
 The linter must see exactly the grid the AI steers by. Extract the grid
 construction in `Game::update` (the `Grid::build(width, height,
-PATHFIND_CELL_SIZE, max_tank_avoidance_radius(), obstacles ⧺ frog)` call)
+PATHFIND_CELL_SIZE, max_tank_avoidance_radius(), obstacles ⧺ bong)` call)
 into `pub(crate) fn Game::nav_grid(&self, width: f32, height: f32) ->
 Grid`, called by `update` each frame and by the linter once. A parallel
 reimplementation in the linter is explicitly rejected — it would drift.
@@ -476,7 +476,7 @@ Lint setup is simply a headless round: `Game::default()` + `game.map = …`
 + `seed_override = Some(FIXED)` (Phase 1) + `init(1280, 720)`. Init is
 cheap (the probe does this per round already), and using real init means
 the linter sees seam-widened wall colliders (`tile_hull_half_extent`),
-the frog's actual placed cell, and map-driven pickup slots without
+the bong's actual placed cell, and map-driven pickup slots without
 duplicating any spawn logic.
 
 ### 3.2 The checks
@@ -492,7 +492,7 @@ the bin/lib boundary), `LintFinding` an enum with severity (`Error` /
    when its cell is in or beside it; a start outside it is `start-penned`,
    a `Warning` while destructible terrain is all that pens it (the player
    shoots or rams out) and an `Error` behind permanent walls. `Error` if
-   the frog cell or any pickup slot's cell is outside the playfield; `Warning` for any other open component of
+   the bong cell or any pickup slot's cell is outside the playfield; `Warning` for any other open component of
    ≥ 4 cells (likely authoring mistake; smaller enclosed slivers are
    `Info` — sometimes decorative).
 2. **No boxed-in open cells**: `Error` for any open cell where
@@ -511,9 +511,9 @@ the bin/lib boundary), `LintFinding` an enum with severity (`Error` /
    `max_tank_avoidance_radius()`) centered on the cell center for AABB
    overlap against every obstacle collider (position ±
    `tile_hull_half_extent`, i.e. the seam-widened extents physics really
-   uses) and the frog's collider. Overlap ⇒ `Error`: the grid tells the
+   uses) and the bong's collider. Overlap ⇒ `Error`: the grid tells the
    AI "drive here" and the solver says no — precisely the mismatch class
-   behind the frog bug. (The converse — blocked cell that's physically
+   behind the bong bug. (The converse — blocked cell that's physically
    fine — is expected conservatism from the margin; not reported.)
 5. **Narrow corridors**: `Info` for open playfield cells none of whose
    open neighbors have another open neighbor on the same axis (i.e.
@@ -556,12 +556,12 @@ demanded — and that choice immediately paid off, twice:
   here independently before the other session's heads-up arrived.
   Absorbed: `sealed_ring` resized to a 5×5 ring (exactly one open center
   per axis ⇒ a genuine single boxed cell), a wider `sealed_vault` kept
-  for the pickup/frog burial tests (whose ~128/~150px approach reaches
+  for the pickup/bong burial tests (whose ~128/~150px approach reaches
   need the deeper interior), **maps/test/pockets.toml regenerated** with
   the small ring so the on-disk fixture still carries the boxed-cell
   pathology, and all fixture headers/generator prose re-derived
   (guaranteed grid-passable is now ≥5 cells of wall separation; 3–4 is
-  48px-alignment-dependent; choke/tight-corridors/frog-block lanes are
+  48px-alignment-dependent; choke/tight-corridors/bong-block lanes are
   now two cells wide, so `NarrowCorridor` rightly stays silent for them
   and their provocations are recorded as behavioral).
 
@@ -600,7 +600,7 @@ Deviations from the plan:
   active hand-editing (its unreachable-pickup count grew from 5 to 12
   while the gate was being written), and count-ratcheting a live canvas
   just flaps. A brand-new error class (boxed-in cell, planner/physics
-  mismatch, unreachable frog) still fails instantly. Tighten back to
+  mismatch, unreachable bong) still fails instantly. Tighten back to
   per-kind counts once the map settles.
 - `tight-corridors.toml`'s profile now *includes* `SpawnBandTooTight`
   (its 21-tile rails leave ~3 legal band cells for 4 tanks) — spawn
@@ -624,7 +624,7 @@ Deviations from the plan:
 
 ```rust
 pub struct ContactStats {
-    pub touching_static: bool,   // wall / obstacle / frog (fixed bodies)
+    pub touching_static: bool,   // wall / obstacle / bong (fixed bodies)
     pub touching_tank: bool,     // another tank's hull (dynamic bodies)
     pub max_impulse: f32,        // strongest solver impulse among those contacts
 }
@@ -638,8 +638,8 @@ collider is the solid hull by construction), iterate
 (`fixed` vs `dynamic`), and fold the max of each manifold point's
 `data.impulse`. Hit sensors never appear here — sensors produce
 intersection pairs, not solver contacts — so this is exactly "solid hull
-against solid world". The frog counting as static contact is deliberate:
-pushing against the frog is the historical stuck case.
+against solid world". The bong counting as static contact is deliberate:
+pushing against the bong is the historical stuck case.
 
 ### 4.2 Snapshot: instantaneous facts only, windowing stays in the probe
 
@@ -688,7 +688,7 @@ determinism smoke test still green (contact reads are pure queries).
 
 **Landed (2026-08-27, subagent fork, whole phase).** As designed:
 `Physics::contact_stats` (pair iteration on the hull collider, fixed ⇒
-static incl. walls/frog, max per-point solver impulse), four snapshot
+static incl. walls/bong, max per-point solver impulse), four snapshot
 fields slotted beside the AI-session's `laser_charges`, three probe kinds
 wired through every total/summary. No accumulators in the sim — §4.2's
 instantaneous-facts split held. Thresholds were **measured, then set**
@@ -725,7 +725,7 @@ pile-up metrics this note parked, so `touching_tank` now reaches
 `enemy-pair`/`into-player` counts, printed beside the totals and carried in
 `--json-out` alongside a per-tank `tank_contact_seconds`.
 
-Measured on the tree of that date (nav-grid and frog changes in, neither on
+Measured on the tree of that date (nav-grid and bong changes in, neither on
 master), `--seed 1000`: both new kinds read **0 across all seven fixtures and
 the default map's 30 rounds**, while the ram tally reads 175 enemy-pair rams
 on the default map and 8-32 per fixture. So the contact *jams* the kinds were
@@ -850,7 +850,7 @@ and the verdict runs once at round end — deliberately *outside*
 decidable when arriving can no longer happen. Trace mode prints a
 per-enemy stretch table. At production thresholds: `never-arrived` = 0
 and `invariant` = 0 across default/maze/u-trap/tight-corridors/
-frog-block (10 seeded rounds each); since nothing fired naturally, the
+bong-block (10 seeded rounds each); since nothing fired naturally, the
 wiring was proven by a temporary threshold-floor positive control (maze
 seed `0x3ea`: "route existed (15 cells, ideal 4.3s) but no engagement in
 13.1s") and then reverted to byte-identical sweep output. Suite 36/36.
@@ -942,7 +942,7 @@ would. Sweep cost is seconds; the build dominates. No secrets needed.
 **Phase 6 verified by:** JSONL parsed by a throwaway `python -c
 json.loads` loop over the file; a deliberately-tight budget exiting 1; the
 workflow green on a clean branch and red on a branch with a seeded,
-known-bad regression (e.g. temporarily reverting the frog-in-grid fix).
+known-bad regression (e.g. temporarily reverting the bong-in-grid fix).
 
 **Landed (2026-08-27, subagent fork + wave-5 finishing pass).** As
 designed, with an `ANOMALY_KINDS` registry (12 tags in reporting order)
@@ -973,7 +973,7 @@ map tank counts):
 | u-trap | 4/10 | jitter=1 spin=2 churn=1 |
 | choke | 3/10 | jitter=1 churn=2 |
 | tight-corridors | 3/10 | jitter=1 spin=2 clustering=3 |
-| frog-block | 3/10 | jitter=1 clustering=4 |
+| bong-block | 3/10 | jitter=1 clustering=4 |
 | maze | 8/10 | jitter=8 spin=1 churn=5 clustering=6 low-progress=3 |
 | pockets | 1/10 | churn=2 |
 
@@ -1000,7 +1000,7 @@ so the pinned-seed numbers were re-read (same sweep parameters as above):
 | u-trap | 2/10 | jitter=1 spin=1 |
 | choke | 4/10 | jitter=2 churn=2 |
 | tight-corridors | 2/10 | jitter=1 spin=1 churn=1 |
-| frog-block | 2/10 | churn=3 |
+| bong-block | 2/10 | churn=3 |
 | maze | 8/10 | jitter=7 spin=2 churn=5 clustering=16 low-progress=7 |
 | pockets | 4/10 | jitter=5 churn=3 |
 
@@ -1054,7 +1054,7 @@ parameters as above) with both changes in:
 | u-trap | 2/10 | jitter=1 churn=2 |
 | choke | 3/10 | churn=5 |
 | tight-corridors | 6/10 | jitter=1 churn=5 clustering=1 low-progress=2 |
-| frog-block | 1/10 | clustering=3 |
+| bong-block | 1/10 | clustering=3 |
 | maze | 8/10 | jitter=4 spin=3 churn=14 clustering=17 |
 | pockets | 2/10 | jitter=1 churn=3 |
 

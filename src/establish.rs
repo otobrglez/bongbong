@@ -1,5 +1,5 @@
 //! The establishing shot (docs/large-maps-follow-camera.md section 6): a
-//! field map's round opens on the whole map for about a second - the frog,
+//! field map's round opens on the whole map for about a second - the bong,
 //! the gates, the lie of the land - then zooms fast down to the tank's
 //! follow view, or cuts to it under reduced motion (`motion.rs`).
 //!

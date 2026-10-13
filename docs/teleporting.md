@@ -41,7 +41,7 @@ already agree when `sync_tanks_and_ram` measures travel and `press_treads` sees 
 - **Arrival cell**: `Grid::nearest_open_reachable` from the exit - a BFS through open cells
   only, at most `portal_arrival_max_cells` steps - for the first usable cell outside the exit's
   trigger radius and at least two tank half-extents plus a quarter cell from every other tank
-  (wrecks included; frogs and fires are already blocked cells). Two tanks entering on one frame
+  (wrecks included; bongs and fires are already blocked cells). Two tanks entering on one frame
   never share a cell. No candidate at any exit: nothing happens, no RNG is drawn.
 - **Placement**: `Game::place_tank`, the same path the dev server's `teleport` uses - position,
   ring snap, commanded and physics velocity zeroed, movement collider re-oriented. Heading is
@@ -140,7 +140,7 @@ plan is exact; with three or more it is *optimistic* - the planner assumes the b
 tank lands wherever the draw says and re-plans from there. `Grid::components` unions the
 footprints' components, so a room joined to the field only by a portal counts as reachable.
 
-The flow fields (`Grid::add_field`, one per player and for the frog - see `pathfind.rs`'s
+The flow fields (`Grid::add_field`, one per player and for the bong - see `pathfind.rs`'s
 module doc) walk the same hub: the Dijkstra outward from the goal, on popping a portal cell,
 relaxes every other portal cell at that cost plus the hop (the exit's own price is not
 charged, as in A*), and `descend` offers the exits beside the four neighbours from a portal
@@ -180,12 +180,12 @@ GROUND category after the gate, multi-instance, toggle-erase like every other br
 nav cell within the trigger radius, or - in an active network - none in the playfield. The
 linter's own flood fills (`Cells::neighbours`) step along `Grid::portal_links`, the same
 footprint rule the planner routes by, so a portal-only room is playfield and not a
-`disconnected-region`, and a frog or pickup there is reachable.
+`disconnected-region`, and a bong or pickup there is reachable.
 
 ## Maps
 
 - `maps/test/portals.toml`: two rooms split by a full iron column, one portal each, the player
-  and frog on one side, three waves rolling in on the other. Every enemy must route through the
+  and bong on one side, three waves rolling in on the other. Every enemy must route through the
   hub; `just probe-fixtures` sweeps it at the shared budgets.
 - `maps/portals.toml` (shipped as `portals`): three portals in a triangle around a walled
   centre; the corner ones are shortcuts, the bottom one an escape.

@@ -1,4 +1,4 @@
-//! The frog's speech bubble (`bubble.rs`), painted in the bitmap's pixels
+//! The bong's speech bubble (`bubble.rs`), painted in the bitmap's pixels
 //! over the world and under the HUD: a white body with a near-black rim
 //! and a stepped tail, the words in the default font and every control as
 //! a key cap.

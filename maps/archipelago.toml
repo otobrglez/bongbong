@@ -4,7 +4,7 @@
 # swallow every `cells.` line after it.
 #
 # Hunt on the band plan, six tanks. The field is a warm sea of four islands:
-# the player's frog keeps the west island, the enemy's the east one, and the
+# the player's bong keeps the west island, the enemy's the east one, and the
 # north and south islands join them through fords two cells wide that slow
 # every hull to a wade. The deep water between stops a tank but never a shell.
 #
@@ -14,6 +14,8 @@
 # fishing huts on every shore.
 
 version = 1
+bong = "gloop"
+enemy_bong = "blip"
 size = [56, 28]
 tanks = 6
 tank = "flak"
@@ -359,7 +361,7 @@ cells."38,11" = { kind = "water" }
 cells."39,11" = { kind = "water" }
 cells."40,11" = { kind = "water" }
 cells."41,11" = { kind = "water" }
-cells."46,11" = { kind = "enemy_frog" }
+cells."46,11" = { kind = "enemy_bong" }
 cells."55,11" = { kind = "pine" }
 cells."0,12" = { kind = "water" }
 cells."15,12" = { kind = "water" }
@@ -492,7 +494,7 @@ cells."4,17" = { kind = "wall", material = "wood" }
 cells."5,17" = { kind = "wall", material = "glass" }
 cells."6,17" = { kind = "wall", material = "glass" }
 cells."7,17" = { kind = "wall", material = "wood" }
-cells."10,17" = { kind = "frog" }
+cells."10,17" = { kind = "bong" }
 cells."15,17" = { kind = "water" }
 cells."16,17" = { kind = "water" }
 cells."17,17" = { kind = "water" }
@@ -520,7 +522,7 @@ cells."38,17" = { kind = "water" }
 cells."39,17" = { kind = "water" }
 cells."40,17" = { kind = "water" }
 cells."41,17" = { kind = "water" }
-cells."45,17" = { kind = "pickup", pickup = "frog_health" }
+cells."45,17" = { kind = "pickup", pickup = "bong_health" }
 cells."55,17" = { kind = "pine" }
 cells."0,18" = { kind = "water" }
 cells."4,18" = { kind = "wall", material = "wood" }
@@ -583,7 +585,7 @@ cells."39,19" = { kind = "water" }
 cells."40,19" = { kind = "water" }
 cells."41,19" = { kind = "water" }
 cells."0,20" = { kind = "water" }
-cells."11,20" = { kind = "pickup", pickup = "frog_health" }
+cells."11,20" = { kind = "pickup", pickup = "bong_health" }
 cells."16,20" = { kind = "water" }
 cells."17,20" = { kind = "water" }
 cells."40,20" = { kind = "water" }

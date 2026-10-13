@@ -1,4 +1,5 @@
 version = 1
+bong = "spike"
 tank = "scout"
 size = [
     48.0,
@@ -1655,7 +1656,7 @@ pickup = "health"
 
 [cells."45,20"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."47,20"]
 kind = "wall"
@@ -1694,7 +1695,7 @@ material = "brick"
 
 [cells."11,21"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."13,21"]
 kind = "wall"
@@ -1818,11 +1819,11 @@ kind = "wall"
 material = "brick"
 
 [cells."27,22"]
-kind = "frog"
+kind = "bong"
 
 [cells."30,22"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."31,22"]
 kind = "pickup"
@@ -1853,7 +1854,7 @@ material = "iron"
 
 [cells."1,23"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."3,23"]
 kind = "wall"

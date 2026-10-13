@@ -1011,7 +1011,7 @@ pub enum Depth {
 
 impl Depth {
     /// Liquid water: a ford or a lake, not ice. What wets a track, sprays,
-    /// puts a fire on a hull out and draws a frog's hop.
+    /// puts a fire on a hull out and draws a bong's hop.
     pub fn is_wet(self) -> bool {
         matches!(self, Depth::Shallow | Depth::Deep)
     }

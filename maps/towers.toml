@@ -3,7 +3,7 @@
 # The level tables are dotted keys on purpose - a `[spawn]` header would
 # swallow every `cells.` line after it.
 #
-# Hold the base. The frog sits in a sandbag pen on the left with the
+# Hold the base. The bong sits in a sandbag pen on the left with the
 # player's three towers round it - a tesla coil on the pen's mouth, a gun
 # tower above and a bio slush mortar below - and four waves, light to
 # heavy, roll in through the two gates on the right edge. The enemy has its
@@ -16,6 +16,7 @@
 # waves off the border lanes.
 
 version = 1
+bong = "gloop"
 size = [48, 24]
 mission.kind = "protect"
 spawn.kind = "waves"
@@ -26,7 +27,7 @@ spawn.tier_start = "light"
 spawn.tier_end = "heavy"
 
 cells."16,11" = { kind = "start" }
-cells."8,11" = { kind = "frog" }
+cells."8,11" = { kind = "bong" }
 cells."47,6" = { kind = "gate" }
 cells."47,17" = { kind = "gate" }
 

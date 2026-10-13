@@ -56,8 +56,8 @@ cells."19,8" = { kind = "water" }
 cells."20,8" = { kind = "water" }
 cells."21,8" = { kind = "water" }
 cells."26,8" = { kind = "sandbag" }
-cells."30,8" = { kind = "enemy_frog" }
-cells."3,9" = { kind = "frog" }
+cells."30,8" = { kind = "enemy_bong" }
+cells."3,9" = { kind = "bong" }
 cells."11,9" = { kind = "pine" }
 cells."15,9" = { kind = "water" }
 cells."16,9" = { kind = "water" }

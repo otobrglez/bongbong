@@ -7,6 +7,7 @@
 
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::map::{CellObject, MapFile, Skies, Theme};
+use crate::bong::BongKind;
 use crate::tank::TankKind;
 
 /// How many steps the stack keeps. Past this the oldest step is dropped;
@@ -21,6 +22,11 @@ pub struct MapSettings {
     pub tank: Option<TankKind>,
     /// Player 2's chassis in a two-player round (`MapFile::tank2`).
     pub tank2: Option<TankKind>,
+    /// The players' bong (`MapFile::bong`); `None` is Bong Spike.
+    pub bong: Option<BongKind>,
+    /// The enemy's bong in a Hunt round (`MapFile::enemy_bong`); `None`
+    /// is Bong Blip.
+    pub enemy_bong: Option<BongKind>,
     pub mission: Mission,
     pub spawn: SpawnKind,
     pub waves: Option<u32>,
@@ -40,6 +46,8 @@ impl MapSettings {
             tanks: map.tanks,
             tank: map.tank,
             tank2: map.tank2,
+            bong: map.bong,
+            enemy_bong: map.enemy_bong,
             mission: map.mission.kind,
             spawn: map.spawn.kind,
             waves: map.spawn.waves,
@@ -56,6 +64,8 @@ impl MapSettings {
         map.tanks = self.tanks;
         map.tank = self.tank;
         map.tank2 = self.tank2;
+        map.bong = self.bong;
+        map.enemy_bong = self.enemy_bong;
         map.mission.kind = self.mission;
         map.spawn.kind = self.spawn;
         map.spawn.waves = self.waves;
@@ -79,6 +89,12 @@ impl MapSettings {
         }
         if self.tank2 != other.tank2 {
             out.push("tank2");
+        }
+        if self.bong != other.bong {
+            out.push("bong");
+        }
+        if self.enemy_bong != other.enemy_bong {
+            out.push("enemy_bong");
         }
         if self.mission != other.mission {
             out.push("mission");

@@ -1295,7 +1295,7 @@ impl<T: Transport> OnlineRound<T> {
     /// a press since the last frame ripples the muzzle its first shot left
     /// and kicks the turret (what a replica does on a `Fired`, drawn here on
     /// the press instead of a round trip later); each shot flies by its own state
-    /// machine and stops at the first tile, edge, tank or frog it meets,
+    /// machine and stops at the first tile, edge, tank or bong it meets,
     /// its impact drawn there at once; beams pressed since the last frame
     /// are drawn to where they stop.
     fn fly_own_shots(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8, shells: &[IncomingShell]) {
@@ -1319,7 +1319,7 @@ impl<T: Transport> OnlineRound<T> {
             let to = portal.unwrap_or(to);
             let mut world_hit = world
                 .shot_contact(Some(seat), from, to, shot_half_extent(kind))
-                .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Frog)));
+                .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Bong)));
             // A bullet stops at a drone of the other side's it crosses
             // first, as the room's sweep has it; the drone stays up until
             // the room says it is down.
@@ -2890,7 +2890,7 @@ mod tests {
         let launch = |input_tick: u32, id: u16| {
             vec![
                 WireEvent::Fired { slot: 0, weapon: WeaponKind::FpvSwarm, input_tick },
-                WireEvent::DroneLaunched { id, slot: 0, x: 0, y: 0, target: crate::net::events::NO_TARGET, frog: false },
+                WireEvent::DroneLaunched { id, slot: 0, x: 0, y: 0, target: crate::net::events::NO_TARGET, bong: false },
             ]
         };
         // The room fired the second press: the first was refused.

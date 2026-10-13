@@ -5,11 +5,11 @@
 #
 # portals: two rooms split by a full-height iron column (col 20) and joined
 # by nothing but a portal on each side ((15,11) and (25,11), each with a
-# clear 3x3 around it). The player and the frog live on the left; three
+# clear 3x3 around it). The player and the bong live on the left; three
 # waves of two roll in through two gates on the right edge, spread well
 # apart (rows 5 and 17) so a wave's pair does not arrive shoulder to
 # shoulder and circle each other on the way to the same portal. Every
-# enemy has to route through the portal to reach the frog, so this is the
+# enemy has to route through the portal to reach the bong, so this is the
 # standing check that the planner's hub routing works and that the linter
 # sees one playfield through the network: `just probe-fixtures` sweeps it
 # at the shared budgets (never-arrived=0, low-progress=0), and maplint
@@ -32,7 +32,7 @@ spawn.tier_start = "light"
 spawn.tier_end = "heavy"
 
 cells."10,11" = { kind = "start" }
-cells."5,11" = { kind = "frog" }
+cells."5,11" = { kind = "bong" }
 cells."15,11" = { kind = "portal" }
 cells."25,11" = { kind = "portal" }
 cells."39,5" = { kind = "gate" }

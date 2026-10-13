@@ -3,7 +3,7 @@
 //! the field). A released charge calls a rod on its reticle's cell
 //! (`fire_rod`), put on the field as a zone once the tank loops are done
 //! (`place_calls`); at its end the rod lands (`resolve_zones`): every hull
-//! with any part in its circle crushed, frogs killed, drones downed, every
+//! with any part in its circle crushed, bongs killed, drones downed, every
 //! breakable tile within the break radius crushed, hulls out to the shove
 //! radius knocked off their tracks, a crater left on dry ground and a
 //! volcano it struck set off. Also what the AI is handed - the standing
@@ -15,7 +15,7 @@ use crate::math;
 use hecs::Entity;
 
 use crate::ai::{Ai, Danger, RodPick, RodSense, Role};
-use crate::frog::{Frog, Side};
+use crate::bong::{Bong, Side};
 use crate::map::{cell_to_world, world_to_cell};
 use crate::math::Vec2;
 use crate::obstacle::{face_toward, Obstacle};
@@ -29,7 +29,7 @@ use crate::{MAX_DAMAGE, MAX_SEATS, OBSTACLE_GRID_SIZE, Position};
 
 use super::combat::BlastParams;
 use super::props::DamageCause;
-use super::{Event, Footing, Frame, Game, HitCause, HitTarget, RollIn, SHOCK_FROG, Spectacle};
+use super::{Event, Footing, Frame, Game, HitCause, HitTarget, RollIn, SHOCK_BONG, Spectacle};
 
 /// A rod called this frame, waiting for `place_calls` to put it on the
 /// field.
@@ -136,7 +136,7 @@ impl Game {
     /// A rod lands on `zone`'s cell (docs/rod-from-god.md "The impact"):
     /// with `live`, in this order - every live hull on the field with any
     /// part of its box in the circle crushed, every other within the shove
-    /// radius knocked out from the strike; frogs in the circle killed and in
+    /// radius knocked out from the strike; bongs in the circle killed and in
     /// the ring stunned; drones over the circle downed; every breakable tile
     /// whose cell reaches into the break radius crushed (iron, a cone and a
     /// door sooted, standing), drums going off at once; grenades in reach
@@ -156,7 +156,7 @@ impl Game {
         if live {
             self.chain_held_drums(f, c, t.rod_shove_radius_px);
             self.rod_hulls(f, c, zone.owner, &t);
-            self.rod_frogs(f, c, &t);
+            self.rod_bongs(f, c, &t);
             for target in self.air_targets() {
                 if target.ground.distance_to(c) <= t.rod_kill_radius_px {
                     self.strike_air(f, target.key, crate::air::AirStrike::Rod);
@@ -241,26 +241,26 @@ impl Game {
         }
     }
 
-    /// The frogs, either side's: one whose collider reaches into the circle
+    /// The bongs, either side's: one whose collider reaches into the circle
     /// is killed, one in the shove ring stunned.
-    fn rod_frogs(&mut self, f: &mut Frame, c: Position, t: &Tuning) {
-        let half = Vec2::new(crate::FROG_COLLIDER_HALF_EXTENT.0, crate::FROG_COLLIDER_HALF_EXTENT.1);
+    fn rod_bongs(&mut self, f: &mut Frame, c: Position, t: &Tuning) {
+        let half = Vec2::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
         let mut dead = Vec::new();
-        for frog in self.world.query_mut::<&mut Frog>() {
-            if frog.is_dead() {
+        for bong in self.world.query_mut::<&mut Bong>() {
+            if bong.is_dead() {
                 continue;
             }
-            let d = crate::emp::box_reach(c, frog.position, half);
+            let d = crate::emp::box_reach(c, bong.position, half);
             if d <= t.rod_kill_radius_px {
-                frog.damage(f32::MAX);
-                f.events.push(Event::Hit { target: HitTarget::Frog { side: frog.side }, damage: MAX_DAMAGE, killed: true, x: frog.position.x, y: frog.position.y, cause: HitCause::Rod });
-                dead.push(frog.position);
-            } else if frog.position.distance_to(c) <= t.rod_shove_radius_px {
-                frog.stun(t.rod_frog_stun_seconds);
+                bong.damage(f32::MAX);
+                f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: MAX_DAMAGE, killed: true, x: bong.position.x, y: bong.position.y, cause: HitCause::Rod });
+                dead.push(bong.position);
+            } else if bong.position.distance_to(c) <= t.rod_shove_radius_px {
+                bong.stun(t.rod_bong_stun_seconds);
             }
         }
         for at in dead {
-            f.shocks.push(Shockwave::scaled(at, SHOCK_FROG));
+            f.shocks.push(Shockwave::scaled(at, SHOCK_BONG));
         }
     }
 
@@ -534,7 +534,7 @@ impl Game {
     /// What each rod-carrying enemy that thinks this tick would call
     /// (docs/rod-from-god.md "What it is handed"), in owner-slot order: a
     /// seat standing still, a slow seat led to where it will be, a player
-    /// tower, the players' frog - a hunter's quarry before the towers -
+    /// tower, the players' bong - a hunter's quarry before the towers -
     /// each one it knows of, in its reticle's reach, whose circle holds no
     /// ally and no call already covers, and a seat's only from inside that
     /// seat's sight box; one caller per target. No RNG: the preference, then
@@ -555,7 +555,7 @@ impl Game {
             .filter(|(_, tank, _)| tank.active_weapon() == ActiveWeapon::RodFromGod || tank.charge.is_some_and(|c| c.weapon == ActiveWeapon::RodFromGod))
             .map(|(e, tank, ai)| {
                 let aiming = tank.charge.is_some_and(|c| c.weapon == ActiveWeapon::RodFromGod);
-                (tank.owner_slot(), e, tank.position, ai.role == Role::Hunter, ai.frog_only, aiming, tank.fire_cooldown)
+                (tank.owner_slot(), e, tank.position, ai.role == Role::Hunter, ai.bong_only, aiming, tank.fire_cooldown)
             })
             .collect();
         if armed.is_empty() {
@@ -578,8 +578,8 @@ impl Game {
             .collect();
         let enemy_towers: Vec<(i32, i32)> = self.standing_towers_of(Side::Enemy);
         let player_towers: Vec<(i32, i32)> = self.standing_towers_of(Side::Player);
-        let enemy_frog = self.enemy_frog.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
-        let quarry = self.frog.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
+        let enemy_bong = self.enemy_bong.and_then(|e| self.world.get::<&Bong>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
+        let quarry = self.bong.and_then(|e| self.world.get::<&Bong>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
         let sight = self.enemy_sight();
         let margin = t.rod_kill_radius_px + t.rod_ai_friend_margin_px;
         let near = |at: Position, &(_, centre, half, ahead): &(Entity, Position, Vec2, Position)| {
@@ -591,14 +591,14 @@ impl Game {
             let at = cell_to_world(cell.0, cell.1);
             allies.iter().filter(|a| Some(a.0) != but).any(|a| near(at, a))
                 || enemy_towers.iter().any(|&tower| rod::cell_reach(at, tower) <= t.rod_break_radius_px)
-                || enemy_frog.is_some_and(|f| f.distance_to(at) <= margin + crate::FROG_COLLIDER_HALF_EXTENT.0)
+                || enemy_bong.is_some_and(|f| f.distance_to(at) <= margin + crate::BONG_COLLIDER_HALF_EXTENT.0)
         };
         let covered = |cell: (i32, i32)| {
             let at = cell_to_world(cell.0, cell.1);
             self.zones.iter().any(|z| z.centre.distance_to(at) <= 2.0 * t.rod_kill_radius_px)
         };
         // Whether a call on `cell` from `me` would crush a seat standing by
-        // it - a tower's or the frog's neighbour, a couch partner beside a
+        // it - a tower's or the bong's neighbour, a couch partner beside a
         // camper - from outside that seat's sight box: a call that holds a
         // seat is a call on that seat, and the box binds it.
         let seat_half = Vec2::new(crate::battlefield::max_tank_clearance_half_extent(), crate::battlefield::max_tank_clearance_half_extent());
@@ -607,10 +607,10 @@ impl Game {
             seats.iter().any(|s| s.live && crate::emp::box_reach(at, s.pos, seat_half) <= margin && !crate::ai::in_sight_box_of((half_w, half_h), s.pos, me))
         };
         let mut taken: Vec<(i32, i32)> = Vec::new();
-        for (_, entity, me, hunter, frog_only, aiming, cooldown) in armed {
+        for (_, entity, me, hunter, bong_only, aiming, cooldown) in armed {
             let under_call = self.zones.iter().any(|z| z.holds(me, &t));
             let mut sense = RodSense { pick: None, under_call, keep_from: None, self_blocks: false };
-            if frog_only {
+            if bong_only {
                 out.insert(entity, sense);
                 continue;
             }
@@ -640,18 +640,18 @@ impl Game {
                 };
                 candidates.push((rank, me.distance_to(s.pos), s.seat, cell, RodPick { cell, at_seat: Some(s.seat), why }));
             }
-            let (tower_rank, frog_rank) = if hunter { (3, 2) } else { (2, 3) };
+            let (tower_rank, bong_rank) = if hunter { (3, 2) } else { (2, 3) };
             for &tower in &player_towers {
                 let at = cell_to_world(tower.0, tower.1);
                 if me.distance_to(at) <= sight {
                     candidates.push((tower_rank, me.distance_to(at), u8::MAX, tower, RodPick { cell: tower, at_seat: None, why: "tower" }));
                 }
             }
-            if let Some(frog) = quarry
-                && me.distance_to(frog) <= sight
+            if let Some(bong) = quarry
+                && me.distance_to(bong) <= sight
             {
-                let cell = world_to_cell(frog);
-                candidates.push((frog_rank, me.distance_to(frog), u8::MAX, cell, RodPick { cell, at_seat: None, why: "frog" }));
+                let cell = world_to_cell(bong);
+                candidates.push((bong_rank, me.distance_to(bong), u8::MAX, cell, RodPick { cell, at_seat: None, why: "bong" }));
             }
             candidates.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
             let open = |p: &RodPick| range.holds(p.cell) && p.cell != world_to_cell(me) && !covered(p.cell) && !taken.contains(&p.cell) && !holds_seat_offbox(p.cell, me);

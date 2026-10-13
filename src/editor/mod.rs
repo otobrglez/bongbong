@@ -68,7 +68,7 @@
 //! the mouse - or stands where a finger drags or taps it - until a press
 //! puts it down. Every move, paste, flip, cut and delete is one `EditStep`.
 //! What a selection carries is what the brushes would do with it: a start,
-//! player 2's start or either frog moves with a moved selection, and a
+//! player 2's start or either bong moves with a moved selection, and a
 //! paste places one only where the map holds none of it - so a paste never
 //! leaves two, never reaches a cell outside its own rectangle, and a CUT
 //! then PASTE carries the start like a move. Gates and portals are copied
@@ -107,7 +107,7 @@ use crate::level::{Mission, SpawnKind, Tier};
 use crate::map::{self, CellObject, MapEntry, MapFile, Theme, Weather};
 use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
-use crate::frog::Side;
+use crate::bong::{BongKind, Side};
 use crate::tower::TowerKind;
 use crate::tank::TankKind;
 use crate::{Layout, PATHFIND_CELL_SIZE, Position};
@@ -237,15 +237,15 @@ pub enum Tool {
     /// middle of covers the cells round it (`volcano::footprint`). Any
     /// number, each on its own clock.
     Volcano,
-    Frog,
-    /// Player 1's start - singleton, moved on placement like `Frog`.
+    Bong,
+    /// Player 1's start - singleton, moved on placement like `Bong`.
     Start,
     /// Player 2's start (two-player rounds, docs/two-players.md) -
     /// singleton like `Start`, independent of it.
     Start2,
-    /// The Hunt mission's enemy frog - singleton, moved on placement like
-    /// `Frog`.
-    EnemyFrog,
+    /// The Hunt mission's enemy bong - singleton, moved on placement like
+    /// `Bong`.
+    EnemyBong,
     /// A wave roll-in gate - any number, meant for nav-grid edge cells (the
     /// linter's `gate-not-on-edge` catches one placed elsewhere).
     Gate,
@@ -326,8 +326,8 @@ pub const TOOLS: [Tool; 69] = [
     Tool::Prop(Material::Lamp),
     Tool::Start,
     Tool::Start2,
-    Tool::Frog,
-    Tool::EnemyFrog,
+    Tool::Bong,
+    Tool::EnemyBong,
     Tool::Prop(Material::Target),
     Tool::Pickup(PickupKind::Health),
     Tool::Pickup(PickupKind::Ammo),
@@ -338,7 +338,7 @@ pub const TOOLS: [Tool; 69] = [
     Tool::Pickup(PickupKind::SpeedUp),
     Tool::Pickup(PickupKind::Shield),
     Tool::Pickup(PickupKind::Flamethrower),
-    Tool::Pickup(PickupKind::FrogHealth),
+    Tool::Pickup(PickupKind::BongHealth),
     Tool::Pickup(PickupKind::TowerPack),
     Tool::Pickup(PickupKind::HeatShield),
     Tool::Pickup(PickupKind::Grenades),
@@ -400,8 +400,8 @@ impl Tool {
             Tool::Portal => "portal",
             Tool::Start => "start",
             Tool::Start2 => "start2",
-            Tool::Frog => "frog",
-            Tool::EnemyFrog => "enemy_frog",
+            Tool::Bong => "bong",
+            Tool::EnemyBong => "enemy_bong",
             Tool::Pickup(PickupKind::Health) => "health",
             Tool::Pickup(PickupKind::Ammo) => "ammo",
             Tool::Pickup(PickupKind::Laser) => "laser",
@@ -411,7 +411,7 @@ impl Tool {
             Tool::Pickup(PickupKind::SpeedUp) => "speedup",
             Tool::Pickup(PickupKind::Shield) => "shield",
             Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
-            Tool::Pickup(PickupKind::FrogHealth) => "frog_health",
+            Tool::Pickup(PickupKind::BongHealth) => "bong_health",
             Tool::Pickup(PickupKind::TowerPack) => "tower_pack",
             Tool::Pickup(PickupKind::HeatShield) => "heat_shield",
             Tool::Pickup(PickupKind::Grenades) => "grenades",
@@ -451,7 +451,7 @@ impl Tool {
             Tool::Road | Tool::Water | Tool::Lava | Tool::Volcano | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => {
                 Some(Category::Ground)
             }
-            Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
+            Tool::Start | Tool::Start2 | Tool::Bong | Tool::EnemyBong => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
             Tool::Eraser | Tool::Select => None,
         }
@@ -469,10 +469,10 @@ impl Tool {
             Tool::Water => Some(CellObject::Water),
             Tool::Lava => Some(CellObject::Lava),
             Tool::Volcano => Some(CellObject::Volcano),
-            Tool::Frog => Some(CellObject::Frog),
+            Tool::Bong => Some(CellObject::Bong),
             Tool::Start => Some(CellObject::Start),
             Tool::Start2 => Some(CellObject::Start2),
-            Tool::EnemyFrog => Some(CellObject::EnemyFrog),
+            Tool::EnemyBong => Some(CellObject::EnemyBong),
             Tool::Gate => Some(CellObject::Gate),
             Tool::Portal => Some(CellObject::Portal),
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
@@ -486,7 +486,7 @@ impl Tool {
     /// A brush that keeps at most one of its object on the map and moves
     /// it on placement.
     pub fn is_singleton(self) -> bool {
-        matches!(self, Tool::Frog | Tool::Start | Tool::Start2 | Tool::EnemyFrog)
+        matches!(self, Tool::Bong | Tool::Start | Tool::Start2 | Tool::EnemyBong)
     }
 }
 
@@ -1908,10 +1908,10 @@ impl MapEditor {
             if self.active_tool.is_singleton() {
                 let index = self.cell_index();
                 let old = match self.active_tool {
-                    Tool::Frog => index.frog(),
+                    Tool::Bong => index.bong(),
                     Tool::Start => index.start(),
                     Tool::Start2 => index.start2(),
-                    Tool::EnemyFrog => index.enemy_frog(),
+                    Tool::EnemyBong => index.enemy_bong(),
                     _ => None,
                 };
                 if let Some((oc, or)) = old.filter(|&c| c != (col, row)) {
@@ -2228,7 +2228,7 @@ impl MapEditor {
 
     /// Put the paste ghost down where it stands, as one undo step: every
     /// cell of it on the field written over what was there - a start,
-    /// player 2's start or a frog only where the map holds none of it by
+    /// player 2's start or a bong only where the map holds none of it by
     /// then (the module docs) - and the rectangle it covered selected.
     pub fn place_ghost(&mut self) -> Vec<CellChange> {
         self.finish_drag();
@@ -4012,6 +4012,8 @@ impl MapEditor {
             MapField::Tanks => s.tanks = step_option_number(s.tanks, forward, 0, cap),
             MapField::Tank => s.tank = step_option_choice(s.tank, &TankKind::ALL, forward),
             MapField::Tank2 => s.tank2 = step_option_choice(s.tank2, &TankKind::ALL, forward),
+            MapField::Bong => s.bong = Some(step_bong(s.bong, Side::Player, forward)),
+            MapField::EnemyBong => s.enemy_bong = Some(step_bong(s.enemy_bong, Side::Enemy, forward)),
             MapField::Mission => s.mission = step_choice(s.mission, &MISSIONS, forward),
             MapField::Spawn => s.spawn = step_choice(s.spawn, &[SpawnKind::Band, SpawnKind::Waves], forward),
             MapField::Waves => s.waves = step_option_number(s.waves, forward, 1, 20),
@@ -4043,10 +4045,10 @@ impl MapEditor {
     pub fn singleton_placed(&self, tool: Tool) -> bool {
         let index = self.cell_index();
         match tool {
-            Tool::Frog => index.frog().is_some(),
+            Tool::Bong => index.bong().is_some(),
             Tool::Start => index.start().is_some(),
             Tool::Start2 => index.start2().is_some(),
-            Tool::EnemyFrog => index.enemy_frog().is_some(),
+            Tool::EnemyBong => index.enemy_bong().is_some(),
             _ => false,
         }
     }
@@ -4066,7 +4068,7 @@ pub fn sky_label_text(t: &crate::text::Catalogue, sky: Weather) -> String {
 pub enum MapTab {
     /// How the round is fought: the mission and the enemies.
     Round,
-    /// The players' chassis.
+    /// The players' chassis and the two sides' bongs.
     Tanks,
     /// The look and the size.
     Field,
@@ -4106,7 +4108,7 @@ impl MapTab {
         match self {
             MapTab::Round if waves => vec![vec![Mission], vec![Spawn], vec![Waves, Size, Growth], vec![TierStart, TierEnd]],
             MapTab::Round => vec![vec![Mission], vec![Spawn], vec![Tanks]],
-            MapTab::Tanks => vec![vec![Tank], vec![Tank2]],
+            MapTab::Tanks => vec![vec![Tank], vec![Tank2], vec![Bong, EnemyBong]],
             MapTab::Field => vec![vec![Theme], vec![Width, Height, Anchor]],
             MapTab::Sky => Weather::SKIES.chunks(3).map(|row| row.iter().map(|w| Sky(*w)).collect()).collect(),
         }
@@ -4130,6 +4132,10 @@ pub enum MapField {
     Tank,
     /// Player 2's chassis (`MapFile::tank2`), read only in a two-player round.
     Tank2,
+    /// The players' bong (`MapFile::bong`): one of the player's kinds.
+    Bong,
+    /// The enemy's bong (`MapFile::enemy_bong`), read only in a Hunt round.
+    EnemyBong,
     /// The look (`MapFile::theme`): the canvas redraws in it at once.
     Theme,
     /// The map's size in cells (`MapFile::size`), each press one cell, the
@@ -4188,6 +4194,8 @@ impl MapField {
             MapField::TierEnd => "tier_end",
             MapField::Tank => "tank",
             MapField::Tank2 => "tank2",
+            MapField::Bong => "bong",
+            MapField::EnemyBong => "enemy_bong",
             MapField::Theme => "theme",
             MapField::Width => "width",
             MapField::Height => "height",
@@ -4211,6 +4219,8 @@ impl MapField {
             MapField::TierEnd => keys::SETTINGS_TIER_END,
             MapField::Tank => keys::SETTINGS_TANK,
             MapField::Tank2 => keys::SETTINGS_TANK2,
+            MapField::Bong => keys::SETTINGS_BONG,
+            MapField::EnemyBong => keys::SETTINGS_ENEMY_BONG,
             MapField::Theme => keys::SETTINGS_THEME,
             MapField::Width => keys::SETTINGS_WIDTH,
             MapField::Height => keys::SETTINGS_HEIGHT,
@@ -4391,6 +4401,14 @@ fn step_option_choice<T: Copy + PartialEq>(value: Option<T>, list: &[T], forward
     }
 }
 
+/// Step a side's bong through that side's kinds, wrapping. A map that
+/// names none, or names the other side's, starts from what it plays: the
+/// side's default (`MapFile::bong_kind`).
+fn step_bong(value: Option<BongKind>, side: Side, forward: bool) -> BongKind {
+    let current = value.filter(|k| k.side() == side).unwrap_or_else(|| BongKind::default_for(side));
+    step_choice(current, BongKind::of(side), forward)
+}
+
 /// Cycle a choice through `list`, wrapping.
 fn step_choice<T: Copy + PartialEq>(value: T, list: &[T], forward: bool) -> T {
     let at = list.iter().position(|&x| x == value).unwrap_or(0);
@@ -4497,8 +4515,8 @@ mod editor_tests {
         map.tank2 = Some(TankKind::Scout);
         map.set_cell(30, 11, CellObject::Start);
         map.set_cell(32, 11, CellObject::Start2);
-        map.set_cell(35, 11, CellObject::Frog);
-        map.set_cell(5, 11, CellObject::EnemyFrog);
+        map.set_cell(35, 11, CellObject::Bong);
+        map.set_cell(5, 11, CellObject::EnemyBong);
         map.set_cell(0, 11, CellObject::Gate);
         map.set_cell(39, 11, CellObject::Gate);
         map.set_cell(20, 11, CellObject::Wall { material: Material::Brick });
@@ -4517,12 +4535,12 @@ mod editor_tests {
         assert_eq!(back.tanks, Some(5));
         assert_eq!(back.mission, map.mission);
         assert_eq!(back.spawn, map.spawn);
-        assert_eq!(back.enemy_frog_cell(), Some((5, 11)));
+        assert_eq!(back.enemy_bong_cell(), Some((5, 11)));
         assert_eq!(back.gate_cells(), vec![(0, 11), (39, 11)]);
         assert_eq!(back.start_cell(), Some((30, 11)));
         assert_eq!(back.start2_cell(), Some((32, 11)));
         assert_eq!(back.tank2, Some(TankKind::Scout));
-        assert_eq!(back.frog_cell(), Some((35, 11)));
+        assert_eq!(back.bong_cell(), Some((35, 11)));
         assert_eq!(back.portal_cells(), vec![(10, 5), (30, 5)]);
         assert_eq!(back.cells.len(), map.cells.len());
         assert_eq!(back.cell(22, 11).and_then(|c| c.material()), Some(Material::Barrel));
@@ -4667,19 +4685,19 @@ mod editor_tests {
     #[test]
     fn singletons_move_and_undo_restores_the_old_cell() {
         let mut ed = MapEditor::new(MapFile::new());
-        ed.select_tool(Tool::Frog);
+        ed.select_tool(Tool::Bong);
         ed.stroke(&[(3, 3)], false);
         let changes = ed.stroke(&[(6, 6)], false);
         assert_eq!(changes.len(), 2, "a move is a clear and a placement");
-        assert_eq!(ed.map().frog_cell(), Some((6, 6)));
+        assert_eq!(ed.map().bong_cell(), Some((6, 6)));
         ed.undo();
-        assert_eq!(ed.map().frog_cell(), Some((3, 3)));
+        assert_eq!(ed.map().bong_cell(), Some((3, 3)));
         ed.redo();
-        assert_eq!(ed.map().frog_cell(), Some((6, 6)));
-        // Tapping the frog with the frog tool removes it.
+        assert_eq!(ed.map().bong_cell(), Some((6, 6)));
+        // Tapping the bong with the bong tool removes it.
         ed.stroke(&[(6, 6)], false);
-        assert_eq!(ed.map().frog_cell(), None);
-        assert!(ed.singleton_placed(Tool::Frog) == false);
+        assert_eq!(ed.map().bong_cell(), None);
+        assert!(ed.singleton_placed(Tool::Bong) == false);
     }
 
     /// CLEAR MAP empties the cells and nothing else, as one undo step that
@@ -4688,7 +4706,7 @@ mod editor_tests {
     fn clear_empties_the_canvas_as_one_undo_step_and_keeps_the_settings() {
         let mut base = MapFile::new();
         base.set_cell(1, 1, brick());
-        base.set_cell(3, 4, CellObject::Frog);
+        base.set_cell(3, 4, CellObject::Bong);
         base.tanks = Some(4);
         base.mission.kind = Mission::Hunt;
         base.name = Some("arena".into());
@@ -4704,12 +4722,12 @@ mod editor_tests {
         assert!(ed.dirty(), "a clear is not a new baseline");
         assert_eq!(ed.diff().removed, 2, "the baseline's two cells are gone");
         assert_eq!(ed.history().undo_depth(), 2, "the stroke and the clear");
-        assert!(!ed.singleton_placed(Tool::Frog));
+        assert!(!ed.singleton_placed(Tool::Bong));
 
         ed.undo();
         assert_eq!(ed.map().cell(1, 1), Some(&brick()));
         assert_eq!(ed.map().cell(2, 2), Some(&CellObject::Road));
-        assert_eq!(ed.map().cell(3, 4), Some(&CellObject::Frog));
+        assert_eq!(ed.map().cell(3, 4), Some(&CellObject::Bong));
         ed.redo();
         assert!(ed.map().cells.is_empty());
 
@@ -6122,7 +6140,7 @@ mod editor_tests {
         assert!(ed.map().cells.is_empty());
         // With the popup open a finger on the canvas past it only closes
         // it (the MAP panel hangs over the cells nearer the bar).
-        let Vec2 { x, y } = on_cell(&ed, &frame, 10, 15);
+        let Vec2 { x, y } = on_cell(&ed, &frame, 10, 16);
         fingers(&mut ed, &frame, &[vec![(2, x, y)], vec![(2, x + 60.0, y)]]);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing finger painted");
@@ -6301,7 +6319,7 @@ mod editor_tests {
         let mut base = MapFile::new();
         let corners = [(0, 0), (33, 0), (0, 16), (33, 16), (17, 8)];
         for (i, &(c, r)) in corners.iter().enumerate() {
-            base.set_cell(c, r, if i == 4 { CellObject::Frog } else { brick() });
+            base.set_cell(c, r, if i == 4 { CellObject::Bong } else { brick() });
         }
         base.set_cell(34, 17, CellObject::Road);
         for anchor in Anchor::ALL {
@@ -6568,7 +6586,7 @@ mod editor_tests {
     }
 
     /// A 250 x 250 map painted edge to edge - each cell a wall, a prop, a
-    /// tree, grass, road, water, oil or a pickup - with a start, a frog, two
+    /// tree, grass, road, water, oil or a pickup - with a start, a bong, two
     /// portals and a tower among them.
     fn dense_map() -> MapFile {
         let mut map = MapFile::new();
@@ -6594,7 +6612,7 @@ mod editor_tests {
             }
         }
         map.set_cell(10, 10, CellObject::Start);
-        map.set_cell(240, 240, CellObject::Frog);
+        map.set_cell(240, 240, CellObject::Bong);
         map.set_cell(100, 100, CellObject::Portal);
         map.set_cell(150, 150, CellObject::Portal);
         map.set_cell(120, 60, CellObject::Tesla { side: None });
@@ -6908,7 +6926,7 @@ mod editor_tests {
     // ----- the select tool -----
 
     /// A map with a little of everything for the select tool: two bricks, a
-    /// road, water, player 1's start and the frog in one corner of it, a
+    /// road, water, player 1's start and the bong in one corner of it, a
     /// gate on the left edge and a pair of portals.
     fn select_map() -> MapFile {
         let mut map = MapFile::new();
@@ -6917,7 +6935,7 @@ mod editor_tests {
         map.set_cell(4, 5, CellObject::Road);
         map.set_cell(6, 6, CellObject::Water);
         map.set_cell(5, 6, CellObject::Start);
-        map.set_cell(20, 10, CellObject::Frog);
+        map.set_cell(20, 10, CellObject::Bong);
         map.set_cell(0, 8, CellObject::Gate);
         map.set_cell(8, 4, CellObject::Portal);
         map.set_cell(25, 12, CellObject::Portal);
@@ -7064,7 +7082,7 @@ mod editor_tests {
     }
 
     /// The singletons in a selection (docs above): a paste places a start
-    /// or a frog only where the map holds none of it once the rest of the
+    /// or a bong only where the map holds none of it once the rest of the
     /// paste is down - never two, and never a cell outside the paste's own
     /// rectangle - so a cut and a paste carry the start like a move, and a
     /// paste over the map's own start puts the pasted one in its place.
@@ -7100,12 +7118,12 @@ mod editor_tests {
         assert_eq!(ed.map().cell(5, 6), Some(&brick()), "the brick over the old start");
         assert_eq!(ed.map().start_cell(), Some((5, 8)), "the pasted start in its place");
         assert_eq!(count(&ed, CellObject::Start), 1);
-        // The frog alike, by a move: it goes with the cells.
+        // The bong alike, by a move: it goes with the cells.
         let mut ed = MapEditor::new(select_map());
         ed.select_cells(CellRect::spanning((19, 9), (21, 11)));
         ed.move_selection((3, 2));
-        assert_eq!(ed.map().frog_cell(), Some((23, 12)));
-        assert_eq!(count(&ed, CellObject::Frog), 1);
+        assert_eq!(ed.map().bong_cell(), Some((23, 12)));
+        assert_eq!(count(&ed, CellObject::Bong), 1);
     }
 
     #[test]
@@ -7441,7 +7459,7 @@ mod editor_tests {
         let before = ed.map().clone();
         ed.stroke(&[(2, 2), (8, 7)], true);
         assert_eq!(CellRect::spanning((2, 2), (8, 7)).cells().filter(|&(c, r)| ed.map().cell(c, r).is_some()).count(), 0);
-        assert_eq!(ed.map().cell(20, 10), Some(&CellObject::Frog), "and nothing past it");
+        assert_eq!(ed.map().cell(20, 10), Some(&CellObject::Bong), "and nothing past it");
         undo_redo_exact(&mut ed, &before);
         ground_is_rebuilt(&ed);
         // ... and so does the eraser.

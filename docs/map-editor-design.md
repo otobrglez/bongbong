@@ -3,7 +3,7 @@
 Status: implemented, except the in-game entry point (see "Entering the
 editor" below) - that, and the editor's fusion into the game as a Build
 mode, is specified in docs/game-editor-fusion.md. `map.rs` (format), `battlefield::spawn_from_map`,
-the `simulation::Game::init`/`update` wiring (walls/road/frog/pickup slots),
+the `simulation::Game::init`/`update` wiring (walls/road/bong/pickup slots),
 `src/editor/` (`MapEditor`) and `static/ui/eraser.png` are all in place.
 The editor is no longer a standalone `--editor` driver behind a Cargo
 feature: it is the game's Build mode (`src/mode.rs`, `src/editor/`),
@@ -27,20 +27,20 @@ random-corner fallback even when a map places zero of them - the round
 simply has none). The sections below still describe the original
 "map is optional, everything else falls back to random" design as it was
 first built; where later text in this doc says "falls back to random" for
-obstacles/pickups, that fallback no longer exists - only the frog still has
-one (a map with no `Frog` cell still gets a random near-center placement,
-since a round needs exactly one live frog for the protect-objective
+obstacles/pickups, that fallback no longer exists - only the bong still has
+one (a map with no `Bong` cell still gets a random near-center placement,
+since a round needs exactly one live bong for the protect-objective
 mechanic to mean anything).
 
 **Later change #2: player start point + a map-level default enemy count.**
 A map can now place one `Start` cell (editor palette icon: a tank sprite,
 same fixed representative sprite - `tank::icon_source_rec`, Scout row/col
 0 - as the other editor icons, not any particular round's rolled chassis) -
-singleton, same "clicking a new cell moves it" convention as the Frog tool
-(`MapFile::start_cell`, mirroring `frog_cell`). `Game::init` reads it
+singleton, same "clicking a new cell moves it" convention as the Bong tool
+(`MapFile::start_cell`, mirroring `bong_cell`). `Game::init` reads it
 directly off `self.map` *before* spawning the player (the player is created
 before `battlefield::spawn_from_map` runs, so it can't wait on that
-function's output the way the frog fallback does) and uses it as the
+function's output the way the bong fallback does) and uses it as the
 player's spawn position; a map with no `Start` cell falls back to
 `MapFile::nearest_free_cell` around the battlefield's exact center - an
 expanding-ring search (by grid cell, only `Wall` cells block it) that snaps
@@ -93,7 +93,7 @@ saves).
 ## Goals
 
 - Let a developer hand-author a battlefield layout — walls (per material),
-  glass, road, and a single frog — by clicking cells on the existing
+  glass, road, and a single bong — by clicking cells on the existing
   battlefield grid, then save it as a map file.
 - Let the game load one of these maps at startup instead of the current
   fully-random layout, so a designed map plays out on the same terrain every
@@ -110,7 +110,7 @@ saves).
   below as the reason certain choices are made now, not built now.
 - Placing player/enemy spawn points, battlefield size, or border walls in
   the map. A map only overrides the *interior static terrain* — walls,
-  road, the frog, and pickup slots. Border walls (`battlefield::spawn_walls`)
+  road, the bong, and pickup slots. Border walls (`battlefield::spawn_walls`)
   and enemy spawn positions stay procedural/random on top of whatever
   terrain the map supplies; the player always spawns at the exact screen
   center (there is no fortress/enclosure any more - see the status note at
@@ -168,10 +168,10 @@ object, left to right:
 | Oil trail | an `Oil` cell (`kind = "oil"`) | GROUND category: not solid, no nav effect until lit; a blast or a burning neighbour sets it going and the fire runs along it cell by cell to any drum at the end. Icon from `props_sheet.png` row 9 |
 | Fence | a `Fence` cell (`kind = "fence"`) | " - two styles; the game draws it along whichever axis has fence neighbours |
 | Road | `ground::GroundGrid` cell → `Road` | see "Road & autotiling" below |
-| Frog | single `Frog` placement | see "Frog: singleton enforcement" below |
-| Tank (start point) | single `Start` placement | player 1's spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Frog |
+| Bong | single `Bong` placement | see "Bong: singleton enforcement" below |
+| Tank (start point) | single `Start` placement | player 1's spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Bong |
 | Tank (player 2 start) | single `Start2` placement | player 2's spawn in a two-player round (docs/two-players.md); singleton, independent of `Start`; the same tank icon over player 2's blue ring |
-| Enemy frog | single `EnemyFrog` placement (`kind = "enemy_frog"`) | the Hunt mission's target (docs/maps-to-levels.md); singleton, same move-on-click behavior as Frog; drawn as the frog idle sprite over a red ground ring, the same marker the game draws under it. Ignored by missions without an enemy frog |
+| Enemy bong | single `EnemyBong` placement (`kind = "enemy_bong"`) | the Hunt mission's target (docs/maps-to-levels.md); singleton, same move-on-click behavior as Bong; drawn as the bong idle sprite over a red ground ring, the same marker the game draws under it. Ignored by missions without an enemy bong |
 | Portal | a `Portal` cell (`kind = "portal"`) | GROUND category: a teleport anchor (docs/teleporting.md); any number, not solid, the ~3x3 spiral drawn around it spills over neighbours that stay paintable. Ghosted with an outlined anchor until a second one is placed (`portal-alone`). Icon from `portal_sheet.png`'s last cell |
 | Gate | a `Gate` cell (`kind = "gate"`) | a wave roll-in gate; any number. Meant for nav-grid edge cells (col 0, last col, row 0, last row of the `PATHFIND_CELL_SIZE` grid), where it's drawn as an orange chevron pointing inward; anywhere else it's a plain orange square and the linter's `gate-not-on-edge` flags it. A map with any gate cells uses only those; one with none has its gates scanned from the wall layout each wave |
 | Health pickup | a `Pickup` spawn slot, kind `Health` | see "Pickups: fixed spawn slots" below |
@@ -183,7 +183,7 @@ object, left to right:
 | Eraser | clears whatever occupies the clicked cell | see "Eraser" below |
 
 Each icon is a small button (~48x48px) drawn with the corresponding sprite
-already loaded by the game (`Textures.walls`/`Textures.frog_idle`/etc.) —
+already loaded by the game (`Textures.walls`/`Textures.bong_idle`/etc.) —
 no new sprite generation needed for the palette itself, except the eraser.
 The currently-selected tool is highlighted (border/background tint); the
 active tool determines what a grid click does. Clicking a tool button
@@ -264,16 +264,16 @@ ground layer today. The editor calls the same `GroundGrid` construction
 path the game uses, just seeded from the map's road cells instead of a
 random layout.
 
-### Frog: singleton enforcement
+### Bong: singleton enforcement
 
-Only one frog may exist on a map, since killing it ends the round (the
-same rule serves the enemy frog and the two player starts - four
+Only one bong may exist on a map, since killing it ends the round (the
+same rule serves the enemy bong and the two player starts - four
 singletons, each moved independently of the others). The
-Frog tool doesn't refuse a second click — it *moves* the frog: clicking a
-new cell while a frog is already placed clears the old cell and places the
-frog at the new one, so there's always at most one and the user never
-hits an error state. The palette's Frog icon shows a small badge/outline
-when a frog is currently placed on the canvas, so it's visually obvious
+Bong tool doesn't refuse a second click — it *moves* the bong: clicking a
+new cell while a bong is already placed clears the old cell and places the
+bong at the new one, so there's always at most one and the user never
+hits an error state. The palette's Bong icon shows a small badge/outline
+when a bong is currently placed on the canvas, so it's visually obvious
 one already exists.
 
 ### Pickups: fixed spawn slots
@@ -284,7 +284,7 @@ drops below `PICKUP_COUNT`, a kind and a random corner-adjacent position
 are rolled fresh. A map's Health/Ammo/Laser/Minigun placements don't
 replace that mechanism, they give it fixed candidate *slots* to draw from
 instead of rolling a random corner: any number of each may be placed (no
-singleton restriction like the frog — a map with zero, three, or ten health
+singleton restriction like the bong — a map with zero, three, or ten health
 pickups is equally valid), each cell records only its kind, not "currently
 occupied," since a slot's occupancy is just whether a live `Pickup` entity
 currently sits there.
@@ -292,7 +292,7 @@ currently sits there.
 **Superseded again, past even the "Later change" note at the top of this
 doc:** at round start every placed slot spawns its pickup unconditionally,
 with no clearance check at all (`simulation::spawn_pickup_at`) — a
-map-placed pickup is a deliberate placement, same as the frog, so it's
+map-placed pickup is a deliberate placement, same as the bong, so it's
 honored exactly rather than silently skipped for sitting close to a wall.
 An earlier version of this feature *did* apply the old random-placement's
 clearance check here too, which meant pickups placed near a dense wall
@@ -309,7 +309,7 @@ the map actually places at least one.
 ### Eraser
 
 Clicking the Eraser tool over any occupied cell (wall, glass, road, or
-frog) clears that cell back to empty/grass. Clicking an already-empty cell
+bong) clears that cell back to empty/grass. Clicking an already-empty cell
 is a no-op. No confirmation — single-cell, single-undo-step-equivalent
 actions are cheap enough that a confirm dialog would just be friction (and
 there's no undo to fall back on if a click was a misclick, so the cost of
@@ -372,7 +372,7 @@ material = "glass"
 kind = "road"
 
 [cells."14,9"]
-kind = "frog"
+kind = "bong"
 
 [cells."1,1"]
 kind = "pickup"
@@ -387,7 +387,7 @@ pickup = "ammo"
   matches the preview already shown and approved). Only occupied cells are
   written — empty/grass cells have no entry, so a mostly-empty map stays a
   small file.
-- `kind` is one of `"wall" | "road" | "water" | "frog" | "start" | "enemy_frog" |
+- `kind` is one of `"wall" | "road" | "water" | "bong" | "start" | "enemy_bong" |
   "gate" | "pickup" | "sandbag" | "barrel" | "fence" | "oil"` (`water` is
   painted like `road`; the picture - a river where it is one cell wide, a
   lake where it is wider - is decided by `ground::build` from the cells
@@ -422,10 +422,10 @@ Besides its cells a map can state what kind of *level* it is
 `spawn`, both `#[serde(default)]` so every map without them plays as
 today (Protect mission, band plan).
 
-- `mission.kind` — `"protect"` (default), `"hunt"` (the enemies' frog is
-  the target; place it with an `enemy_frog` cell, or the round picks a
-  procedural spot and the linter warns `hunt-missing-enemy-frog`) or
-  `"destroy"` (no frog at all).
+- `mission.kind` — `"protect"` (default), `"hunt"` (the enemies' bong is
+  the target; place it with an `enemy_bong` cell, or the round picks a
+  procedural spot and the linter warns `hunt-missing-enemy-bong`) or
+  `"destroy"` (no bong at all).
 - `spawn.kind` — `"band"` (default: `tanks`/`--enemies` tanks placed in
   the border band at init) or `"waves"`; with waves, `spawn.waves`,
   `spawn.size`, `spawn.growth`, `spawn.tier_start` and `spawn.tier_end`
@@ -459,7 +459,7 @@ pub struct MapFile {
 pub enum CellObject {
     Wall { material: obstacle::Material },
     Road,
-    Frog,
+    Bong,
     Pickup { pickup: pickup::PickupKind },
 }
 ```
@@ -501,7 +501,7 @@ map: Option<PathBuf>,
 ```
 
 `Game::init` currently always calls `battlefield::scatter_obstacles`
-(random layout), rolls a random frog position, and calls `spawn_pickup`
+(random layout), rolls a random bong position, and calls `spawn_pickup`
 once per corner for the initial pickups (`simulation.rs` ~line 474-523).
 Add a `battlefield::spawn_from_map(&MapFile, &mut Physics, &mut World)`
 entry point alongside `scatter_obstacles`, and have `Game::init` take an
@@ -509,7 +509,7 @@ entry point alongside `scatter_obstacles`, and have `Game::init` take an
 file once at startup and fails fast with a clear error on a missing/
 malformed file — a game that can't find the map it was told to load should
 not silently fall back to random). When `Some`, spawn exactly the map's
-walls/road cells, place the frog at its map cell instead of the random
+walls/road cells, place the bong at its map cell instead of the random
 roll, and spawn the map's pickup slots instead of the corner-based initial
 placement (see "Pickups: fixed spawn slots" above for how top-up respawn
 also switches to drawing from those slots for the rest of the round); when
@@ -553,9 +553,9 @@ drawn over the normal game HUD whenever the game is running with the
 `map-editor` feature enabled (same gate as `--editor` — see "Dev-only
 gating" below; it never exists in a release build). Clicking it pauses the
 current round and switches the top-level driver from `Game` to
-`MapEditor`, seeded from whatever obstacle/road/frog layout the current
+`MapEditor`, seeded from whatever obstacle/road/bong layout the current
 round already has on screen (built once via `MapFile::from_placed`-style
-conversion out of the live obstacle/ground/frog state, not a blank
+conversion out of the live obstacle/ground/bong state, not a blank
 canvas) — an editor entered mid-game becomes "tweak what I'm looking at",
 not "start over". `MapEditor` gets its own matching hamburger/back icon in
 the same top-left spot to switch back to `Game`, which resumes the paused

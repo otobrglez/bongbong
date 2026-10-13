@@ -1,6 +1,6 @@
 //! The drawing surface the static field is painted on (docs/mapshot-prd.md).
 //!
-//! The leaf draw functions of the field - ground, grass, obstacles, frogs,
+//! The leaf draw functions of the field - ground, grass, obstacles, bongs,
 //! pickups, tanks and their rings, tread marks, scorches, rubble - are
 //! generic over [`Canvas`] rather than raylib's `RaylibDraw`, so the same
 //! code paints two very different targets:
@@ -24,7 +24,7 @@
 //! linear filter when source and destination sizes differ (tanks draw at
 //! 2x, grass and pickups at their own scales - every scaled sprite would
 //! blur), it ignores a negative source width (no mirroring, which grass and
-//! frogs rely on), `ImageDrawRectangle` copies bytes without blending, and
+//! bongs rely on), `ImageDrawRectangle` copies bytes without blending, and
 //! `ImageDrawText` lazily loads the default font through a GL texture. So
 //! raylib only decodes PNGs and encodes the result.
 //!
@@ -32,7 +32,7 @@
 //! transient `P1`/`P2` locate label, which stays raylib-only
 //! (`render::tank::draw_player_label`).
 
-use crate::frog::{FROG_VARIANT_DIRS, FrogAnim};
+use crate::bong::{BongAnim, BongKind};
 use crate::map::Theme;
 use crate::Position;
 use crate::math::{Color, Rectangle, Vec2};
@@ -87,9 +87,9 @@ pub enum Sheet {
     /// static/aircraft_sheet.png - air support's helicopter, its rotor and
     /// the jet (docs/AIRCRAFT_SPEC.md, `air_support::draw_aircraft`).
     Aircraft,
-    /// static/toxic_frog/<variant dir>/<clip>.png - one filmstrip per clip
-    /// per colour variant (`FROG_VARIANT_DIRS`, docs/FROG_SPEC.md).
-    Frog { variant: u8, clip: FrogAnim },
+    /// static/bongs/<kind>/<clip>.png - one filmstrip per clip per
+    /// character (`BongKind::name`, docs/BONG_SPEC.md).
+    Bong { kind: BongKind, clip: BongAnim },
 }
 
 /// The fifteen sheets that are one file each regardless of theme.
@@ -111,8 +111,8 @@ pub const SINGLE_SHEETS: [Sheet; 15] = [
     Sheet::Aircraft,
 ];
 
-/// The five frog clips, in `FrogAnim` order.
-pub const FROG_CLIPS: [FrogAnim; 5] = [FrogAnim::Idle, FrogAnim::Hurt, FrogAnim::Hop, FrogAnim::Attack, FrogAnim::Explosion];
+/// The five bong clips, in `BongAnim` order.
+pub const BONG_CLIPS: [BongAnim; 5] = [BongAnim::Idle, BongAnim::Hurt, BongAnim::Hop, BongAnim::Attack, BongAnim::Explosion];
 
 impl Sheet {
     /// The asset's path relative to the working directory - the one table
@@ -136,33 +136,30 @@ impl Sheet {
             Sheet::Crates => "static/crates_sheet.png".into(),
             Sheet::PickupGlyphs => "static/pickup_glyphs.png".into(),
             Sheet::Aircraft => "static/aircraft_sheet.png".into(),
-            Sheet::Frog { variant, clip } => {
-                let dir = FROG_VARIANT_DIRS[variant as usize % FROG_VARIANT_DIRS.len()];
-                format!("static/toxic_frog/{dir}/{}.png", frog_clip_file(clip))
-            }
+            Sheet::Bong { kind, clip } => format!("static/bongs/{}/{}.png", kind.name(), bong_clip_file(clip)),
         }
     }
 
     /// Every sheet the field can ask for: the ground and grass sheets of
-    /// every theme, the single sheets and every frog variant's five clips.
+    /// every theme, the single sheets and every bong kind's five clips.
     pub fn all() -> Vec<Sheet> {
         let mut all: Vec<Sheet> = Theme::ALL.iter().flat_map(|&t| [Sheet::Ground(t), Sheet::Grass(t)]).collect();
         all.extend(SINGLE_SHEETS);
-        for variant in 0..FROG_VARIANT_DIRS.len() as u8 {
-            all.extend(FROG_CLIPS.iter().map(|&clip| Sheet::Frog { variant, clip }));
+        for kind in BongKind::ALL {
+            all.extend(BONG_CLIPS.iter().map(|&clip| Sheet::Bong { kind, clip }));
         }
         all
     }
 }
 
-/// The filmstrip file stem for a frog clip.
-fn frog_clip_file(clip: FrogAnim) -> &'static str {
+/// The filmstrip file stem for a bong clip.
+fn bong_clip_file(clip: BongAnim) -> &'static str {
     match clip {
-        FrogAnim::Idle => "idle",
-        FrogAnim::Hurt => "hurt",
-        FrogAnim::Hop => "hop",
-        FrogAnim::Attack => "attack",
-        FrogAnim::Explosion => "explosion",
+        BongAnim::Idle => "idle",
+        BongAnim::Hurt => "hurt",
+        BongAnim::Hop => "hop",
+        BongAnim::Attack => "attack",
+        BongAnim::Explosion => "explosion",
     }
 }
 
@@ -993,7 +990,7 @@ mod tests {
         paths.sort();
         paths.dedup();
         assert_eq!(paths.len(), n);
-        assert_eq!(n, 2 * Theme::ALL.len() + SINGLE_SHEETS.len() + FROG_VARIANT_DIRS.len() * FROG_CLIPS.len());
+        assert_eq!(n, 2 * Theme::ALL.len() + SINGLE_SHEETS.len() + BongKind::ALL.len() * BONG_CLIPS.len());
     }
 
     /// The ground and grass sheets follow the theme, the way `app.rs`

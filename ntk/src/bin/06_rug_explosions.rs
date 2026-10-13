@@ -49,7 +49,7 @@ fn main() {
     let mut map = MapFile::new();
     map.size = Some((COLS, ROWS));
     map.tanks = Some(0); // no enemies
-    map.mission.kind = Mission::Destroy; // no frog either
+    map.mission.kind = Mission::Destroy; // no bong either
     map.set_cell(PARK.0, PARK.1, CellObject::Start);
     let (width, height) = map.field_size();
     let (w, h) = (width as i32, height as i32);
@@ -83,7 +83,7 @@ fn main() {
     let target = load(&mut rl, "static/target_sheet.png");
     let barrel_explosion = load(&mut rl, "static/barrel_explosion.png");
     let ground = load(&mut rl, "static/punyworld/punyworld-overworld-tileset.png");
-    let frog_idle = load(&mut rl, &format!("static/toxic_frog/{}/idle.png", bongbong::frog::FROG_VARIANT_DIRS[0]));
+    let bong_idle = load(&mut rl, &bongbong::canvas::Sheet::Bong { kind: bongbong::bong::BongKind::Spike, clip: bongbong::bong::BongAnim::Idle }.path());
     let eraser = load(&mut rl, "static/ui/eraser.png");
 
     // The three full-screen ripple shaders the renderer resolves in pass 2.
@@ -184,7 +184,7 @@ fn main() {
             props: &props,
             barrel_explosion: &barrel_explosion,
             ground: &ground,
-            frog_variants: &[],
+            bongs: &[],
             // The demo paints a plain white canvas, which draws no ground
             // and so no floor shade.
             blocks: Vec::new(),
@@ -244,7 +244,8 @@ fn main() {
                             crates: &crates,
                             pickup_glyphs: &pickup_glyphs,
                             portal: &portal,
-                            frog_idle: &frog_idle,
+                            bong_idle: &bong_idle,
+                            enemy_bong_idle: &bong_idle,
                             eraser: &eraser,
                             tanks: &tanks,
                             shade: None,

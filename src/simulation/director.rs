@@ -2,7 +2,7 @@
 //! docs/large-maps-patterns.md "Pacing director"): Left 4 Dead's cycle of
 //! build-up, peak and relax, adapted to the waves of a field map. Each seat
 //! carries an **intensity** from 0 to 1, read from the round alone: the
-//! damage its tank takes - and the damage the players' frog takes - jolts
+//! damage its tank takes - and the damage the players' bong takes - jolts
 //! it up (`director_hurt_full` of a pool is the whole way), the enemies
 //! standing inside its sight box hold it up (`director_crowd_full` of them
 //! hold it at the top), and with neither it falls back to them over
@@ -31,7 +31,7 @@
 //! for as long as the room's, holds included.
 
 use crate::ai::{Ai, in_sight_box_of};
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::tank::Tank;
 use crate::tuning::{Tuning, tuning};
 use crate::{MAX_DAMAGE, MAX_SEATS, Position};
@@ -63,8 +63,8 @@ pub(crate) struct Director {
     /// Whether each seat stood on the field at the last tick, which is
     /// what the team's intensity is the most of.
     on_field: [bool; MAX_SEATS],
-    /// The players' frog's health at the last tick, while it lives.
-    frog_health: Option<f32>,
+    /// The players' bong's health at the last tick, while it lives.
+    bong_health: Option<f32>,
     /// Seconds of rest the last peak still owes the team.
     relax: f32,
     /// Seconds the current breather has run, holds included.
@@ -73,17 +73,17 @@ pub(crate) struct Director {
 
 impl Director {
     /// One tick: every seat on the field (`seats[i]`, `None` for a seat
-    /// that is empty, a wreck or in a gate lane) and the players' frog's
+    /// that is empty, a wreck or in a gate lane) and the players' bong's
     /// health and pool while it lives. Returns the team's intensity, the
     /// highest of its seats on the field (0 with none).
-    pub(super) fn observe(&mut self, seats: &[Option<SeatReading>; MAX_SEATS], frog: Option<(f32, f32)>, dt: f32, t: &Tuning) -> f32 {
+    pub(super) fn observe(&mut self, seats: &[Option<SeatReading>; MAX_SEATS], bong: Option<(f32, f32)>, dt: f32, t: &Tuning) -> f32 {
         let full = t.director_hurt_full.max(f32::EPSILON);
-        // The frog's loss jolts every seat: it is the whole team's.
-        let frog_jolt = match (frog, self.frog_health) {
+        // The bong's loss jolts every seat: it is the whole team's.
+        let bong_jolt = match (bong, self.bong_health) {
             (Some((health, pool)), Some(before)) if pool > 0.0 => (before - health).max(0.0) / pool / full,
             _ => 0.0,
         };
-        self.frog_health = frog.map(|(health, _)| health);
+        self.bong_health = bong.map(|(health, _)| health);
         let mut team = 0.0f32;
         for (i, reading) in seats.iter().enumerate() {
             let Some(r) = reading else {
@@ -95,7 +95,7 @@ impl Director {
             let lost = self.last[i].map_or(0.0, |(damage, shield)| (r.damage - damage).max(0.0) + (shield - r.shield).max(0.0));
             self.last[i] = Some((r.damage, r.shield));
             self.on_field[i] = true;
-            let jolt = lost / MAX_DAMAGE / full + frog_jolt;
+            let jolt = lost / MAX_DAMAGE / full + bong_jolt;
             let crowd = (r.crowd as f32 / t.director_crowd_full.max(f32::EPSILON)).min(1.0);
             self.intensity[i] = settle(self.intensity[i], jolt, crowd, dt, t.director_fall_seconds);
             team = team.max(self.intensity[i]);
@@ -154,7 +154,7 @@ impl Director {
 impl Game {
     /// The director's tick (`Director::observe`) on this round as it
     /// stands: every seat on the field with its tank's damage, shield and
-    /// the live enemies inside its sight box, and the players' frog while
+    /// the live enemies inside its sight box, and the players' bong while
     /// it lives. The team's intensity comes back.
     pub(super) fn observe_pressure(&mut self, dt: f32) -> f32 {
         let enemies: Vec<Position> =
@@ -172,8 +172,8 @@ impl Game {
                 })
             });
         }
-        let frog = self.frog.and_then(|e| self.world.get::<&Frog>(e).ok().and_then(|fr| (!fr.is_dead()).then_some((fr.health, fr.max_health))));
-        self.director.observe(&seats, frog, dt, &tuning())
+        let bong = self.bong.and_then(|e| self.world.get::<&Bong>(e).ok().and_then(|fr| (!fr.is_dead()).then_some((fr.health, fr.max_health))));
+        self.director.observe(&seats, bong, dt, &tuning())
     }
 
     /// The pacing director's reading of the round, for the dev server's
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn enemies_in_the_box_hold_a_seat_up_and_the_frogs_loss_is_everyones() {
+    fn enemies_in_the_box_hold_a_seat_up_and_the_bongs_loss_is_everyones() {
         let t = Tuning::DEFAULT;
         let mut d = Director::default();
         let crowd = t.director_crowd_full.ceil() as usize;

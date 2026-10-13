@@ -15,7 +15,7 @@ use crate::ai::Ai;
 use crate::blast::{BlastFx, BlastKind, Lean, Scorch};
 pub(crate) use crate::blast::BlastShape;
 use crate::decal::Decal;
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::map::{cell_to_world, world_to_cell};
 use crate::obstacle::{face_toward, Drum, Fuse, Material, Obstacle};
 use crate::shockwave::Shockwave;
@@ -23,7 +23,7 @@ use crate::tank::Tank;
 use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position, RUBBLE_ROW_BARREL};
 
 use super::combat::{explosion_hit, BlastParams};
-use super::{Event, Frame, Game, Spectacle, SHOCK_BARREL, SHOCK_FROG, SHOCK_FUEL};
+use super::{Event, Frame, Game, Spectacle, SHOCK_BARREL, SHOCK_BONG, SHOCK_FUEL};
 
 /// Everything `obstacle_died` needs to know about a tile that just died.
 /// Bundled rather than passed loose because each death path has the whole
@@ -583,7 +583,7 @@ impl Game {
 
     /// A barrel's detonation: everyone inside the drum's blast radius
     /// takes linear-falloff damage and a shove - player and enemies alike,
-    /// both frogs, every tile - and any other barrel in range is put on a
+    /// both bongs, every tile - and any other barrel in range is put on a
     /// fuse. `live` is false on the end screen, where a cascade finishes
     /// visually without dealing damage.
     ///
@@ -623,22 +623,22 @@ impl Game {
             for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
                 explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
             }
-            let mut dead_frogs = Vec::new();
-            for frog in self.world.query::<&mut Frog>().iter() {
-                if frog.is_dead() {
+            let mut dead_bongs = Vec::new();
+            for bong in self.world.query::<&mut Bong>().iter() {
+                if bong.is_dead() {
                     continue;
                 }
-                let dist = frog.position.distance_to(center);
+                let dist = bong.position.distance_to(center);
                 if dist > params.radius {
                     continue;
                 }
-                frog.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
-                if frog.is_dead() {
-                    dead_frogs.push(frog.position);
+                bong.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
+                if bong.is_dead() {
+                    dead_bongs.push(bong.position);
                 }
             }
-            for pos in dead_frogs {
-                f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
+            for pos in dead_bongs {
+                f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
             }
             // A lantern on the ground near the blast is knocked out.
             let reach = params.radius * 0.6;

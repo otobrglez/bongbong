@@ -7,8 +7,8 @@ green.
 
 ## Purpose
 
-Today every map plays the same round: a random band of enemies, one frog to
-protect, the round ends when the player or the frog dies or every enemy is a
+Today every map plays the same round: a random band of enemies, one bong to
+protect, the round ends when the player or the bong dies or every enemy is a
 wreck. This design turns a map into a *level*: each map states its
 **mission** (what ends the round) and its **spawn plan** (how enemies arrive),
 both overridable from the CLI and tunable at runtime. Proceeding from one
@@ -20,17 +20,17 @@ map still restarts on its own.
 
 | Topic | Decision |
 |---|---|
-| Hunt-mission AI | Each enemy is rolled **hunter** (drives to and shoots the player's frog, fights the player only when in the way) or **guard** (stays leashed near its own frog, engages the player as today). The split is a knob. |
-| Protect-mission AI | Same hunter roll with a lower default share, so the frog is a real target rather than collateral. Enemies not rolled hunter behave exactly as today. |
-| Destroy mission | No frog is spawned at all. Win = every enemy wrecked and no more arriving. |
+| Hunt-mission AI | Each enemy is rolled **hunter** (drives to and shoots the player's bong, fights the player only when in the way) or **guard** (stays leashed near its own bong, engages the player as today). The split is a knob. |
+| Protect-mission AI | Same hunter roll with a lower default share, so the bong is a real target rather than collateral. Enemies not rolled hunter behave exactly as today. |
+| Destroy mission | No bong is spawned at all. Win = every enemy wrecked and no more arriving. |
 | Wave pacing | Next wave when live enemies drop to `wave_next_when_alive` (default 0) **or** `wave_timeout_seconds` elapses, whichever first, then a `wave_gap_seconds` breather with a "Wave N" banner. |
 | Tank class | Four named **tiers**: `light` (scout, wraith, flak, glacier), `medium` (assault, warden), `heavy` (longbow, obelisk, breaker, ravager), `super` (titan, leviathan). A wave plan gives a start and end tier; waves interpolate between them. |
 | Roll-in gates | Gates are found automatically each wave: an edge nav cell with `wave_gate_inward_cells` open cells inward. A map may also place explicit `kind = "gate"` cells, which win when present. |
 | Wrecks in wave rounds | A wreck despawns (fades) after `wave_wreck_despawn_seconds`; owner slots are monotonic and never reused (the 31 is a cap on *live* enemies, not on a round's total). Non-wave rounds keep wrecks forever, as today. |
 | Mission banner | The round starts frozen for `mission_banner_seconds` with big white mission text over a dim overlay, then unfreezes and the text fades. Shown on every restart; move or fire skips it. Headless callers (probe, tests, dev server) start with the intro off. |
-| Enemy frog | New `kind = "enemy_frog"` map cell (plus editor tool). A hunt map without one gets a procedural spot in the enemy spawn band. Same `Frog` entity as the player's (bites, hops, health), told apart by a red ground ring; the player's frog gets a white one. |
-| Hunt win rule | Only the enemy frog's death wins. Wrecking every enemy makes the field safe but does not end the round. *(Assumption made while writing this plan; flag if you want "all enemies dead" to count as a win too.)* |
-| Frog damage sides | Any shot damages any frog, exactly as the player's own shells damage the frog today. Keeps the "watch your fire" tension symmetric. |
+| Enemy bong | New `kind = "enemy_bong"` map cell (plus editor tool). A hunt map without one gets a procedural spot in the enemy spawn band. Same `Bong` entity as the player's (bites, hops, health), told apart by a red ground ring; the player's bong gets a white one. |
+| Hunt win rule | Only the enemy bong's death wins. Wrecking every enemy makes the field safe but does not end the round. *(Assumption made while writing this plan; flag if you want "all enemies dead" to count as a win too.)* |
+| Bong damage sides | Any shot damages any bong, exactly as the player's own shells damage the bong today. Keeps the "watch your fire" tension symmetric. |
 
 ## Concepts
 
@@ -40,10 +40,10 @@ map still restarts on its own.
 pub enum Mission { Protect, Hunt, Destroy }   // default: Protect
 ```
 
-| Mission | Frogs spawned | Lose when | Win when | Banner |
+| Mission | Bongs spawned | Lose when | Win when | Banner |
 |---|---|---|---|---|
-| Protect | player frog | every player tank wrecked, or player frog dead | all enemies wrecked and spawn plan finished | `PROTECT THE FROG!` |
-| Hunt | player frog + enemy frog | every player tank wrecked, or player frog dead | enemy frog dead | `HUNT THE FROG!` |
+| Protect | player bong | every player tank wrecked, or player bong dead | all enemies wrecked and spawn plan finished | `PROTECT THE BONG!` |
+| Hunt | player bong + enemy bong | every player tank wrecked, or player bong dead | enemy bong dead | `HUNT THE BONG!` |
 | Destroy | none | every player tank wrecked | all enemies wrecked and spawn plan finished | `DESTROY!` |
 
 "Spawn plan finished" = no wave pending and no tank still rolling in. Losing
@@ -86,7 +86,7 @@ exactly as at init.
 A **gate** is a nav-grid edge cell (col 0, col `cols-1`, row 0 or row
 `rows-1`) whose `wave_gate_inward_cells` cells toward the interior are all
 `Grid::usable`, and which lies at least `wave_gate_min_player_dist` px from
-the player and the player's frog. Candidates are recomputed from the live
+the player and the player's bong. Candidates are recomputed from the live
 nav grid at the start of each wave (walls may have been shot away), sorted,
 and drawn with the round RNG. Explicit `kind = "gate"` cells replace the
 scan entirely when a map has any; a gate cell that is not on an edge or is
@@ -112,17 +112,17 @@ pub enum Role { Player, Hunter, Guard }   // Ai::role, rolled at spawn
 
 - `Player` (today's behaviour, unchanged): target is the player, engage
   ring around the player.
-- `Hunter`: target is the player's frog. Steers via the grid to a second
-  engage ring built around the frog (`Game::engage_frog`), fire gate is line
-  of sight to the frog. Opportunistic: if the player is within
+- `Hunter`: target is the player's bong. Steers via the grid to a second
+  engage ring built around the bong (`Game::engage_bong`), fire gate is line
+  of sight to the bong. Opportunistic: if the player is within
   `enemy_attack_range` with line of sight, shoot the player this tick
-  instead. Reverts to `Player` behaviour when the frog is dead.
-- `Guard` (Hunt only): leashed to its own frog. Engages the player as
+  instead. Reverts to `Player` behaviour when the bong is dead.
+- `Guard` (Hunt only): leashed to its own bong. Engages the player as
   `Player` does while the player is within `guard_leash_px` of the enemy
-  frog; otherwise wanders inside the leash and returns when outside it.
+  bong; otherwise wanders inside the leash and returns when outside it.
 
 `Ai::think` gains a `target: Position` (replacing the implicit player) and a
-`frog_target: Option<Position>`; it stays snapshot-only. The role share
+`bong_target: Option<Position>`; it stays snapshot-only. The role share
 rolls are `enemy_hunter_share_protect` (Protect) and
 `enemy_hunter_share_hunt` (Hunt; the rest are guards). Destroy rolls nothing.
 
@@ -145,7 +145,7 @@ growth = 1                       # tanks added per wave
 tier_start = "light"
 tier_end = "super"
 
-cells."3,5"  = { kind = "enemy_frog" }   # hunt: one, singleton like frog
+cells."3,5"  = { kind = "enemy_bong" }   # hunt: one, singleton like bong
 cells."0,11" = { kind = "gate" }         # waves: optional, edge cells only
 ```
 
@@ -157,9 +157,9 @@ after it. `MapFile::to_toml_string` emits the tables after `cells`, so
 editor-saved files are fine either way. `MapFile` gains `mission: MissionConfig` and
 `spawn: SpawnConfig` (plain serde structs with the defaults above; the
 `SpawnPlan` enum is resolved in `Game::init` after CLI precedence), plus
-`enemy_frog_cell()` and `gate_cells()`. The editor round-trips the new
+`enemy_bong_cell()` and `gate_cells()`. The editor round-trips the new
 fields untouched (it saves the loaded `MapFile`). `nearest_free_cell` and
-`enemy_spawn_legal` treat `enemy_frog`/`gate` like other non-wall cells.
+`enemy_spawn_legal` treat `enemy_bong`/`gate` like other non-wall cells.
 
 ### CLI (`main.rs` and `bin/probe.rs`, identical flags)
 
@@ -183,7 +183,7 @@ New group `mission`:
 | `enemy_hunter_share_protect` | 0.25 | Spawn |
 | `enemy_hunter_share_hunt` | 0.6 | Spawn |
 | `guard_leash_px` | 260 | Live |
-| `enemy_frog_spawn_min_dist` | 400 (from the player's frog) | Restart |
+| `enemy_bong_spawn_min_dist` | 400 (from the player's bong) | Restart |
 
 New group `waves`:
 
@@ -213,8 +213,8 @@ rows joined the group later, `wave_size_scale` and `wave_tier_step` - see
 pub struct Game {
     pub mission: Mission,                 // resolved at init
     pub spawn_plan: SpawnPlan,            // resolved at init
-    pub(crate) enemy_frog: Option<Entity>,
-    pub(crate) engage_frog: EngageRing,   // hunters' ring
+    pub(crate) enemy_bong: Option<Entity>,
+    pub(crate) engage_bong: EngageRing,   // hunters' ring
     intro_timer: f32,                     // mission banner freeze
     pub show_intro: bool,                 // false for headless callers
     wave: WaveState,                      // index, pending queue, gap/timeout timers, next slot
@@ -222,13 +222,13 @@ pub struct Game {
 }
 ```
 
-`Frog` gains `side: Side` (`Player`/`Enemy`); `HitTarget::Frog` and
-`Event::FrogBite`/`Hit` carry it. `Event` gains `WaveStarted { wave, size,
+`Bong` gains `side: Side` (`Player`/`Enemy`); `HitTarget::Bong` and
+`Event::BongBite`/`Hit` carry it. `Event` gains `WaveStarted { wave, size,
 tier }`, `TankEntered { slot }`, `WreckRemoved { slot }`, and
 `RoundStarted` gains `mission` and `spawn` fields.
 
-`Game::update` phase order becomes: intro freeze check → timers → frog phase
-(both frogs) → pickups → player → **rollin_phase** → enemies → **wave_phase**
+`Game::update` phase order becomes: intro freeze check → timers → bong phase
+(both bongs) → pickups → player → **rollin_phase** → enemies → **wave_phase**
 (schedules/spawns) → … → cleanup (**wreck_despawn**) → round end (per
 mission). Wave spawning draws from the round RNG inside the fixed-step
 frame, so a seeded round replays bit-for-bit including waves.
@@ -239,9 +239,9 @@ frame, so a seeded round replays bit-for-bit including waves.
   overlay while `intro_timer > 0`, then a 0.5 s alpha fade. Same code
   path draws `WAVE N` (with `FINAL WAVE` on the last) during the wave gap,
   smaller and without the overlay.
-- Enemy frog: `draw_frog_ring` draws its ground ring as a health gauge
-  (`RingStyle::Gauge`) in the all-red ramp; the player's frog gets the same
-  gauge in the white ramp. The ring is each frog's health readout.
+- Enemy bong: `draw_bong_ring` draws its ground ring as a health gauge
+  (`RingStyle::Gauge`) in the all-red ramp; the player's bong gets the same
+  gauge in the white ramp. The ring is each bong's health readout.
 - HUD: `WAVE i/N` and live-enemy count on the right of the existing HUD line
   in wave rounds; `MISSION: …` is not shown (the banner covers it).
 - Rolling-in tanks are drawn as normal tanks (they are partly off-screen by
@@ -252,7 +252,7 @@ frame, so a seeded round replays bit-for-bit including waves.
 - **Dev server / MCP** (`devserver.rs`, `bin/bbmcp.rs`): `restart` gains
   `mission`, `spawn`, `waves`, `wave_size`, `wave_growth`, `tier_start`,
   `tier_end`, `intro` (default false). `status` reports `mission`, `spawn`
-  and `wave { index, total, alive, pending, next_in }`. `snapshot.frogs`
+  and `wave { index, total, alive, pending, next_in }`. `snapshot.bongs`
   becomes a list with `side`; `tanks[]` gains `role` and `entering`.
   `spawn_enemy` gains an optional `role`. `map_get`'s description lists the
   two new cell kinds and tables.
@@ -262,14 +262,14 @@ frame, so a seeded round replays bit-for-bit including waves.
   frame and position; a new `just probe-waves` recipe sweeps
   `maps/missions/waves-basic.toml`. Hunt rounds against an AFK player are
   expected to be lost quickly; the sweep uses `--mission destroy`/`protect`
-  for AI-health checks and a dedicated `hunt` run only for the frog-race
+  for AI-health checks and a dedicated `hunt` run only for the bong-race
   outcome distribution.
 - **Map linter** (`maplint.rs`): new kinds `gate-not-on-edge` (error),
   `gate-blocked` (error), `waves-no-gates` (error: waves plan and zero
-  candidates), `hunt-missing-enemy-frog` (warning: fallback used),
-  `enemy-frog-unreachable` (error: not in the player start's component).
+  candidates), `hunt-missing-enemy-bong` (warning: fallback used),
+  `enemy-bong-unreachable` (error: not in the player start's component).
   The spawn-band capacity check runs only for the Band plan.
-- **Editor** (`editor/`): two new tools, `EnemyFrog` (singleton, frog idle
+- **Editor** (`editor/`): two new tools, `EnemyBong` (singleton, bong idle
   sprite with a red ring) and `Gate` (multi-place, drawn as an arrow chevron
   on the edge). The mission/spawn tables are edited from the builder's MAP
   panel (docs/game-editor-fusion.md section 9) and preserved on save. docs/map-editor-design.md's cell table gets the
@@ -287,34 +287,34 @@ MCP tools (`just run-dev`, `restart {...}`, `step`, `screenshot`).
 
 1. `Mission` enum + `[mission]` table in `map.rs`; `--mission` on both
    binaries; `Game::mission` with override precedence.
-2. Round end per mission in `check_round_end`; `Game::frog` becomes truly
-   optional (Destroy spawns none; every `expect("frog…")` becomes a guard).
+2. Round end per mission in `check_round_end`; `Game::bong` becomes truly
+   optional (Destroy spawns none; every `expect("bong…")` becomes a guard).
 3. `intro_timer`/`show_intro` freeze, banner drawing, skip on input;
    `mission_banner_seconds` knob; dev server `restart {intro}`.
 4. Tests: map round-trip with/without `[mission]`; mechanics: Destroy has
-   no frog and ends Won on the last wreck; Protect unchanged; intro freezes
+   no bong and ends Won on the last wreck; Protect unchanged; intro freezes
    exactly `ceil(seconds / dt)` frames and a move input skips it.
 
-### Phase 2: AI roles and the frog as a target
+### Phase 2: AI roles and the bong as a target
 
-1. `Role` on `Ai`, `target`/`frog_target` parameters on `think`, second
-   engage ring, hunter fire gate on frog line of sight, opportunistic
-   player shots, revert when the frog dies.
+1. `Role` on `Ai`, `target`/`bong_target` parameters on `think`, second
+   engage ring, hunter fire gate on bong line of sight, opportunistic
+   player shots, revert when the bong dies.
 2. Protect rolls hunters with `enemy_hunter_share_protect`.
 3. Tests (`ai.rs` role tests, `mechanics_tests`): a hunter's distance to
-   the frog decreases monotonically on an open map; a hunter with the player
+   the bong decreases monotonically on an open map; a hunter with the player
    in range and LOS fires at the player; the existing `probe-fixtures`
    ceilings hold with the default share (re-baseline consciously if not;
    hunters change every seeded stream).
 
 ### Phase 3: Hunt mission
 
-1. `enemy_frog` cell kind, `Frog::side`, spawn (map cell or band fallback),
-   red/white ground rings, `enemy_frog_spawn_min_dist`.
+1. `enemy_bong` cell kind, `Bong::side`, spawn (map cell or band fallback),
+   red/white ground rings, `enemy_bong_spawn_min_dist`.
 2. Guards and the leash; Hunt role roll.
 3. Win/lose rules; events carry `side`.
 4. Editor tool, linter kinds, `maps/missions/hunt-basic.toml` fixture.
-5. Tests: Hunt ends Won when the enemy frog dies and Lost when the player's
+5. Tests: Hunt ends Won when the enemy bong dies and Lost when the player's
    does; a guard never leaves its leash on an open map; determinism test
    covers a Hunt round; lint fixture profiles.
 
@@ -354,22 +354,22 @@ rolling in through an edge gate.
   lanes whose centre line runs inside the boundary walls (the nav grid does
   not mark them).
 - Guards hold an annulus, not a disc: `guard_keep_off_px` (new knob) keeps
-  them out of their own frog's bite/hop range.
-- The hunt fixture's enemy band puts hunters next to the player's frog, so
+  them out of their own bong's bite/hop range.
+- The hunt fixture's enemy band puts hunters next to the player's bong, so
   an idle player loses within seconds; balance is a follow-up.
 - `just probe-fixtures` ceilings were re-baselined twice: the Protect
   hunter roll shifts every seeded stream (verified identical with the
   share zeroed), and the hunter fixes below add movement the probe's
   jitter/churn kinds count.
-- **Hunters versus a walled-in frog** (found on the default map, whose frog
+- **Hunters versus a walled-in bong** (found on the default map, whose bong
   sits in a brick-and-iron bunker): a hunter's fire gate and its ring's
-  slot test are the line of *fire* to the frog (`Terrain::line_of_fire_to_frog`:
-  only iron and other frogs obstruct), so it shoots the destructible walls
+  slot test are the line of *fire* to the bong (`Terrain::line_of_fire_to_bong`:
+  only iron and other bongs obstruct), so it shoots the destructible walls
   down instead of waiting for a line of sight that never comes; the
   opportunistic snipe at the player has a cooldown
   (`hunter_snipe_cooldown_seconds`) so an aligned player can't hold a
-  hunter forever; the frog ring is built even for a lone hunter when it has
-  no route to the frog's own cell; and a hunter without a direct route that
+  hunter forever; the bong ring is built even for a lone hunter when it has
+  no route to the bong's own cell; and a hunter without a direct route that
   holds no tenable slot (every slot off the map, unreachable from its half
   of the field or behind iron) fights the player instead until one opens.
   The default map's bunker also grew a 3x2 interior with an empty row above
@@ -462,5 +462,5 @@ in the gate lanes), which is a map-authoring limit, not a tuning one.
 ## Out of scope
 
 Level progression ("next level" after a win), per-wave explicit chassis
-lists, editor UI for the mission/spawn tables, enemy frog art variants
+lists, editor UI for the mission/spawn tables, enemy bong art variants
 beyond the ring, audio.

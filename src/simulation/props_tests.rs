@@ -24,7 +24,7 @@ fn map_with(extra: &str) -> String {
         r#"
 version = 1
 tanks = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."20,18" = { kind = "start" }
 "#,
     );

@@ -545,8 +545,8 @@ pub(super) trait Projectile: hecs::Component {
     fn damage_range(&self) -> (f32, f32);
     /// Shove a surviving tank along the travel direction at this speed.
     fn knockback_speed() -> Option<f32>;
-    /// Whether a surviving frog tries to hop away from this hit.
-    fn frog_hops() -> bool;
+    /// Whether a surviving bong tries to hop away from this hit.
+    fn bong_hops() -> bool;
     /// Whether it strikes what is in the air (`air.rs`): bullets do;
     /// shells and plasma pass under.
     fn strikes_air() -> bool {
@@ -586,7 +586,7 @@ pub(super) trait Projectile: hecs::Component {
     fn swallowed_as() -> crate::well::Swallow;
 }
 
-/// How many ticks into the past stand the enemies and frogs a seat's
+/// How many ticks into the past stand the enemies and bongs a seat's
 /// shell, bolt or bullet is swept against: its seat's rewind, taken at
 /// spawn (`Game::spawn_pending`, `Game::seat_rewind`; lag compensation,
 /// docs/online-coop-prd.md §4.16). A component beside the projectile
@@ -680,7 +680,7 @@ impl Projectile for Shell {
     fn hit_half_extent() -> f32 { tuning().shell_hit_half_extent }
     fn damage_range(&self) -> (f32, f32) { side_damage(self.owner, self.shooter_row) }
     fn knockback_speed() -> Option<f32> { Some(tuning().shell_impact_knockback_speed) }
-    fn frog_hops() -> bool { true }
+    fn bong_hops() -> bool { true }
     fn hit_cause() -> super::HitCause { super::HitCause::Shell }
     deflect_impl!();
 
@@ -739,8 +739,8 @@ impl Projectile for Bullet {
     /// No per-bullet shove: a burst of them would read as juddering.
     fn knockback_speed() -> Option<f32> { None }
     /// No hop per bullet: several rounds in a third of a second would make
-    /// the frog flail rather than dodge.
-    fn frog_hops() -> bool { false }
+    /// the bong flail rather than dodge.
+    fn bong_hops() -> bool { false }
     fn hit_cause() -> super::HitCause { super::HitCause::Bullet }
     fn strikes_air() -> bool { true }
     fn can_bounce() -> bool { true }
@@ -775,7 +775,7 @@ impl Projectile for Plasma {
         (min * factor, max * factor)
     }
     fn knockback_speed() -> Option<f32> { Some(tuning().plasma_impact_knockback_speed) }
-    fn frog_hops() -> bool { true }
+    fn bong_hops() -> bool { true }
     fn hit_cause() -> super::HitCause { super::HitCause::Plasma }
     /// A bolt never ricochets (see docs/PLASMA_SPEC.md).
     fn can_bounce() -> bool { false }

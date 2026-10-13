@@ -123,7 +123,7 @@ From the code, with the places a camera touches:
   `WaterLayout` (two vectors of cols x rows) every update and every
   rendered frame on online clients; `route_grid` builds the nav grid,
   labels its components with a flood fill and runs one Dijkstra flow
-  field per live seat plus the frog; every A* query allocates
+  field per live seat plus the bong; every A* query allocates
   cols x rows arrays; `conceals` scans the grass cells linearly. A 96 x 54
   map has nine times the standard's 578 cells. Measured with the probe
   (`--scenario circle --frames 3600 --seed 1000`, release build, one
@@ -375,7 +375,7 @@ local round use the same code, and the dev server reports it.
   next wave: the camera follows the nearest live teammate and an arrow
   marks the gate the seat will come through.
 - **An establishing shot** at round start: the whole map for about a
-  second (the frog, the gates), then a cut or a fast zoom to the tank.
+  second (the bong, the gates), then a cut or a fast zoom to the tank.
 - **Couch play** (desktop only, two seats on one screen): one shared
   view while both tanks' sight boxes fit in it, then a dynamic (Voronoi)
   split along the line between them, each half following its seat at the
@@ -403,10 +403,10 @@ change alone.
   cluster, the minimap or a thumb's rest (a 12 mm pad about 22 mm in from
   each side and 18 mm up), slide it along the edge until it is clear.
 - **Distance** by size and opacity: full at one screen away, 60% size and
-  55% opacity at four. The frog's arrow carries its distance in cells.
+  55% opacity at four. The bong's arrow carries its distance in cells.
 - **Clustering and priority.** Enemies whose arrows land within about
   22 pt merge into one arrow with a count; at most eight arrows, filled by
-  priority: lane threats, teammates, the frog, then the nearest enemies,
+  priority: lane threats, teammates, the bong, then the nearest enemies,
   the rest folded into one count per edge. Teammates and objectives are
   never merged away.
 - **The lane warning.** An enemy that is lined up on your row or column
@@ -420,7 +420,7 @@ change alone.
   the channel most shooters use for off-screen danger.
 - **Teammates** in their ring colour with their `P2`..`P8` label; a
   wrecked teammate waiting at a gate shows there.
-- **The frog** (Protect) in green with its distance; the enemy frog
+- **The bong** (Protect) in green with its distance; the enemy bong
   (Hunt) as the objective.
 - **Wave gates** flash amber for a few seconds when a tank rolls in, using
   the `WaveStarted` and `TankEntered` events nothing renders today.
@@ -430,7 +430,7 @@ change alone.
   last-seen marker that never moves. At night or in fog, arrows follow
   the sky's sight factor for the same reason.
 - **The minimap** is for objectives and clusters: the field at a glance,
-  the view rectangle, teammates, the frog, enemies that are not
+  the view rectangle, teammates, the bong, enemies that are not
   concealed. On by default on tablets and desktops under the top-right
   cluster, and off on phones, where the edge arrows carry the field. In
   the builder it is the navigator on every device.
@@ -536,7 +536,7 @@ shape with the bar at the standard arena's size (`editor::camera`).
   is a ghost that follows the mouse, or that a finger drags or taps into
   place, until a press puts it down. Every move, paste, flip, cut and
   delete is one undo step. A clip is transparent - its empty cells leave
-  the map as it was - a start or a frog moves with a moved selection, and
+  the map as it was - a start or a bong moves with a moved selection, and
   a paste puts one down only where the map holds none, so it never leaves
   two. Three stamps ship under `maps/stamps/` (a fort, a bunker, a river
   bend); the ones kept in a session live in memory, on every build. The
@@ -555,7 +555,7 @@ shape with the bar at the standard arena's size (`editor::camera`).
   and a stroke counter, so going over the ground again thickens it, and
   erasing thins it. PEN and FILL keep the toggle-erase rule; a rectangle's
   or a scatter's first cell says nothing about the rest, so they paint.
-  A start, player 2's start or a frog is one object, painted with the
+  A start, player 2's start or a bong is one object, painted with the
   pen whatever the shape. Each stroke is one undo step, and the water and
   road a fill lays auto-tile like a stroke's. A fill stops at
   `builder_fill_max_cells` (4096): one that has leaked out of a fort is
@@ -630,7 +630,7 @@ shape with the bar at the standard arena's size (`editor::camera`).
 - **The AI, the spawns and the gates use the sight box**, never a client's
   window.
 - **Online indicators need nothing new on the wire**: the snapshot already
-  carries every tank, shot and frog.
+  carries every tank, shot and bong.
 - **Android 16 ignores the landscape lock on large screens.** Apps
   targeting API 36 have `screenOrientation`, `resizeableActivity` and
   aspect-ratio limits ignored on displays 600 dp and wider, unless
@@ -679,7 +679,7 @@ shape with the bar at the standard arena's size (`editor::camera`).
   anywhere. On a field map that drains every patrol on the map toward one
   fight; the alert needs a radius (a few screens) or a chain (enemies
   alert neighbours within sight), and guards need a home and a leash.
-- **Far enemies should sleep.** An enemy with no seat or frog within a
+- **Far enemies should sleep.** An enemy with no seat or bong within a
   few screens of path distance can stop thinking and routing until a
   hit, an alert or a seat wakes it, and the rest can think every k-th
   tick, staggered by owner slot. Both are pure functions of positions,
@@ -696,9 +696,9 @@ shape with the bar at the standard arena's size (`editor::camera`).
 - **Landmarks.** A screen-sized view of a large map needs features that
   say where you are: rivers, roads, a town, a fort, each region's
   material palette. The study map used by the lab is laid out that way.
-- **Objectives across the map** (the frog, pickups, gates) are what the
+- **Objectives across the map** (the bong, pickups, gates) are what the
   minimap and the objective arrows are for; a Protect field map should
-  keep the frog within a couple of screens of the start.
+  keep the bong within a couple of screens of the start.
 
 **Built for field maps** (`simulation::field`, `Game::field_map`; an arena
 takes none of it and replays as before): an enemy that sees a seat alerts
@@ -708,7 +708,7 @@ alert, call or hit keeps within `enemy_leash_px` of where it first stood
 and turns back past it; a wave tank is called to the nearest live seat
 until it first has a seat in sight range or is hit - without the call a
 wave leashed to its gate a walk from the fight would never reach it;
-farther than `enemy_far_px` from every live seat and the players' frog an
+farther than `enemy_far_px` from every live seat and the players' bong an
 enemy thinks every `enemy_far_think_ticks` ticks, staggered by owner slot,
 and one nothing has woken does not think or route at all; band spawns and
 wave gates stay outside every seat's sight box, a wave taking the gates
@@ -755,7 +755,7 @@ the next one's centre than the margin, so no step into that one could beat
 the margin again, and a hull whose route turned that way drove past every
 turning, to and fro between two walls, for the rest of the round. With a
 perfect defence - every enemy destroyed the moment it comes within 400 px
-of a seat or the frog (the probe's `--scenario defend`, `just
+of a seat or the bong (the probe's `--scenario defend`, `just
 probe-defend`) - 16 rounds in 20 on longwater and 12 in 20 on the study
 map still had a tank out after seven minutes. Letting such a hull step on
 any gain at all cleared those walks but about doubled `probe-fields`'
@@ -816,8 +816,8 @@ churn fell by a fifth, pile-ups by a sixth, border-stuck by an eighth,
 jitter by 4 % and clustering held, but hedge-maze's jitter rose 9 %, in
 its one-lane gaps, and harbor-lights' clustering and pile-ups by a
 quarter, at its seat's north firing slot, which the fight now reaches
-sooner. Their never-arrived count went from 21 to 25, all of them frogs'
-guards and hunters - at a frog, fleeing on their last hit points, on a
+sooner. Their never-arrived count went from 21 to 25, all of them bongs'
+guards and hunters - at a bong, fleeing on their last hit points, on a
 detour - which the probe counts because only a seat ends a walk. The arenas'
 recipes read as before, line for line, and `probe-fields` was re-baselined
 (the justfile says how). A tick costs no more: 0.61 ms against 0.64 on
@@ -833,7 +833,7 @@ group) is Left 4 Dead's cycle of build-up, peak and relax, adapted to the
 waves of a field map. Each seat carries an intensity from 0 to 1, read
 from the round alone: what its tank loses jolts it up
 (`director_hurt_full` of its health and shield is the whole way, and the
-players' frog's losses, by the frog's own pool, jolt every seat), the
+players' bong's losses, by the bong's own pool, jolt every seat), the
 live enemies inside its sight box hold it up (`director_crowd_full` of
 them hold it at the top), and with neither it falls back over
 `director_fall_seconds`. The team stands at its most pressed seat, and
@@ -875,7 +875,7 @@ steering kind lanes did not reach.
 
 **Stragglers** are rolled in again (`Game::reroll_stragglers`): a wave
 tank that has gone `field_reroll_after_seconds` (30 s) without a live
-seat or the players' frog within its sight, and stands farther from them
+seat or the players' bong within its sight, and stands farther from them
 by walk than any gate is paced for (`field_walk_seconds` less its slack,
 10 s), is taken off the field and rolls in again through a gate nearer
 the fight. It is taken only where no screen can see it go - past every
@@ -885,7 +885,7 @@ and comes back only through a free lane a wave could take, outside every
 sight box and shorter by walk than where it stood, about the paced walk
 where one is. It keeps its slot, its role, its damage and its weapons,
 and arrives called to the fight with its new gate for home; a guard
-keeping its frog and a burning hull are left where they are, and the
+keeping its bong and a burning hull are left where they are, and the
 round looks once a second. Over the thirty defended rounds of the study
 map five stragglers were rolled in again, one in each of five rounds, the
 longest walk to the fight fell from 86 s to 54 s and its p90 from 18.5 to
@@ -899,7 +899,7 @@ column 74 (0x3fd), which a screen round the seat could see go and so no
 re-roll's to take, was the steering's (below).
 
 **The margin's window.** That tank was a hunter routing to its slot on the
-frog's ring, a searched route, and it rode column 74 11.8 px west of the
+bong's ring, a searched route, and it rode column 74 11.8 px west of the
 column's centre line: 20.2 px across from the centre line of the column
 its route turned into, 0.2 px past the switch margin, so not a hull
 `margin_never_turns` took for the lanes. The margin turns a hull on a think
@@ -938,7 +938,7 @@ says how); the arenas' recipes and `probe-waves` read line for line as
 before.
 
 **Flow fields as far as they are read** (`pathfind::Grid`): the frame's
-routing grid carried each seat's and the frog's flow field as a Dijkstra
+routing grid carried each seat's and the bong's flow field as a Dijkstra
 over the whole map, every tick - on the study map 3,752 cells settled a
 tick, most of them where no enemy stood, and the routing grid was about
 two thirds of a tick. A field is now worked out as it is read
@@ -974,7 +974,7 @@ A 40-wide level's whole field is under a thousand cells, so it gains less.
 
 **The nav grid kept across frames** (`simulation::nav`): the grid itself
 was still built and labelled from scratch every tick - on the study map
-0.08 ms building the occupancy from every tile, deep cell, frog and fire
+0.08 ms building the occupancy from every tile, deep cell, bong and fire
 (the seam-closed extents and the rasterising) and 0.06 ms labelling its
 components, of a routing grid of 0.15 ms in a tick of 0.44. Neither
 changes unless the terrain does, so the round keeps both
@@ -983,7 +983,7 @@ frame) in two layers: the field's boundary, the tiles and the deep water,
 rebuilt whole only when the world's tiles are no longer the ones it was
 built from - read every frame in the world's order, position and
 material, about a microsecond - or the field's size or a knob the grid
-reads has changed; and, on a copy of it, the frogs and the burning cells,
+reads has changed; and, on a copy of it, the bongs and the burning cells,
 the portals' footprints, the fords' prices and the labels, rebuilt only
 when that occupancy comes out different from the one they were worked
 out on. A frame copies that grid and adds its own surcharges and fields.
@@ -993,7 +993,7 @@ holds every frame of three rounds to the grid built from scratch that
 frame: the props playground with its seat shooting the drums down (twelve
 tiles dead and fires lit and burnt out in 900 frames, the layer rebuilt
 ten times and what lies on it thirteen), the portals fixture, and
-longwater with its lake (the frog's hops rebuilt what lies on the layer
+longwater with its lake (the bong's hops rebuilt what lies on the layer
 six times). Another plays two
 rounds both ways, tank for tank, and every recipe (the arenas',
 `probe-waves`, `probe-fields`, `probe-defend`) and every one of the 1,760
@@ -1210,7 +1210,7 @@ The questions this research left open, as decided:
   it fires, so nobody is shot from beyond the edge of their screen, and
   phone tanks stay 7.5 to 9.3 mm. Sideways nothing changes.
 - **Minimap on phones.** Off. A phone's view relies on the edge arrows,
-  which already point at threats, teammates and the frog; tablets and
+  which already point at threats, teammates and the bong; tablets and
   desktops keep the minimap, and the builder's navigator stays on every
   device.
 - **Stick side.** It stays a build-time choice (the `touch-steer-right`

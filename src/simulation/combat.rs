@@ -1,6 +1,6 @@
 //! Damage and knockback: applying a resolved hit to whatever it struck,
 //! ram contact between the player and an enemy, a wreck's explosion, and
-//! the frog's evasive hop.
+//! the bong's evasive hop.
 
 use crate::math;
 use crate::tuning::tuning;
@@ -10,22 +10,22 @@ use rand::rngs::SmallRng;
 use crate::math::Vec2;
 
 use crate::ai::Ai;
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::obstacle::Obstacle;
 use crate::physics::Physics;
 use crate::shell::Owner;
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::{
-    FROG_HOP_ANGLE_FAN_DEG,
-    FROG_HOP_DISTANCE_STEPS,
+    BONG_HOP_ANGLE_FAN_DEG,
+    BONG_HOP_DISTANCE_STEPS,
     MAX_DAMAGE,
     Position,
 };
 
 use super::hits::{ShellTarget, Terrain};
 use super::props::DamageCause;
-use super::{SHOCK_FROG, with_frog_mut, Event, Frame, Game, HitCause, HitTarget, Shoves};
+use super::{SHOCK_BONG, with_bong_mut, Event, Frame, Game, HitCause, HitTarget, Shoves};
 
 /// One explosion's numbers - a tank wreck's or a barrel's - so
 /// `explosion_hit` serves both.
@@ -87,11 +87,11 @@ impl BlastParams {
 }
 
 /// What a hit does beyond damage: an optional shove (unit travel direction,
-/// speed in px/s) for a surviving tank, and whether the frog tries to hop
+/// speed in px/s) for a surviving tank, and whether the bong tries to hop
 /// away (along the given direction) when it survives.
 pub(super) struct HitEffects {
     pub knockback: Option<(Vec2, f32)>,
-    pub frog_hop: Option<Vec2>,
+    pub bong_hop: Option<Vec2>,
     /// The projectile's unit travel direction, whatever it hit: a barrel
     /// it pops leans its fire this way (`BlastShape::Shot`). `None` for a
     /// beam, which has no travel to speak of.
@@ -105,7 +105,7 @@ impl HitEffects {
     pub fn none(cause: HitCause) -> Self {
         HitEffects {
             knockback: None,
-            frog_hop: None,
+            bong_hop: None,
             travel: None,
             cause,
         }
@@ -116,10 +116,10 @@ impl Game {
     /// Apply one resolved projectile/beam hit to `target`: roll damage in
     /// `dmg`, then per target kind - a tank is marked hit, either killed
     /// (recorded in `f.kills` for its shockwave/explosion) or shoved; an
-    /// enemy that survives is told it was shot (`Ai::notify_hit`); a frog
-    /// (either side - any shot damages any frog) takes damage and either
+    /// enemy that survives is told it was shot (`Ai::notify_hit`); a bong
+    /// (either side - any shot damages any bong) takes damage and either
     /// dies (shockwave) or hops away; an obstacle
-    /// takes damage; a wall absorbs the shot. Wrecks and dead frogs ignore
+    /// takes damage; a wall absorbs the shot. Wrecks and dead bongs ignore
     /// further hits. `at` is the impact point, recorded in the `Event::Hit`
     /// every landed hit appends. `shooter` is who fired: a player hitting
     /// the other player deals `friendly_fire_damage_factor` of the roll.
@@ -186,26 +186,26 @@ impl Game {
                     }
                 }
             }
-            ShellTarget::Frog(entity) => {
+            ShellTarget::Bong(entity) => {
                 let (dead, pos, can_hop, hop_distance) = {
-                    let mut q = self.world.query_one::<&mut Frog>(entity);
-                    let frog = q.get().expect("hit target always has a Frog");
-                    if frog.is_dead() {
-                        (true, frog.position, false, 0.0)
+                    let mut q = self.world.query_one::<&mut Bong>(entity);
+                    let bong = q.get().expect("hit target always has a Bong");
+                    if bong.is_dead() {
+                        (true, bong.position, false, 0.0)
                     } else {
                         let d = f.rng.random_range(dmg.0..dmg.1);
-                        frog.damage(d);
-                        let target = HitTarget::Frog { side: frog.side };
-                        f.events.push(Event::Hit { target, damage: d, killed: frog.is_dead(), x: at.x, y: at.y, cause: effects.cause });
-                        (frog.is_dead(), frog.position, frog.can_hop(), frog.hop_distance())
+                        bong.damage(d);
+                        let target = HitTarget::Bong { side: bong.side };
+                        f.events.push(Event::Hit { target, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: effects.cause });
+                        (bong.is_dead(), bong.position, bong.can_hop(), bong.hop_distance())
                     }
                 };
                 if dead {
-                    f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
-                } else if let (true, Some(away)) = (can_hop, effects.frog_hop) {
-                    let landing = frog_hop_target(&mut f.rng, pos, away, hop_distance, &f.terrain, f.width, f.height);
+                    f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
+                } else if let (true, Some(away)) = (can_hop, effects.bong_hop) {
+                    let landing = bong_hop_target(&mut f.rng, pos, away, hop_distance, &f.terrain, f.width, f.height);
                     if let Some(new_pos) = landing {
-                        with_frog_mut(&self.world, entity, |fr| fr.start_hop(new_pos));
+                        with_bong_mut(&self.world, entity, |fr| fr.start_hop(new_pos));
                     }
                 }
             }
@@ -233,7 +233,7 @@ impl Game {
     /// `explosion_radius`, reaching every live tank regardless of side,
     /// plus a chip of damage only to the side opposing whoever died.
     /// Obstacles in range crack too (no side, no knockback) - a barrel in
-    /// range goes off (`Game::damage_obstacle`). The frog is deliberately
+    /// range goes off (`Game::damage_obstacle`). The bong is deliberately
     /// immune - it is a loss condition, so splash damage would be a real
     /// balance change rather than a detail. A chip that finishes off a
     /// tank pushes it onto `f.kills`, so it gets its own blast in turn.
@@ -420,25 +420,25 @@ pub(super) fn explosion_hit(
     Some(knockback(tank, physics, axis, push))
 }
 
-/// A landing spot for the frog's evasive hop, up to `distance` px away
+/// A landing spot for the bong's evasive hop, up to `distance` px away
 /// along `away_dir` (only its angle matters).
 ///
 /// The search is a ladder, widest leap first: for each length in
-/// FROG_HOP_DISTANCE_STEPS, every offset in FROG_HOP_ANGLE_FAN_DEG off the
+/// BONG_HOP_DISTANCE_STEPS, every offset in BONG_HOP_ANGLE_FAN_DEG off the
 /// ideal dead-away angle (plus a little jitter so hops don't all look
 /// mechanically identical), taking the first candidate inside the
-/// battlefield (`frog_hop_bounds_margin`) that the frog's own hull fits at
-/// (`Terrain::frog_fits`). So a cornered frog shortens and angles its hop
+/// battlefield (`bong_hop_bounds_margin`) that the bong's own hull fits at
+/// (`Terrain::bong_fits`). So a cornered bong shortens and angles its hop
 /// rather than sitting still, and the fan stops at a quarter turn either
 /// way - past that a "hop away" would carry it back toward the threat.
-/// `None` only when the frog really is boxed in; the hop is best-effort.
+/// `None` only when the bong really is boxed in; the hop is best-effort.
 ///
-/// Frogs love water (docs/water.md): the ladder runs twice, first taking
+/// Bongs love water (docs/water.md): the ladder runs twice, first taking
 /// only a landing in water, then any landing. One jitter draw either way,
 /// so a map without water hops exactly as before.
-pub(super) fn frog_hop_target(
+pub(super) fn bong_hop_target(
     rng: &mut SmallRng,
-    frog_pos: Position,
+    bong_pos: Position,
     away_dir: Vec2,
     distance: f32,
     terrain: &Terrain,
@@ -446,22 +446,22 @@ pub(super) fn frog_hop_target(
     height: f32,
 ) -> Option<Position> {
     let jitter = rng
-        .random_range(-tuning().frog_hop_angle_jitter_deg..tuning().frog_hop_angle_jitter_deg)
+        .random_range(-tuning().bong_hop_angle_jitter_deg..tuning().bong_hop_angle_jitter_deg)
         .to_radians();
     let base_angle = math::atan2(away_dir.y, away_dir.x) + jitter;
-    let margin = tuning().frog_hop_bounds_margin;
+    let margin = tuning().bong_hop_bounds_margin;
     for wet_only in [true, false] {
-        for step in FROG_HOP_DISTANCE_STEPS {
-            for offset_deg in FROG_HOP_ANGLE_FAN_DEG {
+        for step in BONG_HOP_DISTANCE_STEPS {
+            for offset_deg in BONG_HOP_ANGLE_FAN_DEG {
                 let angle = base_angle + offset_deg.to_radians();
                 let reach = distance * step;
-                let candidate = Position::new(frog_pos.x + math::cos(angle) * reach, frog_pos.y + math::sin(angle) * reach);
+                let candidate = Position::new(bong_pos.x + math::cos(angle) * reach, bong_pos.y + math::sin(angle) * reach);
                 let in_bounds = candidate.x >= margin
                     && candidate.x <= width - margin
                     && candidate.y >= margin
                     && candidate.y <= height - margin;
                 let wet = terrain.depth_at(candidate).is_wet();
-                if in_bounds && (wet || !wet_only) && terrain.frog_fits(candidate) {
+                if in_bounds && (wet || !wet_only) && terrain.bong_fits(candidate) {
                     return Some(candidate);
                 }
             }
@@ -486,24 +486,24 @@ mod ram_tests {
     }
 
     #[test]
-    fn the_frog_hops_into_water_when_the_fan_reaches_any() {
+    fn the_bong_hops_into_water_when_the_fan_reaches_any() {
         let world = hecs::World::new();
         let (w, h) = (1280.0, 720.0);
-        // A pond east of the frog, just inside the widest leap.
+        // A pond east of the bong, just inside the widest leap.
         let pond: Vec<Position> = (14..=16).flat_map(|c| (10..=12).map(move |r| crate::map::cell_to_world(c, r))).collect();
         let water = crate::ground::WaterLayout::build(w, h, &[], &pond);
         let terrain = Terrain::build(&world, w, h, &[], &water);
-        let frog = crate::map::cell_to_world(11, 11);
+        let bong = crate::map::cell_to_world(11, 11);
         let away = Vec2::new(1.0, 0.0);
         let mut rng = SmallRng::seed_from_u64(3);
-        let landing = frog_hop_target(&mut rng, frog, away, 96.0, &terrain, w, h).expect("a landing");
+        let landing = bong_hop_target(&mut rng, bong, away, 96.0, &terrain, w, h).expect("a landing");
         assert_ne!(water.depth_at(landing), crate::ground::Depth::Dry, "landed in the pond: {landing:?}");
         // Threat from the east: hopping west finds no water in the fan, so
         // it lands on dry ground as before.
         let mut rng = SmallRng::seed_from_u64(3);
-        let landing = frog_hop_target(&mut rng, frog, Vec2::new(-1.0, 0.0), 96.0, &terrain, w, h).expect("a landing");
+        let landing = bong_hop_target(&mut rng, bong, Vec2::new(-1.0, 0.0), 96.0, &terrain, w, h).expect("a landing");
         assert_eq!(water.depth_at(landing), crate::ground::Depth::Dry);
-        assert!(landing.x < frog.x);
+        assert!(landing.x < bong.x);
     }
 
     #[test]

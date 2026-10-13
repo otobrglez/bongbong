@@ -230,7 +230,7 @@ use crate::math::Vec2;
 use crate::ai::{Ai, AiSnapshot, CrateSeeker, Intent, Mover, Role, SpecialSense};
 use crate::battlefield;
 use crate::bullet::Bullet;
-use crate::frog::{Facing, Frog, Side};
+use crate::bong::{Facing, Bong, BongKind, Side};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::missile::Missile;
 use crate::grenade::Grenade;
@@ -246,7 +246,7 @@ use crate::shockwave::Shockwave;
 use crate::tank::{ActiveWeapon, Dir, Tank, TankKind, Trigger};
 use crate::{
     DAMAGE_VARIANTS,
-    FROG_COLLIDER_HALF_EXTENT,
+    BONG_COLLIDER_HALF_EXTENT,
     MAX_DAMAGE,
     OBSTACLE_CLEAR,
     OBSTACLE_GRID_SIZE,
@@ -267,7 +267,7 @@ use crate::{
     TANK_WRECK_COLS,
 };
 
-use combat::{frog_hop_target, ram, HitEffects};
+use combat::{bong_hop_target, ram, HitEffects};
 use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
 use hits::{HitBoxFrame, HitBoxHistory, REWIND_MAX_TICKS, ShellTarget, Terrain};
 use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, laser_end, tick_queued_shots, PendingLaserShot, Projectile, Rewind, laser_beam_half_width};
@@ -422,7 +422,7 @@ pub enum Outcome {
     Playing,
     /// Every enemy is a wreck.
     Won,
-    /// Every player tank is a wreck, or the frog died.
+    /// Every player tank is a wreck, or the bong died.
     Lost,
 }
 
@@ -440,7 +440,7 @@ pub struct RoundStats {
     pub enemies: u32,
     /// Of `destroyed`, the ones each seat dealt the last damage to
     /// (`Tank::last_hit_by`). A wreck no seat touched - a drum, a fire, a
-    /// frog's bite - counts for the team alone.
+    /// bong's bite - counts for the team alone.
     pub by_seat: [u32; MAX_SEATS],
 }
 
@@ -527,9 +527,9 @@ pub enum Event {
     ChargeEnded { slot: usize, weapon: &'static str, end: crate::tank::ChargeEnd },
     /// A drone `id` left the halo of the tank in owner slot `slot` from its
     /// slot's ground point (`x`, `y`) (docs/fpv-swarm.md), locked on the
-    /// tank in owner slot `target`, on the players' frog (`frog`), or on
+    /// tank in owner slot `target`, on the players' bong (`bong`), or on
     /// nothing. Logged after its `Fired`, in the same tick.
-    DroneLaunched { id: u32, slot: usize, x: f32, y: f32, target: Option<usize>, frog: bool },
+    DroneLaunched { id: u32, slot: usize, x: f32, y: f32, target: Option<usize>, bong: bool },
     /// The drone `id`, launched by `slot`, burst at (`x`, `y`) - `crown` in
     /// a tree's leaves.
     DroneBurst { id: u32, slot: usize, x: f32, y: f32, crown: bool },
@@ -622,13 +622,13 @@ pub enum Event {
     ShieldBroken { slot: usize, x: f32, y: f32 },
     /// Two opposing shells met mid-air and cancelled at (`x`, `y`).
     ShellsCollided { x: f32, y: f32 },
-    /// The `side` frog bit the tank in `slot`.
-    FrogBite { side: Side, slot: usize, damage: f32, killed: bool },
-    /// The tank in `slot` collected a frog health pack and healed the
-    /// `side` frog by `amount`, at the frog's own position (`x`, `y`) -
+    /// The `side` bong bit the tank in `slot`.
+    BongBite { side: Side, slot: usize, damage: f32, killed: bool },
+    /// The tank in `slot` collected a bong health pack and healed the
+    /// `side` bong by `amount`, at the bong's own position (`x`, `y`) -
     /// which is nowhere near the pickup, so `fx.rs` needs the coordinates
     /// rather than deriving them from the collector.
-    FrogHealed { side: Side, slot: usize, amount: f32, x: f32, y: f32 },
+    BongHealed { side: Side, slot: usize, amount: f32, x: f32, y: f32 },
     /// The wave scheduler called wave `wave` (1-based): `size` tanks of
     /// `tier` queued to roll in.
     WaveStarted { wave: u32, size: u32, tier: crate::level::Tier },
@@ -741,9 +741,9 @@ pub enum Event {
     DoorOpened { beat: usize, x: f32, y: f32 },
     /// Seat `seat` took the training flag at (`x`, `y`).
     FlagTaken { seat: usize, x: f32, y: f32 },
-    /// A training round's fallen frog got up again at (`x`, `y`), and the
+    /// A training round's fallen bong got up again at (`x`, `y`), and the
     /// beat it fell in starts over.
-    FrogRevived { x: f32, y: f32 },
+    BongRevived { x: f32, y: f32 },
     /// Rapier quarantined `bodies` bodies and `colliders` colliders on one
     /// fixed step because their state went non-finite (see
     /// `Physics::quarantined`). A solver blow-up, never normal play - the
@@ -757,7 +757,7 @@ pub enum Event {
     AiAction { slot: usize, from: Option<&'static str>, to: Option<&'static str> },
     /// The engagement ring gave `slot` a different slot index (see
     /// `engage::EngageSlot::index`; `None` = steering at its target - the
-    /// player, or a hunter's frog - directly).
+    /// player, or a hunter's bong - directly).
     EngageSlot { slot: usize, from: Option<u8>, to: Option<u8> },
     /// The stuck escape fired (`escapes` so far this round).
     StuckEscape { slot: usize, escapes: u32 },
@@ -806,7 +806,7 @@ pub enum HitTarget {
     /// Human player `player` (0 or 1).
     Player { player: u8 },
     Enemy { slot: usize },
-    Frog { side: Side },
+    Bong { side: Side },
     /// A destructible tile. Carries its material because the presentation
     /// layer has to know what a shot just knocked a chip off: masonry,
     /// glass and timber throw very different debris, and `Event::Hit` is
@@ -907,6 +907,11 @@ impl Overlays {
 /// docs/SPRITESHEET_SPEC.md §4). Rows 1, 4, 7, 9 and 10 are twin-barrel.
 const TANK_VARIANTS: i32 = 12;
 
+/// The range of the draw `Game::init` makes as it places each bong. The
+/// draw decides nothing; it keeps the round's stream where every seed's
+/// later rolls expect it.
+const BONG_STREAM_DRAW: i32 = 6;
+
 /// Enemy spawn order over the 12 variants, alternating twin- and
 /// single-barrel chassis so both kinds appear early however few tanks
 /// are on the field.
@@ -942,7 +947,7 @@ fn resolve_player_row(cli: Option<i32>, knob: i32, map: Option<TankKind>, random
 #[derive(Default)]
 pub struct Game {
     /// Every entity: tanks (a `Tank`; enemies also carry an `Ai`, which is
-    /// what distinguishes them - the player never does), the `Frog`,
+    /// what distinguishes them - the player never does), the `Bong`,
     /// `Obstacle`s, `Pickup`s and in-flight `Shell`/`Bullet`/`Plasma`
     /// projectiles. `pub(crate)` so `render` and the map linter can read it.
     pub(crate) world: hecs::World,
@@ -1059,15 +1064,15 @@ pub struct Game {
     /// the update it is for (`set_seat_reticle`, docs/rod-from-god.md "The
     /// reticle report"), one update only, like `seat_hold`.
     seat_reticle: [Option<(u64, (i32, i32))>; MAX_SEATS],
-    /// The enemy and frog hit boxes of the last `REWIND_MAX_TICKS` ticks,
+    /// The enemy and bong hit boxes of the last `REWIND_MAX_TICKS` ticks,
     /// recorded at the end of each update: what a seat's shot is swept
     /// against when its client was drawing the past (`seat_rewind`).
     hit_history: HitBoxHistory,
-    /// The player's frog - `None` in a mission without one (`Destroy`),
+    /// The player's bong - `None` in a mission without one (`Destroy`),
     /// and before the first `init`.
-    pub(crate) frog: Option<Entity>,
-    /// The enemy side's frog (`Hunt` mission only), else `None`.
-    pub(crate) enemy_frog: Option<Entity>,
+    pub(crate) bong: Option<Entity>,
+    /// The enemy side's bong (`Hunt` mission only), else `None`.
+    pub(crate) enemy_bong: Option<Entity>,
     /// What ends this round - resolved by `init` from `level_overrides`
     /// and the map's `[mission]` table (docs/maps-to-levels.md).
     pub mission: Mission,
@@ -1093,7 +1098,7 @@ pub struct Game {
     pub(crate) trample_passes: u16,
     /// How many enemies the band plan placed at init. Zero is a sandbox
     /// round (`tanks = 0` / `--enemies 0`): nothing to wreck, so it never
-    /// ends by wreck count - only by the player's or the frog's death.
+    /// ends by wreck count - only by the player's or the bong's death.
     pub(crate) band_enemy_count: usize,
     /// The wave scheduler (`waves.rs`): idle under the band plan apart
     /// from handing out owner slots.
@@ -1165,9 +1170,9 @@ pub struct Game {
     /// ring per seat, indexed like `seats`; a ring past the seats this
     /// round holds stays empty.
     engage: [EngageRing; MAX_SEATS],
-    /// The second ring, around the player's frog: what hunters with a live
+    /// The second ring, around the player's bong: what hunters with a live
     /// quarry compete on (`enemy_phase`).
-    engage_frog: EngageRing,
+    engage_bong: EngageRing,
     /// Kill/blast ripples currently playing, at most `SHOCK_MAX`. A list
     /// rather than one slot: a chained barrel cascade sets off one per
     /// link, and last-write-wins used to mean the tank explosion that
@@ -1272,7 +1277,7 @@ pub struct Game {
     /// map the moment it lights or cools to nothing. Ordered so the
     /// ignition order is fixed frame to frame.
     pub(crate) heat: BTreeMap<(i32, i32), f32>,
-    /// Tanks and frogs a stream touched last frame, sorted - the first
+    /// Tanks and bongs a stream touched last frame, sorted - the first
     /// frame of contact during a hold is what `Event::Hit` records.
     pub(crate) flame_contacts: Vec<Entity>,
     /// The defence towers' weapons (docs/defence-towers-prd.md), keyed by
@@ -1307,7 +1312,7 @@ pub struct Game {
     /// Drop shadows on/off (toggle key, and `--no-shadows` at startup).
     /// Survives restarts; `main.rs` sets the default.
     pub shadows_enabled: bool,
-    /// The rapier world: tank bodies plus wall/obstacle/frog colliders.
+    /// The rapier world: tank bodies plus wall/obstacle/bong colliders.
     physics: Physics,
     /// Real time not yet consumed by a fixed physics step.
     physics_accumulator: f32,
@@ -1476,7 +1481,7 @@ struct Frame {
     pending_anchors: Vec<u32>,
     /// The wells pulling this tick (`well::WellField`, built by `update`
     /// from the zones): what the drive, the fixed-step loop, the grenades,
-    /// the frogs and the crates read.
+    /// the bongs and the crates read.
     wells: crate::well::WellField,
     /// Charges that ended this frame without firing, put on the field by
     /// `resolve_rails`.
@@ -1627,7 +1632,7 @@ pub(crate) const SHOCK_KILL: f32 = 1.0;
 pub(crate) const SHOCK_BARREL: f32 = 0.7;
 /// A fuel drum: harder than oil, still short of a tank dying.
 pub(crate) const SHOCK_FUEL: f32 = 0.9;
-pub(crate) const SHOCK_FROG: f32 = 0.6;
+pub(crate) const SHOCK_BONG: f32 = 0.6;
 /// Ammo cooking off inside a wreck: a faint local ring, and too weak to
 /// move the camera once the shake snaps to 2px blocks - a cook-off is a
 /// pop next to the hulk, not another explosion.
@@ -1670,7 +1675,7 @@ impl Game {
         }
     }
 
-    /// Set up a fresh round: player, map terrain, enemies, frog, pickups,
+    /// Set up a fresh round: player, map terrain, enemies, bong, pickups,
     /// ground. Also the restart path. `width`/`height` are the battlefield
     /// size in pixels.
     pub fn init(&mut self, width: f32, height: f32) {
@@ -1714,7 +1719,7 @@ impl Game {
         for ring in &mut self.engage {
             ring.clear();
         }
-        self.engage_frog.clear();
+        self.engage_bong.clear();
         self.commander.clear();
         self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
         self.player_fire_held_last_frame = [false; MAX_SEATS];
@@ -1789,8 +1794,8 @@ impl Game {
         self.debug_kills.clear();
         self.debug_detonations.clear();
         self.seats = [None; MAX_SEATS];
-        self.frog = None;
-        self.enemy_frog = None;
+        self.bong = None;
+        self.enemy_bong = None;
         self.mission = self.level_overrides.resolve_mission(&self.map.mission);
         self.spawn_plan = self.level_overrides.resolve_spawn(&self.map.spawn, self.enemy_count_override);
         self.field_map = self.map.class() == crate::framing::MapClass::Field;
@@ -1895,7 +1900,7 @@ impl Game {
         let enemy_clear = tank.size() * 1.5;
         self.seats[PLAYER_OWNER_SLOT] = Some(self.world.spawn((tank,)));
 
-        // --- Map terrain (walls/road/frog/pickup slots) ---
+        // --- Map terrain (walls/road/bong/pickup slots) ---
         // Before enemies, so their clearance check below sees every wall.
         let obstacle_half_extent = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE * OBSTACLE_HULL_FRACTION * 0.5;
         let map_spawn = battlefield::spawn_from_map(&mut self.physics, &mut self.world, &mut rng, &self.map, obstacle_half_extent);
@@ -1943,7 +1948,7 @@ impl Game {
         self.grass.extend(self.woods.undergrowth());
         self.grass.sort_by(|a, b| a.base.y.total_cmp(&b.base.y));
         // Deep water counts as terrain for every clearance roll below:
-        // no enemy, frog or bonus spawns in a lake.
+        // no enemy, bong or bonus spawns in a lake.
         let mut obstacle_positions = map_spawn.obstacle_positions;
         obstacle_positions.extend(self.water.deep_cells());
         // And lava of every depth: nothing spawns to burn.
@@ -1952,7 +1957,7 @@ impl Game {
         let map_road_cells = map_spawn.road_cells;
         let map_water_cells = map_spawn.water_cells;
         let map_lava_cells = map_spawn.lava_cells;
-        let map_frog_pos = map_spawn.frog_pos;
+        let map_bong_pos = map_spawn.bong_pos;
         self.map_pickup_slots = map_spawn.pickup_slots;
 
         // --- Enemies ---
@@ -1978,7 +1983,7 @@ impl Game {
         self.director = director::Director::default();
 
         // Terrain legality is the nav grid's `usable` test (see
-        // `battlefield::enemy_spawn_legal`); the frog is not down yet, so
+        // `battlefield::enemy_spawn_legal`); the bong is not down yet, so
         // this grid is walls only - the same grid `relocate_unusable_spawns`
         // audits against below.
         let spawn_grid = self.nav_grid(width, height);
@@ -2123,7 +2128,7 @@ impl Game {
         // Several individually-fine wall placements can still seal an
         // enemy's spawn cell; relocate those (and any spawn the fallback
         // above still left in a blocked cell), then re-read positions for
-        // the frog's clearance check.
+        // the bong's clearance check.
         battlefield::relocate_unusable_spawns(&mut self.physics, &mut self.world, width, height);
         enemy_positions = self
             .world
@@ -2133,19 +2138,19 @@ impl Game {
             .map(|t| t.position)
             .collect();
 
-        // --- Frog (protect-objective) ---
-        // A map-placed frog cell wins outright; otherwise roll a spot near
+        // --- Bong (protect-objective) ---
+        // A map-placed bong cell wins outright; otherwise roll a spot near
         // the player's spawn so defending both is the same early fight.
-        // The placement roll runs even in a frog-less mission so the RNG
+        // The placement roll runs even in a bong-less mission so the RNG
         // stream, hence every later spawn, matches across missions.
-        let frog_clear = FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + OBSTACLE_CLEAR;
-        let frog_pos = map_frog_pos.unwrap_or_else(|| {
+        let bong_clear = BONG_COLLIDER_HALF_EXTENT.0.max(BONG_COLLIDER_HALF_EXTENT.1) + OBSTACLE_CLEAR;
+        let bong_pos = map_bong_pos.unwrap_or_else(|| {
             battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                 let dist = pos.distance_to(center);
-                (tuning().frog_spawn_min_dist..=tuning().frog_spawn_max_dist).contains(&dist)
+                (tuning().bong_spawn_min_dist..=tuning().bong_spawn_max_dist).contains(&dist)
                     && clear_of_others(pos)
                     && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
-                    && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
+                    && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= bong_clear)
             })
             .unwrap_or_else(|| {
                 // Attempt cap: snap to the nearest usable nav cell clear of
@@ -2157,29 +2162,32 @@ impl Game {
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             })
         });
-        let frog_variant = rng.random_range(0..crate::frog::FROG_VARIANT_DIRS.len() as i32);
-        if self.mission.has_player_frog() {
-            self.frog = Some(self.spawn_frog(Side::Player, frog_pos, frog_variant));
+        // The bong's kind is the map's (`MapFile::bong_kind`); this draw holds
+        // the round's stream at the point every later roll is pinned to
+        // (`determinism_tests`), so a seed plays the same round on any map.
+        let _ = rng.random_range(0..BONG_STREAM_DRAW);
+        if self.mission.has_player_bong() {
+            self.bong = Some(self.spawn_bong(Side::Player, bong_pos, self.map.bong_kind(Side::Player)));
         }
 
-        // --- Enemy frog (Hunt only) ---
-        // A map-placed `enemy_frog` cell wins; otherwise roll a spot in the
-        // enemy spawn band, well away from the player's frog and clear of
-        // every tank and wall like the player frog's fallback. Draws RNG
+        // --- Enemy bong (Hunt only) ---
+        // A map-placed `enemy_bong` cell wins; otherwise roll a spot in the
+        // enemy spawn band, well away from the player's bong and clear of
+        // every tank and wall like the player bong's fallback. Draws RNG
         // only in a mission that has one, so every other mission's stream
         // is unchanged by this block.
-        if self.mission.has_enemy_frog() {
-            let min_dist = tuning().enemy_frog_spawn_min_dist;
-            let pos = map_spawn.enemy_frog_pos.unwrap_or_else(|| {
+        if self.mission.has_enemy_bong() {
+            let min_dist = tuning().enemy_bong_spawn_min_dist;
+            let pos = map_spawn.enemy_bong_pos.unwrap_or_else(|| {
                 battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                     let border_dist = pos.x.min(width - pos.x).min(pos.y).min(height - pos.y);
                     border_dist <= margin_max
-                        && pos.distance_to(frog_pos) >= min_dist
+                        && pos.distance_to(bong_pos) >= min_dist
                         && pos.distance_to(center) >= clear
                         && clear_of_others(pos)
                         && spawn_grid.usable(pos)
                         && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
-                        && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
+                        && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= bong_clear)
                 })
                 .unwrap_or_else(|| {
                     let sample = Position::new(
@@ -2189,12 +2197,12 @@ impl Game {
                     let mut avoid = enemy_positions.clone();
                     avoid.push(center);
                     avoid.extend(others.iter().copied());
-                    avoid.push(frog_pos);
+                    avoid.push(bong_pos);
                     spawn_grid.nearest_open(sample, &avoid, enemy_clear)
                 })
             });
-            let variant = rng.random_range(0..crate::frog::FROG_VARIANT_DIRS.len() as i32);
-            self.enemy_frog = Some(self.spawn_frog(Side::Enemy, pos, variant));
+            let _ = rng.random_range(0..BONG_STREAM_DRAW);
+            self.enemy_bong = Some(self.spawn_bong(Side::Enemy, pos, self.map.bong_kind(Side::Enemy)));
         }
 
         // --- Pickups: every map slot spawns immediately ---
@@ -2205,8 +2213,8 @@ impl Game {
         // can't land on a slot that hasn't spawned yet.
         for &(pos, kind) in &self.map_pickup_slots {
             if kind == PickupKind::Health {
-                // The frog was created at full health a few lines up, so
-                // no frog pack is ever rolled here and round setup draws
+                // The bong was created at full health a few lines up, so
+                // no bong pack is ever rolled here and round setup draws
                 // the RNG it always drew.
                 maybe_spawn_health_slot_bonuses(&mut self.world, &self.map, pos, width, height, BonusGates::default(), None, &mut rng);
             }
@@ -2241,18 +2249,18 @@ impl Game {
         });
     }
 
-    /// Put a fresh, full-health frog of `side` at `pos` with its static
+    /// Put a fresh, full-health bong of `side` at `pos` with its static
     /// collider, returning its entity.
-    pub(crate) fn spawn_frog(&mut self, side: Side, pos: Position, variant: i32) -> Entity {
+    pub(crate) fn spawn_bong(&mut self, side: Side, pos: Position, kind: BongKind) -> Entity {
         let body = self
             .physics
-            .spawn_static(pos, Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1));
-        self.world.spawn((Frog {
+            .spawn_static(pos, Position::new(BONG_COLLIDER_HALF_EXTENT.0, BONG_COLLIDER_HALF_EXTENT.1));
+        self.world.spawn((Bong {
             side,
             position: pos,
-            health: tuning().frog_max_health,
-            max_health: tuning().frog_max_health,
-            variant,
+            health: tuning().bong_max_health,
+            max_health: tuning().bong_max_health,
+            kind,
             body,
             hurt_timer: 0.0,
             hop_timer: 0.0,
@@ -2332,7 +2340,7 @@ impl Game {
         if self.outcome == Outcome::Playing {
             self.apply_debug_kills(&mut f);
             self.apply_debug_detonations(&mut f);
-            self.frog_phase(&mut f);
+            self.bong_phase(&mut f);
             self.pickup_phase(&mut f);
             self.portal_phase(&mut f, &grid);
             self.player_phase(input, &mut f);
@@ -2539,7 +2547,7 @@ impl Game {
     }
 
     /// Per-entity timers: every tank's cooldowns/recharge/wreck burn,
-    /// obstacles' burn, the frog's animation and in-flight hop (its static
+    /// obstacles' burn, the bong's animation and in-flight hop (its static
     /// body follows `position`), and track fade.
     fn tick_timers(&mut self, dt: f32, rng: &mut SmallRng) {
         // The portal cooldown only runs while the tank is off every
@@ -2604,9 +2612,9 @@ impl Game {
             tower.disabled = (tower.disabled - dt).max(0.0);
         }
         self.lamps_out = (self.lamps_out - dt).max(0.0);
-        for frog in self.world.query::<&mut Frog>().iter() {
-            frog.tick(dt);
-            self.physics.set_position(frog.body, frog.position);
+        for bong in self.world.query::<&mut Bong>().iter() {
+            bong.tick(dt);
+            self.physics.set_position(bong.body, bong.position);
         }
         self.tick_wear(dt);
     }
@@ -2908,7 +2916,7 @@ impl Game {
         ((behind + 128).div_euclid(256)).clamp(0, REWIND_MAX_TICKS as i64) as u8
     }
 
-    /// The enemy and frog boxes `rewind` ticks before this update, or
+    /// The enemy and bong boxes `rewind` ticks before this update, or
     /// `None` for the present: a rewind of 0, or a tick the history does
     /// not hold (before the round's first ticks, across a pause).
     fn rewound_boxes(&self, rewind: u8) -> Option<&HitBoxFrame> {
@@ -3170,10 +3178,10 @@ impl Game {
         for drone in self.world.query_mut::<&mut crate::fpv::Drone>() {
             drone.age_by(dt);
         }
-        // A stunned frog stays stunned until the room says it is not.
-        for frog in self.world.query_mut::<&mut Frog>() {
-            if frog.stun_timer > 0.0 {
-                frog.stun_timer = (frog.stun_timer - dt).max(f32::EPSILON);
+        // A stunned bong stays stunned until the room says it is not.
+        for bong in self.world.query_mut::<&mut Bong>() {
+            if bong.stun_timer > 0.0 {
+                bong.stun_timer = (bong.stun_timer - dt).max(f32::EPSILON);
             }
         }
         // The room's flattened grass (`Snapshot::grass_flat`) stands back
@@ -3205,30 +3213,30 @@ impl Game {
         self.derive_flame_jets();
     }
 
-    /// Each frog on the field (the player's, then the enemy's) bites the
+    /// Each bong on the field (the player's, then the enemy's) bites the
     /// single nearest live *hostile* tank within its attack range (never the
     /// killing blow on a player - it is a hazard, not a fair fight) and,
     /// independently, hops away from the nearest tank of any side within its
     /// wider avoid range. Each on its own cooldown.
-    fn frog_phase(&mut self, f: &mut Frame) {
-        for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
-            self.frog_reflexes(f, frog_entity);
+    fn bong_phase(&mut self, f: &mut Frame) {
+        for bong_entity in [self.bong, self.enemy_bong].into_iter().flatten() {
+            self.bong_reflexes(f, bong_entity);
         }
     }
 
-    /// One frog's bite and hop for this frame - see `frog_phase`.
+    /// One bong's bite and hop for this frame - see `bong_phase`.
     ///
     /// The two reflexes pick their own tank: the bite only ever lands on the
-    /// other side (`Side::bites` - your own frog is an objective to defend,
+    /// other side (`Side::bites` - your own bong is an objective to defend,
     /// not a hazard to park away from), while the hop is indiscriminate, so
-    /// a frog still shies away from the tanks that guard it.
+    /// a bong still shies away from the tanks that guard it.
     ///
-    /// Both set the frog's `facing`, and the hop runs second so it wins a
-    /// frame that does both - which is right, because `Frog::anim` draws the
+    /// Both set the bong's `facing`, and the hop runs second so it wins a
+    /// frame that does both - which is right, because `Bong::anim` draws the
     /// hop clip over the attack clip on exactly those frames.
-    fn frog_reflexes(&mut self, f: &mut Frame, frog_entity: Entity) {
-        let (side, can_attack, can_hop, frog_pos, attack_range, avoid_range, hop_distance) =
-            with_frog(&self.world, frog_entity, |fr| {
+    fn bong_reflexes(&mut self, f: &mut Frame, bong_entity: Entity) {
+        let (side, can_attack, can_hop, bong_pos, attack_range, avoid_range, hop_distance) =
+            with_bong(&self.world, bong_entity, |fr| {
                 (fr.side, fr.can_attack(), fr.can_hop(), fr.position, fr.attack_range(), fr.avoid_range(), fr.hop_distance())
             });
         let live: Vec<(Entity, Position, f32, Owner)> = self
@@ -3237,7 +3245,7 @@ impl Game {
             .without::<&RollIn>()
             .iter()
             .filter(|(_, t)| !t.is_wreck())
-            .map(|(e, t)| (e, t.position, t.position.distance_to(frog_pos), t.owner()))
+            .map(|(e, t)| (e, t.position, t.position.distance_to(bong_pos), t.owner()))
             .collect();
         let by_distance = |a: &(Entity, Position, f32, Owner), b: &(Entity, Position, f32, Owner)| a.2.total_cmp(&b.2);
         let nearest_foe = live.iter().filter(|(.., owner)| side.bites(*owner)).min_by(|a, b| by_distance(a, b)).copied();
@@ -3247,7 +3255,7 @@ impl Game {
             && let Some((target, target_pos, dist, _)) = nearest_foe
             && dist <= attack_range
         {
-            let dmg = f.rng.random_range(tuning().frog_attack_damage_min..tuning().frog_attack_damage_max);
+            let dmg = f.rng.random_range(tuning().bong_attack_damage_min..tuning().bong_attack_damage_max);
             // A bite never finishes a player off, whichever player it is.
             let cap = if self.is_player(target) { MAX_DAMAGE - 1.0 } else { MAX_DAMAGE };
             let (became_wreck, victim_pos, victim) = {
@@ -3257,28 +3265,28 @@ impl Game {
                 tank.mark_hit();
                 (tank.is_wreck(), tank.position, tank.owner())
             };
-            f.events.push(Event::FrogBite { side, slot: victim.slot(), damage: dmg, killed: became_wreck });
+            f.events.push(Event::BongBite { side, slot: victim.slot(), damage: dmg, killed: became_wreck });
             if became_wreck {
                 f.kills.push((victim_pos, victim));
             }
-            with_frog_mut(&self.world, frog_entity, |fr| fr.start_attack(target_pos));
+            with_bong_mut(&self.world, bong_entity, |fr| fr.start_attack(target_pos));
         }
 
-        // A training frog on its way to its next beat's cell keeps walking
+        // A training bong on its way to its next beat's cell keeps walking
         // rather than shy from the tank it is leading (`training.rs`).
-        let walking = Some(frog_entity) == self.frog && self.frog_walking();
-        // A frog under a rod's call hops out of it, away from its middle,
+        let walking = Some(bong_entity) == self.bong && self.bong_walking();
+        // A bong under a rod's call hops out of it, away from its middle,
         // before it shies from any tank (docs/rod-from-god.md): a stunned
         // or penned one cannot.
         let t = tuning();
         if can_hop
             && !walking
-            && let Some(zone) = self.zones.iter().find(|z| z.holds(frog_pos, &t))
+            && let Some(zone) = self.zones.iter().find(|z| z.holds(bong_pos, &t))
         {
-            let away = frog_pos - zone.centre;
+            let away = bong_pos - zone.centre;
             let away = if away.length() > 1.0 { away } else { Vec2::new(1.0, 0.0) };
-            if let Some(new_pos) = frog_hop_target(&mut f.rng, frog_pos, away, hop_distance, &f.terrain, f.width, f.height) {
-                with_frog_mut(&self.world, frog_entity, |fr| fr.start_hop(new_pos));
+            if let Some(new_pos) = bong_hop_target(&mut f.rng, bong_pos, away, hop_distance, &f.terrain, f.width, f.height) {
+                with_bong_mut(&self.world, bong_entity, |fr| fr.start_hop(new_pos));
                 return;
             }
         }
@@ -3287,9 +3295,9 @@ impl Game {
             && let Some((_, tank_pos, dist, _)) = nearest_any
             && dist <= avoid_range
         {
-            let away = Vec2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
-            if let Some(new_pos) = frog_hop_target(&mut f.rng, frog_pos, away, hop_distance, &f.terrain, f.width, f.height) {
-                with_frog_mut(&self.world, frog_entity, |fr| fr.start_hop(new_pos));
+            let away = Vec2::new(bong_pos.x - tank_pos.x, bong_pos.y - tank_pos.y);
+            if let Some(new_pos) = bong_hop_target(&mut f.rng, bong_pos, away, hop_distance, &f.terrain, f.width, f.height) {
+                with_bong_mut(&self.world, bong_entity, |fr| fr.start_hop(new_pos));
             }
         }
     }
@@ -3299,29 +3307,29 @@ impl Game {
     /// (`Pickup::in_reach` - pure geometry, no physics), then the field is
     /// topped back up to the map's slot count after
     /// `pickup_respawn_seconds`.
-    /// Whether the player's frog is hurt enough to be worth dropping a
-    /// bonus frog health pack for - the gate on that roll, checked before
-    /// any RNG is drawn (docs/frog-health-pack-prd.md section 6). Only the
-    /// player's frog counts: the bonus exists to give the player a way back
+    /// Whether the player's bong is hurt enough to be worth dropping a
+    /// bonus bong health pack for - the gate on that roll, checked before
+    /// any RNG is drawn (docs/bong-health-pack-prd.md section 6). Only the
+    /// player's bong counts: the bonus exists to give the player a way back
     /// from a hurt objective, and the packs are neutral once on the ground,
-    /// so a Hunt round's enemy frog is welcome to whatever the player
+    /// so a Hunt round's enemy bong is welcome to whatever the player
     /// leaves behind but never summons one.
-    fn frog_wants_a_pack(&self) -> bool {
-        self.frog.is_some_and(|e| {
-            with_frog(&self.world, e, |f| !f.is_dead() && f.health_fraction() < tuning().frog_pack_bonus_below)
+    fn bong_wants_a_pack(&self) -> bool {
+        self.bong.is_some_and(|e| {
+            with_bong(&self.world, e, |f| !f.is_dead() && f.health_fraction() < tuning().bong_pack_bonus_below)
         })
     }
 
     /// Who takes a crate on touch, as things stand this frame - see
     /// `TakeRules`.
     fn take_rules(&self) -> TakeRules {
-        // A frog pack is left where it is for a tank whose own frog is
-        // alive and already at full health (docs/frog-health-pack-prd.md).
-        // A side whose frog is absent or dead still collects, and wastes it.
-        let frog_full = |frog: Option<Entity>| frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
+        // A bong pack is left where it is for a tank whose own bong is
+        // alive and already at full health (docs/bong-health-pack-prd.md).
+        // A side whose bong is absent or dead still collects, and wastes it.
+        let bong_full = |bong: Option<Entity>| bong.is_some_and(|e| with_bong(&self.world, e, Bong::at_full_health));
         TakeRules {
-            frog_full: [frog_full(self.frog), frog_full(self.enemy_frog)],
-            // The tower pack's rule, the frog pack's shape: left alone while
+            bong_full: [bong_full(self.bong), bong_full(self.enemy_bong)],
+            // The tower pack's rule, the bong pack's shape: left alone while
             // every standing tower of the collector's side is whole and not
             // burning (docs/defence-towers-prd.md section 9).
             towers_want: [self.tower_pack_wanted(Side::Player), self.tower_pack_wanted(Side::Enemy)],
@@ -3448,10 +3456,10 @@ impl Game {
                         tank.damage = 0.0;
                         tank.raise_shield();
                     }
-                    // Nothing on the tank: the frog pack heals a frog, and
-                    // the frog can't be touched while this `&mut Tank`
+                    // Nothing on the tank: the bong pack heals a bong, and
+                    // the bong can't be touched while this `&mut Tank`
                     // borrow is live - see just below.
-                    PickupKind::FrogHealth => {}
+                    PickupKind::BongHealth => {}
                     // Nothing on the tank either: it repairs its side's
                     // towers, just below.
                     PickupKind::TowerPack => {}
@@ -3480,16 +3488,16 @@ impl Game {
                 let side = if self.is_player(tank_entity) { Side::Player } else { Side::Enemy };
                 self.repair_towers(f, side);
             }
-            if kind == PickupKind::FrogHealth {
-                let frog = if self.is_player(tank_entity) { self.frog } else { self.enemy_frog };
-                if let Some(frog) = frog {
-                    let (side, amount, pos) = with_frog_mut(&self.world, frog, |f| {
+            if kind == PickupKind::BongHealth {
+                let bong = if self.is_player(tank_entity) { self.bong } else { self.enemy_bong };
+                if let Some(bong) = bong {
+                    let (side, amount, pos) = with_bong_mut(&self.world, bong, |f| {
                         let before = f.health;
-                        f.heal(f.max_health * tuning().frog_pack_heal_fraction);
+                        f.heal(f.max_health * tuning().bong_pack_heal_fraction);
                         (f.side, f.health - before, f.position)
                     });
                     if amount > 0.0 {
-                        f.events.push(Event::FrogHealed { side, slot, amount, x: pos.x, y: pos.y });
+                        f.events.push(Event::BongHealed { side, slot, amount, x: pos.x, y: pos.y });
                     }
                 }
             }
@@ -3500,7 +3508,7 @@ impl Game {
         if slot_backed_count(&self.world, &self.map_pickup_slots) < self.map_pickup_slots.len() {
             self.pickup_respawn_timer -= f.dt;
             if self.pickup_respawn_timer <= 0.0 {
-                let hurt = BonusGates { frog: self.frog_wants_a_pack(), towers: self.player_tower_hurt() };
+                let hurt = BonusGates { bong: self.bong_wants_a_pack(), towers: self.player_tower_hurt() };
                 let respawned = respawn_from_slots(
                     &mut self.world,
                     &self.map,
@@ -3631,7 +3639,7 @@ impl Game {
             for ring in &mut self.engage {
                 ring.release(entity);
             }
-            self.engage_frog.release(entity);
+            self.engage_bong.release(entity);
             if let Some(o) = occupied.iter_mut().find(|(e, _)| *e == entity) {
                 o.1 = to;
             }
@@ -3875,20 +3883,20 @@ impl Game {
             alert
         };
 
-        // Role targets: hunters fight the player's frog while it lives
+        // Role targets: hunters fight the player's bong while it lives
         // (`quarry`), guards hold a leash around their own (`home`); both
-        // are `None` once that frog is dead or absent, and the role then
+        // are `None` once that bong is dead or absent, and the role then
         // behaves as `Role::Player`.
-        let live_frog = |frog: Option<Entity>| {
-            frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some((e, fr.position))))
+        let live_bong = |bong: Option<Entity>| {
+            bong.and_then(|e| with_bong(&self.world, e, |fr| (!fr.is_dead()).then_some((e, fr.position))))
         };
-        let quarry = live_frog(self.frog);
-        let home = live_frog(self.enemy_frog).map(|(_, p)| p);
+        let quarry = live_bong(self.bong);
+        let home = live_bong(self.enemy_bong).map(|(_, p)| p);
         // A hunter carrying a weapon its own rule fires (`ai::generic_fire`
-        // false: the sonic hammer, which cannot hurt a frog) fights the
+        // false: the sonic hammer, which cannot hurt a bong) fights the
         // seat like everyone else until it is spent.
         let target_of = |ai: &Ai, tank: &Tank| match (ai.role, quarry) {
-            (Role::Hunter, Some((frog, pos))) if crate::ai::generic_fire(tank.active_weapon()) => (pos, Some(frog)),
+            (Role::Hunter, Some((bong, pos))) if crate::ai::generic_fire(tank.active_weapon()) => (pos, Some(bong)),
             _ => (target_pos_of(ai), None),
         };
         let guard_holds = |ai: &Ai| {
@@ -3901,21 +3909,21 @@ impl Game {
         // far out don't claim one - that held approaching packs in loose
         // formation through the same bottleneck (measured via the probe's
         // clustering anomaly); steering at the raw alert point is fine for
-        // them. Hunters with a live quarry compete on the frog's ring;
+        // them. Hunters with a live quarry compete on the bong's ring;
         // everyone else on the ring around the player it is fighting - one
         // ring per seat, the rest only populated once that seat is filled.
         let mut report = EngageReport::default();
         let mut engaged: Vec<Vec<(Entity, Position)>> = vec![Vec::new(); players.len()];
-        let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
+        let mut engaged_bong: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
             let (target, hunting) = target_of(ai, tank);
-            // A seat in the light is seen from further; a frog by the sky.
+            // A seat in the light is seen from further; a bong by the sky.
             let sight = if hunting.is_some() { view_range } else { players[(ai.target_player() as usize).min(players.len() - 1)].sight };
             let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, hunting.is_some(), sight) };
             report.tanks.push(EngageTank::new(entity, tank.owner_slot(), status));
             if status == EngageStatus::Engaged {
                 if hunting.is_some() {
-                    engaged_frog.push((entity, tank.position));
+                    engaged_bong.push((entity, tank.position));
                 } else {
                     engaged[(ai.target_player() as usize).min(players.len() - 1)].push((entity, tank.position));
                 }
@@ -3926,7 +3934,7 @@ impl Game {
         for ring in &mut engaged {
             ring.sort_by_key(|(e, _)| *e);
         }
-        engaged_frog.sort_by_key(|(e, _)| *e);
+        engaged_bong.sort_by_key(|(e, _)| *e);
         let reachable = |a: Position, b: Position| grid.connected(a, b);
         // One worst-case tank clear of the wall, plus a little.
         let margin = battlefield::max_tank_clearance_half_extent() + 8.0;
@@ -3973,7 +3981,7 @@ impl Game {
             }
             // A seat past the first keeps no slot table either (the
             // snapshot shows player 1's); its per-tank outcomes are merged
-            // into the one report, the way the frog ring's are below.
+            // into the one report, the way the bong ring's are below.
             let mut seat_report = EngageReport {
                 tanks: report.tanks.iter().filter(|t| engaged[seat].iter().any(|(e, _)| *e == t.entity)).copied().collect(),
                 ..Default::default()
@@ -3999,31 +4007,31 @@ impl Game {
                 }
             }
         }
-        // Whether a hunter can drive straight at the frog: a route to the
-        // frog's own cell exists (open ground). Without one (a bunker, the
-        // frog plugging a corridor) steering at the frog only jitters, so
+        // Whether a hunter can drive straight at the bong: a route to the
+        // bong's own cell exists (open ground). Without one (a bunker, the
+        // bong plugging a corridor) steering at the bong only jitters, so
         // such a hunter needs a ring slot even when it is the only one -
         // unlike the player ring, which a lone attacker never needs.
-        let direct_route = |pos: Position, frog_pos: Position| grid.same_cell(pos, frog_pos) || grid.next_step(pos, frog_pos).is_some();
-        let frog_ring_wanted = match quarry {
-            Some((_, frog_pos)) => engaged_frog.len() >= 2 || engaged_frog.iter().any(|&(_, pos)| !direct_route(pos, frog_pos)),
+        let direct_route = |pos: Position, bong_pos: Position| grid.same_cell(pos, bong_pos) || grid.next_step(pos, bong_pos).is_some();
+        let bong_ring_wanted = match quarry {
+            Some((_, bong_pos)) => engaged_bong.len() >= 2 || engaged_bong.iter().any(|&(_, pos)| !direct_route(pos, bong_pos)),
             None => false,
         };
-        if let (true, Some((frog, frog_pos))) = (frog_ring_wanted, quarry) {
-            // The frog ring's own report: its slot table is not kept (the
+        if let (true, Some((bong, bong_pos))) = (bong_ring_wanted, quarry) {
+            // The bong ring's own report: its slot table is not kept (the
             // snapshot shows the player ring's), its per-tank outcomes are
             // merged into the one report every reader consults.
             // Line of *fire*, not sight: a slot behind a brick wall of the
-            // frog's bunker is a slot worth holding, the shells open it.
-            let line_of_sight = |a: Position, b: Position| f.terrain.line_of_fire_to_frog(a, b, Some(frog));
-            let mut frog_report = EngageReport {
-                tanks: report.tanks.iter().filter(|t| engaged_frog.iter().any(|(e, _)| *e == t.entity)).copied().collect(),
+            // bong's bunker is a slot worth holding, the shells open it.
+            let line_of_sight = |a: Position, b: Position| f.terrain.line_of_fire_to_bong(a, b, Some(bong));
+            let mut bong_report = EngageReport {
+                tanks: report.tanks.iter().filter(|t| engaged_bong.iter().any(|(e, _)| *e == t.entity)).copied().collect(),
                 ..Default::default()
             };
-            self.engage_frog.assign(
-                &engaged_frog,
+            self.engage_bong.assign(
+                &engaged_bong,
                 &EngageCtx {
-                    target_pos: frog_pos,
+                    target_pos: bong_pos,
                     width: f.width,
                     height: f.height,
                     margin,
@@ -4032,9 +4040,9 @@ impl Game {
                     reachable: &reachable,
                     line_of_sight: &line_of_sight,
                 },
-                &mut frog_report,
+                &mut bong_report,
             );
-            for t in frog_report.tanks {
+            for t in bong_report.tanks {
                 if let Some(slot) = report.tanks.iter_mut().find(|r| r.entity == t.entity) {
                     *slot = t;
                 }
@@ -4079,7 +4087,7 @@ impl Game {
         let standing_towers = if self.towers.is_empty() { Vec::new() } else { self.standing_towers() };
 
         // Field maps: what keeps a tank thinking every tick when it is near
-        // - the live seats and the players' frog (`field::mind`).
+        // - the live seats and the players' bong (`field::mind`).
         let anchors: Vec<Position> =
             if field { live_seats.iter().copied().chain(quarry.map(|(_, p)| p)).collect() } else { Vec::new() };
         let frame = self.frame;
@@ -4116,7 +4124,7 @@ impl Game {
             (BTreeMap::new(), Vec::new())
         };
         // A hunter carrying a weapon its own rule fires fights the seat
-        // rather than the frog (`target_of`), so on a field map it is woken
+        // rather than the bong (`target_of`), so on a field map it is woken
         // and leashed as any other tank is (`field::mind`).
         let field_hunting = |ai: &Ai, tank: &Tank| ai.role == Role::Hunter && quarry.is_some() && crate::ai::generic_fire(tank.active_weapon());
         // Whether a tank thinks this tick, as the collect pass below will
@@ -4263,17 +4271,17 @@ impl Game {
             ai.air_threat = air_threats.get(&entity).copied();
             ai.pull = pull_senses.get(&entity).copied();
             let (mut target, mut hunting) = target_of(ai, tank);
-            // A hunter that cannot route to the frog and holds no slot on
+            // A hunter that cannot route to the bong and holds no slot on
             // its ring (every slot rejected: off the map, unreachable from
             // its half of the field, or iron in the way) has no way at the
-            // frog this frame unless it already stands in range with a line
+            // bong this frame unless it already stands in range with a line
             // of fire. It fights the player like everyone else instead -
             // breaching walls on the way as any tank does - and is back on
-            // the frog the frame a slot opens up.
-            if let Some(frog) = hunting {
+            // the bong the frame a slot opens up.
+            if let Some(bong) = hunting {
                 let no_slot = self.last_engage.slot_of(entity).is_none() && engage_target.is_none();
                 let can_shoot_from_here = tank.position.distance_to(target) <= tuning().enemy_attack_range
-                    && f.terrain.line_of_fire_to_frog(tank.position, target, Some(frog));
+                    && f.terrain.line_of_fire_to_bong(tank.position, target, Some(bong));
                 if no_slot && !direct_route(tank.position, target) && !can_shoot_from_here {
                     target = target_pos_of(ai);
                     hunting = None;
@@ -4284,7 +4292,7 @@ impl Game {
             } else if ai.sap_due(f.dt) {
                 sap_wanted.push((entity, tank.position, target));
             }
-            let frog_target = match ai.role {
+            let bong_target = match ai.role {
                 Role::Hunter => hunting.map(|_| target),
                 Role::Guard => home,
                 Role::Player => None,
@@ -4310,14 +4318,14 @@ impl Game {
             let fighting_sight = fighting.sight;
             let player_hidden = fighting.concealed && !ai.is_hit_alerted();
             let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, fighting.pos);
-            // A hunter's fire gate is line of *fire* to the frog: only iron
-            // or another frog blocks it, so a walled-in frog gets shot at
+            // A hunter's fire gate is line of *fire* to the bong: only iron
+            // or another bong blocks it, so a walled-in bong gets shot at
             // through its destructible walls until they are gone. Note it
             // filters on `is_permanent`, not `blocks_sight`, so concealment
             // has to be applied here separately or a hunter would keep
             // shooting a target the rest of the AI has lost.
             let line_of_sight = match hunting {
-                Some(frog) => f.terrain.line_of_fire_to_frog(tank.position, target, Some(frog)),
+                Some(bong) => f.terrain.line_of_fire_to_bong(tank.position, target, Some(bong)),
                 None => player_line_of_sight,
             };
             // Captured before anything this frame touches them, for the
@@ -4345,7 +4353,7 @@ impl Game {
                     tank,
                     player_tank,
                     target,
-                    frog_target,
+                    bong_target,
                     f.width,
                     f.height,
                     think_dt,
@@ -4559,7 +4567,7 @@ impl Game {
     /// length right now along the gun line, drawn from the laser's lens up
     /// to where it stopped, and applied.
     ///
-    /// A seat's beam is swept against the enemies and frogs its client was
+    /// A seat's beam is swept against the enemies and bongs its client was
     /// drawing (`seat_rewind`, `rewound_boxes`), like its shells.
     ///
     /// A beam that reaches a portal before anything else goes in at the
@@ -4617,7 +4625,7 @@ impl Game {
                 }
                 let Some(target) = target else { break };
                 f.impact_flashes.push(Shockwave::new(hit_pos));
-                // No knockback and no frog hop: an instant beam isn't
+                // No knockback and no bong hop: an instant beam isn't
                 // something to be shoved by or to dodge.
                 self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none(HitCause::Laser), shot.owner);
                 break;
@@ -4861,7 +4869,7 @@ impl Game {
     /// Resolve every flying projectile of one type against the terrain
     /// snapshot and the tanks: sweep its frame segment, flash at the entry
     /// point, ricochet if it can (shells off iron, on a roll), otherwise detonate at
-    /// that point and - when `live` - apply damage/knockback/frog hop.
+    /// that point and - when `live` - apply damage/knockback/bong hop.
     ///
     /// A shot whose segment passes through a portal before it meets
     /// anything goes in there and comes out of another
@@ -4916,7 +4924,7 @@ impl Game {
             let core = if f.wells.is_empty() { None } else { f.wells.core_hit(prev, pos, &tuning()).map(|(_, k)| prev + (pos - prev) * k) };
             let entry = if core.is_some() { None } else { entry };
             let pos = core.unwrap_or(pos);
-            // Lag compensation: a seat's shot meets the enemies and frogs
+            // Lag compensation: a seat's shot meets the enemies and bongs
             // where its client drew them (`Rewind`); 0 is the present.
             let past = self.rewound_boxes(rewind);
             // Sweep, and re-sweep past any prop tile the projectile rolls a
@@ -5047,7 +5055,7 @@ impl Game {
             let dir = Vec2::new(vel.x / len, vel.y / len);
             let effects = HitEffects {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
-                frog_hop: P::frog_hops().then_some(vel),
+                bong_hop: P::bong_hops().then_some(vel),
                 travel: Some(dir),
                 cause: P::hit_cause(),
             };
@@ -5284,11 +5292,11 @@ impl Game {
     }
 
     /// Per-mission end rules (docs/maps-to-levels.md). Losing (player or
-    /// the player's frog dead) takes precedence over winning when both
+    /// the player's bong dead) takes precedence over winning when both
     /// happen on the same frame.
     fn check_round_end(&mut self, f: &mut Frame) {
         // A training round is won by its last beat and never lost: a
-        // wrecked seat and a fallen frog come back (`training_phase`).
+        // wrecked seat and a fallen bong come back (`training_phase`).
         if let Some(run) = &self.training {
             if run.finished() {
                 self.end_round(f, Outcome::Won);
@@ -5296,7 +5304,7 @@ impl Game {
             return;
         }
         // Lost once every human tank is a wreck - the one player's in a
-        // single-player round, every seat's in a team round - or the frog
+        // single-player round, every seat's in a team round - or the bong
         // dies. `players()`, not `seats_on_field()`: a seat driving back
         // in through a gate is alive and the round goes on, and a seat
         // waiting for the next wave to bring it back (decision 7,
@@ -5308,16 +5316,16 @@ impl Game {
             .into_iter()
             .flatten()
             .all(|e| with_tank(&self.world, e, |t| t.is_wreck()));
-        let frog_dead = |frog: Option<Entity>| frog.is_some_and(|e| with_frog(&self.world, e, Frog::is_dead));
-        if players_dead || frog_dead(self.frog) {
+        let bong_dead = |bong: Option<Entity>| bong.is_some_and(|e| with_bong(&self.world, e, Bong::is_dead));
+        if players_dead || bong_dead(self.bong) {
             self.end_round(f, Outcome::Lost);
             return;
         }
         // A band round with no enemies at all (a sandbox) has nothing to
-        // win by wrecking; it runs until the player or the frog dies.
+        // win by wrecking; it runs until the player or the bong dies.
         let sandbox = matches!(self.spawn_plan, SpawnPlan::Band { .. }) && self.band_enemy_count == 0;
         let won = match self.mission {
-            Mission::Hunt => frog_dead(self.enemy_frog),
+            Mission::Hunt => bong_dead(self.enemy_bong),
             Mission::Protect | Mission::Destroy => !sandbox && self.spawn_plan_finished() && self.all_enemies_wrecked(),
         };
         if won {
@@ -5693,16 +5701,16 @@ impl Game {
             .collect()
     }
 
-    /// Where the players' frog stands while it lives - for tooling (the
+    /// Where the players' bong stands while it lives - for tooling (the
     /// probe's `defend` scenario guards it like a seat).
-    pub fn frog_position(&self) -> Option<Position> {
-        self.frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position)))
+    pub fn bong_position(&self) -> Option<Position> {
+        self.bong.and_then(|e| with_bong(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position)))
     }
 
     pub fn tank_snapshots(&self) -> Vec<TankSnapshot> {
-        // A hunter with the players' frog to hunt is on its way to a fight
+        // A hunter with the players' bong to hunt is on its way to a fight
         // whatever its alert says (`TankSnapshot::leashed`).
-        let quarry = self.frog.is_some_and(|e| self.world.get::<&Frog>(e).is_ok_and(|fr| !fr.is_dead()));
+        let quarry = self.bong.is_some_and(|e| self.world.get::<&Bong>(e).is_ok_and(|fr| !fr.is_dead()));
         self.world
             .query::<(Entity, &Tank, Option<&Ai>)>()
             .iter()
@@ -5890,7 +5898,7 @@ pub struct TankSnapshot {
     /// The seat this enemy's last decision to fire was aimed at
     /// (`Ai::shot_at_seat`): the attack on the seat it fights, or a
     /// hunter's snipe. `None` for a seat's own tank, and for an enemy
-    /// that fired at a frog, a tower or a tile or did not fire. Paired
+    /// that fired at a bong, a tower or a tile or did not fire. Paired
     /// with that frame's `Event::Fired`, it is what the probe's
     /// `offbox-fire` check reads.
     pub shot_at_seat: Option<u8>,
@@ -5901,11 +5909,11 @@ pub struct TankSnapshot {
     /// holds still and thinks nothing, by design. Always false on an arena.
     pub asleep: bool,
     /// A field map's enemy with nothing calling it to the fight - no
-    /// alert, no call, no recent hit, no frog it hunts - so it keeps to
+    /// alert, no call, no recent hit, no bong it hunts - so it keeps to
     /// its home leash rather than heading for a seat. Always false on an
     /// arena.
     pub leashed: bool,
-    /// A guard keeping its beat by its frog while the seat it would fight
+    /// A guard keeping its beat by its bong while the seat it would fight
     /// is far from it (`Role::Guard`, `Ai::holds_beat`): staying put, by
     /// design.
     pub guarding: bool,
@@ -6355,7 +6363,7 @@ impl Game {
     ///
     /// One drain rather than an emit at each seam. A shield is spent in
     /// eight places - `Tank::take_damage` covers ram (both tanks), blasts,
-    /// the flame cone and its afterburn, oil fire and the frog, and the
+    /// the flame cone and its afterburn, oil fire and the bong, and the
     /// projectile deflect in `resolve_projectiles` covers the rest - and
     /// `take_damage` has no `Frame` to push onto, so asking each caller to
     /// notice the edge itself is how six of the eight ended up silent.
@@ -6403,16 +6411,16 @@ fn slot_backed_count(world: &hecs::World, slots: &[(Position, PickupKind)]) -> u
 }
 
 /// Who takes a crate on touch (`Game::take_rules`): a tank that wants it
-/// (`Tank::wants_pickup`), except that a frog pack is left while the
-/// tank's own frog is whole and a tower pack while its side's towers are.
+/// (`Tank::wants_pickup`), except that a bong pack is left while the
+/// tank's own bong is whole and a tower pack while its side's towers are.
 /// The one rule `Game::pickup_phase` collects by and an enemy's routes
 /// steer by (`Game::keep_off_cells`), so a tank never goes round a crate
 /// it would take, nor drives over one it leaves when there is room to go
 /// round.
 #[derive(Clone, Copy)]
 struct TakeRules {
-    /// Per side, the player's first: its frog is alive and whole.
-    frog_full: [bool; 2],
+    /// Per side, the player's first: its bong is alive and whole.
+    bong_full: [bool; 2],
     /// Per side, the player's first: a tower pack would mend something
     /// (`Game::tower_pack_wanted`).
     towers_want: [bool; 2],
@@ -6424,17 +6432,17 @@ impl TakeRules {
     fn takes(&self, tank: &Tank, player: bool, kind: PickupKind) -> bool {
         let side = usize::from(!player);
         tank.wants_pickup(kind)
-            && (kind != PickupKind::FrogHealth || !self.frog_full[side])
+            && (kind != PickupKind::BongHealth || !self.bong_full[side])
             && (kind != PickupKind::TowerPack || self.towers_want[side])
     }
 }
 
 /// The conditional bonuses a Health slot may roll, each checked before
-/// any RNG is drawn for it: the frog pack while the frog is hurt, the
+/// any RNG is drawn for it: the bong pack while the bong is hurt, the
 /// tower pack while a player tower is.
 #[derive(Clone, Copy, Default)]
 struct BonusGates {
-    frog: bool,
+    bong: bool,
     towers: bool,
 }
 
@@ -6469,13 +6477,13 @@ fn respawn_from_slots(
 }
 
 /// The un-slotted bonuses that ride along with a Health slot just
-/// (re)spawned at `slot`: the rainbow shield always, a frog health pack
-/// only while `hurt.frog`, a tower pack only while `hurt.towers`.
+/// (re)spawned at `slot`: the rainbow shield always, a bong health pack
+/// only while `hurt.bong`, a tower pack only while `hurt.towers`.
 ///
-/// The frog pack's gate is checked *before* its roll, never after, and that
-/// ordering is load-bearing (docs/frog-health-pack-prd.md section 6): a
-/// round whose frog is never hurt - `Game::init`'s own spawn pass included,
-/// where the frog has just been created at full health - draws exactly the
+/// The bong pack's gate is checked *before* its roll, never after, and that
+/// ordering is load-bearing (docs/bong-health-pack-prd.md section 6): a
+/// round whose bong is never hurt - `Game::init`'s own spawn pass included,
+/// where the bong has just been created at full health - draws exactly the
 /// RNG it drew before the pack existed, so every such seeded replay is
 /// unchanged. `occupied` is recomputed per roll inside `maybe_spawn_bonus`,
 /// so the two bonuses can never land on the same neighbour.
@@ -6490,9 +6498,9 @@ fn maybe_spawn_health_slot_bonuses(
     rng: &mut SmallRng,
 ) {
     maybe_spawn_bonus(world, map, slot, PickupKind::Shield, tuning().shield_near_health_chance, width, height, dropped_at, rng);
-    if hurt.frog {
-        let chance = tuning().frog_pack_near_health_chance;
-        maybe_spawn_bonus(world, map, slot, PickupKind::FrogHealth, chance, width, height, dropped_at, rng);
+    if hurt.bong {
+        let chance = tuning().bong_pack_near_health_chance;
+        maybe_spawn_bonus(world, map, slot, PickupKind::BongHealth, chance, width, height, dropped_at, rng);
     }
     if hurt.towers {
         let chance = tuning().tower_pack_near_health_chance;
@@ -6530,7 +6538,7 @@ fn maybe_spawn_bonus(
 
 /// A uniformly random free cell touching the slot at `slot`, or `None`
 /// when all eight neighbours are taken. Eligible: empty, road or water in
-/// the map (walls, the frog, the start cell and other slots are not), centre inside
+/// the map (walls, the bong, the start cell and other slots are not), centre inside
 /// the border walls (their inner faces sit at 0/`width`/0/`height`), and no
 /// live pickup already on it. Map walls are checked rather than the live
 /// obstacle set: a shot-away wall's cell stays off limits, which is
@@ -6626,14 +6634,14 @@ pub(crate) fn with_tank<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&
     f(q.get().expect("entity should have a Tank component"))
 }
 
-pub(crate) fn with_frog<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&Frog) -> R) -> R {
-    let mut q = world.query_one::<&Frog>(entity);
-    f(q.get().expect("entity should have a Frog component"))
+pub(crate) fn with_bong<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&Bong) -> R) -> R {
+    let mut q = world.query_one::<&Bong>(entity);
+    f(q.get().expect("entity should have a Bong component"))
 }
 
-fn with_frog_mut<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&mut Frog) -> R) -> R {
-    let mut q = world.query_one::<&mut Frog>(entity);
-    f(q.get().expect("entity should have a Frog component"))
+fn with_bong_mut<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&mut Bong) -> R) -> R {
+    let mut q = world.query_one::<&mut Bong>(entity);
+    f(q.get().expect("entity should have a Bong component"))
 }
 
 fn with_tank_mut<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&mut Tank) -> R) -> R {
@@ -6703,7 +6711,7 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
 /// Roll one spawning enemy's `Role` for `mission` (docs/maps-to-levels.md
 /// "AI roles"): Protect rolls hunters at `enemy_hunter_share_protect`
 /// (the rest fight the player), Hunt at `enemy_hunter_share_hunt` (the rest
-/// guard the enemy frog), Destroy has nothing to hunt or guard. A share of
+/// guard the enemy bong), Destroy has nothing to hunt or guard. A share of
 /// zero draws nothing, so it leaves the round's RNG stream untouched.
 fn roll_role(mission: Mission, rng: &mut SmallRng) -> Role {
     let mut rolls = |share: f32| share > 0.0 && rng.random_range(0.0..1.0) < share;
@@ -6734,13 +6742,13 @@ fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) -> bool {
 
 /// Whether an enemy competes for an engagement slot this frame, and if
 /// not, why - the exclusions win over the range test. `target` is what
-/// the enemy fights (the player, or a hunter's frog: `on_frog`); `sight`
+/// the enemy fights (the player, or a hunter's bong: `on_bong`); `sight`
 /// is how far it sees (`Game::enemy_sight`), held past the edge for a seat
 /// still in sight (`Ai::sees`), as the chase tier holds it - never for a
-/// frog, which that hold is not about.
-fn engage_status(tank: &Tank, ai: &Ai, target: Position, on_frog: bool, sight: f32) -> EngageStatus {
+/// bong, which that hold is not about.
+fn engage_status(tank: &Tank, ai: &Ai, target: Position, on_bong: bool, sight: f32) -> EngageStatus {
     let dist = tank.position.distance_to(target);
-    let in_range = if on_frog { dist <= sight } else { ai.sees(dist, sight) };
+    let in_range = if on_bong { dist <= sight } else { ai.sees(dist, sight) };
     if tank.is_wreck() {
         EngageStatus::Wreck
     } else if tank.damage >= tuning().enemy_flee_damage {
@@ -6998,8 +7006,8 @@ mod determinism_tests {
     /// Two full runs of the same seed must agree bit-for-bit. 600 frames
     /// of an AFK round crosses spawn, patrol, alert sharing, engagement
     /// and firing, so every RNG consumer gets exercised. The Hunt seed adds
-    /// the procedural enemy-frog placement, the role rolls, hunters on the
-    /// frog ring and guards on their leash.
+    /// the procedural enemy-bong placement, the role rolls, hunters on the
+    /// bong ring and guards on their leash.
     #[test]
     fn same_seed_replays_bit_identical() {
         for (seed, mission) in [(0xB0B5_u64, Mission::Protect), (0xC0FFEE_u64, Mission::Protect), (0xF406_u64, Mission::Hunt)] {
@@ -7123,7 +7131,7 @@ mod determinism_tests {
     /// A portal round replays too: the destination draw sits on the round
     /// stream and the arrival placement is a deterministic search. The
     /// fixture puts every enemy on the far side of an iron wall from the
-    /// frog, so within 900 frames at least one hops - both runs must show
+    /// bong, so within 900 frames at least one hops - both runs must show
     /// the same `Teleported` events on the same frames.
     #[test]
     fn same_seed_replays_a_portal_round_bit_identical() {
@@ -7284,13 +7292,13 @@ mod mechanics_tests {
     }
 
     /// The engagement ring holds a seat in sight past the edge of sight
-    /// as the chase tier does (`Ai::sees`), but never a hunter's frog: a
-    /// hunter still latched on the seat it fought between frogs would
-    /// take a slot on the frog's ring from past its sight, turn to the
-    /// frog, drop the latch, lose the slot and turn back to the seat -
+    /// as the chase tier does (`Ai::sees`), but never a hunter's bong: a
+    /// hunter still latched on the seat it fought between bongs would
+    /// take a slot on the bong's ring from past its sight, turn to the
+    /// bong, drop the latch, lose the slot and turn back to the seat -
     /// every tick.
     #[test]
-    fn the_ring_holds_a_seat_in_sight_but_never_a_frog() {
+    fn the_ring_holds_a_seat_in_sight_but_never_a_bong() {
         let sight = tuning().enemy_view_range;
         let mut tank = Tank::default();
         tank.position = Position::new(0.0, 0.0);
@@ -7299,7 +7307,7 @@ mod mechanics_tests {
         assert_eq!(engage_status(&tank, &ai, past, false, sight), EngageStatus::OutOfRange, "nothing in sight to hold");
         ai.set_in_sight(true);
         assert_eq!(engage_status(&tank, &ai, past, false, sight), EngageStatus::Engaged, "a seat held past the edge");
-        assert_eq!(engage_status(&tank, &ai, past, true, sight), EngageStatus::OutOfRange, "a frog is not");
+        assert_eq!(engage_status(&tank, &ai, past, true, sight), EngageStatus::OutOfRange, "a bong is not");
     }
 
     /// `Input::held_only` is the input for a rendered frame's second and
@@ -7857,7 +7865,7 @@ mod mechanics_tests {
     }
 
     #[test]
-    fn a_destroy_round_has_no_frog_and_ends_on_the_last_wreck() {
+    fn a_destroy_round_has_no_bong_and_ends_on_the_last_wreck() {
         let mut game = Game::default();
         game.enemy_count_override = Some(1);
         game.seed_override = Some(7);
@@ -7865,8 +7873,8 @@ mod mechanics_tests {
         game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
         game.init(W, H);
         assert_eq!(game.mission, Mission::Destroy);
-        assert!(game.frog.is_none() && game.enemy_frog.is_none());
-        assert_eq!(game.world.query::<&Frog>().iter().count(), 0);
+        assert!(game.bong.is_none() && game.enemy_bong.is_none());
+        assert_eq!(game.world.query::<&Bong>().iter().count(), 0);
         assert!(matches!(game.events(), [Event::RoundStarted { mission: Mission::Destroy, .. }]));
         let slot = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().unwrap();
         game.debug_kill(slot).unwrap();
@@ -8097,13 +8105,13 @@ mod mechanics_tests {
     }
 
     /// A 112 px wide vertical iron corridor (two nav cells): the player at
-    /// its top, the frog at its bottom - the default map's lane beside the
+    /// its top, the bong at its bottom - the default map's lane beside the
     /// player start, where two enemies heading opposite ways jammed.
     const CORRIDOR_MAP: &str = r#"
 version = 1
 tanks = 2
 cells."14,1" = { kind = "start" }
-cells."14,22" = { kind = "frog" }
+cells."14,22" = { kind = "bong" }
 cells."14,20" = { kind = "pickup", pickup = "ammo" }
 cells."11,2" = { kind = "wall", material = "iron" }
 cells."11,3" = { kind = "wall", material = "iron" }
@@ -8209,61 +8217,61 @@ cells."16,20" = { kind = "wall", material = "iron" }
         assert!(me.position.distance_to(seat) > 400.0, "{} px from the seat", me.position.distance_to(seat));
     }
 
-    fn frog_position(game: &Game, frog: Option<Entity>) -> Position {
-        with_frog(&game.world, frog.expect("frog on the field"), |fr| fr.position)
+    fn bong_position(game: &Game, bong: Option<Entity>) -> Position {
+        with_bong(&game.world, bong.expect("bong on the field"), |fr| fr.position)
     }
 
     fn enemy_position(game: &Game) -> Position {
         game.tank_snapshots().into_iter().find(|t| !t.is_player).expect("enemy").position
     }
 
-    /// The player in the top-left corner, its frog two cells over, the
-    /// enemy frog in the far bottom-right: a hunter has a long, clear run
-    /// to the player's frog and a guard's beat is far from the player.
+    /// The player in the top-left corner, its bong two cells over, the
+    /// enemy bong in the far bottom-right: a hunter has a long, clear run
+    /// to the player's bong and a guard's beat is far from the player.
     const CORNERS_MAP: &str = r#"
 version = 1
 tanks = 1
 cells."3,3" = { kind = "start" }
-cells."36,20" = { kind = "frog" }
-cells."36,3" = { kind = "enemy_frog" }
+cells."36,20" = { kind = "bong" }
+cells."36,3" = { kind = "enemy_bong" }
 "#;
 
     #[test]
-    fn a_hunter_drives_to_the_players_frog() {
+    fn a_hunter_drives_to_the_players_bong() {
         let mut game = game_on(CORNERS_MAP, 1, Some(0));
         set_enemy_role(&mut game, Role::Hunter);
-        let frog = frog_position(&game, game.frog);
-        // Far left on the frog's row: a straight eastward run along y=656
+        let bong = bong_position(&game, game.bong);
+        // Far left on the bong's row: a straight eastward run along y=656
         // that never lines up on the player in the corner.
-        game.debug_teleport(1, Position::new(200.0, frog.y), Some(90.0)).expect("enemy in slot 1");
+        game.debug_teleport(1, Position::new(200.0, bong.y), Some(90.0)).expect("enemy in slot 1");
         let attack_range = tuning().enemy_attack_range;
-        let mut last = enemy_position(&game).distance_to(frog);
-        assert!(last > 900.0, "starts {last} px from the frog");
+        let mut last = enemy_position(&game).distance_to(bong);
+        assert!(last > 900.0, "starts {last} px from the bong");
         let mut arrived = false;
         for second in 1..=8 {
             for _ in 0..60 {
                 step(&mut game, Input::default());
             }
-            let now = enemy_position(&game).distance_to(frog_position(&game, game.frog));
+            let now = enemy_position(&game).distance_to(bong_position(&game, game.bong));
             if now <= attack_range {
                 arrived = true;
                 break;
             }
-            assert!(now < last - 60.0, "second {second}: {last:.0} -> {now:.0} px, not closing on the frog");
+            assert!(now < last - 60.0, "second {second}: {last:.0} -> {now:.0} px, not closing on the bong");
             last = now;
         }
-        assert!(arrived, "never reached attack range of the frog ({last:.0} px)");
+        assert!(arrived, "never reached attack range of the bong ({last:.0} px)");
         assert_eq!(game.outcome(), Outcome::Playing);
     }
 
-    /// The frog inside a bunker like the default map's: brick above and
+    /// The bong inside a bunker like the default map's: brick above and
     /// below, iron on both sides, one open cell around it. No line of
     /// sight exists from anywhere; the only way in is through the brick.
     const BUNKER_MAP: &str = r#"
 version = 1
 tanks = 1
 cells."3,3" = { kind = "start" }
-cells."20,12" = { kind = "frog" }
+cells."20,12" = { kind = "bong" }
 cells."18,10" = { kind = "wall", material = "brick" }
 cells."19,10" = { kind = "wall", material = "brick" }
 cells."20,10" = { kind = "wall", material = "brick" }
@@ -8285,30 +8293,30 @@ cells."22,14" = { kind = "wall", material = "brick" }
 
 
     #[test]
-    fn a_hunter_shoots_its_way_into_the_frogs_bunker() {
+    fn a_hunter_shoots_its_way_into_the_bongs_bunker() {
         let mut game = game_on(BUNKER_MAP, 1, Some(0));
         set_enemy_role(&mut game, Role::Hunter);
-        let frog = frog_position(&game, game.frog);
+        let bong = bong_position(&game, game.bong);
         // Straight above the bunker, facing down, inside attack range: the
-        // brick roof is all that stands between the hunter and the frog.
-        game.debug_teleport(1, Position::new(frog.x, frog.y - tuning().enemy_attack_range * 0.8), Some(180.0))
+        // brick roof is all that stands between the hunter and the bong.
+        game.debug_teleport(1, Position::new(bong.x, bong.y - tuning().enemy_attack_range * 0.8), Some(180.0))
             .expect("enemy in slot 1");
-        let (mut broke_a_tile, mut hit_the_frog) = (false, false);
+        let (mut broke_a_tile, mut hit_the_bong) = (false, false);
         for _ in 0..(20 * 60) {
             step(&mut game, Input::default());
             for event in game.events() {
                 match event {
                     Event::Hit { target: HitTarget::Obstacle { .. }, .. } => broke_a_tile = true,
-                    Event::Hit { target: HitTarget::Frog { side: Side::Player }, .. } => hit_the_frog = true,
+                    Event::Hit { target: HitTarget::Bong { side: Side::Player }, .. } => hit_the_bong = true,
                     _ => {}
                 }
             }
-            if hit_the_frog {
+            if hit_the_bong {
                 break;
             }
         }
         assert!(broke_a_tile, "the hunter never fired at the bunker's brick");
-        assert!(hit_the_frog, "the hunter never got a shell through to the frog");
+        assert!(hit_the_bong, "the hunter never got a shell through to the bong");
     }
 
     #[test]
@@ -8317,7 +8325,7 @@ cells."22,14" = { kind = "wall", material = "brick" }
         set_enemy_role(&mut game, Role::Hunter);
         let player = player_snapshot(&game).position;
         // Straight above the player, half an attack range away, facing it;
-        // the frog is off in the bottom-right.
+        // the bong is off in the bottom-right.
         game.debug_teleport(1, Position::new(player.x, player.y - tuning().enemy_attack_range * 0.5), Some(180.0))
             .expect("enemy in slot 1");
         let (mut fired, mut hit_player) = (false, false);
@@ -8340,7 +8348,7 @@ cells."22,14" = { kind = "wall", material = "brick" }
 
     /// The sight-box tests' field (docs/large-maps-follow-camera.md section
     /// 5): the player near the top middle of an empty map and one enemy, no
-    /// frog - nothing but that enemy ever fires, and nothing stands between
+    /// bong - nothing but that enemy ever fires, and nothing stands between
     /// the two.
     const SIGHT_BOX_MAP: &str = r#"
 version = 1
@@ -8503,24 +8511,24 @@ cells."20,4" = { kind = "start" }
         game.init(W, H);
         assert_eq!(game.mission, Mission::Hunt);
         set_enemy_role(&mut game, Role::Guard);
-        let home = frog_position(&game, game.enemy_frog);
-        assert_eq!(home, map::cell_to_world(36, 3), "the map's enemy_frog cell places the enemy frog");
+        let home = bong_position(&game, game.enemy_bong);
+        assert_eq!(home, map::cell_to_world(36, 3), "the map's enemy_bong cell places the enemy bong");
         let leash = tuning().guard_leash_px;
         assert!(player_snapshot(&game).position.distance_to(home) > leash * 2.0, "the player starts far from the beat");
         game.debug_teleport(1, Position::new(home.x - 150.0, home.y), Some(270.0)).expect("enemy in slot 1");
         // Slack: waypoints stay inside the leash but the hull turns around
-        // a little past one, and the frog hops away from any tank that
+        // a little past one, and the bong hops away from any tank that
         // comes close - its own guard included - which moves the anchor by
         // a hop before the guard turns back.
         let hull = Tank::default().size();
-        let hop = with_frog(&game.world, game.enemy_frog.unwrap(), Frog::hop_distance);
+        let hop = with_bong(&game.world, game.enemy_bong.unwrap(), Bong::hop_distance);
         let (mut outside, mut moved) = (0, 0.0);
         let mut prev = enemy_position(&game);
         for frame in 0..900 {
             step(&mut game, Input::default());
             let pos = enemy_position(&game);
-            let dist = pos.distance_to(frog_position(&game, game.enemy_frog));
-            assert!(dist <= leash + hull + hop, "frame {frame}: guard {dist:.0} px from its frog (leash {leash})");
+            let dist = pos.distance_to(bong_position(&game, game.enemy_bong));
+            assert!(dist <= leash + hull + hop, "frame {frame}: guard {dist:.0} px from its bong (leash {leash})");
             outside += (dist > leash + hull) as u32;
             moved += pos.distance_to(prev);
             prev = pos;
@@ -8531,47 +8539,47 @@ cells."20,4" = { kind = "start" }
     }
 
     #[test]
-    fn a_hunt_round_is_won_when_the_enemy_frog_dies_and_lost_when_the_players_does() {
+    fn a_hunt_round_is_won_when_the_enemy_bong_dies_and_lost_when_the_players_does() {
         let mut game = Game::default();
         game.enemy_count_override = Some(1);
         game.seed_override = Some(7);
         game.level_overrides.mission = Some(Mission::Hunt);
         game.map = MapFile::from_toml_str(CORNERS_MAP).expect("test map parses");
         game.init(W, H);
-        assert_eq!(game.world.query::<&Frog>().iter().count(), 2);
-        let sides: Vec<Side> = [game.frog, game.enemy_frog]
+        assert_eq!(game.world.query::<&Bong>().iter().count(), 2);
+        let sides: Vec<Side> = [game.bong, game.enemy_bong]
             .into_iter()
-            .map(|e| with_frog(&game.world, e.expect("both frogs"), |fr| fr.side))
+            .map(|e| with_bong(&game.world, e.expect("both bongs"), |fr| fr.side))
             .collect();
         assert_eq!(sides, [Side::Player, Side::Enemy]);
 
-        with_frog_mut(&game.world, game.enemy_frog.unwrap(), |fr| fr.damage(fr.max_health));
+        with_bong_mut(&game.world, game.enemy_bong.unwrap(), |fr| fr.damage(fr.max_health));
         step(&mut game, Input::default());
-        assert_eq!(game.outcome(), Outcome::Won, "the enemy frog's death wins the hunt");
+        assert_eq!(game.outcome(), Outcome::Won, "the enemy bong's death wins the hunt");
         assert!(game.events().iter().any(|e| matches!(e, Event::RoundEnded { outcome: Outcome::Won })));
 
         game.init(W, H);
         assert_eq!(game.outcome(), Outcome::Playing);
-        with_frog_mut(&game.world, game.frog.unwrap(), |fr| fr.damage(fr.max_health));
+        with_bong_mut(&game.world, game.bong.unwrap(), |fr| fr.damage(fr.max_health));
         step(&mut game, Input::default());
-        assert_eq!(game.outcome(), Outcome::Lost, "the player's frog's death loses the hunt");
+        assert_eq!(game.outcome(), Outcome::Lost, "the player's bong's death loses the hunt");
     }
 
     #[test]
-    fn a_hunt_map_without_an_enemy_frog_cell_places_one_in_the_band() {
+    fn a_hunt_map_without_an_enemy_bong_cell_places_one_in_the_band() {
         let mut game = Game::default();
         game.enemy_count_override = Some(2);
         game.seed_override = Some(11);
         game.level_overrides.mission = Some(Mission::Hunt);
         game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
         game.init(W, H);
-        let home = frog_position(&game, game.enemy_frog);
-        let frog = frog_position(&game, game.frog);
-        assert!(home.distance_to(frog) >= tuning().enemy_frog_spawn_min_dist, "{home:?} is too close to {frog:?}");
+        let home = bong_position(&game, game.enemy_bong);
+        let bong = bong_position(&game, game.bong);
+        assert!(home.distance_to(bong) >= tuning().enemy_bong_spawn_min_dist, "{home:?} is too close to {bong:?}");
         let border = home.x.min(W - home.x).min(home.y).min(H - home.y);
         assert!(border <= W.min(H) * tuning().enemy_spawn_margin_max, "{home:?} is outside the spawn band");
         for t in game.tank_snapshots() {
-            assert!(t.position.distance_to(home) > Tank::default().size(), "{:?} spawned on the enemy frog", t.position);
+            assert!(t.position.distance_to(home) > Tank::default().size(), "{:?} spawned on the enemy bong", t.position);
         }
     }
 
@@ -8590,55 +8598,55 @@ cells."20,4" = { kind = "start" }
         game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().expect("one enemy")
     }
 
-    /// Park `slot`'s tank beside `frog`, well inside its bite range. Called
-    /// every frame, since the frog hops away from any tank that crowds it -
+    /// Park `slot`'s tank beside `bong`, well inside its bite range. Called
+    /// every frame, since the bong hops away from any tank that crowds it -
     /// its own side's included.
-    fn park_beside(game: &mut Game, slot: usize, frog: Option<Entity>) {
-        let (pos, range) = with_frog(&game.world, frog.expect("frog on the field"), |fr| (fr.position, fr.attack_range()));
+    fn park_beside(game: &mut Game, slot: usize, bong: Option<Entity>) {
+        let (pos, range) = with_bong(&game.world, bong.expect("bong on the field"), |fr| (fr.position, fr.attack_range()));
         let spot = Position::new(pos.x + range * 0.5, pos.y);
         assert!(spot.distance_to(pos) < range, "the test parks the tank outside bite range");
         game.debug_teleport(slot, spot, Some(0.0)).expect("tank in slot");
     }
 
-    fn bites_while_parked(game: &mut Game, slot: usize, frog: Option<Entity>, frames: u32) -> Vec<(Side, usize)> {
+    fn bites_while_parked(game: &mut Game, slot: usize, bong: Option<Entity>, frames: u32) -> Vec<(Side, usize)> {
         let mut seen = Vec::new();
         for _ in 0..frames {
-            park_beside(game, slot, frog);
+            park_beside(game, slot, bong);
             step(game, Input::default());
             seen.extend(game.events().iter().filter_map(|e| match e {
-                Event::FrogBite { side, slot, .. } => Some((*side, *slot)),
+                Event::BongBite { side, slot, .. } => Some((*side, *slot)),
                 _ => None,
             }));
         }
         seen
     }
 
-    /// A frog is its side's objective, not a hazard to it: neither frog
+    /// A bong is its side's objective, not a hazard to it: neither bong
     /// ever bites a tank of its own side, however long one sits on it.
     #[test]
-    fn a_frog_never_bites_its_own_side() {
+    fn a_bong_never_bites_its_own_side() {
         let mut game = hunt_game();
-        let (player_frog, enemy_frog) = (game.frog, game.enemy_frog);
+        let (player_bong, enemy_bong) = (game.bong, game.enemy_bong);
         let enemy = enemy_slot(&game);
         for frame in 0..300 {
-            park_beside(&mut game, 0, player_frog);
-            park_beside(&mut game, enemy, enemy_frog);
+            park_beside(&mut game, 0, player_bong);
+            park_beside(&mut game, enemy, enemy_bong);
             step(&mut game, Input::default());
-            let bite = game.events().iter().find(|e| matches!(e, Event::FrogBite { .. }));
-            assert!(bite.is_none(), "frame {frame}: a frog bit its own side: {bite:?}");
+            let bite = game.events().iter().find(|e| matches!(e, Event::BongBite { .. }));
+            assert!(bite.is_none(), "frame {frame}: a bong bit its own side: {bite:?}");
         }
     }
 
-    /// A 384 px corridor between two long walls four cells apart, the frog
+    /// A 384 px corridor between two long walls four cells apart, the bong
     /// parked in the middle of it: open ground in every direction along
     /// the corridor, with terrain close by on two sides. A landing test
     /// measured from the tiles' centres rather than their hulls rejects
-    /// the whole corridor and the frog never hops at all.
+    /// the whole corridor and the bong never hops at all.
     const HOP_CORRIDOR_MAP: &str = r#"
 version = 1
 tanks = 0
 cells."5,11" = { kind = "start" }
-cells."20,11" = { kind = "frog" }
+cells."20,11" = { kind = "bong" }
 "#;
 
     fn hop_corridor_map() -> String {
@@ -8652,116 +8660,116 @@ cells."20,11" = { kind = "frog" }
     }
 
     /// Every wall/prop tile's centre and hull half-extents, for asserting
-    /// the frog never lands inside one.
+    /// the bong never lands inside one.
     fn tile_boxes(game: &Game) -> Vec<(Position, f32)> {
         game.world.query::<&Obstacle>().iter().map(|o| (o.position, o.hull_size() * 0.5)).collect()
     }
 
-    /// Crowd the frog from the west and let it run: it hops clear rather
+    /// Crowd the bong from the west and let it run: it hops clear rather
     /// than sitting there taking it, even with terrain a couple of cells
     /// away on both sides.
     #[test]
-    fn a_crowded_frog_hops_clear_of_the_tank_in_built_up_terrain() {
+    fn a_crowded_bong_hops_clear_of_the_tank_in_built_up_terrain() {
         let mut game = game_on(&hop_corridor_map(), 0, Some(0));
-        let frog = game.frog.expect("the map places a frog");
-        let (start, avoid, hop) = with_frog(&game.world, frog, |fr| (fr.position, fr.avoid_range(), fr.hop_distance()));
+        let bong = game.bong.expect("the map places a bong");
+        let (start, avoid, hop) = with_bong(&game.world, bong, |fr| (fr.position, fr.avoid_range(), fr.hop_distance()));
         let boxes = tile_boxes(&game);
-        let frog_half = (FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1);
+        let bong_half = (BONG_COLLIDER_HALF_EXTENT.0, BONG_COLLIDER_HALF_EXTENT.1);
         for frame in 0..180 {
             // Follow it west of wherever it has got to, just inside the
             // avoid ring and outside its bite range.
-            let pos = with_frog(&game.world, frog, |fr| fr.position);
+            let pos = with_bong(&game.world, bong, |fr| fr.position);
             game.debug_teleport(0, Position::new(pos.x - avoid * 0.9, pos.y), Some(0.0)).expect("player slot");
             step(&mut game, Input::default());
-            let pos = with_frog(&game.world, frog, |fr| fr.position);
+            let pos = with_bong(&game.world, bong, |fr| fr.position);
             let inside = boxes.iter().find(|(c, h)| {
-                (pos.x - c.x).abs() < h + frog_half.0 && (pos.y - c.y).abs() < h + frog_half.1
+                (pos.x - c.x).abs() < h + bong_half.0 && (pos.y - c.y).abs() < h + bong_half.1
             });
-            assert!(inside.is_none(), "frame {frame}: the frog landed inside the tile at {inside:?}");
+            assert!(inside.is_none(), "frame {frame}: the bong landed inside the tile at {inside:?}");
         }
-        let moved = with_frog(&game.world, frog, |fr| fr.position).distance_to(start);
-        assert!(moved > hop, "the crowded frog moved {moved:.0} px in 3 s - a single hop is {hop:.0} px");
+        let moved = with_bong(&game.world, bong, |fr| fr.position).distance_to(start);
+        assert!(moved > hop, "the crowded bong moved {moved:.0} px in 3 s - a single hop is {hop:.0} px");
     }
 
-    /// The frog runs *from* the tank: crowded from one side for long
+    /// The bong runs *from* the tank: crowded from one side for long
     /// enough, it ends up further away than the tank ever let it be, not
     /// hopping into it.
     #[test]
-    fn a_frogs_hops_carry_it_away_from_what_crowds_it() {
+    fn a_bongs_hops_carry_it_away_from_what_crowds_it() {
         let mut game = game_on(&hop_corridor_map(), 0, Some(0));
-        let frog = game.frog.expect("the map places a frog");
-        let (start, avoid) = with_frog(&game.world, frog, |fr| (fr.position, fr.avoid_range()));
-        // The tank sits still this time, west of the frog: every hop has
-        // to take the frog further east than the last.
+        let bong = game.bong.expect("the map places a bong");
+        let (start, avoid) = with_bong(&game.world, bong, |fr| (fr.position, fr.avoid_range()));
+        // The tank sits still this time, west of the bong: every hop has
+        // to take the bong further east than the last.
         let post = Position::new(start.x - avoid * 0.9, start.y);
         let mut nearest = f32::MAX;
         for _ in 0..300 {
             game.debug_teleport(0, post, Some(0.0)).expect("player slot");
             step(&mut game, Input::default());
-            let pos = with_frog(&game.world, frog, |fr| fr.position);
+            let pos = with_bong(&game.world, bong, |fr| fr.position);
             nearest = nearest.min(pos.distance_to(post));
         }
-        let pos = with_frog(&game.world, frog, |fr| fr.position);
-        assert!(pos.distance_to(post) > avoid, "the frog stayed inside the avoid ring: {pos:?} vs {post:?}");
-        assert!(nearest >= avoid * 0.85, "a hop carried the frog to {nearest:.0} px of the tank, closer than it started");
+        let pos = with_bong(&game.world, bong, |fr| fr.position);
+        assert!(pos.distance_to(post) > avoid, "the bong stayed inside the avoid ring: {pos:?} vs {post:?}");
+        assert!(nearest >= avoid * 0.85, "a hop carried the bong to {nearest:.0} px of the tank, closer than it started");
     }
 
     /// The art is authored facing right and mirrored for the other way
-    /// (`frog::Facing`), so a hop has to turn the frog or it moonwalks.
+    /// (`bong::Facing`), so a hop has to turn the bong or it moonwalks.
     #[test]
-    fn a_frog_faces_the_way_it_hops() {
+    fn a_bong_faces_the_way_it_hops() {
         for (from_east, want) in [(true, Facing::Left), (false, Facing::Right)] {
             let mut game = game_on(&hop_corridor_map(), 0, Some(0));
-            let frog = game.frog.expect("the map places a frog");
-            let avoid = with_frog(&game.world, frog, |fr| fr.avoid_range());
+            let bong = game.bong.expect("the map places a bong");
+            let avoid = with_bong(&game.world, bong, |fr| fr.avoid_range());
             // Start it facing the wrong way, so passing means a hop turned
             // it rather than that it was already right.
             let wrong = if want == Facing::Left { Facing::Right } else { Facing::Left };
-            with_frog_mut(&game.world, frog, |fr| fr.facing = wrong);
+            with_bong_mut(&game.world, bong, |fr| fr.facing = wrong);
             for _ in 0..300 {
-                let pos = with_frog(&game.world, frog, |fr| fr.position);
+                let pos = with_bong(&game.world, bong, |fr| fr.position);
                 let side = if from_east { avoid * 0.9 } else { -avoid * 0.9 };
                 game.debug_teleport(0, Position::new(pos.x + side, pos.y), Some(0.0)).expect("player slot");
                 step(&mut game, Input::default());
             }
-            let facing = with_frog(&game.world, frog, |fr| fr.facing);
+            let facing = with_bong(&game.world, bong, |fr| fr.facing);
             let side = if from_east { "east" } else { "west" };
-            assert_eq!(facing, want, "crowded from the {side}, the frog ended up facing {facing:?}");
+            assert_eq!(facing, want, "crowded from the {side}, the bong ended up facing {facing:?}");
         }
     }
 
-    /// The attack clip lashes its tongue to the side the frog faces, so a
+    /// The attack clip lashes its tongue to the side the bong faces, so a
     /// bite turns it toward the tank. Checked only on frames where the bite
-    /// is what gets drawn: a hop outranks it in `Frog::anim`, and on a frame
-    /// that does both the frog rightly faces the way it leapt.
+    /// is what gets drawn: a hop outranks it in `Bong::anim`, and on a frame
+    /// that does both the bong rightly faces the way it leapt.
     #[test]
-    fn a_frog_faces_the_tank_it_bites() {
+    fn a_bong_faces_the_tank_it_bites() {
         let mut game = hunt_game();
-        let enemy_frog = game.enemy_frog.expect("Hunt places an enemy frog");
-        with_frog_mut(&game.world, enemy_frog, |fr| fr.facing = Facing::Right);
+        let enemy_bong = game.enemy_bong.expect("Hunt places an enemy bong");
+        with_bong_mut(&game.world, enemy_bong, |fr| fr.facing = Facing::Right);
         let mut checked = false;
         for _ in 0..300 {
-            let (pos, range) = with_frog(&game.world, enemy_frog, |fr| (fr.position, fr.attack_range()));
-            // Player 1 parked to the frog's *west*, inside its bite range.
+            let (pos, range) = with_bong(&game.world, enemy_bong, |fr| (fr.position, fr.attack_range()));
+            // Player 1 parked to the bong's *west*, inside its bite range.
             game.debug_teleport(0, Position::new(pos.x - range * 0.5, pos.y), Some(0.0)).expect("player slot");
             step(&mut game, Input::default());
-            let bit = game.events().iter().any(|e| matches!(e, Event::FrogBite { side: Side::Enemy, .. }));
-            let (facing, hopping) = with_frog(&game.world, enemy_frog, |fr| (fr.facing, fr.hop_timer > 0.0));
+            let bit = game.events().iter().any(|e| matches!(e, Event::BongBite { side: Side::Enemy, .. }));
+            let (facing, hopping) = with_bong(&game.world, enemy_bong, |fr| (fr.facing, fr.hop_timer > 0.0));
             if bit && !hopping {
                 assert_eq!(facing, Facing::Left, "the tongue lashed away from the tank it bit");
                 checked = true;
                 break;
             }
         }
-        assert!(checked, "the enemy frog never bit the player parked beside it");
+        assert!(checked, "the enemy bong never bit the player parked beside it");
     }
 
-    /// Walled in on every side, there is nowhere to land and the frog
+    /// Walled in on every side, there is nowhere to land and the bong
     /// simply stays put - the search reports no spot rather than dropping
     /// it into a tile.
     #[test]
-    fn a_boxed_in_frog_stays_put() {
-        let mut text = String::from("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\ncells.\"20,11\" = { kind = \"frog\" }\n");
+    fn a_boxed_in_bong_stays_put() {
+        let mut text = String::from("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\ncells.\"20,11\" = { kind = \"bong\" }\n");
         for col in 18..=22 {
             for row in 9..=13 {
                 if (col, row) != (20, 11) {
@@ -8770,39 +8778,39 @@ cells."20,11" = { kind = "frog" }
             }
         }
         let mut game = game_on(&text, 0, Some(0));
-        let frog = game.frog.expect("the map places a frog");
-        let (start, avoid) = with_frog(&game.world, frog, |fr| (fr.position, fr.avoid_range()));
+        let bong = game.bong.expect("the map places a bong");
+        let (start, avoid) = with_bong(&game.world, bong, |fr| (fr.position, fr.avoid_range()));
         for _ in 0..120 {
             game.debug_teleport(0, Position::new(start.x - avoid * 0.9, start.y), Some(0.0)).expect("player slot");
             step(&mut game, Input::default());
         }
-        let pos = with_frog(&game.world, frog, |fr| fr.position);
-        assert_eq!((pos.x, pos.y), (start.x, start.y), "a boxed-in frog hopped into the walls around it");
+        let pos = with_bong(&game.world, bong, |fr| fr.position);
+        assert_eq!((pos.x, pos.y), (start.x, start.y), "a boxed-in bong hopped into the walls around it");
     }
 
     /// The other side is still fair game, on both sides - the bite reflex
     /// is gated on who the tank belongs to, not switched off.
     #[test]
-    fn a_frog_bites_the_other_side() {
+    fn a_bong_bites_the_other_side() {
         let mut game = hunt_game();
-        let (player_frog, enemy_frog) = (game.frog, game.enemy_frog);
+        let (player_bong, enemy_bong) = (game.bong, game.enemy_bong);
         let enemy = enemy_slot(&game);
-        let bites = bites_while_parked(&mut game, enemy, player_frog, 120);
+        let bites = bites_while_parked(&mut game, enemy, player_bong, 120);
         assert!(
             bites.iter().any(|&(side, slot)| side == Side::Player && slot == enemy),
-            "the player's frog never bit the enemy parked on it: {bites:?}"
+            "the player's bong never bit the enemy parked on it: {bites:?}"
         );
-        let bites = bites_while_parked(&mut game, 0, enemy_frog, 120);
+        let bites = bites_while_parked(&mut game, 0, enemy_bong, 120);
         assert!(
             bites.iter().any(|&(side, slot)| side == Side::Enemy && slot == 0),
-            "the enemy frog never bit the player parked on it: {bites:?}"
+            "the enemy bong never bit the player parked on it: {bites:?}"
         );
-        assert!(player_snapshot(&game).damage > 0.0, "the enemy frog's bites did no damage");
+        assert!(player_snapshot(&game).damage > 0.0, "the enemy bong's bites did no damage");
     }
 
     /// The role roll is skipped entirely at a zero share, so a Destroy
     /// round and a Protect round with no hunters draw the same stream and
-    /// only differ by the frog; every enemy of a Destroy round fights the
+    /// only differ by the bong; every enemy of a Destroy round fights the
     /// player.
     #[test]
     fn destroy_rolls_no_roles_and_hunt_rolls_hunters_or_guards() {
@@ -8844,7 +8852,7 @@ cells."10,12" = { kind = "wall", material = "iron" }
 cells."11,12" = { kind = "wall", material = "iron" }
 cells."12,12" = { kind = "wall", material = "iron" }
 cells."13,12" = { kind = "wall", material = "iron" }
-cells."30,20" = { kind = "frog" }
+cells."30,20" = { kind = "bong" }
 "#;
 
     #[test]
@@ -9034,7 +9042,7 @@ cells."30,20" = { kind = "frog" }
 version = 1
 tanks = 1
 cells."20,11" = { kind = "start" }
-cells."30,20" = { kind = "frog" }
+cells."30,20" = { kind = "bong" }
 "#;
 
     /// Two rooms split by a full-height iron column at col 20, joined only
@@ -9042,7 +9050,7 @@ cells."30,20" = { kind = "frog" }
     /// the other (docs/teleporting.md).
     fn portal_rooms_map(portal_b: bool, tanks: usize) -> String {
         let mut s = format!(
-            "version = 1\ntanks = {tanks}\ncells.\"5,11\" = {{ kind = \"start\" }}\ncells.\"5,8\" = {{ kind = \"frog\" }}\ncells.\"10,11\" = {{ kind = \"portal\" }}\n"
+            "version = 1\ntanks = {tanks}\ncells.\"5,11\" = {{ kind = \"start\" }}\ncells.\"5,8\" = {{ kind = \"bong\" }}\ncells.\"10,11\" = {{ kind = \"portal\" }}\n"
         );
         if portal_b {
             s.push_str("cells.\"30,11\" = { kind = \"portal\" }\n");
@@ -9225,13 +9233,13 @@ cells."30,20" = { kind = "frog" }
     /// (4, 11) facing right, portal A (12, 11) in its line, portal B
     /// (28, 5) on the far side of an iron column at col 20, and a brick
     /// wall at (36, 5) on B's row - in line with A only through the
-    /// portal. A frog keeps the round going.
+    /// portal. A bong keeps the round going.
     const SHOT_PORTALS_MAP: &str = r#"
 version = 1
 size = [40, 22]
 tanks = 0
 cells."4,11" = { kind = "start" }
-cells."4,17" = { kind = "frog" }
+cells."4,17" = { kind = "bong" }
 cells."12,11" = { kind = "portal" }
 cells."28,5" = { kind = "portal" }
 cells."36,5" = { kind = "wall", material = "brick" }
@@ -9398,7 +9406,7 @@ version = 1
 tanks = 1
 cells."10,10" = { kind = "start" }
 cells."11,10" = { kind = "pickup", pickup = "health" }
-cells."30,20" = { kind = "frog" }
+cells."30,20" = { kind = "bong" }
 "#;
         let mut game = game_on(MAP, 1, Some(0));
         // Park the player far away so only the enemy can reach the pack.
@@ -9431,7 +9439,7 @@ version = 1
 tanks = 0
 cells."10,10" = { kind = "start" }
 cells."11,10" = { kind = "pickup", pickup = "health" }
-cells."30,20" = { kind = "frog" }
+cells."30,20" = { kind = "bong" }
 "#;
         let mut game = game_on(MAP, 0, Some(0));
         let player = game.player().expect("a player exists");
@@ -9453,21 +9461,21 @@ cells."30,20" = { kind = "frog" }
 
     /// An enemy keeps off what it would leave lying and nothing it would
     /// take - the collection rule (`TakeRules`), side rules and all: in a
-    /// Protect round it has no frog, so it takes a frog pack (and wastes
+    /// Protect round it has no bong, so it takes a bong pack (and wastes
     /// it) and does not go round one; in a Hunt round it goes round the
-    /// pack while its own frog is whole and not once it is hurt. Kept, the
+    /// pack while its own bong is whole and not once it is hurt. Kept, the
     /// pack's cells are the 2 x 2 round the corner it stands on.
     #[test]
-    fn an_enemy_keeps_off_a_frog_pack_only_while_it_would_leave_it() {
-        assert!(kept_off(&game_on(FROG_PACK_MAP, 1, Some(0))).is_empty(), "no frog of its own: it takes the pack");
+    fn an_enemy_keeps_off_a_bong_pack_only_while_it_would_leave_it() {
+        assert!(kept_off(&game_on(BONG_PACK_MAP, 1, Some(0))).is_empty(), "no bong of its own: it takes the pack");
 
-        let game = game_on(FROG_PACK_HUNT_MAP, 1, Some(0));
+        let game = game_on(BONG_PACK_HUNT_MAP, 1, Some(0));
         let mut pack: Vec<(usize, usize)> = game.route_grid(W, H).cells_under(map::cell_to_world(11, 10), 16.0).collect();
         pack.sort_unstable();
         assert_eq!(pack.len(), 4);
-        assert_eq!(kept_off(&game), pack, "its frog is whole: it would leave the pack");
-        hurt_frog(&game, game.enemy_frog.expect("Hunt has an enemy frog"), 25.0);
-        assert!(kept_off(&game).is_empty(), "its frog is hurt: it would take the pack");
+        assert_eq!(kept_off(&game), pack, "its bong is whole: it would leave the pack");
+        hurt_bong(&game, game.enemy_bong.expect("Hunt has an enemy bong"), 25.0);
+        assert!(kept_off(&game).is_empty(), "its bong is hurt: it would take the pack");
     }
 
     /// The whole AI, not just the router: an enemy chasing the player
@@ -9481,7 +9489,7 @@ cells."30,20" = { kind = "frog" }
 version = 1
 tanks = 1
 cells."28,10" = { kind = "start" }
-cells."20,20" = { kind = "frog" }
+cells."20,20" = { kind = "bong" }
 "#;
         let spot = map::cell_to_world(10, 10);
         // The frames the enemy's hull is over the crate's square, until it
@@ -9530,7 +9538,7 @@ version = 1
 tanks = 1
 cells."38,20" = { kind = "start" }
 cells."12,10" = { kind = "pickup", pickup = "laser" }
-cells."30,2" = { kind = "frog" }
+cells."30,2" = { kind = "bong" }
 "#;
         let mut game = game_on(MAP, 1, None);
         let enemy = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().expect("an enemy");
@@ -9568,7 +9576,7 @@ version = 1
 tanks = 2
 cells."38,20" = { kind = "start" }
 cells."8,4" = { kind = "pickup", pickup = "laser" }
-cells."30,2" = { kind = "frog" }
+cells."30,2" = { kind = "bong" }
 "#;
         let mut game = game_on(MAP, 2, None);
         let slots: Vec<usize> = enemy_actions(&game).iter().map(|&(slot, _)| slot).collect();
@@ -9612,7 +9620,7 @@ cells."30,2" = { kind = "frog" }
     #[test]
     fn an_enemy_gives_up_a_crate_it_cannot_get_to() {
         let mut map = String::from(
-            "version = 1\ntanks = 1\ncells.\"38,20\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"pickup\", pickup = \"laser\" }\ncells.\"30,2\" = { kind = \"frog\" }\n",
+            "version = 1\ntanks = 1\ncells.\"38,20\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"pickup\", pickup = \"laser\" }\ncells.\"30,2\" = { kind = \"bong\" }\n",
         );
         for c in 8..=12 {
             for r in 8..=12 {
@@ -9645,36 +9653,36 @@ cells."30,2" = { kind = "frog" }
         assert_eq!(with_tank(&game.world, entity, |t| t.active_weapon()), ActiveWeapon::Shell, "and never got it");
     }
 
-    // --- The frog health pack (docs/frog-health-pack-prd.md) ---
+    // --- The bong health pack (docs/bong-health-pack-prd.md) ---
 
-    /// The player starts one cell from a frog pack, so the collect test is
-    /// one `step`. The frog is far enough away that nothing else reaches
+    /// The player starts one cell from a bong pack, so the collect test is
+    /// one `step`. The bong is far enough away that nothing else reaches
     /// it. `tanks = 1` so there is an enemy to teleport onto the pack.
-    const FROG_PACK_MAP: &str = r#"
+    const BONG_PACK_MAP: &str = r#"
 version = 1
 tanks = 1
 cells."10,10" = { kind = "start" }
-cells."11,10" = { kind = "pickup", pickup = "frog_health" }
-cells."30,20" = { kind = "frog" }
+cells."11,10" = { kind = "pickup", pickup = "bong_health" }
+cells."30,20" = { kind = "bong" }
 "#;
 
-    /// Same, as a Hunt round: the enemy has a frog of its own to heal.
-    const FROG_PACK_HUNT_MAP: &str = r#"
+    /// Same, as a Hunt round: the enemy has a bong of its own to heal.
+    const BONG_PACK_HUNT_MAP: &str = r#"
 version = 1
 tanks = 1
 mission.kind = "hunt"
 cells."10,10" = { kind = "start" }
-cells."11,10" = { kind = "pickup", pickup = "frog_health" }
-cells."30,20" = { kind = "frog" }
-cells."4,4" = { kind = "enemy_frog" }
+cells."11,10" = { kind = "pickup", pickup = "bong_health" }
+cells."30,20" = { kind = "bong" }
+cells."4,4" = { kind = "enemy_bong" }
 "#;
 
-    fn hurt_frog(game: &Game, entity: Entity, amount: f32) {
-        with_frog_mut(&game.world, entity, |f| f.damage(amount));
+    fn hurt_bong(game: &Game, entity: Entity, amount: f32) {
+        with_bong_mut(&game.world, entity, |f| f.damage(amount));
     }
 
-    fn frog_health(game: &Game, entity: Entity) -> f32 {
-        with_frog(&game.world, entity, |f| f.health)
+    fn bong_health(game: &Game, entity: Entity) -> f32 {
+        with_bong(&game.world, entity, |f| f.health)
     }
 
     /// Health packs specifically. A Health slot also rolls a bonus shield
@@ -9685,7 +9693,7 @@ cells."4,4" = { kind = "enemy_frog" }
     }
 
     fn packs_on_field(game: &Game) -> usize {
-        game.world.query::<&Pickup>().iter().filter(|p| p.kind == PickupKind::FrogHealth).count()
+        game.world.query::<&Pickup>().iter().filter(|p| p.kind == PickupKind::BongHealth).count()
     }
 
     /// Drive `slot`'s tank onto the pack's cell and advance one frame.
@@ -9695,22 +9703,22 @@ cells."4,4" = { kind = "enemy_frog" }
     }
 
     #[test]
-    fn a_frog_pack_restores_the_players_hurt_frog_to_full() {
-        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
-        let frog = game.frog.expect("a Protect round has a frog");
-        // Init already collected nothing: the frog is pristine, so the
+    fn a_bong_pack_restores_the_players_hurt_bong_to_full() {
+        let mut game = game_on(BONG_PACK_MAP, 1, Some(0));
+        let bong = game.bong.expect("a Protect round has a bong");
+        // Init already collected nothing: the bong is pristine, so the
         // pack must still be there.
         assert_eq!(packs_on_field(&game), 1);
-        hurt_frog(&game, frog, 25.0);
-        let hurt = frog_health(&game, frog);
-        assert!(hurt < tuning().frog_max_health);
+        hurt_bong(&game, bong, 25.0);
+        let hurt = bong_health(&game, bong);
+        assert!(hurt < tuning().bong_max_health);
         step(&mut game, Input::default());
-        assert_eq!(frog_health(&game, frog), tuning().frog_max_health, "one pack is a full heal");
+        assert_eq!(bong_health(&game, bong), tuning().bong_max_health, "one pack is a full heal");
         assert_eq!(packs_on_field(&game), 0, "the pack was consumed");
         assert!(
             game.events()
                 .iter()
-                .any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::FrogHealth, .. })),
+                .any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::BongHealth, .. })),
             "{:?}",
             game.events()
         );
@@ -9718,133 +9726,133 @@ cells."4,4" = { kind = "enemy_frog" }
             .events()
             .iter()
             .find_map(|e| match e {
-                Event::FrogHealed { side, amount, .. } => Some((*side, *amount)),
+                Event::BongHealed { side, amount, .. } => Some((*side, *amount)),
                 _ => None,
             })
             .expect("a heal reports itself");
         assert_eq!(healed.0, Side::Player);
-        assert!((healed.1 - (tuning().frog_max_health - hurt)).abs() < 0.01, "{healed:?}");
+        assert!((healed.1 - (tuning().bong_max_health - hurt)).abs() < 0.01, "{healed:?}");
     }
 
     #[test]
-    fn a_frog_pack_is_left_on_the_field_while_the_frog_is_at_full_health() {
-        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
+    fn a_bong_pack_is_left_on_the_field_while_the_bong_is_at_full_health() {
+        let mut game = game_on(BONG_PACK_MAP, 1, Some(0));
         for _ in 0..30 {
             step(&mut game, Input::default());
         }
-        assert_eq!(packs_on_field(&game), 1, "a pristine frog does not spend the pack");
+        assert_eq!(packs_on_field(&game), 1, "a pristine bong does not spend the pack");
         assert!(!game.events().iter().any(|e| matches!(e, Event::PickupCollected { .. })));
     }
 
-    /// The pack is the frog's, not the collector's: a tank at full health
-    /// still picks one up for a hurt frog, and takes nothing from it.
+    /// The pack is the bong's, not the collector's: a tank at full health
+    /// still picks one up for a hurt bong, and takes nothing from it.
     #[test]
-    fn a_frog_pack_heals_the_frog_and_never_the_tank_that_took_it() {
-        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
-        let frog = game.frog.expect("a Protect round has a frog");
-        hurt_frog(&game, frog, 25.0);
+    fn a_bong_pack_heals_the_bong_and_never_the_tank_that_took_it() {
+        let mut game = game_on(BONG_PACK_MAP, 1, Some(0));
+        let bong = game.bong.expect("a Protect round has a bong");
+        hurt_bong(&game, bong, 25.0);
         let player = game.player().expect("a player exists");
         with_tank_mut(&game.world, player, |t| t.damage = 30.0);
         step(&mut game, Input::default());
-        assert_eq!(frog_health(&game, frog), tuning().frog_max_health);
+        assert_eq!(bong_health(&game, bong), tuning().bong_max_health);
         assert_eq!(with_tank(&game.world, player, |t| t.damage), 30.0, "the tank's own health is untouched");
     }
 
-    /// Protect gives the enemies no frog, so an enemy that drives over a
+    /// Protect gives the enemies no bong, so an enemy that drives over a
     /// pack consumes it for nothing - the denial pressure that makes the
     /// pack worth racing for.
     #[test]
-    fn an_enemy_with_no_frog_of_its_own_wastes_the_pack() {
-        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
-        let frog = game.frog.expect("a Protect round has a frog");
-        hurt_frog(&game, frog, 25.0);
-        let hurt = frog_health(&game, frog);
+    fn an_enemy_with_no_bong_of_its_own_wastes_the_pack() {
+        let mut game = game_on(BONG_PACK_MAP, 1, Some(0));
+        let bong = game.bong.expect("a Protect round has a bong");
+        hurt_bong(&game, bong, 25.0);
+        let hurt = bong_health(&game, bong);
         // Park the player far away so only the enemy can reach the pack.
         game.debug_teleport(0, map::cell_to_world(30, 5), None).expect("the player exists");
         let enemy = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().unwrap();
         collect_with(&mut game, enemy);
         assert_eq!(packs_on_field(&game), 0, "the enemy took it");
-        assert_eq!(frog_health(&game, frog), hurt, "and healed nothing");
-        assert!(!game.events().iter().any(|e| matches!(e, Event::FrogHealed { .. })));
+        assert_eq!(bong_health(&game, bong), hurt, "and healed nothing");
+        assert!(!game.events().iter().any(|e| matches!(e, Event::BongHealed { .. })));
     }
 
-    /// Hunt gives both sides a frog, and each heals only its own.
+    /// Hunt gives both sides a bong, and each heals only its own.
     #[test]
-    fn an_enemy_in_a_hunt_round_heals_the_enemy_frog_and_not_the_players() {
-        let mut game = game_on(FROG_PACK_HUNT_MAP, 1, Some(0));
-        let frog = game.frog.expect("Hunt has a player frog");
-        let enemy_frog = game.enemy_frog.expect("Hunt has an enemy frog");
-        hurt_frog(&game, frog, 25.0);
-        hurt_frog(&game, enemy_frog, 25.0);
-        let player_hurt = frog_health(&game, frog);
+    fn an_enemy_in_a_hunt_round_heals_the_enemy_bong_and_not_the_players() {
+        let mut game = game_on(BONG_PACK_HUNT_MAP, 1, Some(0));
+        let bong = game.bong.expect("Hunt has a player bong");
+        let enemy_bong = game.enemy_bong.expect("Hunt has an enemy bong");
+        hurt_bong(&game, bong, 25.0);
+        hurt_bong(&game, enemy_bong, 25.0);
+        let player_hurt = bong_health(&game, bong);
         game.debug_teleport(0, map::cell_to_world(30, 5), None).expect("the player exists");
         let enemy = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().unwrap();
         collect_with(&mut game, enemy);
-        assert_eq!(frog_health(&game, enemy_frog), tuning().frog_max_health, "the enemy healed its own frog");
-        assert_eq!(frog_health(&game, frog), player_hurt, "and left the player's alone");
+        assert_eq!(bong_health(&game, enemy_bong), tuning().bong_max_health, "the enemy healed its own bong");
+        assert_eq!(bong_health(&game, bong), player_hurt, "and left the player's alone");
         assert!(
-            game.events().iter().any(|e| matches!(e, Event::FrogHealed { side: Side::Enemy, .. })),
+            game.events().iter().any(|e| matches!(e, Event::BongHealed { side: Side::Enemy, .. })),
             "{:?}",
             game.events()
         );
     }
 
     #[test]
-    fn a_frog_pack_does_not_revive_a_dead_frog() {
-        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
-        let frog = game.frog.expect("a Protect round has a frog");
-        hurt_frog(&game, frog, tuning().frog_max_health);
-        assert!(with_frog(&game.world, frog, Frog::is_dead));
+    fn a_bong_pack_does_not_revive_a_dead_bong() {
+        let mut game = game_on(BONG_PACK_MAP, 1, Some(0));
+        let bong = game.bong.expect("a Protect round has a bong");
+        hurt_bong(&game, bong, tuning().bong_max_health);
+        assert!(with_bong(&game.world, bong, Bong::is_dead));
         step(&mut game, Input::default());
-        assert_eq!(frog_health(&game, frog), 0.0, "a dead frog stays dead");
-        assert!(with_frog(&game.world, frog, Frog::is_dead));
-        // A dead frog is not "full": the pack is taken like any other side
+        assert_eq!(bong_health(&game, bong), 0.0, "a dead bong stays dead");
+        assert!(with_bong(&game.world, bong, Bong::is_dead));
+        // A dead bong is not "full": the pack is taken like any other side
         // with nothing to heal, and wasted.
         assert_eq!(packs_on_field(&game), 0);
-        assert!(!game.events().iter().any(|e| matches!(e, Event::FrogHealed { .. })));
+        assert!(!game.events().iter().any(|e| matches!(e, Event::BongHealed { .. })));
     }
 
-    /// The bonus drop: a hurt frog can put a pack beside a respawning
+    /// The bonus drop: a hurt bong can put a pack beside a respawning
     /// health slot, a pristine one never does. The player is parked next
     /// to the health slot so it is collected and respawns over and over,
     /// giving the roll many chances.
     #[test]
-    fn the_bonus_pack_rolls_only_while_the_frog_is_hurt() {
+    fn the_bonus_pack_rolls_only_while_the_bong_is_hurt() {
         const MAP: &str = r#"
 version = 1
 tanks = 0
 cells."10,10" = { kind = "start" }
 cells."11,10" = { kind = "pickup", pickup = "health" }
-cells."30,20" = { kind = "frog" }
+cells."30,20" = { kind = "bong" }
 "#;
         let frames = (tuning().pickup_respawn_seconds * 60.0) as u32 * 8 + 120;
 
         let mut hurt = game_on(MAP, 0, Some(0));
-        let frog = hurt.frog.expect("a Protect round has a frog");
+        let bong = hurt.bong.expect("a Protect round has a bong");
         let mut saw_pack = false;
         for _ in 0..frames {
             // Held hurt on purpose: a pack the player picks up would
             // otherwise close the gate after the very first drop.
-            with_frog_mut(&hurt.world, frog, |f| f.health = f.max_health * 0.5);
+            with_bong_mut(&hurt.world, bong, |f| f.health = f.max_health * 0.5);
             step(&mut hurt, Input::default());
             saw_pack |= packs_on_field(&hurt) > 0;
         }
-        assert!(saw_pack, "a hurt frog eventually draws a bonus pack");
+        assert!(saw_pack, "a hurt bong eventually draws a bonus pack");
 
         let mut pristine = game_on(MAP, 0, Some(0));
         for _ in 0..frames {
             step(&mut pristine, Input::default());
-            assert_eq!(packs_on_field(&pristine), 0, "a pristine frog never gets one");
+            assert_eq!(packs_on_field(&pristine), 0, "a pristine bong never gets one");
         }
     }
 
     /// The gate sits *before* the roll, which is what keeps every round
-    /// whose frog is never hurt byte-identical to the same seed before
-    /// this pickup existed (docs/frog-health-pack-prd.md section 6). Tested
-    /// as it is stated: a pristine frog's health slot must leave the RNG
+    /// whose bong is never hurt byte-identical to the same seed before
+    /// this pickup existed (docs/bong-health-pack-prd.md section 6). Tested
+    /// as it is stated: a pristine bong's health slot must leave the RNG
     /// exactly where the shield's own roll alone leaves it.
     #[test]
-    fn a_pristine_frogs_health_slot_draws_no_more_rng_than_the_shield_roll_alone() {
+    fn a_pristine_bongs_health_slot_draws_no_more_rng_than_the_shield_roll_alone() {
         let map = MapFile::from_toml_str("version = 1\ncells.\"10,10\" = { kind = \"start\" }\n").expect("parses");
         let slot = map::cell_to_world(11, 10);
         let (mut with_gate, mut shield_only) = (SmallRng::seed_from_u64(99), SmallRng::seed_from_u64(99));
@@ -9855,7 +9863,7 @@ cells."30,20" = { kind = "frog" }
         assert_eq!(
             with_gate.random::<u64>(),
             shield_only.random::<u64>(),
-            "a pristine frog must add no draw of its own"
+            "a pristine bong must add no draw of its own"
         );
     }
 
@@ -9914,7 +9922,7 @@ cells."10,12" = { kind = "wall", material = "brick" }
 cells."11,12" = { kind = "wall", material = "brick" }
 cells."12,12" = { kind = "wall", material = "brick" }
 cells."24,14" = { kind = "start" }
-cells."30,20" = { kind = "frog" }
+cells."30,20" = { kind = "bong" }
 "#;
 
     #[test]
@@ -9964,7 +9972,7 @@ cells."21,8" = { kind = "wall", material = "iron" }
         /// It burst on the iron.
         burst_on_iron: bool,
         /// It met something after a ricochet: the boundary wall, or on a
-        /// seed that puts the frog in its way, the frog.
+        /// seed that puts the bong in its way, the bong.
         landed_after: bool,
     }
 
@@ -10104,7 +10112,7 @@ cells."10,12" = { kind = "wall", material = "iron" }
 cells."11,12" = { kind = "wall", material = "iron" }
 cells."12,12" = { kind = "wall", material = "iron" }
 cells."13,12" = { kind = "wall", material = "iron" }
-cells."30,20" = { kind = "frog" }
+cells."30,20" = { kind = "bong" }
 "#;
 
     fn player_snapshot(game: &Game) -> TankSnapshot {
@@ -11188,12 +11196,12 @@ cells."30,20" = { kind = "frog" }
         assert!(!game.is_entering(game.tank_entity_by_slot(control).unwrap()), "the tank near the fight stays");
     }
 
-    /// The straggler's exemptions: a guard while the frog it keeps lives,
+    /// The straggler's exemptions: a guard while the bong it keeps lives,
     /// a hull still burning, and one an EMP has coasting with its brain off
     /// (docs/emp-burst.md), are never taken off - though each is lost, a
     /// long walk from the fight and on no screen, as a straggler is.
     #[test]
-    fn a_guard_keeping_its_frog_a_burning_hull_and_a_disabled_one_are_never_rolled_in_again() {
+    fn a_guard_keeping_its_bong_a_burning_hull_and_a_disabled_one_are_never_rolled_in_again() {
         for exempt in ["guard", "burning", "disabled"] {
             let mut game = Game::default();
             game.seed_override = Some(7);
@@ -11225,8 +11233,8 @@ cells."30,20" = { kind = "frog" }
             });
             let entity = game.tank_entity_by_slot(straggler).expect("the straggler");
             if exempt == "guard" {
-                let frog = game.enemy_frog.expect("a Hunt round keeps an enemy frog");
-                assert!(with_frog(&game.world, frog, |fr| !fr.is_dead()), "its frog lives");
+                let bong = game.enemy_bong.expect("a Hunt round keeps an enemy bong");
+                assert!(with_bong(&game.world, bong, |fr| !fr.is_dead()), "its bong lives");
                 game.world.get::<&mut Ai>(entity).expect("an enemy").role = Role::Guard;
             } else if exempt == "disabled" {
                 with_tank_mut(&game.world, entity, |tank| {
@@ -11278,7 +11286,7 @@ cells."30,20" = { kind = "frog" }
 
     /// A flow field worked out only as far as the round reads it routes
     /// every enemy as the whole field does: the same seeded round on
-    /// longwater - two seats, so two fields and the frog's, its first wave
+    /// longwater - two seats, so two fields and the bong's, its first wave
     /// rolling in a long walk out and called across the map to the fort -
     /// with every field settled whole as each frame's grid is built and
     /// without, tank for tank and bit for bit.

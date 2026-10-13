@@ -870,7 +870,7 @@ async fn a_round_that_ends_plays_its_end_screen_out_and_comes_back_to_the_lobby(
     // the room says the round is over.
     let played = play_to_the_end(&mut host, first.snapshot.clone()).await;
 
-    assert_eq!(played.ended, Some(RoundOutcome::Won), "the hunt is won by killing the enemy frog");
+    assert_eq!(played.ended, Some(RoundOutcome::Won), "the hunt is won by killing the enemy bong");
     let (mut guest, guest_outcome) = tokio::time::timeout(WAIT, listening).await.expect("the guest heard the room").unwrap();
     assert_eq!(guest_outcome, RoundOutcome::Won, "every seat is told, not just the one that was playing");
 

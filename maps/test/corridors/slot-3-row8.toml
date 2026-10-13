@@ -21,9 +21,9 @@ tanks = 4
 mission.kind = "protect"
 spawn.kind = "band"
 
-# player right of the divider, frog left, so neither ever plugs the slot
+# player right of the divider, bong left, so neither ever plugs the slot
 cells."30,11" = { kind = "start" }
-cells."8,11" = { kind = "frog" }
+cells."8,11" = { kind = "bong" }
 
 # the divider: col 20, every row but the slot (8..10)
 cells."20,0" = { kind = "wall", material = "iron" }

@@ -53,7 +53,7 @@ cells."20,11" = { kind = "wall", material = "iron" }
 cells."21,11" = { kind = "wall", material = "iron" }
 cells."22,11" = { kind = "wall", material = "iron" }
 cells."23,11" = { kind = "wall", material = "iron" }
-cells."33,11" = { kind = "frog" }
+cells."33,11" = { kind = "bong" }
 cells."12,12" = { kind = "wall", material = "iron" }
 cells."12,13" = { kind = "wall", material = "iron" }
 cells."12,14" = { kind = "wall", material = "iron" }

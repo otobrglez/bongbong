@@ -16,7 +16,7 @@ use super::chrome::{
 };
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
-use crate::frog::FrogAnim;
+use crate::bong::{BongAnim, BongKind, Side};
 use crate::hud::{Hints, BAR_FILL, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
 use crate::math::{Color, Rectangle};
 use crate::obstacle;
@@ -97,7 +97,11 @@ pub struct EditorTextures<'a> {
     /// The tall-grass sheet of the canvas map's theme
     /// (`Theme::grass_texture_path`).
     pub grass: &'a Texture2D,
-    pub frog_idle: &'a Texture2D,
+    /// The idle filmstrip of the players' bong the canvas map picks
+    /// (`MapFile::bong_kind`), for its cell and the BONG tool.
+    pub bong_idle: &'a Texture2D,
+    /// The same for the enemy's bong, for its cell and the ENEMY BONG tool.
+    pub enemy_bong_idle: &'a Texture2D,
     /// static/crates_sheet.png - the pickups' crates, a row per kind.
     pub crates: &'a Texture2D,
     /// static/pickup_glyphs.png - the crates' symbols on their own: a
@@ -196,7 +200,7 @@ fn hold<'a>(
 
 /// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
 /// game. It holds the sheets a map can show at rest; a sheet only a live
-/// round draws from (damage, blasts, the frog's other clips) is a
+/// round draws from (damage, blasts, the bong's other clips) is a
 /// programming error here.
 impl Sheets for EditorTextures<'_> {
     fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
@@ -219,13 +223,14 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Tanks => self.tanks,
             Sheet::Crates => self.crates,
             Sheet::PickupGlyphs => self.pickup_glyphs,
-            Sheet::Frog { clip: FrogAnim::Idle, .. } => self.frog_idle,
+            Sheet::Bong { clip: BongAnim::Idle, kind } if kind.side() == Side::Enemy => self.enemy_bong_idle,
+            Sheet::Bong { clip: BongAnim::Idle, .. } => self.bong_idle,
             Sheet::TankGlow
             | Sheet::TankModules
             | Sheet::TankModulesGlow
             | Sheet::BarrelExplosion
             | Sheet::Aircraft
-            | Sheet::Frog { .. } => {
+            | Sheet::Bong { .. } => {
                 panic!("the builder has no {sheet:?} sheet")
             }
         }
@@ -1524,9 +1529,9 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             // The pack's flat water, straight off the theme's tileset.
             d.draw_texture_pro(textures.ground, ground::water_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
-        Tool::Frog => {
-            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-            d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        Tool::Bong => {
+            let src = Rectangle::new(0.0, 0.0, crate::BONG_TEXTURE_SIZE, crate::BONG_TEXTURE_SIZE);
+            d.draw_texture_pro(textures.bong_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Start => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
@@ -1542,11 +1547,11 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
                 d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             }
         }
-        Tool::EnemyFrog => {
+        Tool::EnemyBong => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
             draw_enemy_ring(d, center, dest.width / 2.0, 255);
-            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-            d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            let src = Rectangle::new(0.0, 0.0, crate::BONG_TEXTURE_SIZE, crate::BONG_TEXTURE_SIZE);
+            d.draw_texture_pro(textures.enemy_bong_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Gate => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
@@ -1789,7 +1794,7 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let big = crate::TREE_TEXTURE_SIZE;
             let dest = Rectangle::new(pos.x, pos.y, big, big);
             let origin = Vector2::new(big / 2.0, big / 2.0);
-            let reach = if side == crate::frog::Side::Enemy { Color::new(230, 60, 60, 70) } else { Color::new(77, 155, 230, 70) };
+            let reach = if side == crate::bong::Side::Enemy { Color::new(230, 60, 60, 70) } else { Color::new(77, 155, 230, 70) };
             d.draw_circle_lines(pos.x as i32, pos.y as i32, kind.range(), faded(reach));
             for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
                 d.draw_texture_pro(textures.towers, src, dest, origin, 0.0, tint);
@@ -1839,9 +1844,9 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let src = crate::grass::bush_source_rec(bush, textures.theme);
             d.draw_texture_pro(textures.bushes, src, dest, origin, 0.0, tint);
         }
-        CellObject::Frog => {
-            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-            d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, tint);
+        CellObject::Bong => {
+            let src = Rectangle::new(0.0, 0.0, crate::BONG_TEXTURE_SIZE, crate::BONG_TEXTURE_SIZE);
+            d.draw_texture_pro(textures.bong_idle, src, dest, origin, 0.0, tint);
         }
         CellObject::Start | CellObject::Start2 => {
             let player = u8::from(*obj == CellObject::Start2);
@@ -1850,10 +1855,10 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
                 d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, tint);
             }
         }
-        CellObject::EnemyFrog => {
+        CellObject::EnemyBong => {
             draw_enemy_ring(d, pos, size / 2.0, alpha);
-            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-            d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, tint);
+            let src = Rectangle::new(0.0, 0.0, crate::BONG_TEXTURE_SIZE, crate::BONG_TEXTURE_SIZE);
+            d.draw_texture_pro(textures.enemy_bong_idle, src, dest, origin, 0.0, tint);
         }
         CellObject::Gate => match gate_inward(pos, field.0, field.1) {
             Some(inward) => draw_gate_chevron(d, pos, size, inward, faded(GATE_COLOR)),
@@ -1990,7 +1995,7 @@ fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &
 }
 
 /// The enemy side's marker colour - the red ground ring the game draws
-/// under the enemy frog, so an `enemy_frog` cell reads the same here.
+/// under the enemy bong, so an `enemy_bong` cell reads the same here.
 const ENEMY_RING_COLOR: Color = Color::new(230, 60, 60, 220);
 
 const GATE_COLOR: Color = Color::ORANGE;
@@ -2008,7 +2013,7 @@ fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, alpha
     d.draw_circle_v(center, radius * 0.75, scaled(Color::new(230, 60, 60, 50), alpha));
 }
 
-/// A player's team-coloured ring, the same shape as the enemy frog's red
+/// A player's team-coloured ring, the same shape as the enemy bong's red
 /// one, under the start markers: a `start` cell reads as "a tank, the blue
 /// one" and `start2` as the pink one, the colours the tanks will be.
 fn draw_player_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, player: usize, alpha: u8) {
@@ -2095,6 +2100,8 @@ impl MapField {
             MapField::Tanks => auto(s.tanks.map(|n| n.to_string()), false),
             MapField::Tank => auto(s.tank.map(|k| t.named("tank", k.name())), false),
             MapField::Tank2 => auto(s.tank2.map(|k| t.named("tank", k.name())), false),
+            MapField::Bong => t.get(bong_shown(s.bong, Side::Player).title()),
+            MapField::EnemyBong => t.get(bong_shown(s.enemy_bong, Side::Enemy).title()),
             MapField::Waves => auto(s.waves.map(|n| n.to_string()), true),
             MapField::Size => auto(s.size.map(|n| n.to_string()), true),
             MapField::Growth => auto(s.growth.map(|n| n.to_string()), true),
@@ -2112,6 +2119,8 @@ impl MapField {
             MapField::Tanks => o.tanks,
             MapField::Tank => o.tank,
             MapField::Tank2 => o.tank2,
+            // No CLI flag names a bong: the map is the only source.
+            MapField::Bong | MapField::EnemyBong => false,
             MapField::Mission => o.mission,
             MapField::Spawn => o.spawn,
             MapField::Waves => o.waves,
@@ -2128,6 +2137,12 @@ impl MapField {
             MapField::Width | MapField::Height | MapField::Anchor => false,
         }
     }
+}
+
+/// The bong a BONG stepper shows: the one the map plays for `side`
+/// (`MapFile::bong_kind`), its default when it names none.
+fn bong_shown(named: Option<BongKind>, side: Side) -> BongKind {
+    named.filter(|k| k.side() == side).unwrap_or_else(|| BongKind::default_for(side))
 }
 
 /// A sky tile's name: the sky's in capitals (`sky_label_text`).

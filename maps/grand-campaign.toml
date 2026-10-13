@@ -7,15 +7,16 @@
 # rolling in through six gates on the north, east and south edges. The largest
 # field in the set, and every system in the game on it: a river running out of
 # the northern hills into a lake and on to the south edge, a walled fort on
-# the lake shore where the frog lives, a market town to the north-east, an oil
+# the lake shore where the bong lives, a market town to the north-east, an oil
 # depot wired with fuses to the south-east, a pine forest to the south-west.
 #
 # A pair of portals links the forest to the depot for a fast flank. Laser and
-# missiles in the town, flamethrower at the depot, shield and frog health in
+# missiles in the town, flamethrower at the depot, shield and bong health in
 # the fort, a rod from god on the lake shore beside it, health and ammo along
 # the roads.
 
 version = 1
+bong = "spike"
 size = [67, 34]
 tank = "leviathan"
 tank2 = "titan"
@@ -303,7 +304,7 @@ cells."29,13" = { kind = "water" }
 cells."30,13" = { kind = "water" }
 cells."31,13" = { kind = "road" }
 cells."32,13" = { kind = "road" }
-cells."42,13" = { kind = "pickup", pickup = "frog_health" }
+cells."42,13" = { kind = "pickup", pickup = "bong_health" }
 cells."43,13" = { kind = "sandbag" }
 cells."44,13" = { kind = "wall", material = "brick" }
 cells."45,13" = { kind = "wall", material = "brick" }
@@ -327,7 +328,7 @@ cells."29,14" = { kind = "water" }
 cells."30,14" = { kind = "water" }
 cells."31,14" = { kind = "water" }
 cells."32,14" = { kind = "road" }
-cells."39,14" = { kind = "frog" }
+cells."39,14" = { kind = "bong" }
 cells."45,14" = { kind = "wall", material = "brick" }
 cells."49,14" = { kind = "wall", material = "wood" }
 cells."50,14" = { kind = "wall", material = "glass" }

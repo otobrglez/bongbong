@@ -1,5 +1,5 @@
 //! The flamethrower's stream (docs/flamethrower-prd.md): what one frame
-//! of a held trigger does to the tanks, the frogs and the ground and
+//! of a held trigger does to the tanks, the bongs and the ground and
 //! tiles inside its cone, plus the afterburn it leaves on a hull.
 //!
 //! Kept out of `combat.rs` and `props.rs` because it is the one weapon
@@ -26,7 +26,7 @@ use super::props::{arm_fuse, DamageCause};
 use super::weapons::FlameJet;
 use super::{Event, Frame, Game, HitTarget};
 use crate::ai::Ai;
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::map::cell_to_world;
 use crate::obstacle::{face_toward, Obstacle};
 use crate::shockwave::Shockwave;
@@ -102,7 +102,7 @@ fn cell_of(p: Position) -> (i32, i32) {
 
 impl Game {
     /// The flamethrower phase: resolve this frame's jets against tanks,
-    /// frogs, ground and tiles; tick the afterburn on every burning hull;
+    /// bongs, ground and tiles; tick the afterburn on every burning hull;
     /// cool everything the stream is not on. Runs only while the round
     /// is live - on the end screen nothing fires and nothing burns down.
     pub(super) fn resolve_flames(&mut self, f: &mut Frame) {
@@ -119,7 +119,7 @@ impl Game {
             kept.push(FlameJet { reach, ..*jet });
         }
 
-        // --- Tanks and frogs in a cone. ---
+        // --- Tanks and bongs in a cone. ---
         let mut touched: Vec<Entity> = Vec::new();
         for (cone, jet) in &cones {
             let targets: Vec<Entity> = self
@@ -166,25 +166,25 @@ impl Game {
                     }
                 }
             }
-            if t.flame_frog_damage_per_second > 0.0 {
+            if t.flame_bong_damage_per_second > 0.0 {
                 let mut dead_at = Vec::new();
-                for (entity, frog) in self.world.query::<(Entity, &mut Frog)>().iter() {
-                    if frog.is_dead() || !cone.contains(frog.position, OBSTACLE_GRID_SIZE * 0.25) {
+                for (entity, bong) in self.world.query::<(Entity, &mut Bong)>().iter() {
+                    if bong.is_dead() || !cone.contains(bong.position, OBSTACLE_GRID_SIZE * 0.25) {
                         continue;
                     }
-                    frog.damage(t.flame_frog_damage_per_second * f.dt);
+                    bong.damage(t.flame_bong_damage_per_second * f.dt);
                     let entered = !self.flame_contacts.contains(&entity);
                     touched.push(entity);
-                    if entered || frog.is_dead() {
-                        let target = HitTarget::Frog { side: frog.side };
-                        f.events.push(Event::Hit { target, damage: 0.0, killed: frog.is_dead(), x: frog.position.x, y: frog.position.y, cause: super::HitCause::Flame });
+                    if entered || bong.is_dead() {
+                        let target = HitTarget::Bong { side: bong.side };
+                        f.events.push(Event::Hit { target, damage: 0.0, killed: bong.is_dead(), x: bong.position.x, y: bong.position.y, cause: super::HitCause::Flame });
                     }
-                    if frog.is_dead() {
-                        dead_at.push(frog.position);
+                    if bong.is_dead() {
+                        dead_at.push(bong.position);
                     }
                 }
                 for pos in dead_at {
-                    f.shocks.push(Shockwave::scaled(pos, super::SHOCK_FROG));
+                    f.shocks.push(Shockwave::scaled(pos, super::SHOCK_BONG));
                 }
             }
         }

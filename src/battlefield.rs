@@ -1,5 +1,5 @@
 //! Static battlefield terrain generation: the boundary walls and the
-//! hand-authored/editor-saved map's walls/road/frog/pickup-slots -
+//! hand-authored/editor-saved map's walls/road/bong/pickup-slots -
 //! everything that decides *where* static terrain goes for a fresh round.
 //! Called from `simulation::Game::init` - see that function for the actual
 //! call order.
@@ -36,7 +36,7 @@ use crate::{
     WALL_THICKNESS,
 };
 
-/// Cap on rejection-sampling attempts for a single enemy/frog spawn
+/// Cap on rejection-sampling attempts for a single enemy/bong spawn
 /// position (see `sample_clear_position`) - keeps `Game::init` provably
 /// bounded regardless of how unlucky the RNG gets, rather than an unbounded
 /// `while` loop that could in principle stall for a long time. This
@@ -56,7 +56,7 @@ const PLACEMENT_MAX_ATTEMPTS: u32 = 2000;
 /// way (`Game::init` snaps a fresh band sample to `Grid::nearest_open`);
 /// the last rejected sample is deliberately not handed back, because a
 /// rejected sample can sit inside a wall. Used by the enemy and
-/// frog-fallback placement loops in `Game::init`.
+/// bong-fallback placement loops in `Game::init`.
 pub fn sample_clear_position(
     rng: &mut SmallRng,
     width: f32,
@@ -362,7 +362,7 @@ pub fn relocate_unusable_spawns(physics: &mut Physics, world: &mut hecs::World, 
 }
 
 /// What `spawn_from_map` found and spawned - handed back to `Game::init` so
-/// it can fold each part into the same clearance/road/frog/pickup handling
+/// it can fold each part into the same clearance/road/bong/pickup handling
 /// a random round already does, rather than duplicating any of it here. See
 /// docs/map-editor-design.md.
 pub struct MapSpawn {
@@ -377,8 +377,8 @@ pub struct MapSpawn {
     /// The wall tiles only (a subset of `obstacle_positions`): road is
     /// painted under these; props stand on whatever ground is there.
     pub wall_positions: Vec<Position>,
-    /// World position of the map's `enemy_frog` cell, if any (Hunt mission).
-    pub enemy_frog_pos: Option<Position>,
+    /// World position of the map's `enemy_bong` cell, if any (Hunt mission).
+    pub enemy_bong_pos: Option<Position>,
     /// World position of every cell the map explicitly marked as road (not
     /// including the "road under every wall tile" `Game::init` already
     /// paints for free from `obstacle_positions` - this is only the
@@ -391,11 +391,11 @@ pub struct MapSpawn {
     /// World position of every cell the map marked as lava: ground like
     /// water, shaped into streams and lakes the same way (`lava.rs`).
     pub lava_cells: Vec<Position>,
-    /// The map's one frog placement, if any - `None` means the map didn't
-    /// place a frog, in which case `Game::init` falls back to a random
-    /// near-center roll (every round needs exactly one live frog for the
+    /// The map's one bong placement, if any - `None` means the map didn't
+    /// place a bong, in which case `Game::init` falls back to a random
+    /// near-center roll (every round needs exactly one live bong for the
     /// protect-objective mechanic to mean anything).
-    pub frog_pos: Option<Position>,
+    pub bong_pos: Option<Position>,
     /// Every health/ammo pickup slot the map placed, in map order. This is
     /// now the *only* source of pickups for the round - an empty list means
     /// the round simply has none, there's no random fallback any more (see
@@ -420,7 +420,7 @@ pub struct MapSpawn {
 }
 
 /// Spawn every cell `map` defines as a live entity - walls as `Obstacle`s
-/// (physics body included), road/frog/pickup cells as plain positions for
+/// (physics body included), road/bong/pickup cells as plain positions for
 /// `Game::init` to act on. Called once from `Game::init`, right after the
 /// player is spawned - see `MapSpawn`'s field docs for exactly how each
 /// part gets folded back into the rest of round setup. This is the *only*
@@ -486,8 +486,8 @@ pub fn spawn_from_map(
     let mut bush_cells = Vec::new();
     let mut oil_cells = Vec::new();
     let mut portal_cells = Vec::new();
-    let mut frog_pos = None;
-    let mut enemy_frog_pos = None;
+    let mut bong_pos = None;
+    let mut enemy_bong_pos = None;
     let mut pickup_slots = Vec::new();
 
     for (col, row, obj) in map.iter_cells() {
@@ -589,21 +589,21 @@ pub fn spawn_from_map(
             }
             CellObject::Oil => oil_cells.push((col, row)),
             CellObject::Portal => portal_cells.push((col, row)),
-            CellObject::Frog => frog_pos = Some(pos),
+            CellObject::Bong => bong_pos = Some(pos),
             // The player's start position is read directly from
             // `self.map.start_cell()` in `Game::init`, before this function
             // runs (the player is spawned before map terrain is) - nothing
             // here needs to track it.
             CellObject::Start | CellObject::Start2 => {}
             CellObject::Pickup { pickup } => pickup_slots.push((pos, pickup)),
-            CellObject::EnemyFrog => enemy_frog_pos = Some(pos),
+            CellObject::EnemyBong => enemy_bong_pos = Some(pos),
             // Gates are read straight from `MapFile::gate_cells` by the
             // wave scheduler; nothing is spawned for them.
             CellObject::Gate => {}
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, lava_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, bush_cells, oil_cells, portal_cells }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, lava_cells, bong_pos, enemy_bong_pos, pickup_slots, grass_cells, bush_cells, oil_cells, portal_cells }
 }
 
 /// Every cell a volcano's cone puts a tile on: its footprint inside the
@@ -681,7 +681,7 @@ pub(crate) fn boundary_lane_inset(cell: f32, along: usize, span: f32, near: bool
 /// (`max_tank_clearance_half_extent`) clear of the two boundary walls it
 /// runs between. `width`/`height` are the real battlefield size (the grid's
 /// last column may overhang it). A gate whose `inside` point is closer than
-/// `min_dist` to any `avoid` position (the player, the player's frog) is
+/// `min_dist` to any `avoid` position (the player, the player's bong) is
 /// left out.
 ///
 /// "Outermost a tank can stand in", not "outermost", on both axes: the grid

@@ -533,7 +533,7 @@ grid with every tile a shell can bring down made open but dear
 (`breach_grid`):
 - each cell of such a wall costs `enemy_sap_wall_path_cost` (12), so the way
   round wins until it is that much longer;
-- iron, a cage, deep water and lava, the frogs and the fires stay walls.
+- iron, a cage, deep water and lava, the bongs and the fires stay walls.
 
 The plan is the last open cell before the first such wall on that route, and
 the step into it. `Ai::steer` heads there where it would otherwise wander,

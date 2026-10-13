@@ -21,7 +21,7 @@
 //! - **A flow field** per shared target (`Field`, built by `add_field`): one
 //!   Dijkstra outward from the goal cell stores every cell's cost to reach
 //!   it, and a query from anywhere is then a read of four neighbours. The
-//!   round builds one for each player and for the player's frog every
+//!   round builds one for each player and for the player's bong every
 //!   frame, so however many enemies are alive the frame's routing work is
 //!   bounded by the number of targets, not searchers. `next_step` picks
 //!   the field whose goal cell the target falls in and falls back to A\*
@@ -291,7 +291,7 @@ impl RouteAhead {
     }
 
     /// Whether the route was read from a flow field (`Grid::add_field`):
-    /// the route every tank going to that seat or frog shares, read cell
+    /// the route every tank going to that seat or bong shares, read cell
     /// by cell, rather than the head of one search's path - one of many as
     /// cheap, toward a target of the tank's own that moves (an engagement
     /// slot follows its seat).

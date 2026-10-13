@@ -226,7 +226,7 @@ corner while pressed. Mitigations, in order:
 
 - HUD in the top corners on the phone, never under the thumbs.
 - Map design keeps the two bottom corners low-value: nothing that must be
-  watched constantly (the frog, a gate) goes in the bottom 3 rows x 6
+  watched constantly (the bong, a gate) goes in the bottom 3 rows x 6
   columns of either side. The `arena` layout puts pickups there instead.
 - The joystick only exists while pressed, so a player who lifts the thumb
   sees everything.
@@ -465,7 +465,7 @@ and the touch layout.
   development.
 - **The bars at 960 px.** The play HUD and the builder bar were re-laid
   out (see docs/hud-and-builder-layout-design.md's revised rule).
-- **Knobs.** Only `enemy_frog_spawn_min_dist` (400 to 270) scaled with the
+- **Knobs.** Only `enemy_bong_spawn_min_dist` (400 to 270) scaled with the
   field; the AI's ranges are tank-scale and every fixture baseline held
   (`just probe-fixtures` green, fixtures keep their 40 x 22.5 world).
 - Chosen: 15 rows at first (8.1 mm on an iPhone 15), then 34 x 17, see
