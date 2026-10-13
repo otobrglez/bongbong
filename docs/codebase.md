@@ -857,7 +857,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   through `Grid`; on top: an obstacle-ahead override of the heading commitment (a wall turning a
   hull straight back over a turning it drove past while `ai_dir_hold_seconds` ran keeps the hold,
   so the turning is open to it on the way back - `Ai::passed_turning`; restarted, a turning crossed
-  quicker than the hold with a wall a cell past it either way would be crossed to and fro), a stuck
+  quicker than the hold with a wall a cell past it either way would be crossed to and fro; a heading
+  the hull turned to fire along in `hold_and_fire` gives way to a route turning straight back over
+  it on the first steer out of the tier that fired - `Ai::aimed`; held, the margin, blind to a
+  reversal, drove a tank leaving the fight on at what it fought, into the tanks in its lane), a stuck
   escape on
   *displacement projected onto the commanded heading* (never a physics velocity - the solver reports
   motion for a jammed tank; stuck under `stuck_speed_eps` or `stuck_progress_fraction` of its own top
