@@ -134,8 +134,8 @@ fn main() {
         let pressed = rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT);
         let dt = rl.get_frame_time();
 
-        // P or Tab flips modes. Leaving a live round normally asks first;
-        // the demo answers "leave" on the spot.
+        // P or Tab flips modes: BUILD pauses the round, PLAY starts a new
+        // one on the edited map.
         if rl.is_key_pressed(KeyboardKey::KEY_P) || rl.is_key_pressed(KeyboardKey::KEY_TAB) {
             match session.mode() {
                 Driver::Build => {
@@ -143,9 +143,6 @@ fn main() {
                 }
                 Driver::Play | Driver::Lobby | Driver::Online => {
                     session.press_build();
-                    if session.dialog {
-                        session.answer_dialog(true);
-                    }
                 }
             }
         }
