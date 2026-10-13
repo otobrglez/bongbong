@@ -11,8 +11,8 @@ use sola_raylib::prelude::*;
 use super::*;
 use super::camera::{scene_plan, window_mapping};
 use super::chrome::{
-    button_box, caret_at, icon_box, BarTools, BAR_SMALL_TEXT, BOX_EDGE, BOX_PAD, CARET_GAP, CategoryButton, STAMP_NAME_W,
-    STAMP_PICTURE,
+    button_box, caret_at, icon_box, BarTools, BAR_SMALL_TEXT, BOX_EDGE, BOX_PAD, CARET_GAP, CARET_W, CategoryButton,
+    STAMP_NAME_W, STAMP_PICTURE,
 };
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
@@ -570,19 +570,18 @@ impl MapEditor {
     }
 
     /// The bar (docs/game-editor-fusion.md section 7), in UI points as
-    /// `Bar::of` laid it out: the strip across the window, `BUILD` and the
-    /// map's name with a `*` while edited where the bar has the room, the
-    /// five category buttons or the TOOLS button they fold into, the
-    /// eraser, UNDO, REDO, FILE, MAP, FIT, CHECK, the clear flag, PLAY HERE
-    /// and PLAY - every button in one box (`chrome::button_box`) and by one
-    /// rule of colours (`Face`), its words at one size.
+    /// `Bar::of` laid it out: the strip across the window, BACK, the map's
+    /// name with a `*` while edited where the bar has the room, the five
+    /// category buttons or the TOOLS button they fold into, the eraser,
+    /// UNDO, REDO, FILE, MAP, FIT, CHECK, the clear flag where it is not
+    /// folded into CHECK, PLAY HERE and PLAY - every button in one box
+    /// (`chrome::button_box`) and by one rule of colours (`Face`), its
+    /// words at one size.
     fn draw_bar(&self, d: &mut impl RaylibDraw, bar: &Bar, textures: &EditorTextures) {
         d.draw_rectangle_rec(bar.strip, BAR_FILL);
         let touch = bar.touch;
         let text_y = |r: Rectangle| (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-        if let Some(r) = bar.label {
-            d.draw_text(&text().get(keys::EDITOR_BUILD), r.x as i32, text_y(r), HUD_TEXT_SIZE, BUILD_ACCENT);
-        }
+        self.draw_back_button(d, bar.back, bar.back_word, touch);
         if let Some(r) = bar.name {
             d.draw_text(&fit_text(&self.bar_name(), r.width, HUD_TEXT_SIZE), r.x as i32, text_y(r), HUD_TEXT_SIZE, TEXT);
         }
@@ -614,11 +613,37 @@ impl MapEditor {
         // FIT, dim while the whole canvas is what is shown.
         draw_word_button(d, bar.fit, touch, &text().get(keys::EDITOR_FIT), Face::able(!self.camera.is_fit()));
         let check_open = matches!(self.popup, Some(Popup::Lint { .. }));
-        draw_word_button(d, bar.check, touch, &text().get(keys::EDITOR_CHECK), Face::IDLE.open(check_open));
-        draw_clear_readout(d, bar.clear, self.par(), BAR_SMALL_TEXT);
+        // With the flag folded into it, CHECK says a cleared map in the
+        // flag's green; its panel's first row has the par.
+        let cleared = bar.clear.is_none() && self.par().is_some();
+        draw_word_button(d, bar.check, touch, &text().get(keys::EDITOR_CHECK), Face::IDLE.open(check_open).cleared(cleared));
+        if let Some(r) = bar.clear {
+            draw_clear_readout(d, r, self.par(), BAR_SMALL_TEXT);
+        }
 
         draw_word_button(d, bar.here, touch, &text().get(keys::EDITOR_PLAY_HERE), Face::ACTION);
         draw_word_button(d, bar.play, touch, &text().get(keys::BUTTON_PLAY), Face::ACTION);
+    }
+
+    /// BACK: its arrow, and its word after it where `word`, dim while
+    /// there is no round to go back to, and an amber dot in its top right
+    /// corner while the canvas differs from that round's map - edits BACK
+    /// will put away (`MapEditor::off_round`).
+    fn draw_back_button(&self, d: &mut impl RaylibDraw, slot: Rectangle, word: bool, touch: bool) {
+        let bx = button_box(slot, touch);
+        let face = Face::able(self.can_go_back());
+        draw_box(d, bx, face);
+        let arrow = chrome::back_arrow_at(bx, word);
+        draw_back_arrow(d, arrow.x as i32, arrow.y as i32, face.ink);
+        if word {
+            let label = text().get(keys::EDITOR_BACK);
+            let left = bx.x + BOX_EDGE + BOX_PAD + CARET_W + CARET_GAP;
+            let (x, y) = word_at(bx, left, bx.x + bx.width - BOX_EDGE - BOX_PAD, &label);
+            d.draw_text(&label, x, y, BAR_SMALL_TEXT, face.ink);
+        }
+        if self.off_round() {
+            d.draw_rectangle((bx.x + bx.width) as i32 - 8, bx.y as i32 + 4, 4, 4, BUILD_ACCENT);
+        }
     }
 
     /// One category button: its box, the current tool's icon at its left
@@ -1351,6 +1376,14 @@ fn draw_caret(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
     }
 }
 
+/// BACK's arrow, `chrome::BACK_ARROW` from its top left at (`x`, `y`): a
+/// left-pointing triangle of 2 pt blocks, the caret's turned.
+fn draw_back_arrow(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
+    for (i, h) in [2, 6, 10].into_iter().enumerate() {
+        d.draw_rectangle(x + i as i32 * 2, y + (10 - h) / 2, 2, h, color);
+    }
+}
+
 /// The singleton badge: a dot at an icon's top-right corner.
 fn draw_badge(d: &mut impl RaylibDraw, right: f32, top: f32) {
     d.draw_circle((right - 5.0) as i32, (top + 5.0) as i32, 4.0, Color::LIME);
@@ -1401,6 +1434,12 @@ impl Face {
     /// force: a category's tool, the eraser, the select tool.
     fn in_force(self, on: bool) -> Face {
         if on { Face { edge: BUILD_ACCENT, ..self } } else { self }
+    }
+
+    /// Outline and word in the clear flag's green while the map is
+    /// cleared: CHECK, where the bar has folded the flag into it.
+    fn cleared(self, on: bool) -> Face {
+        if on { Face { edge: LINT_CLEAN, ink: LINT_CLEAN, ..self } } else { self }
     }
 }
 

@@ -97,9 +97,9 @@ render              overlays drawn from Game::debug_overlays; the builder draws 
 after_render        pending screenshot captured (one frame after arming: the read-back lags a present)
 ```
 
-In build mode, or while the leave-round dialog is up, `main.rs` never
-calls `advance` (`Session::playing`), so the round is frozen by
-construction; every request still lands in `before_frame`.
+In build mode, or while a dialog is up, `main.rs` never calls `advance`
+(`Session::playing`), so the round is frozen by construction; every
+request still lands in `before_frame`.
 
 ## 3. Lockstep and determinism
 
@@ -134,7 +134,7 @@ construction; every request still lands in `before_frame`.
 
 | tool | params | reply |
 |---|---|---|
-| `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), `mode` (play\|build\|online), `dialog_open`, `builder` (dirty, tool), history depth, `turns` (turns/u_turns/reversals/spins summed over the live tanks - see "Debugging spinning tanks"), and `round` - whose round all of the above describes: `{kind: "local"}`, or `{kind: "online", room, seat, phase, buffer_ms, server_tick, replica, interpolation, prediction}` (section 4.2; the last two are the stage-2 readings of docs/online-coop-prd.md section 4.12: the delay in force, its target, the jitter, the cadence and the frames extrapolated, and the predictor's corrections by bucket, nudges, snaps, shots drawn/refused/on screen, inputs in flight, the lead's adjustments, and `crossings`/`crossings_hit`/`crossings_missed` - provisional shots the client drew stopping against a live tank or bong, `crossings_hit` when the room's copy burst within `HIT_MATCH_PX` of that stop, `crossings_missed` when it flew on past `MISS_MARGIN_PX` or burst elsewhere) |
+| `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), `mode` (play\|build\|online), `back` (`{puts_away}` in build mode with a paused round, else null), `builder` (dirty, tool), history depth, `turns` (turns/u_turns/reversals/spins summed over the live tanks - see "Debugging spinning tanks"), and `round` - whose round all of the above describes: `{kind: "local"}`, or `{kind: "online", room, seat, phase, buffer_ms, server_tick, replica, interpolation, prediction}` (section 4.2; the last two are the stage-2 readings of docs/online-coop-prd.md section 4.12: the delay in force, its target, the jitter, the cadence and the frames extrapolated, and the predictor's corrections by bucket, nudges, snaps, shots drawn/refused/on screen, inputs in flight, the lead's adjustments, and `crossings`/`crossings_hit`/`crossings_missed` - provisional shots the client drew stopping against a live tank or bong, `crossings_hit` when the room's copy burst within `HIT_MATCH_PX` of that stop, `crossings_missed` when it flew on past `MISS_MARGIN_PX` or burst elsewhere) |
 | `snapshot` | `detail: compact\|full` | tanks (slot, chassis, x/y and the grid `cell`, `rotation` with `facing` as a name, the drawn `hull`/`turret` angles, real velocity with `speed` and `heading` - the direction it is actually moving, null when still - damage/hp, ammo, weapon, shield, boost, `ring` (the health ring's opacity, 0..1), `nearest_ally_px`, enemies' `dist_to_player`; `full` adds `ai`), projectiles (cap 64), pickups, bong, `engage` (per enemy: status `engaged\|wreck\|fleeing\|retreating\|out_of_range`, `ring` slot index or null, target x/y, `sticky`; `full` adds the rejection tally and the 16-slot table), `clusters` (live enemies within 90 px, as slot groups) |
 | `events` | `since`, `limit`, `kinds`, `exclude` | ring of `{seq, frame, event, ...}` (cap 4096); `kinds`/`exclude` filter by event name |
 | `step` | `frames`, `move_dir`, `face`, `fire`, `p2_move_dir`, `p2_face`, `p2_fire` (player 2, two-player rounds), `fire_every`, `snapshot`, `detail`, `kinds`, `exclude` | frame, time, outcome, restarted, events of the step (filtered like `events`), snapshot |
@@ -163,15 +163,16 @@ field pixels (the map's `size`; the shipped default is 1088x544), y down, rotati
 The game has a play mode and a build mode in one window
 (docs/game-editor-fusion.md); `mode::Session` owns the `Game`, the
 `MapEditor` and the switch, and both the window and these tools go through
-its methods (`press_build`, `answer_dialog`, `play`, `replace_map`,
+its methods (`press_build`, `back`, `play`, `replace_map`,
 `update_builder`), so a tool and a click are the same path. Field cells are
 `[col, row]` on the 32 px grid (the map's `size`, 34 x 17 by default); window positions for
 `click` include the 32 px HUD bar, so the field starts at y = 32.
 
 | tool | params | does |
 |---|---|---|
-| `mode` | - | `mode` (play\|build), `dialog_open`, and the builder's `dirty`, `map_name`, `tool`, `category`, `open_menu` (a category name, `map` or `save`, else null), `undo_depth`, `redo_depth`. Cheap |
-| `build` | `answer` (leave\|stay) | presses BUILD: opens the leave-round dialog mid-round (the round freezes), switches at once on the end screen; `answer` answers an open dialog instead. Replies like `mode` |
+| `mode` | - | `mode` (play\|build), `back` (`{puts_away}` in build mode with a paused round to go back to, else null), and the builder's `dirty`, `map_name`, `tool`, `category`, `open_menu` (a category name, `map` or `save`, else null), `undo_depth`, `redo_depth`. Cheap |
+| `build` | - | presses BUILD: into the builder at once, the round paused behind it (only `play` gives it up). Replies like `mode` |
+| `back` | - | presses BACK in build mode: the paused round comes back where it stood (frozen in lockstep if it was), the edits since BUILD put away as one undo step that `builder_undo` takes back. A no-op in play mode and with `mode.back` null. Replies like `mode` |
 | `players` | `count?` (1\|2) | presses the players button in play mode: without `count` opens/closes the "How many players?" dialog (the round freezes); with `count` answers it - a different count restarts the round in that mode, frozen in lockstep (slot 1 becomes player 2, enemies count from 2); the same count just closes. Refused in build mode. Replies like `mode` |
 | `play` | `intro` | presses PLAY in build mode: the builder's map becomes the round's, a fresh round starts frozen in lockstep like `restart` (a pinned seed stays pinned; `intro: true` for the banner). Replies with `status`. An error in play mode |
 | `builder_tool` | `tool` | selects a brush by name (the 23 cell tools - `start2` is player 2's start - or `eraser`) through the category's own path; without `tool`, reports the active tool and every category's current tool and list |
@@ -181,8 +182,8 @@ its methods (`press_build`, `answer_dialog`, `play`, `replace_map`,
 | `builder_map` | `name`, `map_toml`, `map` or `clear` | without any: the builder's map as `toml`, `name`, `dirty`, `diff` (added/removed/changed cells, changed settings); with one: loads it (a Load-list name, inline TOML, or a path) into the canvas as one undo step and the new baseline - the round keeps its map until `play`; `clear: true` is FILE > CLEAR MAP: every placed object goes, settings and size stay, one undo step, not a new baseline. `map_get` keeps answering with the round's map |
 | `builder_files` | | what FILE > LOAD offers: every loadable map (`on_disk` for `maps/*.toml`, else shipped in the binary) and `can_save` (native only) |
 | `builder_save` | `name?` | FILE > SAVE / SAVE AS: writes `maps/<name>.toml` (defaults to the map's name), makes it the baseline; replies like `builder_map` |
-| `click` | `x`, `y`, `button`, `drag_to` | a raw press at a window position on the same hit-tests the mouse gets: in play, the BUILD button, the players button beside it, either dialog's buttons (outside a panel closes it); in build, the bar's buttons (PLAY starts the round), a dropdown row, a stepper, a field cell; `drag_to` drags in 8 px steps and releases. Replies like `mode` |
-| `key` | `key` (tab\|escape\|enter\|undo\|redo\|backspace\|1\|2), `text` | one key for one frame: in play, Tab opens/closes the leave dialog, Esc keeps playing / closes the players dialog, Enter leaves (or, in the players dialog, switches to the other count), 1/2 answer the players dialog; in build, Tab is PLAY and the rest go through `BuilderInput` (`text` types into an open prompt). Replies like `mode` |
+| `click` | `x`, `y`, `button`, `drag_to` | a raw press at a window position on the same hit-tests the mouse gets: in play, the BUILD button, the players button beside it, the players dialog's buttons (outside the panel closes it); in build, the bar's buttons (PLAY starts the round, BACK comes back to the paused one), a dropdown row, a stepper, a field cell; `drag_to` drags in 8 px steps and releases. Replies like `mode` |
+| `key` | `key` (tab\|escape\|enter\|undo\|redo\|backspace\|1\|2), `text` | one key for one frame: in play, Tab is BUILD, Esc opens the level select / closes the players dialog, Enter takes a level's end screen's way (or, in the players dialog, switches to the other count), 1/2 answer the players dialog; in build, Tab is PLAY and the rest go through `BuilderInput` - Escape with nothing on the canvas to take back is BACK (`text` types into an open prompt). Replies like `mode` |
 
 **The refusal rule.** There are two, one per mode that is not play; see
 section 4.2 for the online one. In build mode the tools that read or
@@ -247,9 +248,8 @@ A session, from PRD section 11:
 
 ```
 mode                                   -> play
-build                                  -> dialog open
-screenshot                             -> the dimmed field and the dialog
-build {answer: "leave"}                -> build, tool wall/brick
+build                                  -> build, tool wall/brick
+screenshot                             -> the builder over the paused round's map
 click {x: 340, y: 16}                  -> WALL dropdown open (the caret)
 screenshot
 click {x: 340, y: 120}                 -> picked iron from the list

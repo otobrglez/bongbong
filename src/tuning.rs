@@ -3863,6 +3863,10 @@ tunables! {
         /// ... moving there, and back once the fight has passed, over this
         /// many seconds. 0 snaps.
         ui_fade_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// How long the line BACK from the builder leaves under the left
+        /// cluster stays when it put edits away - that UNDO in BUILD
+        /// brings them back -, in seconds of play. 0 shows none.
+        ui_put_away_seconds: f32 = 4.0 in 0.0 ..= 15.0;
         /// In a build with the dev tools, where each frame's time goes -
         /// the frame, the steps, the pictures kept, the lights, the world,
         /// the chrome, the swap (`frame_stages.rs`) - on a line under the

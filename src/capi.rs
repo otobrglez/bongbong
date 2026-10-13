@@ -322,7 +322,7 @@ pub fn window_json(r: &WindowReport) -> String {
         "map": session.shown().map.name,
         "level": session.level().map(|i| i + 1),
         "levels_open": session.level_select.is_some(),
-        "dialog_open": session.dialog,
+        "back": session.mode() == Driver::Build && session.builder.can_go_back(),
         "players_dialog_open": session.players_dialog,
         "ui": ui_status(session, r.ui),
         "view": { "scale": r.view.scale, "offset": [r.view.offset.x, r.view.offset.y], "bitmap": [r.view.bitmap.0, r.view.bitmap.1] },

@@ -10,7 +10,7 @@ use crate::tuning::tuning;
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, CanvasScreen, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
-use crate::hud::{self, leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, Fade, UiFrame, BAR_FILL};
+use crate::hud::{self, players_dialog_rects, CornerButton, CornerShape, Corners, Fade, UiFrame, BAR_FILL};
 use crate::level_select::SelectInput;
 use crate::levels::{Campaign, Levels};
 use crate::lobby::LobbyInput;
@@ -1674,7 +1674,9 @@ pub fn run(args: Args) {
         tier_end: args.tier_end.is_some(),
     };
     if args.editor {
-        session.driver = Driver::Build;
+        // The round is set up as usual and paused behind the builder, so
+        // BACK plays it.
+        session.enter_build();
     }
     // `--rig`, `--host` or `--join`: the window plays a round somebody
     // else simulates. The local round above is still built and still
@@ -2026,29 +2028,13 @@ pub fn run(args: Args) {
                     } else if rl.is_key_pressed(KeyboardKey::KEY_TWO) {
                         session.answer_players(PlayerCount::TWO);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
-                        // Enter is the action, as it is "leave" in the other
-                        // dialog: the point of opening this one is to switch.
+                        // Enter is the action: the point of opening this
+                        // dialog is to switch.
                         let other =
                             if session.game.players == PlayerCount::ONE { PlayerCount::TWO } else { PlayerCount::ONE };
                         session.answer_players(other);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.close_players_dialog();
-                    }
-                } else if session.dialog {
-                    let rects = leave_dialog_rects(ui.area);
-                    if pressed {
-                        // The dialog's own press is nobody's shot.
-                        touch.claim(&ui_touch_points);
-                        if rects.leave.contains(ui_pointer) {
-                            session.answer_dialog(true);
-                        } else if rects.stay.contains(ui_pointer) || !rects.panel.contains(ui_pointer) {
-                            session.answer_dialog(false);
-                        }
-                    }
-                    if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
-                        session.answer_dialog(true);
-                    } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
-                        session.answer_dialog(false);
                     }
                 } else if pressed && session.press_result(ui_pointer, ui.area) {
                     // A level's end screen (docs/levels.md): PLAY AGAIN or
@@ -2415,6 +2401,7 @@ pub fn run(args: Args) {
         // the fade through black between rounds moves on a frame.
         session.follow_countdown();
         session.tick_curtain(dt);
+        session.tick_note(dt);
         // A level's end screen that counted down may have opened another
         // map: present that one.
         if plan.stale(&session) {

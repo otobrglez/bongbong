@@ -13,17 +13,13 @@ hud-weapon-offline = IZPAD OROŽJA
 hud-rod-aim = NAMERI, NATO SPUSTI ZA UDAR
 hud-rod-cancel = SPUSTI TUKAJ ZA PREKLIC
 hud-well-anchor = ZNOVA SPROŽI ZA SIDRO
+hud-edits-put-away = SPREMEMBE ODLOŽENE - UNDO JIH VRNE
 
 players-title = Koliko igralcev?
 players-keys = P1 puščice + preslednica    P2 WASD + levi Shift
 players-touch = P1 vleci + tapni    P2 WASD + levi Shift
 players-one = 1 IGRALEC
 players-two = 2 IGRALCA
-
-leave-title = Zapustiš to igro?
-leave-sub = Napredek bo izgubljen. Zemljevid ostane.
-leave-confirm = ZAPUSTI IGRO
-leave-stay = IGRAJ NAPREJ
 
 question-revert-title = Povrnem { $name }?
 question-revert-sub = Tvoje spremembe bodo izbrisane, vrne se izvirnik.
@@ -190,7 +186,7 @@ refusal-room-closed = soba se je zaprla
 
 ## Graditelj
 
-editor-build = GRADI
+editor-back = NAZAJ
 editor-file = MENI
 editor-map = IGRA
 editor-fit = VSE

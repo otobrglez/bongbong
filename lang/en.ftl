@@ -39,6 +39,10 @@ hud-weapon-offline = WPN OFFLINE
 hud-rod-aim = AIM, THEN LET GO TO CALL
 hud-rod-cancel = LET GO HERE TO CANCEL
 hud-well-anchor = FIRE AGAIN TO ANCHOR
+# BACK from the builder put the edits made since BUILD away (one undo
+# step): a line under the vitals for a few seconds as the round resumes,
+# in the same size and room as the rod's.
+hud-edits-put-away = EDITS PUT AWAY - UNDO RESTORES THEM
 
 # The players dialog: a 28 px title and a 16 px line across a 440 px
 # panel, then two 176 px buttons in 18 px text (about 14 letters each).
@@ -50,12 +54,6 @@ players-keys = P1 arrows + Space    P2 WASD + L.Shift
 players-touch = P1 drag + tap    P2 WASD + L.Shift
 players-one = 1 PLAYER
 players-two = 2 PLAYERS
-
-# The leave-round dialog, the same shape.
-leave-title = Leave this round?
-leave-sub = Your progress is lost. The map is kept.
-leave-confirm = LEAVE ROUND
-leave-stay = KEEP PLAYING
 
 # A question about a map the player changed, 28 px over 16 px in a
 # 600 pt panel, with two dialog buttons: FILE's revert, and a modified
@@ -264,10 +262,10 @@ refusal-room-closed = the room closed
 
 ## The builder (src/editor/mod.rs, src/editor/render.rs)
 
-# The build bar, in points: BUILD at 18 in 64, FILE and MAP at 18 in 42
-# beside a caret (about 4 letters); UNDO/REDO/FIT at 11 inside 36 with a
-# mouse and at 12 inside 40 on a touch screen.
-editor-build = BUILD
+# The build bar, in points: BACK at its left end, 14 beside its arrow
+# (about 5 letters; a narrow bar shows the arrow alone), FILE and MAP at
+# 14 beside a caret (about 4 letters); UNDO/REDO/FIT at 14 in their boxes.
+editor-back = BACK
 editor-undo = UNDO
 editor-redo = REDO
 editor-file = FILE
