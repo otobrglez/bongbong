@@ -914,6 +914,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   and then a search priced the same way goes to the first cell of the route past them
   (`round_kept`, within `KEEP_OFF_LOOK`). A price, never a wall (a crate in the only gap is driven
   over); a tank never goes round a crate it would take; 0 or no crates routes exactly as without.
+  **One tank per crate** (`ai::claim_crates`, `Game::crate_claims`): a crate is held by the tank
+  that headed for it at its last think (`Ai::sought`, set by the seek tiers and the flee and
+  retreat pickup runs - `Brain::head_for_crate`); of two or more that turned for it on the same
+  think, the nearest by route (`Grid::path_cost`), ties on slot - no RNG, and nothing is routed
+  unless a crate is contended. Each tank's `think` is handed only the crates no other tank holds,
+  so the others carry on (another crate, the tier below) and a held crate cannot flip between two
+  tanks; the claim lapses when its holder heads elsewhere. **Giving a crate up**
+  (`Ai::track_crate_run`): a tank that gains no route step on its crate for
+  `enemy_crate_give_up_seconds` (jammed in a lane, circling one it cannot reach; no route at all is
+  no headway) forsakes it for `enemy_crate_forget_seconds` (`Ai::forsaken`, four kept) - `seek` and
+  `nearest_pickup` pass it over, and its claim lapses; 0 seconds never gives up.
   **Lanes**
   (field maps only, `ai_lane_turns`; docs/large-maps-follow-camera.md §12): a hull slides `v^2/2a`
   past a turn (`tank_turn_grip_force` over its mass), so the switch margin alone
@@ -999,9 +1010,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   slots. **Enemies only collect what they would use** (a weapon crate while on shells, or of the
   weapon carried while short of its carry limit, so one never trades away a stocked weapon;
   `Tank::wants_pickup`, the same predicate `ai::build`'s seek tiers call - collection must never
-  be stricter than seeking or a tank parks on a pickup forever), and **drive round what they would
-  leave** where there is room (`TakeRules`, the one rule `pickup_phase` collects by and the routes
-  keep off - see `pathfind.rs` above);
+  be stricter than seeking or a tank parks on a pickup forever), **one tank goes for a crate** and
+  a tank that cannot get to one gives it up (`ai::claim_crates`, `Ai::track_crate_run` - see AI),
+  and they **drive round what they would leave** where there is room (`TakeRules`, the one rule
+  `pickup_phase` collects by and the routes keep off - see `pathfind.rs` above);
   players always collect. SpeedUp refreshes its timer, never stacks. **Shield is a pool on a
   clock**: full heal plus `shield_hp` and `shield_timer` (`Tank::raise_shield`; it shatters when
   `shield_seconds` run out, 6 by default, or when spent - about four enemy shells), spent at two

@@ -193,10 +193,20 @@ probe-fixtures *args:
 # spreads over it. archipelago, hedge-maze and the study map bunch less with
 # it, longwater and castle-moat read as before, black-gold within a few
 # points of jitter and churn.
+# Re-baselined for one tank per crate and giving a crate up
+# (`ai::claim_crates`, `enemy_crate_give_up_seconds` 4): a tank shuttling
+# on its way to a crate now leaves it after four seconds, so rounds re-time
+# from there. jitter=31 is harbor-lights (23 -> 31 here: 0x3e8, 0x3ee and
+# 0x3f0 two more each, in 0x3f0 a pack in the chase on a re-timed round);
+# over three more blocks it reads 16, 20 and 40 against 23, 25 and 37
+# (seeds 2000, 3000; 5000 at 20 rounds), 107 against 108 in all. These ten
+# rounds' totals over the seven maps, before -> after: churn 93 -> 79,
+# clustering 22 -> 11, jitter 104 -> 107, spin 17 -> 19, border-stuck
+# 10 -> 9, pile-up 10 -> 10; every other ceiling stands.
 # Not in CI: well over two minutes in a debug build, the study map alone
 # more than one.
 probe-fields *args:
-    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=30 --budget spin=12 --budget churn=43 --budget clustering=12 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=8 --budget offbox-fire=0 {{args}} || exit 1; done
+    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=31 --budget spin=12 --budget churn=43 --budget clustering=12 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=8 --budget offbox-fire=0 {{args}} || exit 1; done
 
 # The perfect defence (docs/large-maps-follow-camera.md section 12): the
 # probe's `defend` scenario - every enemy destroyed the moment it comes
