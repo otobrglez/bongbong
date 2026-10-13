@@ -24,7 +24,7 @@
 //! 3. a tower or an enemy decides to engage a seat's air target only from
 //!    inside that seat's sight box - the box it may engage the seat itself
 //!    from - and an enemy's from anywhere;
-//! 4. nothing on the ground collides with one: walls, tiles, tanks and frogs
+//! 4. nothing on the ground collides with one: walls, tiles, tanks and bongs
 //!    pass under it, and its own landing is its owner's business;
 //! 5. walks go by key.
 

@@ -12,7 +12,7 @@ use hecs::Entity;
 
 use crate::ai::Ai;
 use crate::bullet::Bullet;
-use crate::frog::{Frog, Side};
+use crate::bong::{Bong, Side};
 use crate::math::Vec2;
 use crate::obstacle::{Material, Obstacle};
 use crate::physics::Physics;
@@ -20,7 +20,7 @@ use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaVariant};
 use crate::shell::Shell;
 use crate::tank::{ActiveWeapon, Tank};
-use crate::{FROG_ATTACK_SECONDS, FROG_EXPLOSION_FPS, FROG_EXPLOSION_FRAMES, FROG_HOP_SECONDS, FROG_HURT_SECONDS, Position};
+use crate::{BONG_ATTACK_SECONDS, BONG_EXPLOSION_FPS, BONG_EXPLOSION_FRAMES, BONG_HOP_SECONDS, BONG_HURT_SECONDS, Position};
 
 use super::{Game, Outcome};
 
@@ -141,27 +141,27 @@ pub struct DrawableShot {
     pub variant: i32,
 }
 
-/// One frog: where it is, its health, which clips are playing and how far
+/// One bong: where it is, its health, which clips are playing and how far
 /// the top-priority one has come.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrawableFrog {
+pub struct DrawableBong {
     pub side: Side,
     /// Quarter pixels.
     pub x: i32,
     /// Quarter pixels.
     pub y: i32,
-    /// `Frog::health_points`.
+    /// `Bong::health_points`.
     pub hp: u8,
     pub dead: bool,
     pub hopping: bool,
     pub hurt: bool,
     pub biting: bool,
-    /// `Frog::clip_phase`.
+    /// `Bong::clip_phase`.
     pub phase: u8,
     /// The hop's landing spot, quarter pixels; zero unless hopping.
     pub hop_x: i32,
     pub hop_y: i32,
-    /// Held in a gravity well's pull (`Frog::pulled`): drawn pinned.
+    /// Held in a gravity well's pull (`Bong::pulled`): drawn pinned.
     pub pulled: bool,
 }
 
@@ -211,7 +211,7 @@ pub struct DrawableState {
     /// clock between snapshots (`Game::tick_presentation`).
     pub grenades: Vec<(u32, i32, i32, i32)>,
     pub drones: Vec<DrawableDrone>,
-    pub frogs: Vec<DrawableFrog>,
+    pub bongs: Vec<DrawableBong>,
     /// Every pickup on the field, by cell.
     pub pickups: Vec<DrawablePickup>,
     pub tiles: Vec<DrawableTile>,
@@ -295,20 +295,20 @@ impl Tank {
     }
 }
 
-impl Frog {
+impl Bong {
     /// How long the clip on show has run over its own length, 0..=255:
     /// the death sequence, else the hop, else the bite, else the hurt
     /// flicker (the priority `anim` draws by); 0 while idling.
     pub fn clip_phase(&self) -> u8 {
         let fraction = if let Some(elapsed) = self.death_elapsed {
-            let length = FROG_EXPLOSION_FRAMES as f32 / FROG_EXPLOSION_FPS;
+            let length = BONG_EXPLOSION_FRAMES as f32 / BONG_EXPLOSION_FPS;
             (elapsed / length).min(1.0)
         } else if self.hop_timer > 0.0 {
-            1.0 - self.hop_timer / FROG_HOP_SECONDS
+            1.0 - self.hop_timer / BONG_HOP_SECONDS
         } else if self.attack_timer > 0.0 {
-            1.0 - self.attack_timer / FROG_ATTACK_SECONDS
+            1.0 - self.attack_timer / BONG_ATTACK_SECONDS
         } else if self.hurt_timer > 0.0 {
-            1.0 - self.hurt_timer / FROG_HURT_SECONDS
+            1.0 - self.hurt_timer / BONG_HURT_SECONDS
         } else {
             0.0
         };
@@ -321,7 +321,7 @@ impl Frog {
     /// at their full length (the wire says they run, not how far).
     pub fn set_clips(&mut self, dead: bool, hopping: bool, biting: bool, hurt: bool, phase: u8) {
         let fraction = phase as f32 / 255.0;
-        let length = FROG_EXPLOSION_FRAMES as f32 / FROG_EXPLOSION_FPS;
+        let length = BONG_EXPLOSION_FRAMES as f32 / BONG_EXPLOSION_FPS;
         self.death_elapsed = dead.then_some(fraction * length);
         let mut top = !dead;
         let mut timer = |on: bool, full: f32| -> f32 {
@@ -334,9 +334,9 @@ impl Frog {
             top = false;
             value
         };
-        self.hop_timer = timer(hopping, FROG_HOP_SECONDS);
-        self.attack_timer = timer(biting, FROG_ATTACK_SECONDS);
-        self.hurt_timer = timer(hurt, FROG_HURT_SECONDS);
+        self.hop_timer = timer(hopping, BONG_HOP_SECONDS);
+        self.attack_timer = timer(biting, BONG_ATTACK_SECONDS);
+        self.hurt_timer = timer(hurt, BONG_HURT_SECONDS);
     }
 }
 
@@ -524,13 +524,13 @@ impl Game {
             })
             .collect();
 
-        let mut frogs: Vec<DrawableFrog> = self
+        let mut bongs: Vec<DrawableBong> = self
             .world
-            .query::<&Frog>()
+            .query::<&Bong>()
             .iter()
             .map(|f| {
                 let hopping = f.hop_timer > 0.0;
-                DrawableFrog {
+                DrawableBong {
                     side: f.side,
                     x: quarter_px(f.position.x),
                     y: quarter_px(f.position.y),
@@ -546,7 +546,7 @@ impl Game {
                 }
             })
             .collect();
-        frogs.sort_by_key(|f| f.side == Side::Enemy);
+        bongs.sort_by_key(|f| f.side == Side::Enemy);
 
         let mut pickups: Vec<DrawablePickup> = self
             .world
@@ -599,7 +599,7 @@ impl Game {
             missiles,
             grenades,
             drones,
-            frogs,
+            bongs,
             pickups,
             tiles,
             fires,

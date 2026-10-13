@@ -136,10 +136,10 @@ solver step), in this order, all measured from the struck cell's centre `c`:
     wreck's own fireball, mushroom and parts come from `explosions` as
     every kill's). A wreck is left alone; a tank rolling in through a gate
     is off the field.
-  - *every frog* - either side's - whose collider box
-    (`FROG_COLLIDER_HALF_EXTENT`) reaches inside the radius is killed
-    (`Frog::damage` with its whole health; the Protect round is lost the
-    frame the players' frog dies, as ever).
+  - *every bong* - either side's - whose collider box
+    (`BONG_COLLIDER_HALF_EXTENT`) reaches inside the radius is killed
+    (`Bong::damage` with its whole health; the Protect round is lost the
+    frame the players' bong dies, as ever).
   - *every air target* (docs/fpv-swarm.md §3.3) - either side's drones -
     whose ground point is within the radius is downed
     (`Game::strike_air(.., AirStrike::Rod, ..)`): the rod passed through
@@ -175,7 +175,9 @@ solver step), in this order, all measured from the struck cell's centre `c`:
   - *tall grass* hides nobody for `rod_grass_flat_seconds` (8)
     (`Game::grass_flat`, the hammer's - docs/sonic-hammer.md §1), and its
     tufts out to the shove radius are laid flat (`grass::flatten`,
-    cosmetic).
+    cosmetic). The flat cells reach every client, a joiner's included, in
+    `Snapshot::grass_flat` (protocol 31), so its arrows and minimap read
+    the room's cover.
 - **The shove ring** (`rod_shove_radius_px`, 208, six and a half cells):
   - *every live tank on the field outside the kill circle* whose hull box's
     nearest point `d` is within the radius is **knocked** (`Game::knock`,
@@ -193,8 +195,8 @@ solver step), in this order, all measured from the struck cell's centre `c`:
     client that owns its hull). **No damage** outside the circle: the
     circle is the danger, the ring is a push (§12, decision 7) - though a
     push can throw a hull into lava, a tower's reach or another call.
-  - *every frog* in the ring (its centre) is stunned for
-    `rod_frog_stun_seconds` (1.0) (`Frog::stun`, the hammer's): neither hop
+  - *every bong* in the ring (its centre) is stunned for
+    `rod_bong_stun_seconds` (1.0) (`Bong::stun`, the hammer's): neither hop
     nor bite.
 - **The ground**: a scorch, a rubble ring and a crater (§1, "The crater")
   on dry ground; a splash and the fish on water (below).
@@ -274,7 +276,7 @@ The issue's at-11 is built: it fits the round's existing terrain systems
   `Depth::Shallow` in `Game::water` (`WaterLayout::fill`, current none) -
   and every water rule follows from that one place: the ford's pace and
   grip in place of the pit's, the router's ford price, wet tracks and
-  spray, a burning hull put out, no fire, heat or scorch on it, a frog's
+  spray, a burning hull put out, no fire, heat or scorch on it, a bong's
   hop drawn to it. No fish (a ford is not deep). A sky turned to rain
   mid-round (the dev server's `weather`) fills every crater then
   (`Game::change_weather`); a sky turned to snow freezes them with every
@@ -313,7 +315,7 @@ union.
 `player_phase` and `enemy_phase` do not run and `end_round` has lapsed every
 reticle, so nothing is called. Calls already made run out their countdown
 and land with their whole show - `resolve_zones(f, false)` - and touch
-nothing: no crush, no shove, no tile, no frog, no drone, no crater, no
+nothing: no crush, no shove, no tile, no bong, no drone, no crater, no
 eruption, as a blast on the end screen hurts nobody.
 
 ## 2. Where it lives
@@ -322,11 +324,11 @@ eruption, as a blast on the end screen hurts nobody.
 |---|---|
 | `src/zone.rs` (new) | Zones (§3.3): `Zone` (id, kind, owner, centre, `until` on the round clock - the radius is its kind's knob), `ZoneKind` (`Rod(RodCall)` here; the well adds its own), `Zone::{left, radius, danger_radius, danger, holds, route, wire_kind, rod, provisional}`, `ZONE_ROD`, `PROVISIONAL_ZONE_BASE`; the rules every reader keeps, in its doc |
 | `src/rod.rs` (new) | The weapon's headless half. `RodCall` (struck cell, the caller's seat), `SeatStill` (`step`, `speed`), `Steer`, `Range` (`of`, `hold`, `holds`), `Reticle`, `reticle_start`, `step_reticle` (pure: a stick or an aim cell, the range, the step clock), `rule()` (the rod's `ChargeRule` from the `rod` knobs), `cell_reach`, `falloff`, `shove_speed`, `crater_cells`, `Crater`/`Craters`, `lens`, the composers `compose_reticles`, `compose_calls`, `compose_reticle`, `compose_designator`, `compose_call`, `compose_call_ring`, `compose_column`, `compose_impact`, `compose_crater_smoke` (pure, `pyro::Shape`s), `RodImpactFx`, `Ground`, `CraterWater`, `draw_crater` (generic over `canvas::Canvas`), `module_cell` |
-| `src/simulation/rod.rs` (new) | The world half. `fire_rod` (a release: the call, or the cancel), `place_calls`, `resolve_zones`, `rod_impact` (the walk of §1: `rod_hulls`, `hulls_in_order`, `knock_from`, `rod_frogs`, `rod_tiles`, `rod_ground`), `crater_cells_at`, `make_crater`, `fill_craters`, `struck_volcanoes`, `set_off_volcanoes`, `shift_volcano`, `ground_struck`, `rod_show` (the cosmetic half, which a replica's event takes too), `Game::{zones, craters, seat_still}`, `tick_seat_still`, `set_seat_reticle`/`seat_reticle_report` (a room's report, §8), `any_rod`, `zone_dangers`, `zone_route_cells`, `rod_senses` (§4), `standing_towers_of`, `debug_call_rod`, `Tank::crush` |
+| `src/simulation/rod.rs` (new) | The world half. `fire_rod` (a release: the call, or the cancel), `place_calls`, `resolve_zones`, `rod_impact` (the walk of §1: `rod_hulls`, `hulls_in_order`, `knock_from`, `rod_bongs`, `rod_tiles`, `rod_ground`), `crater_cells_at`, `make_crater`, `fill_craters`, `struck_volcanoes`, `set_off_volcanoes`, `shift_volcano`, `ground_struck`, `rod_show` (the cosmetic half, which a replica's event takes too), `Game::{zones, craters, seat_still}`, `tick_seat_still`, `set_seat_reticle`/`seat_reticle_report` (a room's report, §8), `any_rod`, `zone_dangers`, `zone_route_cells`, `rod_senses` (§4), `standing_towers_of`, `debug_call_rod`, `Tank::crush` |
 | `src/simulation/rod_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/gauss.rs` | The charge trigger generalised by weapon: `SeatCharge::{weapon, reticle, hull_cell}`, `charge_trigger`'s aim arm, `fire_charge` handing a rod's release to `fire_rod` |
 | `src/simulation/weapons.rs` | The rod in the special-weapon dispatch's exclusions |
-| `src/simulation/mod.rs` | `Game::{zones, zone_lead, craters, rod_impacts, seat_still, seat_reticle, screen_flash_strength}`; `Frame::pending_calls`; `resolve_zones` in both branches; `tick_seat_still` before `enemy_phase`; `rod_senses` handed to the special tier; the AI's `drop_charge`; `Footing::at` with the craters; the frog's shy hop from a zone; `change_weather` filling craters; `flash_screen_with`; `tick_presentation` (the impacts' ages); `Event::{RodCalled, RodImpact}`; `TankSnapshot::{rods, rod_hold}` |
+| `src/simulation/mod.rs` | `Game::{zones, zone_lead, craters, rod_impacts, seat_still, seat_reticle, screen_flash_strength}`; `Frame::pending_calls`; `resolve_zones` in both branches; `tick_seat_still` before `enemy_phase`; `rod_senses` handed to the special tier; the AI's `drop_charge`; `Footing::at` with the craters; the bong's shy hop from a zone; `change_weather` filling craters; `flash_screen_with`; `tick_presentation` (the impacts' ages); `Event::{RodCalled, RodImpact}`; `TankSnapshot::{rods, rod_hold}` |
 | `src/simulation/nav.rs` | Crater cells weighed `rod_crater_path_cost`; every zone's cells surcharged in `route_grid_on` |
 | `src/simulation/engage.rs` | `EngageCtx::herd` (§4) |
 | `src/simulation/props.rs` | `DamageCause::Crush` |
@@ -412,7 +414,7 @@ wind-up's arrow (`Tank::windup`, `ArrowKind::Windup`), the AI's
 trigger down; the **dangers** (`Danger`, `DangerShape::Disc`, the `dodge`
 tier, `Brain::out_of_danger`, the edge hold); the **knock** and its skid
 (`Game::knock`, `Event::Shoved::skid`, `seat_knock`); the hammer's
-**frog stun**, **flattened grass** and **fish on the bank**; the swarm's
+**bong stun**, **flattened grass** and **fish on the bank**; the swarm's
 **air targets** (`Game::strike_air`) and its long-lived press show paired
 by payload; `Tank::special`/`active_weapon`/`special_down`/`disable`; the
 press show's claim by input tick; `HitCause` on `Event::Hit`;
@@ -503,10 +505,10 @@ press show's claim by input tick; `HitCause` on `Event::Hit`;
   `rod::shove_speed`, falling off linearly); the hammer's `knock` per
   hull, the footing it stands on taken in. The well's collapse throws with
   it too.
-- **`frog_reflexes`** shies from a zone: a frog that can hop and whose
+- **`bong_reflexes`** shies from a zone: a bong that can hop and whose
   centre is inside a live zone's danger hops away from the zone's centre
   (straight away from it, or along its facing when it stands on the centre)
-  through `combat::frog_hop_target`, before the tank check - a frog under a
+  through `combat::bong_hop_target`, before the tank check - a bong under a
   call gets out if it is not penned or stunned.
 - **`fish::throw_from(point, reach, max)`** - the hammer's throw onto the
   bank from a point rather than a wave.
@@ -635,7 +637,7 @@ docs/gauss-rail.md §3.4, docs/fpv-swarm.md §3.4); nothing placed by weapons
 | `X` rod crate | 34,13 | On the enemy side, so an enemy on shells collects it and calls on a seat that camps |
 
 The rest it needs is there: the start to camp on (the probe's AFK seat camps
-there, the issue's standing target), the players' frog (4,14) and towers
+there, the issue's standing target), the players' bong (4,14) and towers
 (the tesla at 5,6, the gun tower at 7,17) the enemies call on, the enemy
 towers (36,5 and 36,16) a seat calls on, brick, wood and glass to break and
 iron to stand (22..23 x 5..6, 35..36 x 10..11), the drums and their oil
@@ -701,9 +703,9 @@ enemy's pick are not in the snapshot (§12): the probe's trace reads them.
 
 BB-46 (docs/levels.md, "The weapons along the way"): No Man's Land (level
 11) has the rod's first crate at 25,19, a cell of its own behind the sandbag
-line: waves in the open and no frog to lose. Grand Campaign (level 15) has
+line: waves in the open and no bong to lose. Grand Campaign (level 15) has
 the second at 31,17, on the lake shore beside the fort, against the
-super-heavies - mind the players' frog in the fort, which a circle kills. It
+super-heavies - mind the players' bong in the fort, which a circle kills. It
 is never on a Hunt map, where one call ends the hunt.
 
 ## 4. AI
@@ -721,9 +723,9 @@ every call's circle (below, "Reacting to a call").
 pass, only when some live enemy on the field carries an online rod or holds
 a rod charge. It gathers once: every seat on the field (position, hull box,
 `SeatStill`, concealed, hit-alerted for each enemy, `Game::sight_on` at it),
-the standing player towers (cell), the players' frog (position, alive), the
-live enemies (slot, hull box, velocity, whether it hunts the frog), the standing
-enemy towers (cell), the enemies' frog (position), the live zones, and the
+the standing player towers (cell), the players' bong (position, alive), the
+live enemies (slot, hull box, velocity, whether it hunts the bong), the standing
+enemy towers (cell), the enemies' bong (position), the live zones, and the
 field. Then, in owner-slot order, each rod tank that thinks this tick gets a
 `RodSense`:
 
@@ -748,7 +750,7 @@ pub struct RodPick {
     /// The seat the call is used on - what `Ai::shot_at_seat` records at
     /// the release - for a seat's pick.
     pub at_seat: Option<u8>,
-    /// "camper", "lead", "tower" or "frog": the trace's word.
+    /// "camper", "lead", "tower" or "bong": the trace's word.
     pub why: &'static str,
 }
 ```
@@ -768,10 +770,10 @@ tick - in this order of preference:
    the field: the call is led, never at where it stands. A seat moving
    faster is never a target.
 3. **A player tower**, standing: its own cell (the call crushes it).
-4. **The players' frog**, alive: its cell (the frog hops out if it can,
-   §3.2; a stunned or penned frog dies).
+4. **The players' bong**, alive: its cell (the bong hops out if it can,
+   §3.2; a stunned or penned bong dies).
 
-A hunter (`Role::Hunter` while its quarry lives - `Brain::hunting_frog`'s
+A hunter (`Role::Hunter` while its quarry lives - `Brain::hunting_bong`'s
 rule) prefers its quarry to towers (4 before 3).
 For every candidate:
 
@@ -779,33 +781,33 @@ For every candidate:
   seat's sight box (`ai::in_sight_box_of`, against the seat's real
   centre), so the caller is on that seat's screen when it calls and the
   circle - the seat's own spot, or a led spot a few cells off - is too.
-  A tower's or the frog's pick needs no seat's box of its own: its
+  A tower's or the bong's pick needs no seat's box of its own: its
   circle's arrow and minimap mark warn the seats wherever they are (§5).
   But **a call whose circle holds a seat is a call on that seat**: no pick
-  - a tower, the frog, a camper with its couch partner beside it - whose
+  - a tower, the bong, a camper with its couch partner beside it - whose
   circle plus the friend margin reaches a live seat's hull while this tank
   stands outside that seat's box, so the box binds every call that can
   crush a seat, not only the ones aimed at one.
 - **It knows of it**: a seat not hidden from this tank (`concealed` and not
   hit-alerted - the attack tier's rule) and within its sight under the sky
-  (`Game::sight_on` at it); a tower or the frog within `Game::enemy_sight`
+  (`Game::sight_on` at it); a tower or the bong within `Game::enemy_sight`
   of it.
 - **In reach**: the cell inside this tank's reticle range (§1).
 - **Never on its own**: no live enemy - this tank included - whose hull box
   reaches within `rod_kill_radius_px + rod_ai_friend_margin_px` (24) of the
   cell's centre, now or where its velocity carries it in a second; no
   standing enemy tower whose cell box reaches inside `rod_break_radius_px`;
-  not the enemies' own frog within the circle plus the margin.
+  not the enemies' own bong within the circle plus the margin.
 - **Not called twice**: no live zone's centre within two kill radii of the
   cell.
 - **One caller per target**: a candidate a lower-slot rod tank already took
   this frame is skipped. A tank takes its pick only while it can call on
   it - its reticle up, or its reload (`fire_cooldown`) and fire timer out
   -, so one still waiting never keeps the tanks after it from calling (the
-  first armed sweeps' hedge-maze pile-ups: the lowest slot held the frog
+  first armed sweeps' hedge-maze pile-ups: the lowest slot held the bong
   for eight seconds at a time while the pack waited round its pond).
 
-A training dummy (`Ai::frog_only`) gets no pick. No RNG anywhere: fixed
+A training dummy (`Ai::bong_only`) gets no pick. No RNG anywhere: fixed
 preference, then distance from this tank, then the lower seat, then cell
 order.
 
@@ -919,8 +921,8 @@ shove at four cells, a slide of under a cell) - the price of herding. The
 moment the seat's centre is out of the danger its ring is built round the
 seat again and the chase goes on. Eight slots four cells out stand 36 px
 apart on an axis and more than 150 px across axes, so a herd is never three
-tanks within `CLUSTER_RADIUS_PX`, nor a pile-up. Hunters' frog rings are not herded (the
-frog leaves a circle on its own). The herders are the pack's attack tier -
+tanks within `CLUSTER_RADIUS_PX`, nor a pile-up. Hunters' bong rings are not herded (the
+bong leaves a circle on its own). The herders are the pack's attack tier -
 the tanks that shoot; a rod tank with a call left stands off (arm 4) and
 takes no slot.
 
@@ -1189,7 +1191,7 @@ fair); what lingers on the ground is shaded in the lit pass.
   read on the zones' clock): a notched arrowhead in `LASER_RED[2]`, rimmed
   near-black, blinking at `indicator_gate_blink_hz` and twice that in the
   last second; never merged, never left out past `indicator_max_arrows`
-  (the tells', teammates', frogs', volcanoes' and drones' rule). An enemy
+  (the tells', teammates', bongs', volcanoes' and drones' rule). An enemy
   holding a reticle off the screen gets the wind-up's arrow
   (`ArrowKind::Windup`, from the charge) in `HUD_ROD_COLOR`.
 - **The minimap** (`minimap.rs`): a crater cell is `Class::Crater` (RUST_DK)
@@ -1217,13 +1219,13 @@ group:
 | `rod_reticle_delay_seconds` | 0.18 | 0..=1 | A held stick steps the reticle at once, then again after this. |
 | `rod_reticle_repeat_seconds` | 0.06 | 0.01..=1 | Then one cell every this long. An enemy's reticle steps at this pace too. |
 | `rod_countdown_seconds` | 3.0 | 0.5..=15 | From the call to the impact. |
-| `rod_kill_radius_px` | 64 | 8..=160 | The circle: a hull with any part inside it is crushed, a frog killed, a drone downed. |
+| `rod_kill_radius_px` | 64 | 8..=160 | The circle: a hull with any part inside it is crushed, a bong killed, a drone downed. |
 | `rod_break_radius_px` | 104 | 0..=256 | Every breakable tile whose cell reaches inside this goes down; iron, a cone and a door stand. |
 | `rod_shove_radius_px` | 208 | 0..=480 | How far out the impact shoves hulls, falling from the circle's edge to nothing here. |
 | `rod_shove_speed` | 420 | 0..=508 | The shove at the circle's edge (px/s) against the chassis-free mass. |
 | `rod_shove_max_speed` | 480 | 0..=508 | The most any shove gives; the wire's shove reaches 508. |
 | `rod_mass_exponent` | 1.0 | 0..=4 | How hard a heavy chassis resists the shove. |
-| `rod_frog_stun_seconds` | 1.0 | 0..=10 | A frog in the shove ring neither hops nor bites this long. |
+| `rod_bong_stun_seconds` | 1.0 | 0..=10 | A bong in the shove ring neither hops nor bites this long. |
 | `rod_grass_flat_seconds` | 8 | 0..=60 | Tall grass within the break radius hides nobody this long. |
 | `rod_fish_reach_px` | 160 | 0..=480 | Fish within this of an impact are thrown onto the bank... |
 | `rod_fish_throw_max: i32` | 8 | 0..=32 | ...at most this many, nearest first. |
@@ -1396,7 +1398,7 @@ Protocol 20 (from the swarm's 19).
 - **What stays the room's**: the call itself (where and when it lands), the
   crush and its kills (`Hit`, `Wreck`), the shoves (`Shoved` to an owned
   hull), tile deaths (`ObstacleDestroyed`), drums (`Blast`), shields
-  (`ShieldBroken`), drones (`DroneDowned`), frogs (`FrogState`), craters
+  (`ShieldBroken`), drones (`DroneDowned`), bongs (`BongState`), craters
   and the volcanoes' shifts.
 - Sizes (`delta::tests::sizes_of_the_prd_snapshot`): the full snapshot 498
   B (from 489), the idle delta 57 B (from 54); a moving and a busy delta
@@ -1406,15 +1408,15 @@ Protocol 20 (from the swarm's 19).
 
 - **The rod draws no RNG of its own.** The crush is whole damage, the shove
   a computed knock, a tile's crush a death with no fence, sandbag or
-  pass-over roll, a frog's death and stun timers, a drone's downing a
+  pass-over roll, a bong's death and stun timers, a drone's downing a
   strike, the crater and the volcano's shift arithmetic, the fish a hash.
   Its walk is fixed: zones in id order; within an impact the seats in
-  index order then the enemies by slot, then the frogs (the players', the
+  index order then the enemies by slot, then the bongs (the players', the
   enemies'), air targets by key, grenades by id, lanterns by id, tiles by
   cell, crates by cell, oil cells sorted, crater cells sorted. What it sets
   off draws as it always does: a drum's blast its damage rolls and an oil
-  pool's chance where it goes off, a grenade's burst its rolls, a frog's
-  hop out of a circle its jitter - only where a call stands over a frog.
+  pool's chance where it goes off, a grenade's burst its rolls, a bong's
+  hop out of a circle its jitter - only where a call stands over a bong.
 - **The reticle** steps on ticks from the intents (or the reported cell);
   the charge is ticks; the hold report a clamp.
 - **The volcano's cycle stays a pure function of the round clock**: the
@@ -1468,7 +1470,7 @@ seat at cell (3, 6), enemies placed by hand):
 - `a_crater_slows_a_hull_and_fills_under_rain` - the plus of cells, the
   pit's pace, a sky turned to rain making it a ford.
 - `no_crater_in_water`.
-- `a_frog_under_a_call_hops_out_and_a_stunned_one_dies`.
+- `a_bong_under_a_call_hops_out_and_a_stunned_one_dies`.
 - `a_rod_on_a_volcano_sets_it_off` - `RodImpact { erupted }`, the eruption
   on the next tick, no crater on the cone.
 - `a_rod_on_vulkans_crater_sets_it_off` - the same on the shipped
@@ -1497,7 +1499,7 @@ seat at cell (3, 6), enemies placed by hand):
 - Added in review: `a_burning_plank_in_reach_is_crushed`,
   `a_range_board_in_reach_is_crushed_never_lit`,
   `the_impact_sets_off_grenades_breaks_lanterns_lights_oil_and_flattens_grass`,
-  `a_frog_in_the_ring_is_stunned`,
+  `a_bong_in_the_ring_is_stunned`,
   `a_charge_held_inside_a_call_is_dropped_and_its_tank_leaves` (a wind-up
   yields to a call), `a_hammer_enemy_inside_a_call_leaves_rather_than_shout`
   (a special yields to the dodge), `a_hammer_enemy_shoves_a_seat_into_a_call`
@@ -1553,9 +1555,9 @@ stall, a stale start, low progress or jitter. **`offbox-fire`** reads
 `shot_at_seat` at the release, and the fire line gains
 `rod-calls-on-seats`/`rod-calls-offbox`: every enemy `RodCalled` with a
 seat pick whose caller stood outside that seat's box that tick is an
-`offbox-fire` anomaly. A call on a tower or the frog is not a shot at a
+`offbox-fire` anomaly. A call on a tower or the bong is not a shot at a
 seat. **A call is engagement** for `never-arrived`, as a drone launched at
-a seat or the frog is: a rod tank calls from its stand-off, a hunter from
+a seat or the bong is: a rod tank calls from its stand-off, a hunter from
 round its quarry, not necessarily from inside `enemy_attack_range` of the
 seat.
 
@@ -1597,8 +1599,8 @@ defaults'.
 
 **What the review moved.** The armed sweeps' worst - hedge-maze by day,
 clustering 18 and pile-up 15 against ceilings of 11 and 8 - was the pack
-waiting round the frog's pond: one caller per target let the lowest slot
-take the frog while its eight-second fire timer ran, so nobody else
+waiting round the bong's pond: one caller per target let the lowest slot
+take the bong while its eight-second fire timer ran, so nobody else
 called (`a_reloading_rod_tank_leaves_its_target_to_the_next`); with a
 target taken only by a tank that can call, hedge-maze armed reads
 clustering 5 and pile-up 5, the fixtures' armed clustering 11 to 3 and
@@ -1612,7 +1614,7 @@ which a tank at 18 points fleeing (low-progress, wall-grind, a stall) and
 three that never reached the seat are flagged. Every remaining
 `never-arrived` is in a round that hit the 60 s cap with the seat still
 unfound; before the probe counted a call as engagement there were four
-times as many (hunters calling on the frog from round its pond).
+times as many (hunters calling on the bong from round its pond).
 
 **Over a ceiling, reviewed** (as built in brackets): armed by day,
 hedge-maze jitter 45 and churn 46 against 30 and 43 (52, 53; clustering 18
@@ -1672,7 +1674,7 @@ rounds in the defaults comparison above match byte for byte).
 | Night, storm, fog | The reticle, the circle, the beam and the number are drawn unlit and the foot throws red light: the telegraph reads in the dark; the AI calls only on a seat within its sight under the sky |
 | Lamp posts, lanterns | A post in the break radius falls; a lantern is broken |
 | Towers | Either side's in the break radius are crushed (ruin, discharge, cook-off or spill); enemies call on player towers; a seat calls on enemy towers |
-| Frogs | Either side's killed in the circle, stunned in the ring; a frog hops out of a circle if it can; the players' frog is an enemy's target |
+| Bongs | Either side's killed in the circle, stunned in the ring; a bong hops out of a circle if it can; the players' bong is an enemy's target |
 | Crates | Left lying in the crater unless `crate_breakable` |
 | Drums, oil, fires | A drum in the break radius goes off at once and chains; a fused one is left to its fuse; a trail in reach is lit |
 | Trees, grass | Trees crushed, not set alight; grass flat and hiding nobody for a while |
@@ -1695,7 +1697,7 @@ rounds in the defaults comparison above match byte for byte).
 |---|---|
 | The knock and its skid | The rod's shove is the hammer's knock, from the impact out (`knock_from`): one skid model, one validator allowance |
 | A hammer's shove into a call's circle | A hammer enemy shoves a seat into a live call (`lands_in_trouble`); a seat can shove enemies in |
-| A frog stunned by a hammer under a call | Cannot hop out: it dies - the frog-pin combo |
+| A bong stunned by a hammer under a call | Cannot hop out: it dies - the bong-pin combo |
 | A shove on a tank holding a reticle | The charge holds; the reticle is pulled back into range |
 | A hammer tell inside a call's circle | The tell commits (half a second); then the dodge |
 | Flattened grass | The impact flattens grass by the hammer's `grass_flat` |
@@ -1772,11 +1774,11 @@ rounds in the defaults comparison above match byte for byte).
 8. **Every breakable tile within two and a half cells is crushed outright -
    towers too - and nothing is left burning**; iron, cones and doors stand.
    "Breaks every breakable tile nearby" read as gone, not cracked.
-9. **Frogs die in the circle and are stunned in the ring, and a frog hops
+9. **Bongs die in the circle and are stunned in the ring, and a bong hops
    out of a circle on its own** (its shy hop, the evasive hop's sibling).
-   Without it an enemy's call on the frog would be a lost Protect round with
-   nothing a seat could do; with it, a call on the frog drives it out of
-   its spot, and a penned or stunned frog dies - the hammer's frog pin and
+   Without it an enemy's call on the bong would be a lost Protect round with
+   nothing a seat could do; with it, a call on the bong drives it out of
+   its spot, and a penned or stunned bong dies - the hammer's bong pin and
    a call is the combo. *For Oto.*
 10. **Drones over the circle are downed** - the one ground strike that
     reaches the air, because the rod comes down through it. The swarm's
@@ -1809,7 +1811,7 @@ rounds in the defaults comparison above match byte for byte).
     the time the seat has to get its hull out by the room's own judgement.
     The impact itself stays the room's.
 15. **The AI calls only on standing things** - a camper, a slow seat led,
-    a player tower, the frog -, one caller per target, never on a circle
+    a player tower, the bong -, one caller per target, never on a circle
     holding an ally, with its reticle walking visibly to the target and
     resting before the call; and it **herds** by moving its ring round the
     circle. Rejected: calling on any seat in sight (a moving seat would
@@ -1873,10 +1875,10 @@ rounds in the defaults comparison above match byte for byte).
     pick are read through the probe's trace rather than the snapshot - no
     `AiSnapshot` field for a rule that changes as it is tuned.
 30. **The sight box binds every call that can crush a seat** (review): a
-    call on a tower or the frog whose circle holds a seat is a call on that
+    call on a tower or the bong whose circle holds a seat is a call on that
     seat, so it needs that seat's box, like a call aimed at the seat.
-    Rejected: leaving tower and frog calls unbound (an enemy off a seat's
-    screen could crush the seat defending its frog, warned only by the
+    Rejected: leaving tower and bong calls unbound (an enemy off a seat's
+    screen could crush the seat defending its bong, warned only by the
     arrow). *For Oto.*
 31. **Out of a call, a tank waits on its own side** (review): `way_out`
     takes the circle's edge nearest the tank for a danger nobody owns. The
@@ -1912,7 +1914,7 @@ rounds in the defaults comparison above match byte for byte).
     a knock's whole travel at rapier's 400 px/s cap - so it misses most
     knocks); clamping the
     knock's travel against the static boxes by hand (a second collision
-    model beside rapier's, for tiles, deep water, lava and the frogs);
+    model beside rapier's, for tiles, deep water, lava and the bongs);
     a faster push out (`IntegrationParameters` are the whole world's, so
     every round would step differently); a lower speed cap (the shove's
     reach is a tuning decision). Ram and blast knockback, which can throw
@@ -1968,9 +1970,9 @@ docs give:
    before the input tick the `Fired` before it names (`claim_own_call`).
 8. **`Game::knock` callable for a shove out from a point** (`knock_from`),
    the echo to an owned hull with its skid and `seat_knock`'s allowance.
-9. **The hammer's `Frog::stun`, `Game::grass_flat` (per-cell seconds) and
+9. **The hammer's `Bong::stun`, `Game::grass_flat` (per-cell seconds) and
    `fish::Flop`** reachable from a point, not only from a wave.
-10. **`frog_reflexes` open to a second threat** (a zone's centre) beside
+10. **`bong_reflexes` open to a second threat** (a zone's centre) beside
     the nearest tank.
 11. **`Game::strike_air` and `AirStrike`** open to `Rod`.
 12. **`ArrowKind`'s never-dropped set** (the wind-up's, the drones') open to

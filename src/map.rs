@@ -1,7 +1,7 @@
 //! On-disk battlefield map format (see docs/map-editor-design.md): which
 //! object, if any, sits at each grid cell of a hand-authored or
 //! editor-saved battlefield. Deliberately small - a map only overrides the
-//! *interior static terrain* (walls, road, the frog, pickup spawn slots).
+//! *interior static terrain* (walls, road, the bong, pickup spawn slots).
 //! Everything else (border walls, the player fortress, enemy spawns) stays
 //! exactly as procedural as it is without a map; `battlefield::spawn_from_map`
 //! is the module that actually spawns a map's cells into a round, called
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::framing::MapClass;
 use crate::level::{MissionConfig, SpawnConfig};
-use crate::frog::Side;
+use crate::bong::{BongKind, Side};
 use crate::obstacle::{Drum, Material};
 use crate::tower::TowerKind;
 use crate::pickup::PickupKind;
@@ -49,12 +49,13 @@ pub enum CellObject {
     /// (docs/water.md): open lake water is deep - a wall to hulls, nothing
     /// to shots - and every other water cell is a ford that slows a hull,
     /// loosens its grip and, in a north/south stream, carries it
-    /// downstream; fire never takes on it, frogs hop toward it, and the
+    /// downstream; fire never takes on it, bongs hop toward it, and the
     /// AI's router prices a ford and walls off the deep. Not an
     /// `Obstacle`: deep water is static colliders spawned by `Game::init`.
     Water,
-    Frog,
-    /// Player 1's start - singleton like `Frog`. A map without one spawns
+    #[serde(alias = "frog")]
+    Bong,
+    /// Player 1's start - singleton like `Bong`. A map without one spawns
     /// player 1 at the nearest free cell to the centre.
     Start,
     /// Player 2's start in a two-player round - singleton like `Start`.
@@ -63,10 +64,10 @@ pub enum CellObject {
     #[serde(rename = "start2")]
     Start2,
     Pickup { pickup: PickupKind },
-    /// The enemy side's frog (Hunt mission) - singleton like `Frog`.
-    /// Ignored by missions without an enemy frog.
-    #[serde(rename = "enemy_frog")]
-    EnemyFrog,
+    /// The enemy side's bong (Hunt mission) - singleton like `Bong`.
+    /// Ignored by missions without an enemy bong.
+    #[serde(rename = "enemy_bong", alias = "enemy_frog")]
+    EnemyBong,
     /// A wave roll-in gate: must sit on a nav-grid edge cell. A map with
     /// any gate cells uses only those; otherwise gates are scanned from the
     /// wall layout each wave.
@@ -681,6 +682,16 @@ pub struct MapFile {
     /// means a random roll; `--tank2` outranks it.
     #[serde(default)]
     pub tank2: Option<TankKind>,
+    /// The players' bong (TOML: a top-level `bong = "oggle"`, one of the
+    /// player's kinds, `BongKind::of(Side::Player)`). Absent, or naming an
+    /// enemy kind, means Bong Spike; absent is not written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bong: Option<BongKind>,
+    /// The enemy's bong in a Hunt round (TOML: a top-level
+    /// `enemy_bong = "capi"`, one of `BongKind::of(Side::Enemy)`). Absent,
+    /// or naming a player kind, means Bong Blip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enemy_bong: Option<BongKind>,
     /// The look (TOML: a top-level `theme = "grass"|"desert"`, the MAP
     /// panel's THEME row). Absent means grass, and grass is not written
     /// back, so older files re-save unchanged.
@@ -798,6 +809,8 @@ impl MapFile {
             tanks: None,
             tank: None,
             tank2: None,
+            bong: None,
+            enemy_bong: None,
             theme: Theme::default(),
             weather: Skies::CLEAR,
             view: None,
@@ -1034,18 +1047,29 @@ impl MapFile {
         cells.into_iter()
     }
 
-    /// The map's one frog cell, if it placed one - see "Frog: singleton
+    /// Which character `side`'s bong is on this map: the map's `bong` or
+    /// `enemy_bong` when it names one of that side's kinds, else the side's
+    /// default (`BongKind::default_for`).
+    pub fn bong_kind(&self, side: Side) -> BongKind {
+        let named = match side {
+            Side::Player => self.bong,
+            Side::Enemy => self.enemy_bong,
+        };
+        named.filter(|k| k.side() == side).unwrap_or_else(|| BongKind::default_for(side))
+    }
+
+    /// The map's one bong cell, if it placed one - see "Bong: singleton
     /// enforcement" in docs/map-editor-design.md; nothing in `MapFile`
     /// itself enforces the singleton (that's the editor's job when placing
     /// one), this just finds whichever one is there.
-    pub fn frog_cell(&self) -> Option<(i32, i32)> {
+    pub fn bong_cell(&self) -> Option<(i32, i32)> {
         self.iter_cells()
-            .find(|(_, _, obj)| matches!(obj, CellObject::Frog))
+            .find(|(_, _, obj)| matches!(obj, CellObject::Bong))
             .map(|(col, row, _)| (col, row))
     }
 
     /// The map's one player-start cell, if it placed one - same singleton
-    /// convention as `frog_cell` (enforced by the editor when placing one,
+    /// convention as `bong_cell` (enforced by the editor when placing one,
     /// not by this type). `Game::init` reads this directly (rather than
     /// waiting on `battlefield::spawn_from_map`'s output) since the player
     /// is spawned before map terrain is; when a map places no start cell,
@@ -1066,11 +1090,11 @@ impl MapFile {
             .map(|(col, row, _)| (col, row))
     }
 
-    /// The map's one enemy-frog cell (Hunt mission), if it placed one -
-    /// same singleton convention as `frog_cell`.
-    pub fn enemy_frog_cell(&self) -> Option<(i32, i32)> {
+    /// The map's one enemy-bong cell (Hunt mission), if it placed one -
+    /// same singleton convention as `bong_cell`.
+    pub fn enemy_bong_cell(&self) -> Option<(i32, i32)> {
         self.iter_cells()
-            .find(|(_, _, obj)| matches!(obj, CellObject::EnemyFrog))
+            .find(|(_, _, obj)| matches!(obj, CellObject::EnemyBong))
             .map(|(col, row, _)| (col, row))
     }
 
@@ -1125,7 +1149,7 @@ impl MapFile {
 
     /// `(col, row)` if it holds nothing solid, else the nearest cell to it
     /// (by expanding ring, closest first) that doesn't - only walls and
-    /// props block a tank spawn; road/pickup/frog cells are fine to spawn
+    /// props block a tank spawn; road/pickup/bong cells are fine to spawn
     /// on top of. Used as
     /// the fallback player-start position when a map places no `Start` cell
     /// (`Game::init`), so the player never spawns wedged inside a wall a
@@ -1531,7 +1555,7 @@ spawn.size = 2
 spawn.tier_start = "light"
 spawn.tier_end = "heavy"
 tank2 = "titan"
-cells."3,5" = { kind = "enemy_frog" }
+cells."3,5" = { kind = "enemy_bong" }
 cells."4,5" = { kind = "start2" }
 cells."0,11" = { kind = "gate" }
 cells."39,11" = { kind = "gate" }
@@ -1549,7 +1573,7 @@ cells."10,5" = { kind = "portal" }
         assert_eq!(map.spawn.kind, SpawnKind::Waves);
         assert_eq!((map.spawn.waves, map.spawn.size, map.spawn.growth), (Some(4), Some(2), None));
         assert_eq!((map.spawn.tier_start, map.spawn.tier_end), (Some(Tier::Light), Some(Tier::Heavy)));
-        assert_eq!(map.enemy_frog_cell(), Some((3, 5)));
+        assert_eq!(map.enemy_bong_cell(), Some((3, 5)));
         assert_eq!(map.gate_cells(), vec![(0, 11), (39, 11)]);
         // Portals: multi-instance anchors in `iter_cells` order, never solid,
         // so a spawn fallback can stand on one.
@@ -1559,11 +1583,59 @@ cells."10,5" = { kind = "portal" }
         let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
         assert_eq!(back.mission, map.mission);
         assert_eq!(back.spawn, map.spawn);
-        assert_eq!(back.enemy_frog_cell(), map.enemy_frog_cell());
+        assert_eq!(back.enemy_bong_cell(), map.enemy_bong_cell());
         assert_eq!(back.gate_cells(), map.gate_cells());
         assert_eq!(back.portal_cells(), map.portal_cells());
         assert_eq!(back.start2_cell(), Some((4, 5)));
         assert_eq!(back.tank2, Some(TankKind::Titan));
+    }
+
+    #[test]
+    fn a_map_names_its_bongs_and_falls_back_to_each_sides_default() {
+        let map = MapFile::from_toml_str("version = 1\nbong = \"oggle\"\nenemy_bong = \"fuzz\"\n").unwrap();
+        assert_eq!(map.bong_kind(Side::Player), BongKind::Oggle);
+        assert_eq!(map.bong_kind(Side::Enemy), BongKind::Fuzz);
+        let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
+        assert_eq!((back.bong, back.enemy_bong), (Some(BongKind::Oggle), Some(BongKind::Fuzz)));
+
+        let none = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(none.bong_kind(Side::Player), BongKind::Spike);
+        assert_eq!(none.bong_kind(Side::Enemy), BongKind::Blip);
+        assert!(!none.to_toml_string().unwrap().contains("bong"), "an absent pick is not written back");
+
+        // A pick from the other side's kinds is not that side's: the default stands.
+        let swapped = MapFile::from_toml_str("version = 1\nbong = \"puff\"\nenemy_bong = \"spike\"\n").unwrap();
+        assert_eq!(swapped.bong_kind(Side::Player), BongKind::Spike);
+        assert_eq!(swapped.bong_kind(Side::Enemy), BongKind::Blip);
+    }
+
+    /// A player's map saved with the frog's keys still loads, as the bong's.
+    #[test]
+    fn a_map_with_the_old_frog_keys_still_loads() {
+        let text = "version = 1\ncells.\"2,2\" = { kind = \"frog\" }\ncells.\"9,2\" = { kind = \"enemy_frog\" }\ncells.\"5,5\" = { kind = \"pickup\", pickup = \"frog_health\" }\n";
+        let map = MapFile::from_toml_str(text).unwrap();
+        assert_eq!(map.bong_cell(), Some((2, 2)));
+        assert_eq!(map.enemy_bong_cell(), Some((9, 2)));
+        assert_eq!(map.cell(5, 5), Some(&CellObject::Pickup { pickup: PickupKind::BongHealth }));
+        let saved = map.to_toml_string().unwrap();
+        assert!(!saved.contains("frog"), "a re-save writes the bong's keys: {saved}");
+    }
+
+    /// Every shipped map with a bong picks its own, from its side's kinds.
+    #[test]
+    fn every_shipped_map_with_a_bong_names_one_of_its_sides_kinds() {
+        for (name, text) in SHIPPED_MAPS {
+            let map = MapFile::from_toml_str(text).unwrap();
+            if !map.mission.kind.has_player_bong() {
+                continue;
+            }
+            let player = map.bong.unwrap_or_else(|| panic!("{name} names no bong"));
+            assert_eq!(player.side(), Side::Player, "{name}: {player:?} is not a player bong");
+            if map.mission.kind.has_enemy_bong() {
+                let enemy = map.enemy_bong.unwrap_or_else(|| panic!("{name} names no enemy bong"));
+                assert_eq!(enemy.side(), Side::Enemy, "{name}: {enemy:?} is not an enemy bong");
+            }
+        }
     }
 
     #[test]
@@ -1665,9 +1737,9 @@ cells."8,4" = { kind = "water" }
         let mut a = MapFile::new();
         a.set_cell(3, 4, CellObject::Start);
         a.set_cell(10, 2, CellObject::Wall { material: Material::Brick });
-        a.set_cell(2, 10, CellObject::Frog);
+        a.set_cell(2, 10, CellObject::Bong);
         let mut b = MapFile::new();
-        b.set_cell(2, 10, CellObject::Frog);
+        b.set_cell(2, 10, CellObject::Bong);
         b.set_cell(10, 2, CellObject::Wall { material: Material::Brick });
         b.set_cell(3, 4, CellObject::Start);
         assert_eq!(a.revision(), b.revision(), "the order the cells went in");

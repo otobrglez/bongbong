@@ -38,7 +38,7 @@
 //! A provisional runs its projectile's own state machine - the muzzle
 //! frames, then flight (`ProvisionalShot::advance`) - and is swept every
 //! frame against the drawn world through the contact `advance_shots` is
-//! handed: where it meets a tile, the field's edge, a tank or a frog it
+//! handed: where it meets a tile, the field's edge, a tank or a bong it
 //! stops and plays its impact at once. Damage stays the room's.
 //!
 //! **Into a portal** (`ShotStop::Portal`) a provisional goes no further:
@@ -92,7 +92,7 @@
 //! **Measured** (`report`): every correction sorted into the buckets of
 //! `ERROR_BUCKETS_PX`, the largest, nudges and snaps, shots drawn and
 //! refused, the inputs in flight, and the crossings - provisionals stopped
-//! against a drawn tank or frog, and how the room's copy answered them.
+//! against a drawn tank or bong, and how the room's copy answered them.
 //! The dev server's `status.round` reads it and the rig's tests assert on
 //! it.
 
@@ -273,7 +273,7 @@ struct Live {
 pub enum ShotStop {
     /// A tile, the field's edge or an opposing shell: it bursts there.
     Struck,
-    /// A tank or a frog: it bursts there, and the room's word on the hit
+    /// A tank or a bong: it bursts there, and the room's word on the hit
     /// is scored against it (`crossings`).
     Body,
     /// A portal: it goes in there and leaves the picture; its room copy
@@ -476,7 +476,7 @@ pub struct PredictionReport {
     /// Provisional shots on screen right now.
     pub shots_on_screen: usize,
     /// Provisional shots this client drew stopping against a tank or a
-    /// frog in its own picture (decision 9's measurement, §4.16).
+    /// bong in its own picture (decision 9's measurement, §4.16).
     pub crossings: u32,
     /// Of those, the ones whose paired room copy burst within
     /// `HIT_MATCH_PX` of where the provisional stopped: the room hit it too.

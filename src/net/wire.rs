@@ -5,14 +5,15 @@
 //! replica, and both sides only ever see the same bytes.
 //!
 //! Every family in a `Snapshot` is a vector sorted by its key (`tanks` by
-//! `id`, `shots` by `id`, `frogs` by side, `tiles` and `fires` by `cell`,
-//! `bonus_pickups` by cell then kind) with each key at most once;
+//! `id`, `shots` by `id`, `bongs` by side, `tiles`, `fires` and
+//! `grass_flat` by `cell`, `bonus_pickups` by cell then kind) with each
+//! key at most once;
 //! `Snapshot::normalise` establishes that order and `delta` relies on it.
 
 use serde::{Deserialize, Serialize};
 
 use crate::ai::Intent;
-use crate::frog::Side;
+use crate::bong::Side;
 use crate::level::{LevelOverrides, Mission, SpawnKind, Tier};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
@@ -93,7 +94,7 @@ pub fn dequantise_heading(q: u8) -> f32 {
 }
 
 /// Health in whole points, rounded to the nearest and saturated at 0 and
-/// 255: enough for a hull (`MAX_DAMAGE` 100), a frog and every wall, the
+/// 255: enough for a hull (`MAX_DAMAGE` 100), a bong and every wall, the
 /// iron one at 220 included. NaN becomes 0.
 pub fn quantise_health(hp: f32) -> u8 {
     saturate_u8(hp)
@@ -164,7 +165,7 @@ pub fn dir_from_index(index: u8) -> Option<Dir> {
     Dir::ALL.get(index as usize).copied()
 }
 
-/// A frog's side as one byte: 0 the player's, 1 the enemy's.
+/// A bong's side as one byte: 0 the player's, 1 the enemy's.
 pub fn side_code(side: Side) -> u8 {
     match side {
         Side::Player => 0,
@@ -676,26 +677,26 @@ pub struct GrenadeState {
     pub fuse: u16,
 }
 
-/// Bits of `FrogState::state`.
-pub mod frog_flags {
-    /// The frog is dead.
+/// Bits of `BongState::state`.
+pub mod bong_flags {
+    /// The bong is dead.
     pub const DEAD: u8 = 1 << 0;
-    /// The frog is mid-hop toward (`hop_x`, `hop_y`).
+    /// The bong is mid-hop toward (`hop_x`, `hop_y`).
     pub const HOPPING: u8 = 1 << 1;
-    /// The frog was hurt recently (the hurt clip plays).
+    /// The bong was hurt recently (the hurt clip plays).
     pub const HURT: u8 = 1 << 2;
-    /// The frog is biting.
+    /// The bong is biting.
     pub const BITING: u8 = 1 << 3;
-    /// A sonic hammer's wave stunned it (`Frog::stun_timer`).
+    /// A sonic hammer's wave stunned it (`Bong::stun_timer`).
     pub const STUNNED: u8 = 1 << 4;
-    /// A gravity well holds it in its pull (`Frog::pulled`).
+    /// A gravity well holds it in its pull (`Bong::pulled`).
     pub const PULLED: u8 = 1 << 5;
 }
 
-/// One of the round's frogs (the player's, and the Hunt mission's enemy
-/// frog), keyed by side.
+/// One of the round's bongs (the player's, and the Hunt mission's enemy
+/// bong), keyed by side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FrogState {
+pub struct BongState {
     pub side: Side,
     /// Quarter pixels (`quantise_pos`).
     pub x: i16,
@@ -703,7 +704,7 @@ pub struct FrogState {
     pub y: i16,
     /// Health left, whole points (`quantise_health`).
     pub hp: u8,
-    /// `frog_flags` bits.
+    /// `bong_flags` bits.
     pub state: u8,
     /// How far the current hop or bite has come, 0..=255 over its length,
     /// so the client plays the clip in step with the server.
@@ -715,7 +716,7 @@ pub struct FrogState {
 }
 
 /// A pickup the Health slot's bonus roll dropped beside a slot
-/// (`maybe_spawn_health_slot_bonuses`): a shield or a frog health pack,
+/// (`maybe_spawn_health_slot_bonuses`): a shield or a bong health pack,
 /// which have no map slot of their own and so travel as explicit cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BonusPickup {
@@ -895,6 +896,19 @@ pub struct CraterState {
     pub tick: u32,
 }
 
+/// A tall-grass cell a sonic wave or a rod's impact flattened
+/// (`Game::grass_flat`), by its cell: it hides nobody until the round tick
+/// `until`. A tick rather than the time left, so an entry changes only
+/// when the cell is flattened again and costs a delta nothing meanwhile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrassFlatState {
+    /// `encode::cell_index` of the cell.
+    pub cell: u16,
+    /// The round tick the cell hides again (`Game::frame` plus its ticks
+    /// left).
+    pub until: u32,
+}
+
 /// An oil print (`simulation::OilPrint`), by its cell.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OilPrintState {
@@ -965,7 +979,7 @@ pub struct Snapshot {
     pub grenades: Vec<GrenadeState>,
     /// FPV drones in the air, by `Drone::id`.
     pub drones: Vec<DroneState>,
-    pub frogs: Vec<FrogState>,
+    pub bongs: Vec<BongState>,
     /// One bit per map pickup slot, set while its pickup is on the field.
     pub pickups: u64,
     pub bonus_pickups: Vec<BonusPickup>,
@@ -993,6 +1007,10 @@ pub struct Snapshot {
     /// `smoke_cover`), sorted cell indices: what the replica's cover - its
     /// arrows - reads. Empty with the knob off.
     pub smoke_cells: Vec<u16>,
+    /// The flattened grass (`GrassFlatState`), by cell: what the
+    /// replica's cover - its arrows - leaves out until each stands back
+    /// up, a joiner's included.
+    pub grass_flat: Vec<GrassFlatState>,
     pub round: RoundState,
     /// What happened on the ticks since the previous snapshot, the AI's
     /// trace left out (`WireEvent::from_event`).
@@ -1009,8 +1027,8 @@ impl Snapshot {
         self.shots.dedup_by_key(|s| s.id);
         self.drones.sort_by_key(|d| d.id);
         self.drones.dedup_by_key(|d| d.id);
-        self.frogs.sort_by_key(|f| side_code(f.side));
-        self.frogs.dedup_by_key(|f| side_code(f.side));
+        self.bongs.sort_by_key(|f| side_code(f.side));
+        self.bongs.dedup_by_key(|f| side_code(f.side));
         self.bonus_pickups.sort();
         self.bonus_pickups.dedup();
         self.tiles.sort_by_key(|t| t.cell);
@@ -1031,6 +1049,8 @@ impl Snapshot {
         self.well_drums.dedup_by_key(|d| d.id);
         self.smoke_cells.sort();
         self.smoke_cells.dedup();
+        self.grass_flat.sort_by_key(|g| g.cell);
+        self.grass_flat.dedup_by_key(|g| g.cell);
         self.air.sort_by_key(|a| a.id);
         self.air.dedup_by_key(|a| a.id);
     }

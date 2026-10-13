@@ -87,7 +87,7 @@
 //!
 //! What blends and what does not:
 //!
-//! - Positions - hulls, shots, missiles, grenades, frogs - move linearly
+//! - Positions - hulls, shots, missiles, grenades, bongs - move linearly
 //!   between the two ends of the bracket, on the wire's own quarter-pixel
 //!   grid; a missile's and a grenade's height too, and a missile's two
 //!   headings by the shortest arc.
@@ -131,7 +131,7 @@
 //! `minigun_bullet_speed`, `plasma_speed`) and a missile along its ground
 //! heading at the speed its last two snapshots show, both for
 //! `SHOT_EXTRAPOLATE_MS`; a shot at the muzzle or in its impact frames
-//! holds. Frogs hold: a hop is a scripted arc the wire describes whole.
+//! holds. Bongs hold: a hop is a scripted arc the wire describes whole.
 //!
 //! **Corrections ease** (`Interpolator::offsets`). When the snapshots that
 //! arrive after an extrapolated frame place an entity somewhere other
@@ -1521,10 +1521,10 @@ from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
             craft.heading = lerp_heading(craft.heading, next.heading, alpha);
         }
     }
-    for frog in &mut out.frogs {
-        if let Some(next) = to.frogs.iter().find(|f| f.side == frog.side) {
-            frog.x = lerp(frog.x, next.x, alpha);
-            frog.y = lerp(frog.y, next.y, alpha);
+    for bong in &mut out.bongs {
+        if let Some(next) = to.bongs.iter().find(|f| f.side == bong.side) {
+            bong.x = lerp(bong.x, next.x, alpha);
+            bong.y = lerp(bong.y, next.y, alpha);
         }
     }
     // A crate a gravity well draws off its cell slides between the two
@@ -1551,7 +1551,7 @@ fn blend_missile(missile: &mut MissileState, next: &MissileState, alpha: f32) {
 /// `from` carried `ahead_ms` past its tick: hulls on their last velocity
 /// and then dead-blended to a stop, flying shots along their heading at
 /// their kind's speed, missiles and drones along their ground heading at
-/// the speed `before` -> `from` shows. Frogs and everything else hold.
+/// the speed `before` -> `from` shows. Bongs and everything else hold.
 fn extrapolate(from: &Snapshot, before: Option<&Snapshot>, ahead_ms: f64) -> Snapshot {
     let mut out = from.clone();
     if ahead_ms <= 0.0 {
@@ -1628,8 +1628,8 @@ fn offset(a: i16, px: f32) -> i16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frog::Side;
-    use crate::net::wire::{FrogState, POSITION_STEPS_PER_PX, quantise_heading, quantise_velocity};
+    use crate::bong::Side;
+    use crate::net::wire::{BongState, POSITION_STEPS_PER_PX, quantise_heading, quantise_velocity};
 
     /// A snapshot at `tick`, stamped as the room would, with one hull
     /// moving right at 200 px/s: 13 quarter pixels a tick.
@@ -1646,7 +1646,7 @@ mod tests {
                 hp: 100,
                 ..Default::default()
             }],
-            frogs: vec![FrogState { side: Side::Player, x: 100, y: 100, hp: 100, state: 0, phase: 0, hop_x: 0, hop_y: 0 }],
+            bongs: vec![BongState { side: Side::Player, x: 100, y: 100, hp: 100, state: 0, phase: 0, hop_x: 0, hop_y: 0 }],
             ..Default::default()
         }
     }
@@ -1751,7 +1751,7 @@ mod tests {
         let x_at = |interp: &mut Interpolator, past: f64| {
             let frame = interp.sample(at(interp, at_newest + past)).expect("a frame");
             assert!(frame.extrapolated, "{past} ms past the newest snapshot is a guess");
-            assert_eq!(frame.snapshot.frogs[0].x, newest.frogs[0].x, "a frog holds");
+            assert_eq!(frame.snapshot.bongs[0].x, newest.bongs[0].x, "a bong holds");
             frame.snapshot.tanks[0].x as f64 - newest.tanks[0].x as f64
         };
         let fifty = x_at(&mut interp, 50.0);

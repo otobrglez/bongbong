@@ -38,6 +38,7 @@ use crate::net::client::{ClientEvent, Phase, RoomClient};
 use crate::net::clock::{RttClock, RttReport};
 use crate::net::interp::{InterpReport, Interpolator};
 use crate::net::mailbox;
+use crate::net::now::Now;
 use crate::net::predict::{PredictionReport, Predictor};
 use crate::net::transport::Transport;
 use crate::net::events::WireEvent;
@@ -214,6 +215,9 @@ pub struct OnlineRound<T: Transport> {
     label: &'static str,
     /// The local clock the interpolator measures against.
     opened: Instant,
+    /// What `opened` and every arrival are read on: the wall unless a
+    /// test winds it (`set_clock`).
+    clock: Now,
     /// The start has gone out; it is not asked for twice.
     start_sent: bool,
     /// Real seconds owed toward the next intent packet.
@@ -312,6 +316,7 @@ impl<T: Transport> OnlineRound<T> {
             interp: Interpolator::default(),
             label,
             opened: Instant::now(),
+            clock: Now::wall(),
             start_sent: false,
             predictor: None,
             send_owed: 0.0,
@@ -392,6 +397,17 @@ impl<T: Transport> OnlineRound<T> {
     /// samples up with them.
     pub fn local_clock_ms(&self) -> i64 {
         self.local_ms()
+    }
+
+    /// Read the time on `clock` from here on - the round, and the client
+    /// under it - with the round opening now on it. Before the first
+    /// frame: a test hands the round, and both ends of its loopback link,
+    /// one manual clock, so render time moves only when the test moves it
+    /// (`net::now`).
+    pub fn set_clock(&mut self, clock: Now) {
+        self.opened = clock.now();
+        self.client.set_clock(clock.clone());
+        self.clock = clock;
     }
 
     /// Whether this client owns its hull (stage 3) or predicts it (stage
@@ -648,7 +664,7 @@ impl<T: Transport> OnlineRound<T> {
     /// Local time in milliseconds since this round was opened: the clock
     /// the server's `server_ms` stamps are measured against.
     fn local_ms(&self) -> i64 {
-        self.opened.elapsed().as_millis().min(i64::MAX as u128) as i64
+        self.clock.since(self.opened).as_millis().min(i64::MAX as u128) as i64
     }
 
     /// An arrival instant on the same clock as `local_ms`.
@@ -1279,7 +1295,7 @@ impl<T: Transport> OnlineRound<T> {
     /// a press since the last frame ripples the muzzle its first shot left
     /// and kicks the turret (what a replica does on a `Fired`, drawn here on
     /// the press instead of a round trip later); each shot flies by its own state
-    /// machine and stops at the first tile, edge, tank or frog it meets,
+    /// machine and stops at the first tile, edge, tank or bong it meets,
     /// its impact drawn there at once; beams pressed since the last frame
     /// are drawn to where they stop.
     fn fly_own_shots(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8, shells: &[IncomingShell]) {
@@ -1303,7 +1319,7 @@ impl<T: Transport> OnlineRound<T> {
             let to = portal.unwrap_or(to);
             let mut world_hit = world
                 .shot_contact(Some(seat), from, to, shot_half_extent(kind))
-                .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Frog)));
+                .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Bong)));
             // A bullet stops at a drone of the other side's it crosses
             // first, as the room's sweep has it; the drone stays up until
             // the room says it is down.
@@ -2034,6 +2050,11 @@ mod tests {
         link: loopback::Loopback,
         game: Game,
         server_ms: u32,
+        /// The one clock the round, its client and both ends of the link
+        /// read (`net::now`): it stands still until a test advances it, so
+        /// render time and every arrival land on the same instants on
+        /// every run, however loaded the machine.
+        clock: Now,
     }
 
     impl Room {
@@ -2073,12 +2094,19 @@ mod tests {
     }
 
     fn room_and_round() -> (Room, OnlineRound<loopback::Loopback>) {
-        let (client_end, room_end) = loopback::pair(LinkQuality::PERFECT, 11);
-        let room = Room { link: room_end, game: authority(), server_ms: 1_000 };
+        let clock = Now::manual();
+        let (mut client_end, mut room_end) = loopback::pair(LinkQuality::PERFECT, 11);
+        client_end.set_clock(clock.clone());
+        room_end.set_clock(clock.clone());
         let client =
             RoomClient::host(client_end, Identity::new("host", "tok"), RoomSetup { seed: Some(0xB0B5), ..RoomSetup::default() });
-        (room, OnlineRound::new(client, "RIG"))
+        let mut round = OnlineRound::new(client, "RIG");
+        round.set_clock(clock.clone());
+        (Room { link: room_end, game: authority(), server_ms: 1_000, clock }, round)
     }
+
+    /// The steps the tests' frames are apart on the round's clock.
+    const STEP: std::time::Duration = std::time::Duration::from_millis(4);
 
     #[test]
     fn a_welcome_builds_the_replica_and_a_snapshot_draws_it() {
@@ -2461,10 +2489,10 @@ mod tests {
         let mut fired = quiet(&room, 21);
         fired.events = vec![WireEvent::Fired { slot: 0, weapon: crate::net::wire::WeaponKind::Shell, input_tick: pressed }];
         room.say(Msg::Snapshot(fired));
-        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = room.clock.now() + std::time::Duration::from_secs(3);
         let mut handed_over = false;
-        while !handed_over && Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(4));
+        while !handed_over && room.clock.now() < deadline {
+            room.clock.advance(STEP);
             round.frame(&Intent::default(), 1.0 / 60.0);
             let game = round.game().expect("a replica");
             handed_over = game.events().iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. }));
@@ -2484,15 +2512,15 @@ mod tests {
         s
     }
 
-    /// Frames, a few milliseconds apart, until the picture hands over this
+    /// Frames, `STEP` apart on `clock`, until the picture hands over this
     /// seat's `Fired` - render time reaching the snapshot that carried it -
     /// and that frame's events; `None` if it never does. The frames owe no
     /// packets (`dt` 0), so the sandbox stands on the tick it had: render
-    /// time runs on the wall clock whatever a frame's `dt` says.
-    fn until_handed_over(round: &mut OnlineRound<loopback::Loopback>) -> Option<Vec<crate::simulation::Event>> {
-        let deadline = Instant::now() + std::time::Duration::from_secs(3);
-        while Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(4));
+    /// time runs on the round's clock whatever a frame's `dt` says.
+    fn until_handed_over(round: &mut OnlineRound<loopback::Loopback>, clock: &Now) -> Option<Vec<crate::simulation::Event>> {
+        let deadline = clock.now() + std::time::Duration::from_secs(3);
+        while clock.now() < deadline {
+            clock.advance(STEP);
             round.frame(&Intent::default(), 0.0);
             let events = round.game().expect("a replica").events();
             if events.iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. })) {
@@ -2554,7 +2582,7 @@ mod tests {
             beam(drawn_x),
         ];
         room.say(Msg::Snapshot(fired));
-        let events = until_handed_over(&mut round).expect("the room's `Fired` reached the picture");
+        let events = until_handed_over(&mut round, &room.clock).expect("the room's `Fired` reached the picture");
         let beams: Vec<f32> = events
             .iter()
             .filter_map(|e| if let crate::simulation::Event::LaserBeam { x0, .. } = e { Some(*x0) } else { None })
@@ -2625,10 +2653,10 @@ mod tests {
         assert_eq!(launched.drones.len(), 1, "the room's copy in its snapshot");
         let room_id = launched.drones[0].id as u32;
         room.say(Msg::Snapshot(launched));
-        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = room.clock.now() + std::time::Duration::from_secs(3);
         let (mut handed_over, mut swapped) = (false, false);
-        while !swapped && Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(4));
+        while !swapped && room.clock.now() < deadline {
+            room.clock.advance(STEP);
             // The drone's climb runs on the frame's time.
             round.frame(&Intent::default(), 0.004);
             let drones = seat_drones(&round);
@@ -2712,10 +2740,10 @@ mod tests {
         let _ = (w, h);
         assert_eq!(called.zones.len(), 1, "the room's zone in its snapshot");
         room.say(Msg::Snapshot(called));
-        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = room.clock.now() + std::time::Duration::from_secs(3);
         let mut swapped = false;
-        while !swapped && Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(4));
+        while !swapped && room.clock.now() < deadline {
+            room.clock.advance(STEP);
             round.frame(&Intent::default(), 0.004);
             let zones = seat_zones(&round);
             assert!(zones.len() <= 1, "two calls of the seat drawn: {zones:?}");
@@ -2785,21 +2813,21 @@ mod tests {
                 .map(|d| (d.id, d.stage))
                 .collect()
         };
-        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = room.clock.now() + std::time::Duration::from_secs(3);
         let mut claimed_at: Option<Instant> = None;
         let mut fall_shown = None;
-        while fall_shown.is_none() && Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(4));
+        while fall_shown.is_none() && room.clock.now() < deadline {
+            room.clock.advance(STEP);
             round.frame(&Intent::default(), 0.004);
             let drones = seat_drones(&round);
             assert!(drones.len() <= 1, "two drones of the seat drawn: {drones:?}");
             if claimed_at.is_none()
                 && round.game().expect("a replica").events().iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. }))
             {
-                claimed_at = Some(Instant::now());
+                claimed_at = Some(room.clock.now());
             }
             if drones == vec![(room_id, crate::fpv::DroneStage::Falling)] {
-                fall_shown = claimed_at.map(|at| at.elapsed());
+                fall_shown = claimed_at.map(|at| room.clock.since(at));
             }
         }
         let fall_shown = fall_shown.expect("the room's falling copy took over");
@@ -2838,13 +2866,13 @@ mod tests {
         round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
         assert_eq!((seat_drones(&round), count(&round)), (1, 5), "drawn on the press, the count one down");
         // The room never launches it: its snapshots go on as they were.
-        let deadline = Instant::now() + std::time::Duration::from_secs(4);
+        let deadline = room.clock.now() + std::time::Duration::from_secs(4);
         let mut tick = 21u32;
-        while seat_drones(&round) > 0 && Instant::now() < deadline {
+        while seat_drones(&round) > 0 && room.clock.now() < deadline {
             let s = on_schedule(&room, tick);
             room.say(Msg::Snapshot(s));
             tick += 1;
-            std::thread::sleep(std::time::Duration::from_millis(4));
+            room.clock.advance(STEP);
             round.frame(&Intent::default(), 1.0 / 60.0);
         }
         assert_eq!(seat_drones(&round), 0, "the refused launch left the picture");
@@ -2862,7 +2890,7 @@ mod tests {
         let launch = |input_tick: u32, id: u16| {
             vec![
                 WireEvent::Fired { slot: 0, weapon: WeaponKind::FpvSwarm, input_tick },
-                WireEvent::DroneLaunched { id, slot: 0, x: 0, y: 0, target: crate::net::events::NO_TARGET, frog: false },
+                WireEvent::DroneLaunched { id, slot: 0, x: 0, y: 0, target: crate::net::events::NO_TARGET, bong: false },
             ]
         };
         // The room fired the second press: the first was refused.
@@ -2929,7 +2957,7 @@ mod tests {
         let latest = round.client.intent_tick() - 1;
         fired.events = vec![WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: latest }];
         room.say(Msg::Snapshot(fired));
-        until_handed_over(&mut round).expect("the room's `Fired` reached the picture");
+        until_handed_over(&mut round, &room.clock).expect("the room's `Fired` reached the picture");
         let cooldown = round.prediction().map_or(0.0, |p| p.cooldown);
         assert!(cooldown > 0.0, "the room's shot did not hold the local gate");
     }
@@ -3022,7 +3050,7 @@ mod tests {
         let before = round.local_clock_ms();
         room.welcome();
         let after = round.local_clock_ms();
-        std::thread::sleep(std::time::Duration::from_millis(120));
+        room.clock.advance(std::time::Duration::from_millis(120));
         round.frame(&Intent::default(), 1.0 / 60.0);
         assert!(round.game().is_some(), "the welcome built a replica");
         // A reading is the room's send time less the arrival: the arrival
@@ -3041,25 +3069,46 @@ mod tests {
     /// before `tick_presentation` lays the frame's marks. The hop is
     /// shorter than `net::apply`'s own jump distance, so nothing else
     /// would catch it.
+    ///
+    /// The room's snapshots come one a tick, a frame each, on the round's
+    /// manual clock. The band's hulls are put down facing the way they
+    /// fight while the drawn ones start facing up, and the swing round
+    /// is a pivot on the spot that presses marks of its own, so the
+    /// marks are counted from once every hull faces the way it was put.
     #[test]
     fn a_hull_that_jumped_presses_no_tread_marks_across_the_jump() {
         let (mut room, mut round) = room_and_round();
         room.welcome();
-        round.frame(&Intent::default(), 1.0 / 60.0);
-        let tracks_before = round.game().expect("a replica").wear().presses();
+        round.frame(&Intent::default(), PHYSICS_FIXED_DT);
         let enemy = room.game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("an enemy in slot 1");
         let from = enemy.position;
         let to = crate::math::Vec2::new(from.x + 40.0, from.y);
-        let send = |room: &mut Room, tick: u32, events: Vec<WireEvent>| {
+        let tick_time = std::time::Duration::from_secs_f32(PHYSICS_FIXED_DT);
+        let mut tick = 0u32;
+        // The room's next tick, sent, and the frame that follows it.
+        let mut play = |room: &mut Room, round: &mut OnlineRound<loopback::Loopback>, events: Vec<WireEvent>| {
+            tick += 1;
+            room.clock.advance(tick_time);
             let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
             s.tick = tick;
             s.server_ms = 1_000 + crate::net::interp::tick_ms(tick).round() as u32;
             s.events = events;
             room.say(Msg::Snapshot(s));
+            round.frame(&Intent::default(), PHYSICS_FIXED_DT);
+            u64::from(tick)
         };
-        for tick in 1..8 {
-            send(&mut room, tick, Vec::new());
+        let facing = |round: &OnlineRound<loopback::Loopback>| -> bool {
+            round.game().expect("a replica").world.query::<&Tank>().iter().all(|t| t.visual_rotation == t.rotation)
+        };
+        for _ in 0..60 {
+            play(&mut room, &mut round, Vec::new());
+            if facing(&round) {
+                break;
+            }
         }
+        assert!(facing(&round), "every drawn hull swung round to the way it was put");
+        let tracks_before = round.game().expect("a replica").wear().presses();
+
         room.game.debug_teleport(1, to, None).expect("the enemy moves");
         let hop = WireEvent::Teleported {
             slot: 1,
@@ -3068,21 +3117,17 @@ mod tests {
             to_x: crate::net::wire::quantise_pos(to.x),
             to_y: crate::net::wire::quantise_pos(to.y),
         };
-        send(&mut room, 8, vec![hop]);
-        for tick in 9..=20 {
-            send(&mut room, tick, Vec::new());
-        }
-        // Render time steers toward the newest ticks at its own pace; the
-        // frames run until it has passed the hop.
-        for _ in 0..100 {
-            round.frame(&Intent::default(), 1.0 / 60.0);
-            if round.game().is_some_and(|g| g.frame() >= 10) {
+        let hopped = play(&mut room, &mut round, vec![hop]);
+        // Render time trails the newest tick by the picture's delay; the
+        // ticks run until it has passed the hop.
+        for _ in 0..60 {
+            if round.game().is_some_and(|g| g.frame() > hopped) {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            play(&mut room, &mut round, Vec::new());
         }
         let replica = round.game().expect("a replica");
-        assert!(replica.frame() >= 10, "the picture passed the hop: frame {}", replica.frame());
+        assert!(replica.frame() > hopped, "the picture passed the hop on tick {hopped}: frame {}", replica.frame());
         let drawn = replica.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("the enemy");
         assert!(drawn.position.distance_to(to) < 1.0, "drawn where it landed: {:?}", drawn.position);
         assert_eq!(replica.wear().presses(), tracks_before, "tread marks were pressed across the hop");

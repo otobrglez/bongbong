@@ -2101,7 +2101,7 @@ version = 1
 size = [16, 8]
 tanks = 0
 spawn.kind = "band"
-cells."1,1" = { kind = "frog" }
+cells."1,1" = { kind = "bong" }
 cells."4,4" = { kind = "start" }
 cells."11,4" = { kind = "start2" }
 "#;

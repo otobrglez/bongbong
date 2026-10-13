@@ -24,7 +24,7 @@
 use crate::math;
 use crate::blast::{seed_for, BlastKind};
 use crate::bullet::{Bullet, BulletState};
-use crate::frog::Side;
+use crate::bong::Side;
 use crate::fx::{Impact, ImpactKind};
 use crate::laser::LaserVariant;
 use crate::map::{Skies, Weather};
@@ -749,7 +749,7 @@ fn heading(rotation: f32) -> Vec2 {
 }
 
 /// Every light the round throws this frame under `look`, each already
-/// cast against the walls: headlights and hull glows, the frogs and the
+/// cast against the walls: headlights and hull glows, the bongs and the
 /// pickups, portals, fires, fuses and burning wrecks, blasts, every shot,
 /// flash and beam in flight, and the flash of every hit the particle layer
 /// is playing (`impacts`: `fx.rs` is the window's, not the round's). Empty
@@ -836,15 +836,15 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
         out.push(Light::point(at, t.fire_light_radius_px * 0.5, heat).unshadowed());
     }
 
-    // The frogs and the pickups, faintly, so a lamp can find them.
+    // The bongs and the pickups, faintly, so a lamp can find them.
     if t.pickup_glow_strength > 0.0 {
-        for frog_entity in [game.frog, game.enemy_frog].into_iter().flatten() {
-            let (at, color, dead) = crate::simulation::with_frog(&game.world, frog_entity, |frog| {
-                let color = match frog.side {
+        for bong_entity in [game.bong, game.enemy_bong].into_iter().flatten() {
+            let (at, color, dead) = crate::simulation::with_bong(&game.world, bong_entity, |bong| {
+                let color = match bong.side {
                     Side::Player => [0.45, 1.0, 0.55],
                     Side::Enemy => [1.0, 0.45, 0.55],
                 };
-                (frog.position, color, frog.is_dead())
+                (bong.position, color, bong.is_dead())
             });
             if !dead {
                 out.push(Light::point(at, 38.0, scale(color, k * t.pickup_glow_strength)).unshadowed());
@@ -1371,7 +1371,7 @@ mod tests {
         let game = round(
             r#"
 version = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."20,12" = { kind = "start" }
 cells."10,5" = { kind = "wall", material = "brick" }
 cells."10,8" = { kind = "wall", material = "glass" }
@@ -1425,13 +1425,13 @@ cells."14,5" = { kind = "wall", material = "wood" }
 
     #[test]
     fn a_view_keeps_only_the_lights_that_reach_it() {
-        let game = round("version = 1\ncells.\"2,2\" = { kind = \"frog\" }\ncells.\"10,8\" = { kind = \"start\" }\n");
+        let game = round("version = 1\ncells.\"2,2\" = { kind = \"bong\" }\ncells.\"10,8\" = { kind = \"start\" }\n");
         let t = Tuning::DEFAULT;
         let look = Look::of(Weather::Night, &t);
         let all = lights(&game, &[], &look, &t);
         assert!(!all.is_empty());
         assert_eq!(lights_in(&game, &[], &look, &t, None).len(), all.len(), "no view keeps every light");
-        // Far from the hull at cell (10, 8) and the frog at (2, 2).
+        // Far from the hull at cell (10, 8) and the bong at (2, 2).
         let far = Rectangle::new(900.0, 400.0, 100.0, 100.0);
         assert!(lights_in(&game, &[], &look, &t, Some(far)).is_empty());
         // Over the hull: its headlight and everything else round it.
@@ -1443,7 +1443,7 @@ cells."14,5" = { kind = "wall", material = "wood" }
 
     #[test]
     fn a_hull_throws_a_beam_ahead_and_a_wall_cuts_it_short() {
-        let open = round("version = 1\ncells.\"2,2\" = { kind = \"frog\" }\ncells.\"10,8\" = { kind = \"start\" }\n");
+        let open = round("version = 1\ncells.\"2,2\" = { kind = \"bong\" }\ncells.\"10,8\" = { kind = \"start\" }\n");
         let t = Tuning::DEFAULT;
         let look = Look::of(Weather::Night, &t);
         let lights = lights(&open, &[], &look, &t);
@@ -1451,7 +1451,7 @@ cells."14,5" = { kind = "wall", material = "wood" }
         assert!(beam.reach.iter().all(|r| (*r - beam.radius).abs() < 1e-3), "nothing in the way");
         // The same hull with a wall right in front of it: the start faces
         // up, so put the wall two cells above.
-        let walled = round("version = 1\ncells.\"2,2\" = { kind = \"frog\" }\ncells.\"10,8\" = { kind = \"start\" }\ncells.\"10,6\" = { kind = \"wall\", material = \"iron\" }\n");
+        let walled = round("version = 1\ncells.\"2,2\" = { kind = \"bong\" }\ncells.\"10,8\" = { kind = \"start\" }\ncells.\"10,6\" = { kind = \"wall\", material = \"iron\" }\n");
         let lights = super::lights(&walled, &[], &look, &t);
         let beam = lights.iter().find(|l| matches!(l.shape, Shape::Cone { .. })).expect("a headlight");
         let n = beam.reach.len();

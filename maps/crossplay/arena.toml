@@ -58,7 +58,7 @@ cells."19,5" = { kind = "wall", material = "wood" }
 cells."20,5" = { kind = "wall", material = "wood" }
 cells."26,5" = { kind = "pickup", pickup = "ammo" }
 cells."4,6" = { kind = "start" }
-cells."6,6" = { kind = "frog" }
+cells."6,6" = { kind = "bong" }
 cells."13,6" = { kind = "road" }
 cells."14,6" = { kind = "road" }
 cells."15,6" = { kind = "road" }

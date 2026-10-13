@@ -287,24 +287,24 @@ fn no_crater_in_water() {
     assert!(game.craters().holds((13, 6)), "the dry ground round it is");
 }
 
-/// A frog under a call hops out of it if it can; a stunned one dies.
+/// A bong under a call hops out of it if it can; a stunned one dies.
 #[test]
-fn a_frog_under_a_call_hops_out_and_a_stunned_one_dies() {
-    let mut game = round_as("cells.\"14,12\" = { kind = \"frog\" }\n", Mission::Protect);
-    let frog = game.frog.expect("a frog");
-    let at = with_frog(&game.world, frog, |f| f.position);
+fn a_bong_under_a_call_hops_out_and_a_stunned_one_dies() {
+    let mut game = round_as("cells.\"14,12\" = { kind = \"bong\" }\n", Mission::Protect);
+    let bong = game.bong.expect("a bong");
+    let at = with_bong(&game.world, bong, |f| f.position);
     game.debug_call_rod(at, true).expect("a call");
     idle(&mut game, countdown_ticks());
-    let (dead, now) = with_frog(&game.world, frog, |f| (f.is_dead(), f.position));
+    let (dead, now) = with_bong(&game.world, bong, |f| (f.is_dead(), f.position));
     assert!(!dead && now.distance_to(at) > tuning().rod_kill_radius_px, "it got out: {at:?} -> {now:?}");
 
-    let mut game = round_as("cells.\"14,12\" = { kind = \"frog\" }\n", Mission::Protect);
-    let frog = game.frog.expect("a frog");
-    let at = with_frog(&game.world, frog, |f| f.position);
-    with_frog_mut(&game.world, frog, |f| f.stun(60.0));
+    let mut game = round_as("cells.\"14,12\" = { kind = \"bong\" }\n", Mission::Protect);
+    let bong = game.bong.expect("a bong");
+    let at = with_bong(&game.world, bong, |f| f.position);
+    with_bong_mut(&game.world, bong, |f| f.stun(60.0));
     game.debug_call_rod(at, true).expect("a call");
     let events = idle(&mut game, countdown_ticks());
-    assert!(with_frog(&game.world, frog, |f| f.is_dead()), "{events:?}");
+    assert!(with_bong(&game.world, bong, |f| f.is_dead()), "{events:?}");
 }
 
 /// A rod that strikes a volcano's cone sets it off: its eruption begins on
@@ -757,19 +757,19 @@ fn the_impact_sets_off_grenades_breaks_lanterns_lights_oil_and_flattens_grass() 
     assert!(!game.grass_flat.contains_key(&(12, 13)), "the grass past it is not");
 }
 
-/// A frog in the shove ring, outside the circle, is stunned by the impact.
+/// A bong in the shove ring, outside the circle, is stunned by the impact.
 #[test]
-fn a_frog_in_the_ring_is_stunned() {
-    let mut game = round_as("cells.\"20,12\" = { kind = \"frog\" }\n", Mission::Protect);
-    let frog = game.frog.expect("a frog");
-    let at = with_frog(&game.world, frog, |f| f.position);
+fn a_bong_in_the_ring_is_stunned() {
+    let mut game = round_as("cells.\"20,12\" = { kind = \"bong\" }\n", Mission::Protect);
+    let bong = game.bong.expect("a bong");
+    let at = with_bong(&game.world, bong, |f| f.position);
     // Four cells north: inside the shove ring, outside the call's danger.
     game.debug_call_rod(Position::new(at.x, at.y - 128.0), true).expect("a call");
     let mut stunned = false;
     for _ in 0..countdown_ticks() {
         let events = step(&mut game, false);
         if events.iter().any(|e| matches!(e, Event::RodImpact { .. })) {
-            stunned = with_frog(&game.world, frog, |f| f.is_stunned() && !f.is_dead());
+            stunned = with_bong(&game.world, bong, |f| f.is_stunned() && !f.is_dead());
         }
     }
     assert!(stunned, "stunned, not killed");
@@ -852,7 +852,7 @@ fn a_hammer_enemy_shoves_a_seat_into_a_call() {
     }
 }
 
-/// A call on a player tower or the frog that would crush a seat standing by
+/// A call on a player tower or the bong that would crush a seat standing by
 /// it is a call on that seat: never from outside that seat's sight box.
 #[test]
 fn an_enemy_never_calls_on_a_tower_whose_circle_holds_a_seat_off_its_box() {
@@ -971,19 +971,19 @@ fn a_reloading_rod_tank_leaves_its_target_to_the_next() {
     assert_eq!(callers, vec![(armed[1].0, (3, 6))], "the second calls on the camper");
 }
 
-/// A rod hunter calls on its quarry, the frog standing still beside it,
+/// A rod hunter calls on its quarry, the bong standing still beside it,
 /// only from outside the circle: never on its own (`Game::rod_senses`).
 #[test]
 fn a_rod_hunter_calls_on_its_quarry_from_outside_the_circle() {
-    let mut game = round_as("cells.\"16,12\" = { kind = \"frog\" }\n", Mission::Protect);
+    let mut game = round_as("cells.\"16,12\" = { kind = \"bong\" }\n", Mission::Protect);
     let s = seat(&game);
     with_tank_mut(&game.world, s, |t| t.disarm());
-    // The seat far off, out of every box: the frog is the hunter's pick.
+    // The seat far off, out of every box: the bong is the hunter's pick.
     game.place_tank(s, crate::map::cell_to_world(32, 1), Some(0.0)).unwrap();
-    let frog = game.frog.expect("a frog");
-    let at = with_frog(&game.world, frog, |f| f.position);
+    let bong = game.bong.expect("a bong");
+    let at = with_bong(&game.world, bong, |f| f.position);
     // Stunned, so it does not hop away from the hunter beside it.
-    with_frog_mut(&game.world, frog, |f| f.stun(60.0));
+    with_bong_mut(&game.world, bong, |f| f.stun(60.0));
     let slot = game.debug_spawn_enemy(Position::new(at.x + 56.0, at.y), Some(1), Some(Role::Hunter)).expect("spawns");
     let hunter = game.tank_entity_by_slot(slot).expect("exists");
     with_tank_mut(&game.world, hunter, |t| {

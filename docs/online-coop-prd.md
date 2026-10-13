@@ -26,7 +26,7 @@ plus the round's `Event`s. Clients keep a `Game` that is never `update`d: they
 write the snapshot into it, tick only its cosmetics, and draw it a little in
 the past - `online_interpolation_delay_ms`, 33 ms on a clean link, widened by
 the link's own jitter - interpolating between snapshots. Enemies, waves, props,
-frogs and every hit stay on the server. That is **stage 1** and it ships a
+bongs and every hit stay on the server. That is **stage 1** and it ships a
 complete co-op game. **Stage 2** adds client-side prediction of the player's
 own tank on the same protocol: the client runs the shared `drive_tank` against
 a small physics sandbox for every input the server has not yet acknowledged,
@@ -221,7 +221,7 @@ Working for us
 In the way
 - The sim links raylib. Seven simulation files import
   `sola_raylib::core::math::Vector2`, and every entity file (`tank.rs`,
-  `frog.rs`, `shell.rs`, `obstacle.rs`, ...) keeps its `draw_*` next to its
+  `bong.rs`, `shell.rs`, `obstacle.rs`, ...) keeps its `draw_*` next to its
   state. Nothing in `simulation/` needs a window, but the crate cannot build
   without the C library.
 - No serializable world: `Game` is 66 fields around a `hecs::World`, neither
@@ -278,10 +278,10 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 | Family | Travels | Derived | Local |
 |---|---|---|---|
 | Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's); `despawn_timer` armed the first frame a wreck is seen, so the fade costs no bytes | `visual_rotation`, `turret_visual_rotation`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
-| Frog (two) | `position`, `health`, a state byte with phase, `hop_end` while hopping | animation frame | — |
+| Bong (two) | `position`, `health`, a state byte with phase, `hop_end` while hopping | animation frame | — |
 | Obstacle (one per solid cell: 578 on the default 34 x 17 field, more on a map with its own `size`) | layout in `Welcome`; then deltas: `health`, `burning`, `fuse` armed with total, `scorched` mask, `destroyed`, a ram-lean byte | `variant`, `edge_mask` (recomputed as `refresh_edge_masks` does), `burn_frame` from time since ignition | `burn_frame_timer`, `heat` (ignition is an event) |
 | Portals (docs/teleporting.md) | anchors in `Welcome`; a hop is `Teleported` plus the tank's new position in the next snapshot | whether the network is active (two or more anchors) | the spiral's turn, the arrival flash |
-| Pickups | bitmask of slot-backed pickups present; the Health slot's bonus shields and frog packs as explicit cells | kind and position from the map's slots | bob and spin |
+| Pickups | bitmask of slot-backed pickups present; the Health slot's bonus shields and bong packs as explicit cells | kind and position from the map's slots | bob and spin |
 | Shells, bullets, plasma | stage 1: id, kind, position, heading, state per live projectile. Later, with `Ricochet`: spawn from `Fired`, removal from `Hit`, nothing between | choreography frame from state and interval | — |
 | Laser, flamethrower | laser: `Fired` plus the hit point; flame: origin, direction, capped reach while held | beam fade, cone flicker | — |
 | Fires, oil, drums | `FireStarted`/`Ignited`, burning cells with remaining time as deltas, `oil_cells` and `oil_prints` in `Welcome` and removals, `OilPrinted` for each print a hull lays, `DrumLaunched` with landing cell | the drum's arc and shadow; fire loop frames | — |
@@ -309,10 +309,11 @@ Snapshot { tick: u32, server_ms: u32,
            tanks:  [{ id: u8, x: i16, y: i16, vx: i8, vy: i8, dir: u8, hp: u8,
                       flags: u8 /* wreck|shield|boost|burning|hit|flame */, weapon: u8, ammo: u8 }],
            shots:  [{ id: u16, kind: u8, x: i16, y: i16, heading: u8, state: u8 }],
-           frogs:  [{ side: u8, x: i16, y: i16, hp: u8, state: u8, phase: u8 }],
+           bongs:  [{ side: u8, x: i16, y: i16, hp: u8, state: u8, phase: u8 }],
            pickups: u64, bonus_shields: [u16],
            tiles:  [{ cell: u16, hp: u8, flags: u8, faces: u8 }],
            fires:  [{ cell: u16, left: u8 }],
+           grass_flat: [{ cell: u16, until: u32 }],  // grass a sonic wave or a rod flattened: hides nobody until tick `until`
            round:  { wave: u8, alive: u8, pending: u8, intro: u8, outcome: u8 },
            events: [Event] }              // AI trace variants filtered out
 
@@ -325,6 +326,12 @@ Welcome  { protocol: u16, sim_version: &str, seat: u8, roster: [{ seat, nick, ch
 // lobby, JSON over the same socket
 Lobby    { Create { nick, device_token, map, mission } | Join { nick, device_token, code } | Ready | Start | Leave | Kick { seat } | Chat { text } }
 ```
+
+A timed cell that decides what hides a hull travels as the tick it ends on,
+not the time left, so its entry changes only when it is set again:
+`grass_flat` is the room's `Game::grass_flat`, which a replica and a joiner
+take whole, so every client's arrows and minimap read the room's
+`cover_cells` (protocol 31).
 
 Positions in quarter pixels fit an `i16` on fields up to 8192 px wide. Encode
 with `postcard`; JSON for the lobby. Events and tile deltas are reliable by
@@ -355,8 +362,8 @@ never sent (the AI's trace, recorded only while `Game::trace_ai` is set);
 | `Ram` | contact sparks and dust | `fx.rs` |
 | `PickupCollected` / `PickupRespawned` | pop / appear | `fx.rs` |
 | `Deflected` (a shield turned a shot, which changes owner), `ShellsCollided` | spark, small flash | `impact_flashes.push` |
-| `FrogBite` | bite cue, frog ripple | `SHOCK_FROG` |
-| `FrogHealed {side, slot, amount, x, y}` | green sparks off the frog, its gauge refills | `fx.rs` |
+| `BongBite` | bite cue, bong ripple | `SHOCK_BONG` |
+| `BongHealed {side, slot, amount, x, y}` | green sparks off the bong, its gauge refills | `fx.rs` |
 | `ShieldBroken {slot, x, y}` | a ring of sparks and smoke off the hull, ripple and shake, the shield ring goes | `fx.rs`, `drain_shield_breaks`' `SHOCK_SHIELD_BREAK` |
 | `WaveStarted`, `TankEntered`, `WreckRemoved` | WAVE N banner; roll-in appears at the gate; the wreck goes (it has been fading on its own) | HUD, `fade_wrecks` |
 | `ObstacleDestroyed {material, x, y}` | rubble decal, thrown | `props::obstacle_died`'s decal part |
@@ -648,7 +655,7 @@ gracefully, and a crash loses it. Persistence is the horizon, not the plan.
 
 The room's life: **waiting** (not ticking; reaped 30 min after the last seat
 leaves) → **playing** (60 Hz) → **paused, nobody connected** (not ticking: an
-empty room must not burn CPU and the AI must not kill the frog with nobody
+empty room must not burn CPU and the AI must not kill the bong with nobody
 watching; the world stays in memory 5 min, resumes where it stopped on
 reconnect) → **ended** (results and roster kept 5 min for a rematch, then
 dropped).
@@ -731,7 +738,7 @@ the browser build is the universal fallback, the apps the upgrade.
 The two-player round with the seats spread across machines.
 `Owner::Player(u8)` versus `Owner::Enemy(slot)` is the co-op split;
 `same_side` already keeps players from hurting each other at full damage; the
-end rule from docs/two-players.md (frog dead or every player wrecked) is the
+end rule from docs/two-players.md (bong dead or every player wrecked) is the
 co-op end rule.
 
 | Piece | Today | For online co-op |
@@ -742,7 +749,7 @@ co-op end rule.
 | Colours, labels | `TEAM_COLORS` two entries; sheet blocks enemy, P1, P2; `P1`/`P2` labels | seats past two draw the P1 block, told apart by ring colour and `P3`..`P8`; proper blocks from `gen_tanks.py` when a fourth friend shows up |
 | HUD | `SLOTS_ONE`/`SLOTS_TWO` | online: the local seat in full, others as a strip of ring-coloured hearts; couch tables stay |
 | Death | a wrecked player waits for the round to end | **built**: in a wave round of two or more a wrecked seat re-enters with the next wave through a gate (`simulation/waves.rs`), as a fresh tank of its own chassis - no penalty; band rounds and solo rounds keep today's rule (decision 7) |
-| Frog, pickups | unchanged | unchanged; the server decides who reached a pickup first, and a frog health pack heals the collector's side's frog wherever it stands (`FrogHealed`) |
+| Bong, pickups | unchanged | unchanged; the server decides who reached a pickup first, and a bong health pack heals the collector's side's bong wherever it stands (`BongHealed`) |
 
 **Re-entry, as built.** `call_wave` queues every seat that is a wreck, in
 seat order; the queue is drained at the head of that wave's own roll-ins,
@@ -898,10 +905,10 @@ delay in the past, and stops where it meets one in the picture (4.16).
 shooter's view - is what makes the room judge the shot against that same
 picture rather than against where the tanks had since moved, and it is
 built (4.16): each intent carries the tick the client was drawing
-(`IntentMsg::view_tick`), the room keeps the last 250 ms of enemy and frog
+(`IntentMsg::view_tick`), the room keeps the last 250 ms of enemy and bong
 hit boxes (`HitBoxHistory`), and a seat's shots and beams are swept against
 the boxes of that tick (`sweep_rewound`). The measurement that checks it:
-every provisional `advance_shots` stops against a drawn tank or frog is a
+every provisional `advance_shots` stops against a drawn tank or bong is a
 *crossing*; its paired room copy bursting within `HIT_MATCH_PX` (40 px) of
 that stop makes it `crossings_hit`, and its copy flying on past
 `MISS_MARGIN_PX` or bursting anywhere else `crossings_missed`, the room's
@@ -919,7 +926,7 @@ makes it owned. This is co-op against the AI: there is nobody to cheat,
 and a hull position the client reports is as true as any the server
 computes from that client's inputs a round trip later. The server stays
 the referee for everything the players compete *with* - enemies, waves,
-hits, damage, pickups, the frog, props, fires - and stops simulating the
+hits, damage, pickups, the bong, props, fires - and stops simulating the
 one thing each client already simulates better.
 
 **The model, as built.** Each client runs its own seat exactly as a local
@@ -965,7 +972,7 @@ the client drew it from and there is nothing provisional to swap. The
 client still draws its own shot on the press (the stage 2 press logic,
 minus the retirement dance - the server's copy *is* that shot, keyed by
 the tick it was fired on) and the laser is drawn at once to the first
-solid tile, drawn tank or frog in the client's own picture, with damage the
+solid tile, drawn tank or bong in the client's own picture, with damage the
 server's. Whether the shot *hit* an enemy drawn the delay in the past was
 decision 9's question; stage 4's lag compensation (4.16) answers it on the
 room, which judges a seat's shots against the tick that seat was drawing.
@@ -1157,7 +1164,7 @@ The pieces, each with its owner module:
 - **Lag compensation, favor the shooter** (the simulation's hit test):
   each intent carries the tick the client was drawing
   (`IntentMsg::view_tick`); the room keeps the last 250 ms of enemy and
-  frog hit boxes (`HitBoxHistory`), and a seat's shots and beams are
+  bong hit boxes (`HitBoxHistory`), and a seat's shots and beams are
   swept against the boxes at the tick that seat saw (`weapons::Rewind`,
   `sweep_rewound`). In co-op the AI does not feel it, so it is strictly a
   gain. *Built*; a round with no seat views rewinds nothing.
@@ -1572,7 +1579,7 @@ ship a complete co-op game; 4 and 5 are stage 2.
   is work that does not scale with tanks (section 3), and half of it was
   `route_grid`: the nav grid rebuilt from every obstacle, labelled, priced,
   and one Dijkstra per shared target - a field per seat plus one for the
-  frog, so eight seats are nine fields a tick. The fields are now worked
+  bong, so eight seats are nine fields a tick. The fields are now worked
   out only as far as they are read and the occupancy and its labels kept
   across ticks, rebuilt only where the terrain changed
   (docs/large-maps-follow-camera.md section 12), so what is left a tick is
@@ -1604,7 +1611,7 @@ Recorded so co-op does not close the door on them; none are in the plan.
 - Free-for-all: a `Team` on `Owner` so `same_side` can say "different humans,
   full damage"; `Mission::Deathmatch` with kills or time; respawn; a
   scoreboard.
-- Team versus team: two teams, optionally a frog each; bots by widening
+- Team versus team: two teams, optionally a bong each; bots by widening
   `Ai::target_player` to "nearest tank not on my team"; team colours three and
   four.
 - Spectators: a seat kind that receives and never sends; the replica is

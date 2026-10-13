@@ -8,7 +8,7 @@
 //!
 //! Each PNG is the map's field - its `size` in 32 px cells, no HUD bar -
 //! as a fresh round shows it on its first frame: ground, grass, walls,
-//! props, trees, frogs, pickups and the player start tank(s); no enemies,
+//! props, trees, bongs, pickups and the player start tank(s); no enemies,
 //! no banner, no locate cue. Two renderers behind `--renderer`:
 //!
 //! - `cpu` (the default) paints on `canvas::CpuCanvas`: no window, no GL,
@@ -73,7 +73,7 @@ struct Args {
     scale: u32,
 
     /// The round seed (decimal or 0x-hex). Only cosmetics depend on it -
-    /// ground and grass tiles, the frog's colour, a rolled chassis - and the
+    /// ground and grass tiles, the bong's colour, a rolled chassis - and the
     /// fixed default keeps a batch stable from run to run.
     #[arg(long, value_parser = bongbong::parse_seed, default_value = "0xB0B5")]
     seed: u64,

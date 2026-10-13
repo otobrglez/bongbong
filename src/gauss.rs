@@ -57,7 +57,7 @@ pub enum Pierced {
     Tank,
     /// A tank whose rainbow shield took it.
     Shield,
-    Frog,
+    Bong,
     /// A tile - a wall, a prop, a tree, a tower, a lamp post, the iron an
     /// overcharged slug cuts.
     Tile(Material),
@@ -360,7 +360,7 @@ fn pierce_sparks(out: &mut Vec<Shape>, pierce: &Pierce, dir: Vec2, age: f32, see
     let (count, colors): (u32, [Color; 2]) = match pierce.what {
         Pierced::Tank => (6, [RAIL[4], RAIL[3]]),
         Pierced::Shield => (6, [SHIELD[2], SHIELD[1]]),
-        Pierced::Frog => (4, [RAIL[3], RAIL[3]]),
+        Pierced::Bong => (4, [RAIL[3], RAIL[3]]),
         Pierced::Tile(Material::Iron) => (6, [RAIL[4], Color::new(0xC1, 0xC1, 0xC1, 255)]),
         Pierced::Tile(_) => (3, [RAIL[4], RAIL[3]]),
         // A drone torn apart in the air: white sparks and its grey shards.
@@ -410,7 +410,7 @@ pub fn compose_slug_lit(slug: &RailSlug) -> Vec<Shape> {
                 None => continue,
             },
             Pierced::Tank => (2, [SMOKE[1], SMOKE[2], SMOKE[3]]),
-            Pierced::Shield | Pierced::Frog | Pierced::Drone => continue,
+            Pierced::Shield | Pierced::Bong | Pierced::Drone => continue,
         };
         for i in 0..count {
             let a = heading + (pyro::unit(seed, i) - 0.5) * 1.2;

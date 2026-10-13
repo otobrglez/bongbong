@@ -4,10 +4,10 @@
 //! second press anchors it (`anchor_press` on the trigger), and so does what
 //! it meets or its range (`resolve_orbs`). The anchor puts a well on the
 //! field as a zone; `well_phase` turns its stage on the clock, lifts the
-//! drums in its reach when its pull starts, pulls the frogs and the crates,
+//! drums in its reach when its pull starts, pulls the bongs and the crates,
 //! swirls the tread marks and bows the grass, and collapses it
 //! (`collapse_well`) - the drums it holds going off together, the hulls in
-//! its reach flung out, the side opposing its owner hurt, frogs hopped out,
+//! its reach flung out, the side opposing its owner hurt, bongs hopped out,
 //! grenades thrown out in a ring, what flies turned out, crates slid out.
 //! The pull on hulls goes through the drive (`Footing::well`), on shots
 //! through the fixed-step loop (`Projectile::bend`), on grenades, missiles
@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hecs::Entity;
 
 use crate::air::AirStrike;
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::map::world_to_cell;
 use crate::math::Vec2;
 use crate::obstacle::{Drum, Material, Obstacle};
@@ -257,7 +257,7 @@ impl Game {
 
     /// Every orb in flight, in id order, after this tick's step: one whose
     /// stretch passes a pulling well's core is swallowed; one whose sweep
-    /// meets a hull (not its shooter's), a frog, a tile that blocks sight or
+    /// meets a hull (not its shooter's), a bong, a tile that blocks sight or
     /// the field's edge anchors there, backed off its half width; one that
     /// has flown its range anchors where it is.
     pub(super) fn resolve_orbs(&mut self, f: &mut Frame) {
@@ -307,7 +307,7 @@ impl Game {
     /// collapse first; a forming well whose time has come starts pulling -
     /// its `until` now the collapse - and lifts the drums in its reach; a
     /// pulling well whose time has come collapses. Then, with `live`, the
-    /// frogs and the crates are pulled; and either way a held drum's fuse
+    /// bongs and the crates are pulled; and either way a held drum's fuse
     /// burns, the tread marks swirl and the grass bows. On the end screen
     /// (`live` false) a well forms and collapses as a show: it lifts, pulls,
     /// flings and hurts nothing, and the drums it already holds go off as
@@ -348,7 +348,7 @@ impl Game {
             }
         }
         if live {
-            self.pull_frogs(f, &t);
+            self.pull_bongs(f, &t);
             self.slide_pickups(f, &t);
         }
         // A held drum's fuse burns on, on the end screen too, as a tile's
@@ -437,7 +437,7 @@ impl Game {
     /// A well collapses (docs/gravity-well.md "The collapse"), in this
     /// order: the drums it holds go off together where they circle; with
     /// `live`, every live hull in its reach is flung out (`knock_from`) and
-    /// the side opposing its owner hurt, and frogs hop out, the opposing
+    /// the side opposing its owner hurt, and bongs hop out, the opposing
     /// side's hurt; grenades it holds are thrown out in a ring; what flies
     /// in its reach is turned straight out; with `live`, crates slide out.
     /// On the end screen (`live` false) the drums' blasts hurt nobody
@@ -454,7 +454,7 @@ impl Game {
         }
         if live {
             self.collapse_hulls(f, c, zone.owner, &t);
-            self.collapse_frogs(f, c, zone.owner, &t);
+            self.collapse_bongs(f, c, zone.owner, &t);
         }
         // Grenades on the ring: out along their own radials, lobbed.
         for g in self.world.query_mut::<&mut crate::grenade::Grenade>() {
@@ -521,38 +521,38 @@ impl Game {
         });
     }
 
-    /// The collapse's frogs: each in the reach hops out along the line from
-    /// the centre (`well::frog_fling_target`, no jitter); the side opposing
+    /// The collapse's bongs: each in the reach hops out along the line from
+    /// the centre (`well::bong_fling_target`, no jitter); the side opposing
     /// `owner` takes the collapse's damage too.
-    fn collapse_frogs(&mut self, f: &mut Frame, c: Position, owner: Owner, t: &Tuning) {
+    fn collapse_bongs(&mut self, f: &mut Frame, c: Position, owner: Owner, t: &Tuning) {
         let r = t.well_radius_px;
         let terrain = &f.terrain;
         let mut hurt = Vec::new();
-        for frog in self.world.query_mut::<&mut Frog>() {
-            if frog.is_dead() {
+        for bong in self.world.query_mut::<&mut Bong>() {
+            if bong.is_dead() {
                 continue;
             }
-            let d = frog.position.distance_to(c);
+            let d = bong.position.distance_to(c);
             if d >= r {
                 continue;
             }
-            frog.pulled = false;
-            let cells = ((t.well_fling_frog_cells as f32) * (1.0 - d / r)).round().max(1.0) as i32;
-            if let Some(to) = well::frog_fling_target(c, frog.position, cells, |p| terrain.frog_fits(p)) {
-                frog.start_hop(to);
+            bong.pulled = false;
+            let cells = ((t.well_fling_bong_cells as f32) * (1.0 - d / r)).round().max(1.0) as i32;
+            if let Some(to) = well::bong_fling_target(c, bong.position, cells, |p| terrain.bong_fits(p)) {
+                bong.start_hop(to);
             }
-            let side_owner = match frog.side {
-                crate::frog::Side::Player => Owner::Player(0),
-                crate::frog::Side::Enemy => Owner::Enemy(0),
+            let side_owner = match bong.side {
+                crate::bong::Side::Player => Owner::Player(0),
+                crate::bong::Side::Enemy => Owner::Enemy(0),
             };
             if !owner.same_side(side_owner) && t.well_collapse_damage > 0.0 {
                 let dmg = t.well_collapse_damage * (1.0 - d / r);
-                frog.damage(dmg);
-                hurt.push((frog.side, frog.position, dmg, frog.is_dead()));
+                bong.damage(dmg);
+                hurt.push((bong.side, bong.position, dmg, bong.is_dead()));
             }
         }
         for (side, at, dmg, killed) in hurt {
-            f.events.push(Event::Hit { target: HitTarget::Frog { side }, damage: dmg, killed, x: at.x, y: at.y, cause: HitCause::Well });
+            f.events.push(Event::Hit { target: HitTarget::Bong { side }, damage: dmg, killed, x: at.x, y: at.y, cause: HitCause::Well });
         }
     }
 
@@ -608,28 +608,28 @@ impl Game {
         }
     }
 
-    /// The frogs in a pull, either side's, alive: pinned (no hop) and slid
-    /// toward the core at `well_frog_speed` times the field's pull, wherever
-    /// a frog fits; its collider moved with it.
-    fn pull_frogs(&mut self, f: &mut Frame, t: &Tuning) {
+    /// The bongs in a pull, either side's, alive: pinned (no hop) and slid
+    /// toward the core at `well_bong_speed` times the field's pull, wherever
+    /// a bong fits; its collider moved with it.
+    fn pull_bongs(&mut self, f: &mut Frame, t: &Tuning) {
         let field = &f.wells;
         let terrain = &f.terrain;
         let mut moved = Vec::new();
-        for frog in self.world.query_mut::<&mut Frog>() {
-            if frog.is_dead() {
-                frog.pulled = false;
+        for bong in self.world.query_mut::<&mut Bong>() {
+            if bong.is_dead() {
+                bong.pulled = false;
                 continue;
             }
-            let pull = if field.is_empty() { Vec2::zero() } else { field.pull(frog.position, t) };
+            let pull = if field.is_empty() { Vec2::zero() } else { field.pull(bong.position, t) };
             if pull.x == 0.0 && pull.y == 0.0 {
-                frog.pulled = false;
+                bong.pulled = false;
                 continue;
             }
-            frog.pulled = true;
-            let to = frog.position + pull * (t.well_frog_speed * f.dt);
-            if terrain.frog_fits(to) {
-                frog.position = to;
-                moved.push((frog.body, to));
+            bong.pulled = true;
+            let to = bong.position + pull * (t.well_bong_speed * f.dt);
+            if terrain.bong_fits(to) {
+                bong.position = to;
+                moved.push((bong.body, to));
             }
         }
         for (body, to) in moved {
@@ -859,7 +859,7 @@ impl Game {
     /// `WELL_AI_STEP_PX` apart from `well_ai_min_px` out of the muzzle to
     /// the orb's range or its stopper, each weighed by its arms - two seats
     /// pulled together, a seat pulled into trouble, a seat pulled off the
-    /// frog it guards, a well across the line a seat shoots it along - and
+    /// bong it guards, a well across the line a seat shoots it along - and
     /// held to dragging no more allies than seats, to no other well within
     /// twice the reach, and to one well a seat. A seat counts only from
     /// inside its sight box, within the tank's sight of it and not hidden
@@ -915,8 +915,8 @@ impl Game {
                 (centre, Vec2::new(half.x, half.y), tank.body.map_or(Vec2::zero(), |h| self.physics.velocity(h)))
             })
             .collect();
-        let alive = |e: Option<Entity>| e.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
-        let (enemy_frog, quarry) = (alive(self.enemy_frog), alive(self.frog));
+        let alive = |e: Option<Entity>| e.and_then(|e| self.world.get::<&Bong>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position));
+        let (enemy_bong, quarry) = (alive(self.enemy_bong), alive(self.bong));
         let drums: Vec<Position> =
             self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed && o.material.is_explosive()).map(|o| o.position).collect();
         let burning: BTreeSet<(i32, i32)> = self.fires.iter().filter(|fire| fire.left > 0.0).map(|fire| fire.cell).collect();
@@ -960,7 +960,7 @@ impl Game {
         let players = self.seats_on_field();
         let allies_at = |p: Position, lead: f32| {
             allies.iter().filter(|&&(c, half, v)| crate::emp::box_reach(p, c, half) <= r + margin || crate::emp::box_reach(p, c + v * lead, half) <= r + margin).count()
-                + usize::from(enemy_frog.is_some_and(|fp| fp.distance_to(p) <= r + margin))
+                + usize::from(enemy_bong.is_some_and(|fp| fp.distance_to(p) <= r + margin))
         };
         let mut planned: Vec<u8> = seat_boxes
             .iter()
@@ -986,7 +986,7 @@ impl Game {
                 let seats_in = seen.iter().filter(|s| crate::emp::box_reach(o.position, s.centre, s.half) <= r).count();
                 sense.orb = Some((o.flown, allies_at(o.position, t.well_form_seconds) > seats_in));
             }
-            if ai.frog_only || tank.orb.is_some() || tank.special_down() || counted.is_empty() {
+            if ai.bong_only || tank.orb.is_some() || tank.special_down() || counted.is_empty() {
                 out.insert(entity, sense);
                 continue;
             }
@@ -1039,9 +1039,9 @@ impl Game {
                         offer((1, fi, pull, k), plan("trouble"), ids.clone());
                     } else if n >= 1
                         && allies_in <= n
-                        && let Some(frog) = quarry
-                        && frog.distance_to(p) > r + margin
-                        && seats_in.iter().any(|s| s.pos.distance_to(frog) <= t.well_ai_guard_px && p.distance_to(frog) > s.pos.distance_to(frog))
+                        && let Some(bong) = quarry
+                        && bong.distance_to(p) > r + margin
+                        && seats_in.iter().any(|s| s.pos.distance_to(bong) <= t.well_ai_guard_px && p.distance_to(bong) > s.pos.distance_to(bong))
                     {
                         offer((2, fi, pull, k), plan("guard"), ids.clone());
                     }

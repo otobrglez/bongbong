@@ -408,27 +408,27 @@ tunables! {
 
     group mission {
         /// How long the round stays frozen behind the opening mission
-        /// banner ("PROTECT THE FROG!") before play starts. Any move or
+        /// banner ("PROTECT THE BONG!") before play starts. Any move or
         /// fire input skips it. Headless callers start with the intro off.
         mission_banner_seconds: f32 = 2.0 in 0.0 ..= 10.0;
         /// Protect mission: odds each enemy is rolled a hunter that drives
-        /// at and shoots the frog rather than the player.
+        /// at and shoots the bong rather than the player.
         enemy_hunter_share_protect: f32 = 0.25 in 0.0 ..= 1.0 @ Spawn;
         /// Hunt mission: odds each enemy is a hunter; the rest guard the
-        /// enemy frog.
+        /// enemy bong.
         enemy_hunter_share_hunt: f32 = 0.6 in 0.0 ..= 1.0 @ Spawn;
         /// A guard engages the player only while the player is within this
-        /// many px of the enemy frog, and wanders inside it otherwise.
+        /// many px of the enemy bong, and wanders inside it otherwise.
         guard_leash_px: f32 = 260.0 in 50.0 ..= 1000.0;
-        /// A guard's beat keeps at least this far from its own frog -
-        /// outside the frog's hop range, so it doesn't shove the thing it
-        /// is guarding around the map. (Its own frog never bites it.)
+        /// A guard's beat keeps at least this far from its own bong -
+        /// outside the bong's hop range, so it doesn't shove the thing it
+        /// is guarding around the map. (Its own bong never bites it.)
         guard_keep_off_px: f32 = 130.0 in 0.0 ..= 500.0;
-        /// Procedural enemy-frog placement (a hunt map without an
-        /// `enemy_frog` cell): at least this far from the player's frog.
-        enemy_frog_spawn_min_dist: f32 = 270.0 in 0.0 ..= 1500.0 @ Restart;
+        /// Procedural enemy-bong placement (a hunt map without an
+        /// `enemy_bong` cell): at least this far from the player's bong.
+        enemy_bong_spawn_min_dist: f32 = 270.0 in 0.0 ..= 1500.0 @ Restart;
         /// After a hunter's opportunistic shot at the player it goes back
-        /// to the frog for at least this long before it may snipe again,
+        /// to the bong for at least this long before it may snipe again,
         /// so a player parked on its firing axis can't hold it forever.
         hunter_snipe_cooldown_seconds: f32 = 5.0 in 0.0 ..= 60.0;
     }
@@ -456,7 +456,7 @@ tunables! {
         /// An edge nav cell is a gate only if this many cells inward are
         /// all open.
         wave_gate_inward_cells: usize = 3 in 1 ..= 10;
-        /// Gates closer than this (px) to the player or the player's frog
+        /// Gates closer than this (px) to the player or the player's bong
         /// are skipped.
         wave_gate_min_player_dist: f32 = 300.0 in 0.0 ..= 1500.0;
         /// Odds a wave tank is drawn one tier below the wave's tier, for
@@ -599,7 +599,7 @@ tunables! {
         enemy_damage_min: f32 = 5.0 in 0.0 ..= 100.0;
         enemy_damage_max: f32 = 15.0 in 0.0 ..= 100.0;
         /// A player's hull armour: every hit that lands on a seat's hull -
-        /// shells, bullets, blasts, rams, fire, towers, frogs - is scaled
+        /// shells, bullets, blasts, rams, fire, towers, bongs - is scaled
         /// by this (`Tank::take_damage`), so 0.77 makes a player's tank
         /// 30 % tougher (1 / 0.77). The shield is spent in full.
         player_armor_factor: f32 = 0.77 in 0.1 ..= 1.0;
@@ -615,7 +615,7 @@ tunables! {
         shell_impact_knockback_speed: f32 = 35.0 in 0.0 ..= 400.0;
         /// Ricochet: a shell may reflect off iron or a volcano's cone
         /// (`Material::ricochets_shells`) instead of detonating, up to this
-        /// many times per shell. Every other target (a tank, the frog, the
+        /// many times per shell. Every other target (a tank, the bong, the
         /// boundary wall, a training door, any destructible material)
         /// detonates it on first contact. One keeps the case readable: a
         /// shell gets one more chance to land, not an indefinitely
@@ -965,8 +965,8 @@ tunables! {
         /// beyond it has to stand to draw the drum onto its cell.
         sonic_drum_throw_cells: f32 = 4.0 in 1.0 ..= 12.0;
         sonic_drum_aim_deg: f32 = 25.0 in 0.0 ..= 90.0;
-        /// How long a frog the wave reaches neither hops nor bites.
-        sonic_frog_stun_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        /// How long a bong the wave reaches neither hops nor bites.
+        sonic_bong_stun_seconds: f32 = 1.5 in 0.0 ..= 10.0;
         /// A grenade's push at the pivot (px/s), falling off like the shove.
         sonic_grenade_push_speed: f32 = 260.0 in 0.0 ..= 1000.0;
         /// An enemy's wind-up before its blast (`tank::Tell`); 0 fires on
@@ -1126,13 +1126,13 @@ tunables! {
         gauss_damage: f32 = 120.0 in 0.0 ..= 500.0;
         /// An enemy's slug's, the same way.
         gauss_enemy_damage: f32 = 60.0 in 0.0 ..= 500.0;
-        /// The share of its damage a slug keeps past each tank, frog or
+        /// The share of its damage a slug keeps past each tank, bong or
         /// tower it goes through.
         gauss_pierce_keep: f32 = 0.8 in 0.0 ..= 1.0;
         /// The share it keeps past each wall, prop or tree.
         gauss_tile_keep: f32 = 0.95 in 0.0 ..= 1.0;
-        /// A frog's hit from a slug, times what the slug has kept.
-        gauss_frog_damage: f32 = 20.0 in 0.0 ..= 200.0;
+        /// A bong's hit from a slug, times what the slug has kept.
+        gauss_bong_damage: f32 = 20.0 in 0.0 ..= 200.0;
         /// The slug's half width (px): what it grows every box it is traced
         /// against by.
         gauss_half_width: f32 = 4.0 in 0.5 ..= 16.0;
@@ -1297,7 +1297,7 @@ tunables! {
         rod_reticle_repeat_seconds: f32 = 0.06 in 0.01 ..= 1.0;
         /// From the call to the impact.
         rod_countdown_seconds: f32 = 3.0 in 0.5 ..= 15.0;
-        /// The circle: a hull with any part inside it is crushed, a frog
+        /// The circle: a hull with any part inside it is crushed, a bong
         /// killed, a drone downed.
         rod_kill_radius_px: f32 = 64.0 in 8.0 ..= 160.0;
         /// Every breakable tile whose cell reaches inside this goes down;
@@ -1314,8 +1314,8 @@ tunables! {
         /// How hard a heavy chassis resists the shove: the speed over its
         /// mass factor to this power.
         rod_mass_exponent: f32 = 1.0 in 0.0 ..= 4.0;
-        /// A frog in the shove ring neither hops nor bites this long.
-        rod_frog_stun_seconds: f32 = 1.0 in 0.0 ..= 10.0;
+        /// A bong in the shove ring neither hops nor bites this long.
+        rod_bong_stun_seconds: f32 = 1.0 in 0.0 ..= 10.0;
         /// Tall grass within the break radius hides nobody this long.
         rod_grass_flat_seconds: f32 = 8.0 in 0.0 ..= 60.0;
         /// Fish within this of an impact are thrown onto the bank...
@@ -1443,8 +1443,8 @@ tunables! {
         well_capture_seconds: f32 = 0.8 in 0.05 ..= 4.0;
         /// How fast a crate slides in at the strongest point (px/s).
         well_crate_speed: f32 = 60.0 in 0.0 ..= 400.0;
-        /// How fast a frog slides in at the strongest point (px/s).
-        well_frog_speed: f32 = 50.0 in 0.0 ..= 400.0;
+        /// How fast a bong slides in at the strongest point (px/s).
+        well_bong_speed: f32 = 50.0 in 0.0 ..= 400.0;
         /// The collapse's shove at the centre (px/s, chassis-free mass),
         /// falling to nothing at the reach.
         well_fling_speed: f32 = 400.0 in 0.0 ..= 508.0;
@@ -1463,9 +1463,9 @@ tunables! {
         well_fling_crate_speed: f32 = 240.0 in 0.0 ..= 1000.0;
         /// How hard a sliding crate brakes (px/s²).
         well_crate_friction: f32 = 600.0 in 1.0 ..= 5000.0;
-        /// How far the collapse hops a frog out from the centre (cells),
+        /// How far the collapse hops a bong out from the centre (cells),
         /// falling off with distance, at least one.
-        well_fling_frog_cells: i32 = 3 in 1 ..= 8;
+        well_fling_bong_cells: i32 = 3 in 1 ..= 8;
         /// Fish within a well's reach thrown onto the bank at its
         /// collapse, nearest first.
         well_fish_throw_max: i32 = 6 in 0 ..= 32;
@@ -1490,7 +1490,7 @@ tunables! {
         /// - past its own pull and the friend margin - and where its shield
         /// stands (px).
         well_ai_min_px: f32 = 160.0 in 64.0 ..= 1000.0;
-        /// A seat this close to the players' frog is its guard, which an
+        /// A seat this close to the players' bong is its guard, which an
         /// enemy pulls off it (px).
         well_ai_guard_px: f32 = 160.0 in 0.0 ..= 480.0;
         /// Added to the reach when an enemy counts the allies a pull would
@@ -1589,8 +1589,8 @@ tunables! {
         /// what that costs per second. Re-contact resets the timer.
         flame_afterburn_seconds: f32 = 2.75 in 0.0 ..= 20.0;
         flame_afterburn_dps: f32 = 4.0 in 0.0 ..= 100.0;
-        /// Damage per second to a frog inside the cone.
-        flame_frog_damage_per_second: f32 = 10.0 in 0.0 ..= 100.0;
+        /// Damage per second to a bong inside the cone.
+        flame_bong_damage_per_second: f32 = 10.0 in 0.0 ..= 100.0;
         /// Seconds of exposure a ground cell or a tile needs before it
         /// catches: a quick sweep scorches, a held stream lights.
         flame_ignite_seconds: f32 = 0.35 in 0.0 ..= 5.0;
@@ -1794,22 +1794,22 @@ tunables! {
         /// The shield is an un-slotted bonus: it never respawns on its own,
         /// only ever alongside a health pack.
         shield_near_health_chance: f32 = 0.2 in 0.0 ..= 1.0;
-        /// Frog health pack (docs/frog-health-pack-prd.md): the fraction of
-        /// `frog_max_health` one pack restores to the collector's own frog.
-        /// 1 is the agreed full heal; lower it to make the frog a running
+        /// Bong health pack (docs/bong-health-pack-prd.md): the fraction of
+        /// `bong_max_health` one pack restores to the collector's own bong.
+        /// 1 is the agreed full heal; lower it to make the bong a running
         /// cost rather than something one detour resets.
-        frog_pack_heal_fraction: f32 = 1.0 in 0.0 ..= 1.0;
-        /// Odds that a frog health pack is dropped in a free cell next to a
+        bong_pack_heal_fraction: f32 = 1.0 in 0.0 ..= 1.0;
+        /// Odds that a bong health pack is dropped in a free cell next to a
         /// Health slot each time that slot is spawned or respawned - the
         /// same un-slotted bonus mechanism the rainbow shield uses, with
-        /// one extra gate: it is only rolled while the frog is hurt (see
-        /// `frog_pack_bonus_below`), so a round whose frog is never touched
+        /// one extra gate: it is only rolled while the bong is hurt (see
+        /// `bong_pack_bonus_below`), so a round whose bong is never touched
         /// draws exactly the RNG it drew before this pickup existed. 0
         /// turns the bonus off and leaves only the map's own slots.
-        frog_pack_near_health_chance: f32 = 0.35 in 0.0 ..= 1.0;
-        /// How hurt the frog has to be before that bonus rolls at all, as a
+        bong_pack_near_health_chance: f32 = 0.35 in 0.0 ..= 1.0;
+        /// How hurt the bong has to be before that bonus rolls at all, as a
         /// fraction of its max health.
-        frog_pack_bonus_below: f32 = 0.75 in 0.0 ..= 1.0;
+        bong_pack_bonus_below: f32 = 0.75 in 0.0 ..= 1.0;
     }
 
     group crates {
@@ -1912,6 +1912,19 @@ tunables! {
         /// that value enemies never noticed the player past roughly half the
         /// window and read as passive.
         enemy_view_range: f32 = 800.0 in 50.0 ..= 3000.0;
+        /// An enemy that has the seat it fights in sight keeps it until the
+        /// seat stands this many px past its sight (`Ai::sees`) -
+        /// hysteresis, so a route that runs along the edge of its sight
+        /// (out round a wall and back) does not flip it between the chase
+        /// and a crate detour every few frames.
+        enemy_sight_hold_px: f32 = 96.0 in 0.0 ..= 800.0;
+        /// An enemy that loses the seat it fights from sight (into tall
+        /// grass, or past its sight) looks for it where the alert says it
+        /// was - the search tier - for this many seconds before a crate
+        /// detour may take it (`Ai::lost_timer`): hysteresis, so a seat
+        /// ducking in and out of cover does not flip it between the chase
+        /// and a crate every second.
+        enemy_lost_seconds: f32 = 2.0 in 0.0 ..= 10.0;
         /// Two-player rounds: an enemy switches to the other player only
         /// once that player is this many px nearer than its current target
         /// - hysteresis, so two players at equal range do not flip the pack
@@ -1952,6 +1965,15 @@ tunables! {
         /// wall - a crate in the only gap is still driven over. 0 switches
         /// it off.
         route_crate_cost: usize = 2 in 0 ..= 64;
+        /// Seconds an enemy heads for a crate without getting a route step
+        /// nearer it before it gives the crate up (`Ai::track_crate_run`) -
+        /// jammed in a lane, or circling a crate it cannot reach - and
+        /// carries on. Long enough for a detour round a wall, which loses no
+        /// route steps; 0 never gives up.
+        enemy_crate_give_up_seconds: f32 = 4.0 in 0.0 ..= 60.0;
+        /// Seconds an enemy passes over a crate it gave up on before it is
+        /// worth heading for again.
+        enemy_crate_forget_seconds: f32 = 12.0 in 0.0 ..= 120.0;
         /// Stop and fight within this distance (px). The engagement ring and
         /// retreat range are factors of this - see the `engage` group.
         enemy_attack_range: f32 = 340.0 in 50.0 ..= 2000.0;
@@ -2032,8 +2054,21 @@ tunables! {
         avoid_margin: f32 = 12.0 in 0.0 ..= 100.0;
         /// How long a sidestep is held once triggered.
         avoid_dodge_seconds: f32 = 0.4 in 0.0 ..= 5.0;
-        /// Skip prediction when moving slower than this (px/s).
+        /// Skip prediction when moving slower than this (px/s); another tank
+        /// slower than this counts as standing still
+        /// (`avoid_still_lookahead`).
         avoid_min_speed: f32 = 10.0 in 0.0 ..= 200.0;
+        /// How far ahead (seconds, under `avoid_lookahead`) a tank standing
+        /// still - slower than `avoid_min_speed` - is looked for: only the
+        /// one a hull is about to hit is sidestepped. Further out the
+        /// route's crowd price (`route_crowd_cost`) bends round it, and an
+        /// early sidestep the route then undoes is a dance.
+        avoid_still_lookahead: f32 = 0.3 in 0.0 ..= 5.0;
+        /// A teammate standing still within this many px of the spot a
+        /// tank is heading for is never sidestepped - the engagement slot
+        /// beside its own, most of all, which no sidestep can reach past.
+        /// The yield brake (`crowded_ahead`) pulls up short of it instead.
+        avoid_near_target_px: f32 = 128.0 in 0.0 ..= 500.0;
         /// Direction commitment: once an AI picks a cardinal heading it
         /// holds it for at least this long ...
         ai_dir_hold_seconds: f32 = 0.35 in 0.0 ..= 5.0;
@@ -2230,7 +2265,7 @@ tunables! {
         /// inside it.
         enemy_leash_px: f32 = 640.0 in 32.0 ..= 4000.0;
         /// Field maps only: an enemy farther than this from every live
-        /// seat and the players' frog is far. A far enemy thinks only every
+        /// seat and the players' bong is far. A far enemy thinks only every
         /// `enemy_far_think_ticks` ticks, and one nothing has woken yet -
         /// no alert, no hit, no call, no seat this close - does not think
         /// or route at all. Past `enemy_view_range`, so a far enemy cannot
@@ -2260,13 +2295,13 @@ tunables! {
         /// Field maps' wave rounds only: stragglers are rolled in again
         /// (`Game::reroll_stragglers`) - a wave tank that has gone
         /// `field_reroll_after_seconds` without a live seat or the players'
-        /// frog in its sight, and stands farther from them by walk than
+        /// bong in its sight, and stands farther from them by walk than
         /// any wave's gate is paced for (`field_walk_seconds` less
         /// `field_walk_slack_seconds`), is taken off where no screen can
         /// see it go and rolls in again through a gate nearer the fight,
         /// outside every sight box. Off, a straggler walks on as it is.
         field_reroll: bool = true in 0 ..= 1;
-        /// How long a wave tank goes without a seat or the frog in its
+        /// How long a wave tank goes without a seat or the bong in its
         /// sight before it counts as a straggler: long past a wave's walk
         /// to the fight, so only one that lost its way - through a portal
         /// for a pickup, its call over, home on its leash - is taken.
@@ -2291,9 +2326,9 @@ tunables! {
         director_calm: f32 = 0.2 in 0.0 ..= 1.0;
         /// The share of a pool lost at once that takes a seat from calm to
         /// the top: its tank's health and shield (100 points), or the
-        /// players' frog's health (`frog_max_health`), which jolts every
+        /// players' bong's health (`bong_max_health`), which jolts every
         /// seat. 0.35 is three or four enemy shells on the tank, one or two
-        /// on the frog's 40.
+        /// on the bong's 40.
         director_hurt_full: f32 = 0.35 in 0.01 ..= 4.0;
         /// Live enemies inside a seat's sight box that hold its intensity
         /// at the top; fewer hold it at their share.
@@ -2449,42 +2484,42 @@ tunables! {
         nightfall_seconds: f32 = 25.0 in 0.0 ..= 300.0;
     }
 
-    group frog {
-        /// The frog's health - deliberately much lower than a tank's 100, a
-        /// couple of hits end the round, so "protect the frog" is a real
+    group bong {
+        /// The bong's health - deliberately much lower than a tank's 100, a
+        /// couple of hits end the round, so "protect the bong" is a real
         /// constraint on where the player fights.
-        frog_max_health: f32 = 40.0 in 1.0 ..= 500.0 @ Restart;
+        bong_max_health: f32 = 40.0 in 1.0 ..= 500.0 @ Restart;
         /// Spawn placement: kept this far from the player's start - far
         /// enough not to spawn on top of the player, close enough that
         /// protecting it and protecting yourself are the same fight early.
-        frog_spawn_min_dist: f32 = 90.0 in 0.0 ..= 1000.0 @ Restart;
-        frog_spawn_max_dist: f32 = 240.0 in 0.0 ..= 1000.0 @ Restart;
-        /// Evasion hop distance as a factor of the frog's on-screen size.
+        bong_spawn_min_dist: f32 = 90.0 in 0.0 ..= 1000.0 @ Restart;
+        bong_spawn_max_dist: f32 = 240.0 in 0.0 ..= 1000.0 @ Restart;
+        /// Evasion hop distance as a factor of the bong's on-screen size.
         /// 0.75 (was 3.0, then 1.5 - a full body-length-times-three read as
         /// an unnaturally huge leap; user feedback, 2026-08).
-        frog_hop_distance_factor: f32 = 0.75 in 0.0 ..= 5.0;
+        bong_hop_distance_factor: f32 = 0.75 in 0.0 ..= 5.0;
         /// Debounce so a rapid volley doesn't trigger a hop every frame -
         /// roughly one hop per this many seconds under sustained fire.
-        frog_hop_cooldown_seconds: f32 = 1.0 in 0.0 ..= 10.0;
+        bong_hop_cooldown_seconds: f32 = 1.0 in 0.0 ..= 10.0;
         /// Random jitter (degrees) on the ideal dead-away-from-the-shot hop
         /// angle so hops don't all look mechanically identical.
-        frog_hop_angle_jitter_deg: f32 = 10.0 in 0.0 ..= 90.0;
+        bong_hop_angle_jitter_deg: f32 = 10.0 in 0.0 ..= 90.0;
         /// Hop landing spots must stay this far (px) inside the battlefield
         /// edge.
-        frog_hop_bounds_margin: f32 = 40.0 in 0.0 ..= 200.0;
+        bong_hop_bounds_margin: f32 = 40.0 in 0.0 ..= 200.0;
         /// Bite a tank of the *other* side within this factor of the
-        /// frog's size (`frog::Side::bites`: a frog never bites the side
+        /// bong's size (`bong::Side::bites`: a bong never bites the side
         /// whose objective it is).
-        frog_attack_range_factor: f32 = 0.9 in 0.0 ..= 5.0;
-        frog_attack_cooldown_seconds: f32 = 1.5 in 0.0 ..= 10.0;
-        frog_attack_damage_min: f32 = 4.0 in 0.0 ..= 100.0;
-        frog_attack_damage_max: f32 = 10.0 in 0.0 ..= 100.0;
+        bong_attack_range_factor: f32 = 0.9 in 0.0 ..= 5.0;
+        bong_attack_cooldown_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        bong_attack_damage_min: f32 = 4.0 in 0.0 ..= 100.0;
+        bong_attack_damage_max: f32 = 10.0 in 0.0 ..= 100.0;
         /// Personal space: hop away from the nearest tank of *either* side
-        /// once one gets within this factor of the frog's size - larger
+        /// once one gets within this factor of the bong's size - larger
         /// than the bite range ("keep your distance" rather than
         /// "retaliate"), well inside the hop distance so a single hop
         /// reliably clears it.
-        frog_avoid_range_factor: f32 = 1.2 in 0.0 ..= 5.0;
+        bong_avoid_range_factor: f32 = 1.2 in 0.0 ..= 5.0;
     }
 
     group walls {
@@ -2626,7 +2661,7 @@ tunables! {
         /// damage with linear falloff, and other barrels inside always chain.
         barrel_blast_radius: f32 = 96.0 in 0.0 ..= 600.0;
         /// Blast damage at the centre, rolled per victim; falls off linearly
-        /// to zero at the radius. Hurts everyone: player, enemies, frogs,
+        /// to zero at the radius. Hurts everyone: player, enemies, bongs,
         /// walls and props alike.
         barrel_blast_damage_min: f32 = 15.0 in 0.0 ..= 100.0;
         /// Upper end of the blast damage roll.
@@ -3130,7 +3165,7 @@ tunables! {
         camera_edge_ease_px: f32 = 48.0 in 0.0 ..= 512.0;
         /// The establishing shot (`establish.rs`, docs/large-maps-follow-camera.md
         /// section 6): a field map's round opens on the whole map - the
-        /// frog, the gates - for this many seconds, while its mission
+        /// bong, the gates - for this many seconds, while its mission
         /// banner holds the round still. 0 plays no shot.
         camera_establish_hold_seconds: f32 = 1.0 in 0.0 ..= 5.0;
         /// ... then zooms down to the tank's follow view over this many
@@ -3299,7 +3334,7 @@ tunables! {
         /// (docs/online-coop-prd.md sections 4.12 and 4.16,
         /// `net::predict`): each is the only drawn copy of its shot for
         /// its whole life, runs its projectile's own state machine, and
-        /// stops at the first tile, tank or frog it meets in the drawn
+        /// stops at the first tile, tank or bong it meets in the drawn
         /// world with its impact drawn at once, the room's copy kept off
         /// the picture while it stands for it. A laser's beam and each
         /// shot's muzzle ripple are drawn on the press too.
@@ -3676,7 +3711,7 @@ tunables! {
         player_ring_opacity: f32 = 0.8 in 0.0 ..= 1.0;
         /// Every tank ring (marker, health gauge and shield, player and
         /// enemy alike) is this much larger in radius than the
-        /// `shield_glow_radius_factor` ring the frogs use, at the same band
+        /// `shield_glow_radius_factor` ring the bongs use, at the same band
         /// thickness, so a halo shows past every hull - the super-heavies
         /// hide the unscaled ring entirely.
         tank_ring_radius_scale: f32 = 1.1 in 0.5 ..= 2.0;
@@ -3715,7 +3750,7 @@ tunables! {
         /// health is at or below this fraction.
         enemy_health_ring_below: f32 = 0.5 in 0.0 ..= 1.0;
         /// The missing part of a white or red health ring (the player's
-        /// tank, both frogs) is still drawn, at `player_ring_opacity` times
+        /// tank, both bongs) is still drawn, at `player_ring_opacity` times
         /// this, so the marker stays a full circle.
         health_ring_base_opacity: f32 = 0.35 in 0.0 ..= 1.0;
         /// Opacity of the dark band over the missing part of an enemy
@@ -3750,13 +3785,13 @@ tunables! {
         indicator_far_scale: f32 = 0.6 in 0.1 ..= 1.0;
         indicator_far_alpha: f32 = 0.55 in 0.0 ..= 1.0;
         /// Enemy arrows that land closer together than this (points) merge
-        /// into one that carries a count. Teammates, frogs and gates never
+        /// into one that carries a count. Teammates, bongs and gates never
         /// merge.
         indicator_cluster_pt: f32 = 22.0 in 0.0 ..= 120.0;
         /// The most arrows a screen shows at once, filled by priority: lane
-        /// threats, teammates, frogs, flashing gates, then the nearest
+        /// threats, teammates, bongs, flashing gates, then the nearest
         /// enemies, the enemies left over folded into one count per screen
-        /// edge. Teammates and frogs always show, whatever this says.
+        /// edge. Teammates and bongs always show, whatever this says.
         indicator_max_arrows: usize = 8 in 1 ..= 32;
         /// An enemy in tall grass gets no arrow unless it fired within
         /// this many seconds ...
@@ -3994,7 +4029,7 @@ tunables! {
         muzzle_glow_radius: f32 = 14.0 in 0.0 ..= 80.0;
         /// How fast (Hz) a laser beam's bloom and end flares flicker.
         laser_flicker_hz: f32 = 28.0 in 0.0 ..= 120.0;
-        /// Sparks thrown off a hull, frog or border wall a shot hits
+        /// Sparks thrown off a hull, bong or border wall a shot hits
         /// (`fx.rs`, scaled by `fx_density`); tiles keep their own
         /// material bursts.
         shot_hit_sparks: i32 = 9 in 0 ..= 60;
@@ -4158,10 +4193,10 @@ tunables! {
         /// comes back as a fresh tank inside the last door opened, this
         /// long after it went (seconds). Training is never lost.
         training_respawn_seconds: f32 = 2.0 in 0.0 ..= 10.0;
-        /// A training round's frog, once it is down, is back on its feet
+        /// A training round's bong, once it is down, is back on its feet
         /// this long after (seconds) - the death animation's length - and
         /// the beat it fell in starts again.
-        training_frog_revive_seconds: f32 = 1.6 in 0.0 ..= 10.0;
+        training_bong_revive_seconds: f32 = 1.6 in 0.0 ..= 10.0;
         /// An enemy wreck in a training round fades and is taken off the
         /// field this long after it went (seconds), so the course stays
         /// clear and no wreck keeps a gate's lane from the next beat's
@@ -4172,22 +4207,22 @@ tunables! {
         /// sight instead, as a band round places one, so a beat never
         /// waits for ever.
         training_lane_wait_seconds: f32 = 5.0 in 0.5 ..= 60.0;
-        /// A training beat's shot at the frog is fired again this long
-        /// after the last (seconds) while the frog is still unhurt - the
+        /// A training beat's shot at the bong is fired again this long
+        /// after the last (seconds) while the bong is still unhurt - the
         /// shell met a tank or a tile on the way - so a beat that waits on
-        /// the frog's kit always gets a frog that needs it.
-        training_frog_shot_retry_seconds: f32 = 3.0 in 0.5 ..= 30.0;
+        /// the bong's kit always gets a bong that needs it.
+        training_bong_shot_retry_seconds: f32 = 3.0 in 0.5 ..= 30.0;
         /// How far past a flag's cell a hull still takes it, px: the
         /// hull's box grown by this much touches the flag's square.
         training_flag_reach_px: f32 = 6.0 in 0.0 ..= 32.0;
-        /// How far each of the frog's hops takes it while it walks to its
+        /// How far each of the bong's hops takes it while it walks to its
         /// next beat's cell, as a share of its usual hop
-        /// (`frog_hop_distance_factor`); it hops again as soon as it
+        /// (`bong_hop_distance_factor`); it hops again as soon as it
         /// lands.
-        training_frog_stride: f32 = 1.0 in 0.2 ..= 3.0;
-        /// How long the frog's line stays up at the least (seconds), on
+        training_bong_stride: f32 = 1.0 in 0.2 ..= 3.0;
+        /// How long the bong's line stays up at the least (seconds), on
         /// top of `training_line_seconds_per_char` of its length
-        /// (`bubble::FrogVoice`).
+        /// (`bubble::BongVoice`).
         training_line_seconds: f32 = 3.0 in 0.2 ..= 10.0;
         /// How much longer a line stays up for each of its letters
         /// (seconds), so a long line is up as long as it takes to read.
@@ -4195,7 +4230,7 @@ tunables! {
         /// The pace the words of a line come into the bubble (words a
         /// second; the first is there at once).
         training_line_words_per_second: f32 = 9.0 in 1.0 ..= 60.0;
-        /// Seconds with nothing said before the frog says the running
+        /// Seconds with nothing said before the bong says the running
         /// beat's nudge again.
         training_nudge_seconds: f32 = 14.0 in 2.0 ..= 120.0;
     }
@@ -4295,7 +4330,7 @@ tunables! {
         /// The light a blast throws at its first frame (px, at a blast's
         /// scale 1); a mushroom cloud's reaches half as far again.
         blast_light_radius_px: f32 = 210.0 in 0.0 ..= 600.0;
-        /// Pickups and frogs glow faintly, so a lamp can find them.
+        /// Pickups and bongs glow faintly, so a lamp can find them.
         pickup_glow_strength: f32 = 0.4 in 0.0 ..= 2.0;
         /// Rain: amount (a multiplier on the look's), fall speed (px/s),
         /// slant (x px per px fallen; negative leans the other way) and

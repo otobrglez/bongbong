@@ -1,7 +1,7 @@
 # ai-powder-keg - a refinery that wants to burn. Hand-authored (generated from an
 # ASCII layout): re-saving from the map editor would drop these comments.
 # 
-# Protect on the band plan, five tanks, the player in a breaker. The frog
+# Protect on the band plan, five tanks, the player in a breaker. The bong
 # sits in a sandbag ring (cols 10-24, rows 5-11) with three-cell gaps on
 # all four sides and an oil drum in each front corner - pop one while a tank
 # is squeezing through and the gap becomes a pool of fire. Four wood-walled
@@ -72,7 +72,7 @@ cells."13,7" = { kind = "barrel", drum = "oil" }
 cells."21,7" = { kind = "barrel", drum = "oil" }
 cells."31,7" = { kind = "tree" }
 cells."2,8" = { kind = "pickup", pickup = "flamethrower" }
-cells."16,8" = { kind = "frog" }
+cells."16,8" = { kind = "bong" }
 cells."32,8" = { kind = "pickup", pickup = "health" }
 cells."10,10" = { kind = "sandbag" }
 cells."17,10" = { kind = "start" }

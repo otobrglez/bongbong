@@ -419,7 +419,7 @@ kind = "pickup"
 pickup = "ammo"
 
 [cells."8,12"]
-kind = "frog"
+kind = "bong"
 
 [cells."21,12"]
 kind = "road"

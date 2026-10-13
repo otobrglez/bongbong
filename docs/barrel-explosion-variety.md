@@ -75,7 +75,7 @@ Things the code already has that a barrel does *not* use:
   `Game::burning_tiles`, the `wood_ember_rate`/`wood_smoke_rate` sampling
   in `fx.rs`): fire exists as a state with particles, but only on wood and
   trees.
-- **Blast strength ratios** (`SHOCK_KILL`/`SHOCK_BARREL`/`SHOCK_FROG`/
+- **Blast strength ratios** (`SHOCK_KILL`/`SHOCK_BARREL`/`SHOCK_BONG`/
   `SHOCK_COOKOFF`): one constant per *event*, none per barrel.
 - **Grass crush** (`grass.rs`'s `crush`): grass flattens under a hull, but
   a blast leaves it standing.
@@ -370,7 +370,7 @@ long fuse, B5). It reuses B1's ground-fire list entirely: an oil cell is
 just a cell that *can* become a `GroundFire` when a neighbour is one.
 
 What it buys the author: a fuse line from a lone barrel at the entrance
-to a depot at the back, a ring of oil around the frog that the player can
+to a depot at the back, a ring of oil around the bong that the player can
 light, a trap the enemy drives across. What it buys the player: a
 tactical object that is legible (a dark streak on the ground with a
 sheen, `SHEEN` and `PUDDLE` are already palette entries in `gen_props.py`)
@@ -502,11 +502,11 @@ play-test and possibly a baseline.
   turret as a thrown `Decal` that stays, chips in the chassis accent, and
   a burn-out transition (the embers stop the instant `wreck_burn_seconds`
   ends).
-- **Frog bite, hop and death** (free). Bite: a filmstrip frame and nothing
-  on the victim. Hop: no dust, no landing puff, no shadow (the frog is the
+- **Bong bite, hop and death** (free). Bite: a filmstrip frame and nothing
+  on the victim. Hop: no dust, no landing puff, no shadow (the bong is the
   one standing thing with none). Death: a 0.6 ripple, no screen flash,
   though it ends the round. A victim burst and short shake on
-  `FrogBite`, dust and grass crush on landing with a height-scaled shadow
+  `BongBite`, dust and grass crush on landing with a height-scaled shadow
   like thrown debris, and on death the flash, a toxic-green scorch and
   lingering smoke sampled like a burning wreck.
 - **Pickups** (free). A static unrotated blit; collection vanishes with no
@@ -535,7 +535,7 @@ play-test and possibly a baseline.
   ripple centred on the deciding event, then a slow desaturation.
 - **Ripple, shake and flash as a set** (gameplay, for the play-test rather
   than the simulation). Four events push a ripple (kill 1.0, barrel 0.7,
-  frog 0.6, cook-off 0.1) and two flash the screen; a player taking a
+  bong 0.6, cook-off 0.1) and two flash the screen; a player taking a
   heavy hit never shakes the camera. A 0.2 shake on a heavy hit to the
   player gated by damage, and per-kind drum strength (`SHOCK_FUEL`) once
   B2 lands.

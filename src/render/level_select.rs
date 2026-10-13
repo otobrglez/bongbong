@@ -25,7 +25,7 @@ const NEXT_FILL: Color = Color::new(255, 200, 80, 36);
 const LOCKED_FILL: Color = Color::new(0, 0, 0, 80);
 /// What cannot be pressed: the lobby's dead grey.
 const DEAD: Color = Color::new(70, 70, 78, 255);
-/// The tick on a won level: the frog's green, the one colour the game
+/// The tick on a won level: the bong's green, the one colour the game
 /// already means "safe" by.
 const TICK: Color = Color::new(120, 220, 90, 255);
 

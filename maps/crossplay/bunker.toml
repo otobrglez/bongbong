@@ -5,7 +5,7 @@
 # `cargo run -- --map maps/crossplay/bunker.toml --resolution 768x448`.
 # Hand-authored: re-saving from the map editor would drop these comments.
 #
-# bunker: a dense Protect map on the waves plan. The frog sits in a brick
+# bunker: a dense Protect map on the waves plan. The bong sits in a brick
 # bunker on the left with one iron door cell; the enemy side mirrors it
 # with barrels inside. Waves roll in through the right edge and the top
 # and bottom gates at col 9.
@@ -39,7 +39,7 @@ cells."13,2" = { kind = "wall", material = "brick" }
 cells."18,2" = { kind = "wall", material = "brick" }
 cells."22,2" = { kind = "wall", material = "brick" }
 cells."2,3" = { kind = "wall", material = "brick" }
-cells."4,3" = { kind = "frog" }
+cells."4,3" = { kind = "bong" }
 cells."7,3" = { kind = "wall", material = "iron" }
 cells."12,3" = { kind = "barrel" }
 cells."13,3" = { kind = "barrel" }

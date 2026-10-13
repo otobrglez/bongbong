@@ -1,13 +1,13 @@
 //! The wire into a client replica (docs/online-coop-prd.md §4.5): `welcome`
 //! builds a `Game` the way the server built its round - `Game::init` on
 //! the same map, seed and overrides, so every roll `init` makes (wall and
-//! prop variants, the frog's colour, the band's tanks) comes out the same -
+//! prop variants, the bong's colour, the band's tanks) comes out the same -
 //! then strips the enemies' `Ai` and applies the welcome's snapshot;
 //! `snapshot` writes one authoritative snapshot into the entities, matched
 //! by id. The replica is never `update`d: a tank in the snapshot but not
 //! the world is spawned (an enemy with a `Tank` and no `Ai`, like a rolling
 //! in wave tank; a seat with its chassis), a world tank missing from the
-//! snapshot is removed, likewise projectiles by id; frogs, tiles, fires,
+//! snapshot is removed, likewise projectiles by id; bongs, tiles, fires,
 //! pickups and the round's scalars are overwritten. Tanks keep physics
 //! bodies so the drawn hull follows the snapshot through the same
 //! `Tank::position`/body pair the renderer reads. No RNG anywhere.
@@ -16,7 +16,7 @@
 //! cosmetic: a wreck's art variant and a spawned enemy's damage overlay
 //! hash from the slot, a shot's shadow height from its id, a snapshot's
 //! flag becomes the full timer it stands for (a boost, an afterburn, the
-//! hit window), a frog's secondary clips run at full length, the round
+//! hit window), a bong's secondary clips run at full length, the round
 //! clock is the tick at the fixed step. Between two snapshots the whole
 //! picture is `Game::tick_presentation`'s, which is why a hull's *drawn*
 //! angles are left where they stand here while its facing snaps.
@@ -47,7 +47,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hecs::Entity;
 
 use crate::bullet::{Bullet, BulletState};
-use crate::frog::{Facing, Frog, Side};
+use crate::bong::{Facing, Bong, Side};
 use crate::map::{self, MapFile};
 use crate::math::Vec2;
 use crate::net::PROTOCOL_VERSION;
@@ -56,7 +56,7 @@ use crate::net::events::WireEvent;
 use crate::net::events::WireHitTarget;
 use crate::net::wire::{
     AirState,
-    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, frog_flags, tank_flags, tile_flags,
+    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, bong_flags, tank_flags, tile_flags,
 };
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Fuse, Obstacle};
@@ -68,7 +68,7 @@ use crate::shell::{Owner, Shell, ShellState};
 use crate::simulation::replica::plasma_variant_from_index;
 use crate::blast::BlastShape;
 use crate::shockwave::Shockwave;
-use crate::simulation::{Game, GroundFire, OilPrint, PlayerCount, SHOCK_FROG, SHOCK_SHIELD_BREAK, SHOCK_TELEPORT, Spectacle, tile_rubble, tile_stump};
+use crate::simulation::{Game, GroundFire, OilPrint, PlayerCount, SHOCK_BONG, SHOCK_SHIELD_BREAK, SHOCK_TELEPORT, Spectacle, tile_rubble, tile_stump};
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::tuning;
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, PHYSICS_FIXED_DT, Position, TANK_SHELL_VARIANT_BY_ROW, TANK_WRECK_COLS};
@@ -211,6 +211,13 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
         game.char_grass(|cell| burnt.contains(&cell));
     }
     apply(&mut game, &w.snapshot, Show::Quiet);
+    // Grass a wave or a rod flattened before this client came in lies
+    // flat for the time it still hides nobody, as a watching replica's
+    // picture laid it.
+    let flat: Vec<((i32, i32), f32)> = game.grass_flat.iter().map(|(&c, &left)| (c, left)).collect();
+    for (cell, left) in flat {
+        crate::grass::pin(&mut game.grass, cell, left);
+    }
     // The lanterns each seat has set down already are spent; one a blast
     // broke before this client came in is forgotten.
     for seat in 0..game.lamps_left.len() {
@@ -342,6 +349,14 @@ fn apply_craters(game: &mut Game, s: &Snapshot, cols: u16) {
     }
 }
 
+/// The room's flattened grass, whole: the cells the replica's cover
+/// leaves out, each with the time left until the tick it stands back up
+/// (`tick_presentation` runs it down between snapshots). The replica's
+/// own sonic pictures never add to it.
+fn apply_grass_flat(game: &mut Game, s: &Snapshot, cols: u16) {
+    game.grass_flat = s.grass_flat.iter().map(|g| (cell_from_index(cols, g.cell), g.until.saturating_sub(s.tick) as f32 * PHYSICS_FIXED_DT)).collect();
+}
+
 /// Each volcano's cycle at the room's shift (a rod's set-off), 0 for every
 /// one the snapshot leaves out.
 fn apply_volcano_shifts(game: &mut Game, s: &Snapshot) {
@@ -403,7 +418,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_missiles(game, s, drawn.then_some(&mut spectacle));
     apply_grenades(game, s);
     apply_drones(game, s);
-    apply_frogs(game, s, drawn.then_some(&mut spectacle));
+    apply_bongs(game, s, drawn.then_some(&mut spectacle));
     apply_pickups(game, s, cols);
     apply_fires(game, s, cols);
     apply_lamps(game, s);
@@ -414,6 +429,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_rubble(game, s, cols);
     apply_volcano_shifts(game, s);
     game.smoke_cells = s.smoke_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
+    apply_grass_flat(game, s, cols);
     apply_round(game, s);
     game.show(spectacle);
     game.frame = s.tick as u64;
@@ -430,7 +446,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
 /// back (`kick_turret`) - except for a seat whose shots the client drew
 /// itself, which rippled and kicked on the press (`net::round`).
 ///
-/// A zero-damage hit on a tank or a frog is a flame's contact, which
+/// A zero-damage hit on a tank or a bong is a flame's contact, which
 /// never flashes - unless it lies where a beam in the same snapshot
 /// stopped: a laser on a shield deals nothing and flashes all the same,
 /// as `resolve_lasers` flashes it. The two land on one point exactly,
@@ -535,7 +551,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
             }
             WireEvent::Hit { target, damage, x, y, .. } => {
                 let contact = damage == 0.0
-                    && matches!(target, WireHitTarget::Player { .. } | WireHitTarget::Enemy { .. } | WireHitTarget::Frog { .. })
+                    && matches!(target, WireHitTarget::Player { .. } | WireHitTarget::Enemy { .. } | WireHitTarget::Bong { .. })
                     && !beam_ends.contains(&(x, y));
                 if !contact {
                     show.impact_flashes.push(Shockwave::new(at(x, y)));
@@ -1111,9 +1127,9 @@ fn apply_drones(game: &mut Game, s: &Snapshot) {
         let stage = DroneStage::from_code(ds.stage).unwrap_or(DroneStage::Cruise);
         let lock = match ds.lock {
             crate::fpv::LOCK_NONE => DroneLock::None,
-            crate::fpv::LOCK_FROG => game.frog.map_or(DroneLock::None, |entity| DroneLock::Frog { entity, side: crate::frog::Side::Player }),
-            crate::fpv::LOCK_ENEMY_FROG => {
-                game.enemy_frog.map_or(DroneLock::None, |entity| DroneLock::Frog { entity, side: crate::frog::Side::Enemy })
+            crate::fpv::LOCK_BONG => game.bong.map_or(DroneLock::None, |entity| DroneLock::Bong { entity, side: crate::bong::Side::Player }),
+            crate::fpv::LOCK_ENEMY_BONG => {
+                game.enemy_bong.map_or(DroneLock::None, |entity| DroneLock::Bong { entity, side: crate::bong::Side::Enemy })
             }
             slot => game.tank_entity_by_slot(slot as usize).map_or(DroneLock::None, |entity| DroneLock::Tank { entity, slot: slot as usize }),
         };
@@ -1419,57 +1435,58 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
     }
 }
 
-/// The frogs as the snapshot has them. A frog that dies here puts the
+/// The bongs as the snapshot has them. A bong that dies here puts the
 /// ripple its death set off on the server into `show`, when the
 /// spectacle is on.
-fn apply_frogs(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) {
-    for f in &s.frogs {
+fn apply_bongs(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) {
+    for f in &s.bongs {
         let position = Position::new(dequantise_pos(f.x), dequantise_pos(f.y));
         let entity = match f.side {
-            Side::Player => game.frog,
-            Side::Enemy => game.enemy_frog,
+            Side::Player => game.bong,
+            Side::Enemy => game.enemy_bong,
         };
         let entity = match entity {
             Some(e) => e,
             None => {
-                let e = game.spawn_frog(f.side, position, 0);
+                let kind = game.map.bong_kind(f.side);
+                let e = game.spawn_bong(f.side, position, kind);
                 match f.side {
-                    Side::Player => game.frog = Some(e),
-                    Side::Enemy => game.enemy_frog = Some(e),
+                    Side::Player => game.bong = Some(e),
+                    Side::Enemy => game.enemy_bong = Some(e),
                 }
                 e
             }
         };
         let on = |bit: u8| f.state & bit != 0;
         let body = {
-            let mut q = game.world.query_one::<&mut Frog>(entity);
-            let Ok(frog) = q.get() else { continue };
-            frog.position = position;
-            let dead = on(frog_flags::DEAD);
-            if dead && !frog.is_dead() {
+            let mut q = game.world.query_one::<&mut Bong>(entity);
+            let Ok(bong) = q.get() else { continue };
+            bong.position = position;
+            let dead = on(bong_flags::DEAD);
+            if dead && !bong.is_dead() {
                 if let Some(show) = show.as_deref_mut() {
-                    show.shocks.push(Shockwave::scaled(position, SHOCK_FROG));
+                    show.shocks.push(Shockwave::scaled(position, SHOCK_BONG));
                 }
             }
-            let hopping = on(frog_flags::HOPPING);
-            frog.health = if dead { 0.0 } else { f.hp.max(1) as f32 };
+            let hopping = on(bong_flags::HOPPING);
+            bong.health = if dead { 0.0 } else { f.hp.max(1) as f32 };
             if hopping {
-                frog.hop_start = position;
-                frog.hop_end = Position::new(dequantise_pos(f.hop_x), dequantise_pos(f.hop_y));
-                if let Some(facing) = Facing::from_dx(frog.hop_end.x - position.x) {
-                    frog.facing = facing;
+                bong.hop_start = position;
+                bong.hop_end = Position::new(dequantise_pos(f.hop_x), dequantise_pos(f.hop_y));
+                if let Some(facing) = Facing::from_dx(bong.hop_end.x - position.x) {
+                    bong.facing = facing;
                 }
             }
-            frog.set_clips(dead, hopping, on(frog_flags::BITING), on(frog_flags::HURT), f.phase);
+            bong.set_clips(dead, hopping, on(bong_flags::BITING), on(bong_flags::HURT), f.phase);
             // Stunned until the room says it is not; a fresh stun is drawn
             // for its full length (`Game::tick_presentation` runs it down).
-            frog.pulled = on(frog_flags::PULLED);
-            frog.stun_timer = match (on(frog_flags::STUNNED), frog.stun_timer > 0.0) {
-                (true, true) => frog.stun_timer,
-                (true, false) => tuning().sonic_frog_stun_seconds.max(f32::EPSILON),
+            bong.pulled = on(bong_flags::PULLED);
+            bong.stun_timer = match (on(bong_flags::STUNNED), bong.stun_timer > 0.0) {
+                (true, true) => bong.stun_timer,
+                (true, false) => tuning().sonic_bong_stun_seconds.max(f32::EPSILON),
                 (false, _) => 0.0,
             };
-            frog.body
+            bong.body
         };
         game.physics_mut().set_position(body, position);
     }
@@ -1694,14 +1711,14 @@ mod tests {
         changed_tiles: usize,
         fires: usize,
         pickups_taken: usize,
-        frog_clips: usize,
+        bong_clips: usize,
         tiles_gone: usize,
         /// Wells standing, drums held, crates drawn off their cells and
-        /// frogs held in a pull (docs/gravity-well.md "Wire").
+        /// bongs held in a pull (docs/gravity-well.md "Wire").
         wells: usize,
         held_drums: usize,
         drifted: usize,
-        pulled_frogs: usize,
+        pulled_bongs: usize,
         /// The most grass cells trampled at once.
         trampled: usize,
         /// Frames on the end screen.
@@ -1734,12 +1751,12 @@ mod tests {
                 .count();
             self.fires += state.fires.len();
             self.pickups_taken += first.pickups.len().saturating_sub(state.pickups.len());
-            self.frog_clips += state.frogs.iter().filter(|f| f.hopping || f.hurt || f.biting).count();
+            self.bong_clips += state.bongs.iter().filter(|f| f.hopping || f.hurt || f.biting).count();
             self.tiles_gone += first.tiles.len().saturating_sub(state.tiles.len());
             self.wells += state.zones.iter().filter(|z| z.1 == crate::zone::ZONE_WELL).count();
             self.held_drums += state.well_drums.len();
             self.drifted += state.pickups.iter().filter(|p| p.drift != (0, 0)).count();
-            self.pulled_frogs += state.frogs.iter().filter(|f| f.pulled).count();
+            self.pulled_bongs += state.bongs.iter().filter(|f| f.pulled).count();
             self.trampled = self.trampled.max(state.trampled.len());
             self.ended += usize::from(state.outcome != crate::simulation::Outcome::Playing);
         }
@@ -1816,7 +1833,7 @@ mod tests {
     #[test]
     fn the_replica_draws_the_default_map_round() {
         // Frame 120, not 300: this map's round can be over well before
-        // then - the mission is Protect and six enemies reach the frog
+        // then - the mission is Protect and six enemies reach the bong
         // inside five seconds - and a kill on the end screen deals no
         // damage, so the wreck this test is about never happens. `kill_at`
         // says so out loud rather than leaving a bare "no wreck".
@@ -1836,22 +1853,22 @@ mod tests {
             if frame == 120 {
                 game.debug_detonate(map::cell_to_world(17, 6)).expect("the oil drum at (17,6)");
             }
-            if frame == 400 {
+            if frame == 250 {
                 game.debug_kill(1).expect("enemy in slot 1");
             }
-            // Lose the round on purpose at 600, so the end screen (three
+            // Lose the round on purpose at 350, so the end screen (three
             // seconds of it) and the `RoundStarted` re-init both fall
             // inside the 900 frames whatever the battle does: a scripted
             // player whose shots land inside `player_shot_hit_pad_px`
-            // keeps the frog alive past the horizon on its own.
-            kill_at(game, frame, 600, 0);
+            // keeps the bong alive past the horizon on its own.
+            kill_at(game, frame, 350, 0);
         });
         assert!(seen.shots > 0, "{seen:?}: nobody fired");
         assert!(seen.wrecks > 0, "{seen:?}: no wreck");
         assert!(seen.fires > 0, "{seen:?}: nothing burned");
         assert!(seen.tiles_gone > 0, "{seen:?}: no tile died");
         assert!(seen.changed_tiles > 0, "{seen:?}: no tile changed");
-        // The round is lost at 600 and restarts inside these 900 frames,
+        // The round is lost at 350 and restarts inside these 900 frames,
         // so the end screen and the `RoundStarted` re-init are covered too.
         assert!(seen.ended > 0, "{seen:?}: the round never ended");
         assert!(seen.eased > 0, "{seen:?}: no hull swung its drawn angle between snapshots");
@@ -2055,7 +2072,7 @@ mod tests {
     /// The gravity well reaches the replica (docs/gravity-well.md "Wire"):
     /// the wells from the zones family by their stage, the drums they hold
     /// from theirs, the orbs as shots, a crate drawn off its cell and a
-    /// frog held in a pull - the picture the room's, frame by frame, and
+    /// bong held in a pull - the picture the room's, frame by frame, and
     /// the bytes again on re-encoding (`round_trip`'s checking).
     #[test]
     fn a_well_and_what_it_holds_reach_the_replica() {
@@ -2067,7 +2084,7 @@ mod tests {
                     game.debug_set_tank(slot, &patch).ok();
                 }
             }
-            // Over the fuel drums on the top edge, and beside the frog and
+            // Over the fuel drums on the top edge, and beside the bong and
             // its pack.
             if frame == 70 {
                 assert!(game.debug_well(map::cell_to_world(19, 2), false).is_some(), "a well on the field");
@@ -2078,7 +2095,7 @@ mod tests {
         });
         assert!(seen.wells > 0, "{seen:?}: no well reached the replica");
         assert!(seen.held_drums > 0, "{seen:?}: no held drum reached the replica");
-        assert!(seen.drifted > 0 || seen.pulled_frogs > 0, "{seen:?}: nothing the pull moves on the ground reached the replica");
+        assert!(seen.drifted > 0 || seen.pulled_bongs > 0, "{seen:?}: nothing the pull moves on the ground reached the replica");
     }
 
     /// A client that joins while a well holds its drums is welcomed with
@@ -2405,10 +2422,10 @@ mod tests {
 
     /// The seat at (4, 11) facing right with portal A (12, 11) in its line
     /// and portal B (28, 5) beyond an iron column - the mechanics tests'
-    /// shot-portal map, with a frog to keep the round going.
+    /// shot-portal map, with a bong to keep the round going.
     fn portal_shots_round() -> Game {
         let mut map = String::from(
-            "version = 1\nsize = [40, 22]\ntanks = 0\ncells.\"4,11\" = { kind = \"start\" }\ncells.\"4,17\" = { kind = \"frog\" }\ncells.\"12,11\" = { kind = \"portal\" }\ncells.\"28,5\" = { kind = \"portal\" }\n",
+            "version = 1\nsize = [40, 22]\ntanks = 0\ncells.\"4,11\" = { kind = \"start\" }\ncells.\"4,17\" = { kind = \"bong\" }\ncells.\"12,11\" = { kind = \"portal\" }\ncells.\"28,5\" = { kind = \"portal\" }\n",
         );
         for row in 0..22 {
             map.push_str(&format!("cells.\"20,{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
@@ -2653,7 +2670,7 @@ mod tests {
         let map = r#"
 version = 1
 tanks = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."4,14" = { kind = "start" }
 cells."10,10" = { kind = "barrel", drum = "oil" }
 cells."11,10" = { kind = "pickup", pickup = "ammo" }
@@ -2685,7 +2702,7 @@ cells."10,12" = { kind = "pickup", pickup = "speedup" }
         let map = r#"
 version = 1
 tanks = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."10,14" = { kind = "start" }
 "#;
         let mut game = quiet_round(map, 0x5A0C, 1);
@@ -2711,7 +2728,7 @@ cells."10,14" = { kind = "start" }
         let map = r#"
 version = 1
 tanks = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."10,14" = { kind = "start" }
 cells."10,11" = { kind = "tall_grass" }
 cells."11,11" = { kind = "tall_grass" }
@@ -2734,6 +2751,108 @@ cells."11,11" = { kind = "tall_grass" }
         let joiner = welcome_through_the_codec(&game);
         assert_eq!(joiner.drawable_state().trampled, vec![(10, 11)]);
         assert_eq!(&*joiner.cover_cells(), &*game.cover_cells());
+    }
+
+    /// A seat at the bottom with a patch of tall grass three to five cells
+    /// up the field from it, the way it faces.
+    const GRASS_AHEAD: &str = r#"
+version = 1
+tanks = 0
+cells."10,14" = { kind = "start" }
+cells."9,10" = { kind = "tall_grass" }
+cells."10,10" = { kind = "tall_grass" }
+cells."11,10" = { kind = "tall_grass" }
+cells."10,11" = { kind = "tall_grass" }
+cells."10,9" = { kind = "tall_grass" }
+cells."22,4" = { kind = "tall_grass" }
+"#;
+
+    /// The cover `game` reads, as cells.
+    fn cover_of(game: &Game) -> Vec<(i32, i32)> {
+        game.cover_cells().iter().map(|&c| map::world_to_cell(c)).collect()
+    }
+
+    /// From a round whose grass a sonic wave or a rod is about to flatten
+    /// (`go` sets it off on the first tick): a replica that watched and a
+    /// client that joins inside the window read the room's `cover_cells`
+    /// at every snapshot - one every third tick, the replica's own clock
+    /// between - until the grass stands back up, and after.
+    fn flattened_grass_agrees(mut game: Game, go: impl Fn(&mut Game) -> Input) {
+        let (w, h) = game.map.field_size();
+        let mut replica = welcome_through_the_codec(&game);
+        let mut joiner: Option<Game> = None;
+        let standing = cover_of(&game);
+        let mut flat_from = None;
+        let mut stood_up = None;
+        for frame in 1..=1200u32 {
+            let input = if frame == 1 { go(&mut game) } else { Input::default() };
+            game.update(input, PHYSICS_FIXED_DT, w, h);
+            if flat_from.is_none() && !game.grass_flat.is_empty() {
+                flat_from = Some(frame);
+            }
+            if flat_from.is_some() && stood_up.is_none() && game.grass_flat.is_empty() {
+                stood_up = Some(frame);
+            }
+            if frame % 3 != 0 {
+                replica.tick_presentation(PHYSICS_FIXED_DT);
+                if let Some(j) = joiner.as_mut() {
+                    j.tick_presentation(PHYSICS_FIXED_DT);
+                }
+                continue;
+            }
+            let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap))).expect("decodes") else { panic!("kind") };
+            snapshot(&mut replica, &snap);
+            if let Some(j) = joiner.as_mut() {
+                snapshot(j, &snap);
+            }
+            let room = cover_of(&game);
+            assert_eq!(cover_of(&replica), room, "frame {frame}: the replica's cover is the room's");
+            if let Some(j) = &joiner {
+                assert_eq!(cover_of(j), room, "frame {frame}: the joiner's cover is the room's");
+            }
+            // In the window, a second after the grass went down: a client
+            // comes in.
+            if joiner.is_none() && flat_from.is_some_and(|f| frame >= f + 60) {
+                assert!(!game.grass_flat.is_empty(), "the grass is still flat");
+                let j = welcome_through_the_codec(&game);
+                assert_eq!(cover_of(&j), room, "the joiner's welcome carries the flat grass");
+                let (&cell, _) = game.grass_flat.iter().next().expect("a flat cell");
+                let tufts: Vec<f32> = j.grass.iter().filter(|t| map::world_to_cell(t.base) == cell).map(|t| t.crush).collect();
+                assert!(!tufts.is_empty() && tufts.iter().all(|&c| c == 1.0), "and lays its tufts flat: {tufts:?}");
+                joiner = Some(j);
+            }
+            if stood_up.is_some_and(|f| frame >= f + 30) {
+                break;
+            }
+        }
+        assert!(flat_from.is_some(), "nothing flattened the grass");
+        assert!(stood_up.is_some(), "the grass never stood back up");
+        assert!(joiner.is_some(), "no client joined in the window");
+        assert_eq!(cover_of(&game), standing, "the room's grass hides again");
+        assert_eq!(cover_of(&replica), standing, "and the replica's");
+        assert_eq!(cover_of(&joiner.unwrap()), standing, "and the joiner's");
+    }
+
+    /// Grass a rod's impact flattened (`rod_grass_flat_seconds`) hides
+    /// nobody on every client for as long as on the room.
+    #[test]
+    fn grass_a_rod_flattened_is_flat_on_every_client() {
+        let game = quiet_round(GRASS_AHEAD, 0x40D, 0);
+        flattened_grass_agrees(game, |game| {
+            game.debug_call_rod(map::cell_to_world(10, 10), false).expect("a call");
+            Input::default()
+        });
+    }
+
+    /// Grass a sonic wave flattened (`sonic_grass_flat_seconds`) hides
+    /// nobody on every client for as long as on the room, a client that
+    /// joined inside the window included: the waves travel in no welcome.
+    #[test]
+    fn grass_a_sonic_wave_flattened_is_flat_on_every_client() {
+        let mut game = quiet_round(GRASS_AHEAD, 0x50, 0);
+        hammer_seat(&mut game);
+        flattened_grass_agrees(game, |_| Input::single(Intent { fire: true, ..Intent::default() }));
     }
 
     /// An oil drum with cover on three sides, the pool's reach, and a
@@ -3334,17 +3453,17 @@ cells."16,10" = { kind = "tall_grass" }
         assert!(tell(&replica).is_none(), "and ends with the room's");
     }
 
-    /// A stunned frog is stunned on the replica: no hop, no bite drawn.
+    /// A stunned bong is stunned on the replica: no hop, no bite drawn.
     #[test]
-    fn a_stunned_frog_reaches_the_replica() {
+    fn a_stunned_bong_reaches_the_replica() {
         let game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
-        let frog = game.frog.expect("the default map has a frog");
-        game.world.get::<&mut crate::frog::Frog>(frog).unwrap().stun(1.5);
+        let bong = game.bong.expect("the default map has a bong");
+        game.world.get::<&mut crate::bong::Bong>(bong).unwrap().stun(1.5);
         let mut replica = welcome_through_the_codec(&game);
         snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
-        let stunned = |g: &Game| g.world.get::<&crate::frog::Frog>(g.frog.unwrap()).unwrap().is_stunned();
+        let stunned = |g: &Game| g.world.get::<&crate::bong::Bong>(g.bong.unwrap()).unwrap().is_stunned();
         assert!(stunned(&replica));
-        game.world.get::<&mut crate::frog::Frog>(frog).unwrap().stun_timer = 0.0;
+        game.world.get::<&mut crate::bong::Bong>(bong).unwrap().stun_timer = 0.0;
         snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
         assert!(!stunned(&replica), "and comes round with the room's");
     }

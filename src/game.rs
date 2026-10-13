@@ -2,7 +2,7 @@
 //! any canvas can run - `paint_floor` (ground, floor shade, tracks,
 //! scorches, landed rubble, oil, portals), `paint_tiles` (walls and props
 //! with their shadows and caps), `paint_standing` (pickups, the y-sorted
-//! tanks/frogs/grass walk, trees) - and `paint_field`, all three. Reads
+//! tanks/bongs/grass walk, trees) - and `paint_field`, all three. Reads
 //! `Game`'s state (owned by `simulation/`) and never mutates it. The GPU
 //! runs these stages through `render::canvas::GpuCanvas` inside
 //! `Game::render` (`render/game.rs`, the raylib half of this module); the
@@ -13,7 +13,7 @@
 use crate::blast::draw_scorch_kept;
 use crate::canvas::Canvas;
 use crate::decal::draw_decal_kept;
-use crate::frog::{draw_frog, draw_frog_ring};
+use crate::bong::{draw_bong, draw_bong_ring};
 use crate::math::Color;
 use crate::obstacle::{draw_obstacle, draw_obstacle_cap, draw_obstacle_shadow, draw_oil_cell, draw_oil_print, draw_tree, draw_tree_shadow, fence_axis, tree_lean, Material, Obstacle};
 use crate::pickup::{draw_pickup, Pickup};
@@ -44,7 +44,7 @@ enum TankRole {
 /// pass. Trees are deliberately not in here - see that pass.
 enum Standing<'a> {
     Tank(&'a Tank, TankRole),
-    Frog(Entity),
+    Bong(Entity),
     Tower(crate::tower::TowerView),
     /// A lamp post: its lantern stands above its foot, so a tank that
     /// drives behind one is drawn behind it.
@@ -564,7 +564,7 @@ impl Game {
         }
     }
 
-    /// Everything standing on the ground: pickups, then tanks, frogs and
+    /// Everything standing on the ground: pickups, then tanks, bongs and
     /// grass drawn back to front by where they *meet* the ground, then the
     /// trees over the lot.
     ///
@@ -616,10 +616,10 @@ impl Game {
             })
             .filter(|(_, item)| !matches!(item, Standing::Tank(tank, _) if culled(cull, tank.position)))
             .collect();
-        for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
-            let at = crate::simulation::with_frog(&self.world, frog_entity, |frog| frog.position);
+        for bong_entity in [self.bong, self.enemy_bong].into_iter().flatten() {
+            let at = crate::simulation::with_bong(&self.world, bong_entity, |bong| bong.position);
             if !culled(cull, at) {
-                standing.push((at.y, Standing::Frog(frog_entity)));
+                standing.push((at.y, Standing::Bong(bong_entity)));
             }
         }
         // A tower rises north of its base, so a tank that drives behind
@@ -661,10 +661,10 @@ impl Game {
                     let hulk = HulkLook { hot: self.wreck_hot(tank), snow: self.hulk_snow(tank) };
                     draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts.locate_cue, hulk);
                 }
-                Standing::Frog(entity) => {
-                    crate::simulation::with_frog(&self.world, *entity, |frog| {
-                        draw_frog_ring(c, frog, self.time);
-                        draw_frog(c, frog, self.time);
+                Standing::Bong(entity) => {
+                    crate::simulation::with_bong(&self.world, *entity, |bong| {
+                        draw_bong_ring(c, bong, self.time);
+                        draw_bong(c, bong, self.time);
                     });
                 }
                 Standing::Tower(view) => {

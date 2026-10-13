@@ -6,7 +6,7 @@
 //! **Kept across frames** (docs/large-maps-follow-camera.md section 12):
 //! building the occupancy and labelling its components is most of what a
 //! routing grid costs on a field map, and both change only when the
-//! terrain does - a tile comes or goes, a frog hops, a fire starts or
+//! terrain does - a tile comes or goes, a bong hops, a fire starts or
 //! burns out. So the round keeps them (`NavCache`, brought up to date by
 //! `Game::refresh_nav` at the top of every frame) in two layers:
 //!
@@ -17,7 +17,7 @@
 //!   the world's own order, position and material, about a microsecond on
 //!   the study map - or the field's size or a knob the grid reads has
 //!   changed;
-//! - the **base**: the layer with the frogs and the burning cells blocked
+//! - the **base**: the layer with the bongs and the burning cells blocked
 //!   (stamped on a copy every frame, a handful of shapes), the portals
 //!   found on it, the fords priced and the components labelled. It is
 //!   rebuilt only when that occupancy comes out different from the one it
@@ -35,14 +35,14 @@
 use std::collections::HashSet;
 
 use crate::battlefield;
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::obstacle::{Material, Obstacle};
 use crate::pathfind::Grid;
 use crate::tank::{Dir, Tank};
 use crate::tuning::tuning;
-use crate::{FROG_COLLIDER_HALF_EXTENT, OBSTACLE_GRID_SIZE, PATHFIND_CELL_SIZE, Position};
+use crate::{BONG_COLLIDER_HALF_EXTENT, OBSTACLE_GRID_SIZE, PATHFIND_CELL_SIZE, Position};
 
-use super::{Ai, Game, with_frog, with_tank};
+use super::{Ai, Game, with_bong, with_tank};
 
 /// What the layer is built under besides the tiles: the field's size and
 /// the knobs the grid reads, as bits so the comparison is exact.
@@ -105,7 +105,7 @@ pub(crate) struct NavCache {
     tiles: Vec<TileKey>,
     /// The boundary, the tiles and the deep water blocked.
     layer: Option<Grid>,
-    /// `layer` with the frogs and the burning cells blocked, its portals,
+    /// `layer` with the bongs and the burning cells blocked, its portals,
     /// its prices and its labels: `nav_grid` labelled, as of the last
     /// `refresh_nav`.
     base: Option<Grid>,
@@ -122,8 +122,8 @@ impl NavCache {
     }
 
     /// The layer as of the last `Game::refresh_nav`: the boundary, the
-    /// tiles and the deep water, with no frog in it - what a frog walks
-    /// by, since the base blocks the frog's own cells.
+    /// tiles and the deep water, with no bong in it - what a bong walks
+    /// by, since the base blocks the bong's own cells.
     pub(crate) fn layer(&self) -> &Grid {
         self.layer.as_ref().expect("refresh_nav runs before the layer is read")
     }
@@ -144,7 +144,7 @@ impl Game {
     /// `pathfind::Grid`), built from scratch from the current terrain and
     /// built exactly the same way by the map linter, so the two can't
     /// drift. The margin is the worst-case tank in the roster, so no route
-    /// is too narrow for a titan. The frog is included: it is a solid
+    /// is too narrow for a titan. The bong is included: it is a solid
     /// static body that blocks movement exactly like a tile and can move.
     /// The battlefield's own boundary needs no entry here - `Grid::build`
     /// insets its outer edge by the same margin. A frame's routing grid
@@ -207,25 +207,25 @@ impl Game {
             .collect()
     }
 
-    /// What comes, goes and moves between frames: the frogs and the
+    /// What comes, goes and moves between frames: the bongs and the
     /// burning cells (`nav_grid`).
     fn nav_moving_shapes(&self) -> impl Iterator<Item = (Position, f32)> + '_ {
-        let frogs: Vec<(Position, f32)> = self
+        let bongs: Vec<(Position, f32)> = self
             .world
-            .query::<&Frog>()
+            .query::<&Bong>()
             .iter()
-            .map(|fr| (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1)))
+            .map(|fr| (fr.position, BONG_COLLIDER_HALF_EXTENT.0.max(BONG_COLLIDER_HALF_EXTENT.1)))
             .collect();
         // A burning cell is a wall for as long as it burns: the AI routes
         // around a pool rather than through it. A tiny half-extent, so
         // only the margin decides how wide the detour is.
-        frogs.into_iter().chain(self.fires.iter().map(|fire| (fire.position(), 1.0)))
+        bongs.into_iter().chain(self.fires.iter().map(|fire| (fire.position(), 1.0)))
     }
 
     /// The nav grid as a sapper reads it (`ai::Sap`): every tile a shell
     /// can bring down (`breachable`) open but dear, at
     /// `enemy_sap_wall_path_cost` a cell, and everything else - iron, a
-    /// cage, deep water and lava, the frogs, a fire - the wall it is in
+    /// cage, deep water and lava, the bongs, a fire - the wall it is in
     /// `nav_grid`. With the breachable tiles' centres.
     pub(crate) fn breach_grid(&self, width: f32, height: f32) -> (Grid, Vec<Position>) {
         let mut grid = Self::nav_open(width, height);
@@ -320,7 +320,7 @@ impl Game {
     /// Bring the nav grid the round keeps (`NavCache`) up to date with the
     /// terrain, at the top of a frame: the layer rebuilt when the world's
     /// tiles, the field's size or a knob it reads have changed since it was
-    /// built, the base when the layer with the frogs and the burning cells
+    /// built, the base when the layer with the bongs and the burning cells
     /// on it no longer blocks the cells the base was built on. Afterwards
     /// `self.nav.base()` is `nav_grid` labelled. No RNG.
     pub(super) fn refresh_nav(&mut self, width: f32, height: f32) {
@@ -378,7 +378,7 @@ impl Game {
     /// The frame's routing grid on `grid`, `nav_grid` labelled for O(1)
     /// reachability: priced with the tactical surcharges, and carrying
     /// one flow field per target the pack shares - every live player and,
-    /// while it lives, the player's frog (a hunter's quarry). Enemies then
+    /// while it lives, the player's bong (a hunter's quarry). Enemies then
     /// route toward those by reading the field, which is worked out only
     /// as far as the frame reads it (`pathfind`), every answer the whole
     /// field's; only a target of their own (an engagement slot, a wander
@@ -447,8 +447,8 @@ impl Game {
         for &(pos, _) in &players {
             grid.add_field(pos);
         }
-        if let Some(frog) = self.frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position))) {
-            grid.add_field(frog);
+        if let Some(bong) = self.bong.and_then(|e| with_bong(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position))) {
+            grid.add_field(bong);
         }
         #[cfg(test)]
         if self.whole_fields {
@@ -480,7 +480,7 @@ mod tests {
 
     /// The props playground's seat turned west, firing down row 11 at the
     /// barrel cluster every half second: drums go up, the oil burns, tiles
-    /// die and the enemies come at the seat and past the frog.
+    /// die and the enemies come at the seat and past the bong.
     fn shooting(frame: u32) -> Input {
         let mut intent = Intent::default();
         if frame <= 2 {

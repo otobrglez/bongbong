@@ -40,7 +40,7 @@
 
 use crate::math::{Color, Rectangle, Vec2};
 
-use crate::simulation::{with_frog, with_tank, Game, RollIn, RoundStats};
+use crate::simulation::{with_bong, with_tank, Game, RollIn, RoundStats};
 use crate::tank::{ActiveWeapon, Tank};
 use crate::tuning::tuning;
 use crate::{Rect, MAX_DAMAGE};
@@ -389,8 +389,8 @@ pub struct HudModel {
     /// The other seats, in seat order, in the compact layout; empty in
     /// the couch ones.
     pub others: Vec<SeatHud>,
-    /// The objective frog's health fraction, `None` in a round without one.
-    pub frog: Option<f32>,
+    /// The objective bong's health fraction, `None` in a round without one.
+    pub bong: Option<f32>,
 }
 
 impl HudModel {
@@ -435,14 +435,14 @@ impl HudModel {
             .filter(|tank| !tank.is_wreck() && tank.owner_slot() >= first_enemy)
             .count();
         let enemies_pending = wave.as_ref().map_or(0, |w| w.pending);
-        // The objective: the player's own frog, or, in a round where only
-        // the other side has one, that frog.
-        let frog = game
-            .frog
-            .or(game.enemy_frog)
-            .map(|e| with_frog(&game.world, e, |f| f.health_fraction()));
+        // The objective: the player's own bong, or, in a round where only
+        // the other side has one, that bong.
+        let bong = game
+            .bong
+            .or(game.enemy_bong)
+            .map(|e| with_bong(&game.world, e, |f| f.health_fraction()));
         let wave = wave.map(|w| (w.index, w.total));
-        HudModel { title, wave, enemies_alive, enemies_pending, layout, local, second, others, frog }
+        HudModel { title, wave, enemies_alive, enemies_pending, layout, local, second, others, bong }
     }
 }
 
@@ -817,7 +817,7 @@ pub fn button_height(touch: bool) -> f32 {
 /// slot table fills it). The row is `Corners::row_h` tall.
 pub const VITALS_W: f32 = 310.0;
 /// The right cluster's first row: the mission word or the level button,
-/// the wave, the enemy count and the frog's gauge.
+/// the wave, the enemy count and the bong's gauge.
 pub const INFO_W: f32 = 304.0;
 /// The mission word's slot at the head of that row, its wave count
 /// included: the budget `text_tests` measures every language's mission
@@ -2479,7 +2479,7 @@ mod hud_tests {
     fn a_banner_shrinks_to_fit_its_area() {
         let [small, _, desktop] = areas();
         assert_eq!(banner_px(small), RESULT_TEXT_PX, "the smallest area is the budget's");
-        let banner = "PROTECT THE FROG!";
+        let banner = "PROTECT THE BONG!";
         assert_eq!(banner_size(banner, BANNER_SIZE, desktop), BANNER_SIZE);
         let fitted = banner_size(banner, BANNER_SIZE, small);
         assert!(fitted < BANNER_SIZE && fitted >= BANNER_MIN_SIZE, "{fitted}");

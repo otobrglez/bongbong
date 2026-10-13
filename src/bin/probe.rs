@@ -183,7 +183,7 @@ const CHURN_NET_MAX: f32 = 60.0; // px of net displacement
 // kind above infers trouble from kinematics alone.
 // Wall-grind: driving *into* terrain - commanded to move while the solid
 // hull holds an active contact with static geometry (wall, obstacle tile,
-// or the frog), sustained. The failure `stall` is structurally blind to:
+// or the bong), sustained. The failure `stall` is structurally blind to:
 // sliding along the wall being ground against can keep speed well above
 // STALL_SPEED_EPS the whole time. No deliberate_hold interplay needed - a
 // holding tank has no move command, and GRIND_CMD_EPS requires one.
@@ -230,7 +230,7 @@ const CLUSTER_FRAMES_THRESHOLD: u32 = 180; // 3s, matching STALL_FRAMES_THRESHOL
 // --- Tank-on-tank contact (docs/enemy-command-and-control-prd.md §10) ---
 // Every kind above measures a tank against the *map*. These two measure it
 // against another tank, which nothing did before: `bump-rate` and
-// `wall-grind` read `touching_static` (walls, tiles, the frog), and
+// `wall-grind` read `touching_static` (walls, tiles, the bong), and
 // `Event::Ram` - the only other signal - saturates, because one ram sets
 // `ram_damage_cooldown` on *both* participants, so a tank in a pile-up
 // reports at most one event per 0.5s however many neighbours it grinds
@@ -275,14 +275,14 @@ const PILEUP_FRAMES: u32 = 60; // 1s
 // never false-flag: elapsed stays under NAV_GRACE_SECONDS alone.
 const NAV_GRACE_SECONDS: f32 = 10.0;
 // The `defend` scenario's reach by default (`--defend-reach`): an enemy this
-// close to a live seat or the players' frog is destroyed. Past
+// close to a live seat or the players' bong is destroyed. Past
 // `enemy_attack_range` (340 px), so no enemy ever gets near enough to
 // attack what the defence guards.
 const DEFEND_REACH_PX: f32 = 400.0;
 const NAV_STRETCH_MAX: f32 = 4.0;
 // --- Pacing: the time between engagements (`Lulls`) ---
 // A frame is in contact while a live enemy on the field stands within
-// `enemy_attack_range` of a live seat or the players' frog - within
+// `enemy_attack_range` of a live seat or the players' bong - within
 // the defence's reach under the `defend` scenario, which destroys it
 // there - and a lull is a stretch of frames with none between two such
 // frames. Shorter stretches are an enemy stepping in and out of range
@@ -331,7 +331,7 @@ enum Scenario {
     Brake,
     /// A perfect defence: the seats never move or fire, and every enemy
     /// that comes within `--defend-reach` of a live seat or the players'
-    /// frog is destroyed on the spot, through the normal kill path
+    /// bong is destroyed on the spot, through the normal kill path
     /// (`Game::debug_kill`). No enemy gets near enough to attack, so a round
     /// lasts until every enemy it calls has come to the fight - on a waves
     /// map, exactly as long as its stragglers keep it waiting. Each tank's arrival at the
@@ -412,7 +412,7 @@ struct Args {
     players: u8,
 
     /// The `defend` scenario's reach (px): an enemy this close to a live
-    /// seat or the players' frog is destroyed. The default, 400, is past
+    /// seat or the players' bong is destroyed. The default, 400, is past
     /// `enemy_attack_range`, so nobody is ever attacked; inside it the
     /// defence lets the enemies land a few shots first, which is what a
     /// team under pressure looks like to the pacing director.
@@ -561,14 +561,14 @@ fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
 }
 
 /// The `defend` scenario's perfect defence: every enemy on the field within
-/// `reach` of a live seat or the players' frog is queued to die at the top
+/// `reach` of a live seat or the players' bong is queued to die at the top
 /// of the next frame (`Game::debug_kill`), and the frame it got there is
 /// its arrival at the fight (`TankTrack::time_to_engage`).
 fn defend(game: &mut Game, tracks: &mut BTreeMap<usize, TankTrack>, frame: u32, reach: f32) {
     let snapshots = game.tank_snapshots();
     let mut guarded: Vec<Position> =
         snapshots.iter().filter(|t| t.is_player && !t.is_wreck && !t.entering).map(|t| t.position).collect();
-    guarded.extend(game.frog_position());
+    guarded.extend(game.bong_position());
     for tank in snapshots.iter().filter(|t| !t.is_player && !t.is_wreck && !t.entering) {
         if guarded.iter().any(|g| g.distance_to(tank.position) <= reach) && game.debug_kill(tank.slot).is_ok() {
             if let Some(track) = tracks.get_mut(&tank.slot) {
@@ -1324,7 +1324,7 @@ fn check_anomalies(
     // Rapier's own NaN quarantine (see `Physics::quarantined`) is the
     // authoritative version of the per-tank check below: it fires inside
     // the step that produced the non-finite state, and covers the wall,
-    // obstacle and frog bodies no tank snapshot ever shows. One-shot per
+    // obstacle and bong bodies no tank snapshot ever shows. One-shot per
     // round like every other kind, keyed by QUARANTINE_FLAG since it
     // belongs to no slot.
     if !invariant_flagged.contains(&QUARANTINE_FLAG) {
@@ -1417,15 +1417,15 @@ fn check_anomalies(
         // player's *current* position - the "arrived" instant for the
         // path-stretch metric (see NAV_GRACE_SECONDS's comment). Recorded
         // here, judged once at round end by `run_round`.
-        // A drone launched at a seat or at the players' frog is
+        // A drone launched at a seat or at the players' bong is
         // engagement too: the tank fights it from where it stands - inside
         // the seat's sight box, out of its face (docs/fpv-swarm.md
         // "Probe"); so is a rod called on anything, which a rod tank does
         // from its stand-off or a hunter from round its quarry
         // (docs/rod-from-god.md "Probe").
         let launched_at_seat = game.events().iter().any(|e| match *e {
-            Event::DroneLaunched { slot, target, frog, .. } if slot == tank.slot => {
-                frog || target.is_some_and(|seat| seat < game.first_enemy_slot())
+            Event::DroneLaunched { slot, target, bong, .. } if slot == tank.slot => {
+                bong || target.is_some_and(|seat| seat < game.first_enemy_slot())
             }
             Event::RodCalled { slot, .. } => slot == tank.slot,
             _ => false,
@@ -2036,12 +2036,12 @@ impl Lulls {
 }
 
 /// Whether the fight is on this frame: a live enemy on the field within
-/// `reach` of a live seat on the field or of the players' frog.
+/// `reach` of a live seat on the field or of the players' bong.
 fn in_contact(game: &Game, reach: f32) -> bool {
     let snapshots = game.tank_snapshots();
     let mut team: Vec<Position> =
         snapshots.iter().filter(|t| t.is_player && !t.is_wreck && !t.entering).map(|t| t.position).collect();
-    team.extend(game.frog_position());
+    team.extend(game.bong_position());
     snapshots
         .iter()
         .filter(|t| !t.is_player && !t.is_wreck && !t.entering)
@@ -2265,7 +2265,7 @@ fn run_round(
         // asleep, or keeping to its home leash with no alert - is not
         // headed for the player at all, so not arriving is no routing
         // failure (docs/large-maps-follow-camera.md section 12); nor is a
-        // guard keeping its beat while the seat is far from its frog, which
+        // guard keeping its beat while the seat is far from its bong, which
         // a round outlasting the budget shows (an AFK seat a sonic hammer
         // pack shoves rather than kills, docs/sonic-hammer.md "Probe").
         if tank.asleep || tank.leashed || tank.guarding {

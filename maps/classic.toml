@@ -1833,7 +1833,7 @@ kind = "wall"
 material = "wood"
 
 [cells."20,20"]
-kind = "frog"
+kind = "bong"
 
 [cells."3,13"]
 kind = "barrel"

@@ -1,10 +1,9 @@
 # Palette — Puny Palette (formerly Resurrect 64)
 
 Every generated sprite sheet in `static/` (tanks, shells, walls, damage,
-props, the barrel explosion) plus
-the hand-authored `tracks.png` decal draws exclusively from **the Puny
-Palette** — a curated set of colours sampled directly from the third-party
-Puny World ground-layer tileset (`static/punyworld/`, see
+props, the barrel explosion) draws exclusively from **the Puny Palette** —
+a curated set of colours sampled directly from the third-party Puny World
+ground-layer tileset (`static/punyworld/`, see
 `static/punyworld/SOURCE.md` and `docs/GROUND_SPEC.md`). The shared source
 of truth is `tools/punypalette.py`:
 

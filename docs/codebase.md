@@ -233,14 +233,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   is no button, `BACK`, Esc and a press outside close it. `wrap` breaks a title onto two balanced
   lines. `SELECT_TILES` is one page, and a test holds `levels.toml` to it.
 - `training.rs` (docs/training-stage.md) — a training map's script as data (`Training`:
-  `start_health`, `start_shells` and the `beat` list; `Beat`: `id`, the frog's cell, its
+  `start_health`, `start_shells` and the `beat` list; `Beat`: `id`, the bong's cell, its
   `say`/`nudge` message keys, `BeatStart`, `BeatDone`), read from and written back to the map's
   `[training]`/`[[training.beat]]` tables (`MapFile::training`), and the two training cells' drawing
   generic over `canvas::Canvas`: `draw_door` (banded iron with a hazard band; `map::CellObject::Door
   { beat }` spawns a permanent `Material::Door` whose `variant` is the beat) and `draw_flag`
   (`CellObject::Flag`, not solid). `maps/boot-camp.toml` is the course (five pens; the fourth a drum
   range any one drum sets off). The rules are `simulation/training.rs`.
-- `bubble.rs` (docs/training-stage.md) — the frog's voice in a training round, headless: `FrogVoice`
+- `bubble.rs` (docs/training-stage.md) — the bong's voice in a training round, headless: `BongVoice`
   (owned by `app.rs` beside `fx::Fx`, `observe` after every step, `update` once a frame on the time
   the round ran) queues each beat's `say` keys when the beat begins (clearing what the last one
   still had), the situational lines from the frame's events (hit in its beat, healed, a bite, the
@@ -248,11 +248,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `training_nudge_seconds` of quiet, and holds a line `training_line_seconds` plus
   `training_line_seconds_per_char` of its length; `key_for` picks a line's `-touch` twin on a touch
   screen (`hud::Hints`); `layout` is the bubble's one geometry in the bitmap's pixels at the UI's
-  points (sized for the whole line, above the frog, under it near the top or over a corner cluster's
-  keep-out, at the view's edge with no tail while the frog is off it), `revealed` the words up so
+  points (sized for the whole line, above the bong, under it near the top or over a corner cluster's
+  keep-out, at the view's edge with no tail while the bong is off it), `revealed` the words up so
   far, and `<ARROWS>`/`<SPACE>`/`<STICK>`/`<TAP>` tokens become key caps. `render/bubble.rs` paints
   it (`Effects::bubble`) after the indicators, under the HUD. The simulation never reads a word;
-  every line is a `frog-*` key constant. Tests: `bubble::tests`.
+  every line is a `bong-*` key constant. Tests: `bubble::tests`.
 - `map.rs` — the TOML map format (docs/map-editor-design.md): `size = [cols, rows]` in 32 px cells
   (rows may be fractional; absent = 34 x 17; at most `MAX_SIDE_CELLS`, 250, a side - what the wire's
   `i16` positions and `u16` cell indices carry - and at least `MIN_SIDE_CELLS`, 8, refused by name
@@ -269,7 +269,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   solid, soft cover like grass; docs/BUSHES_SPEC.md), `oil` trail cells, `portal` anchors (multi-instance, not solid,
   `portal_cells`; docs/teleporting.md), road, `water` (painted like road; `ground::build` draws a
   one-cell-wide line as a river and a wider block as a lake, both animated and flowing down the map -
-  docs/GROUND_SPEC.md §9 - and the rules follow the shape, docs/water.md), frog, `enemy_frog`,
+  docs/GROUND_SPEC.md §9 - and the rules follow the shape, docs/water.md), bong, `enemy_bong`
+  (the top-level `bong = "oggle"` / `enemy_bong = "capi"` name which characters they are,
+  `bong_kind`; the old `frog` keys load as aliases),
   `gate` (explicit gates replace the edge scan), pickup slots, `start`/`start2`, `lava` (painted
   like water: a stream is a burning ford, a lake's middle deep), `volcano` (the crater cell; its
   cone covers the 21 cells within `sqrt(5)`, `volcano_footprint`), `lamp` (a lamp post), `target` (a
@@ -384,14 +386,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 ## Simulation
 
 - `simulation/` — the simulation layer. `mod.rs` owns `Game`: `init`, and `update` as a sequence of
-  named phase methods (intro, timers, frogs, pickups, players, roll-in, enemies, waves, lasers,
+  named phase methods (intro, timers, bongs, pickups, players, roll-in, enemies, waves, lasers,
   flames, `step_world`, ram, projectile hits, explosions, cleanup, round end) sharing a per-frame
   `Frame` (round RNG, terrain snapshot, deferred spawns/kills/blasts/events). No raylib dependency:
   a round needs only this module and an `Input` - `seats: [Intent; MAX_SEATS]`
   (`Input::single`/`two`/`seat`; the round reads the first `players.count()` seats, and
   `Game::seats` holds their tanks - see Seats below) plus the one-shot toggles; every driver
   passes `dt = PHYSICS_FIXED_DT`. **Event log**: phases push `Event`s (fired, hit, wreck, ram,
-  shield, frog, pickups, round start/end, `Ricochet` - a shot bouncing off iron or a barrel, with
+  shield, bong, pickups, round start/end, `Ricochet` - a shot bouncing off iron or a barrel, with
   the heading it flies on along, emitted where `resolve_projectiles` bounces it; `LaserBeam` - the
   beam's muzzle and stop point, since an instant hit leaves nothing in the world for a snapshot to
   carry and a replica draws the beam from it - one a leg, `leg`/`portal`, where portals bend it;
@@ -463,14 +465,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     tank within `missile_seek_range` (ties on slot; none = the launcher's aim point) and keeps its
     aim on that tank while it chases (an enemy's missile locks a seat only while its launcher stands
     inside that seat's sight box); `resolve_missiles` bursts the ones that landed (`missile_blast`:
-    `explosion_hit` for the side opposing the shooter, a shove for everyone, opposing frogs,
+    `explosion_hit` for the side opposing the shooter, a shove for everyone, opposing bongs,
     `damage_obstacle` for tiles). Missiles have **no hit test** - they fly over everything and only
     the blast touches anything. No RNG beyond the blast's damage rolls.
   - `grenades.rs` (docs/grenade-launcher.md) — the grenades' world half (`grenade.rs` is the ball):
     `roll_grenades` (after `step_world` and the ram, on the end screen too) rolls each among
     `Terrain::tile_boxes`/`edge_boxes` and every hull with a body (a live one at its body's
     velocity, a wreck still); `resolve_grenades` sets off the spent ones in id order through
-    `side_blast` (missiles.rs: the side opposing the launcher hurt, everyone shoved, opposing frogs,
+    `side_blast` (missiles.rs: the side opposing the launcher hurt, everyone shoved, opposing bongs,
     tiles, crates) and `grenade_show` (a replica's off `Event::GrenadeBlast`: fireball, a
     `grenade_shock` ripple, the screen flash, scorch). A grenade moves no tank and a round without
     one draws exactly what it did; no RNG beyond the blast's damage rolls.
@@ -483,7 +485,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     the knock's speed past the reach and all of them the knock's slide, no more), damage to the
     opposing side only (`HitCause::Sonic`), glass shattered, grass flattened (`Game::grass_flat`,
     `grass::pin`, `Game::cover_cells` what conceals), drums thrown (`throw_drum`, `drum_landing`),
-    frogs stunned, lanterns broken, grenades pushed - no RNG. `sonic_show` is the cosmetic half a
+    bongs stunned, lanterns broken, grenades pushed - no RNG. `sonic_show` is the cosmetic half a
     replica's `SonicBlast` and a client's press take too; `hammer_senses` is what the AI is handed
     (`ai::HammerSense`; `closer_spots` the two closers' spots, square on the seat and out of each
     other's cones; `lands_in_trouble` hazards on the way, a lane or a tower's reach where the slide
@@ -525,7 +527,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     seat's press the nearest enemy in its sight box not under a tree's crown, an enemy's what its
     rule asked, `Tank::fpv_want`), `guide_drones` keeps or loses the lock (wreck, crown, portal),
     `advance_drones` flies them in the fixed step (gusts carry them), `resolve_drones` bursts a
-    dive's end as a small side blast (`side_blast_sparing`: hulls and frogs under a crown spared; in
+    dive's end as a small side blast (`side_blast_sparing`: hulls and bongs under a crown spared; in
     a crown the tree alone) or crashes a downed one a dud; `drone_show` the cosmetic half a replica
     takes. **Air targets** (`air.rs`, `Game::air_targets`/`strike_air`, the one setter): only
     bullets strike the air (`Terrain::sweep_air`, lag-compensated through `HitBoxFrame::air`), sides
@@ -541,14 +543,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     client has it), `fire_rod` on a full release off the hull's own cell (on it, the cancel),
     `place_calls` puts the call on the field as a `Zone` (`Event::RodCalled`), `resolve_zones` lands
     it `rod_countdown_seconds` on (`rod_impact`: every hull with any part in the circle crushed
-    whatever its shield, frogs killed, drones downed - `AirStrike::Rod` -, breakable tiles crushed
+    whatever its shield, bongs killed, drones downed - `AirStrike::Rod` -, breakable tiles crushed
     (`DamageCause::Crush`), hulls out to the shove radius knocked (`knock_from`, the hammer's
     knock), grenades, lanterns, oil, crates, grass; a crater on dry ground - `Craters`, a pit in
     `Footing`, filled to a ford under rain, `WaterLayout::fill` -; a volcano struck set off by a
     shift of its cycle in ticks, `Volcano::set_off_shift`, on the wire). Every zone's `Danger`
     (owner `None`) is every enemy's to keep out of, the router surcharges it, and a seat in one is
     herded (`EngageCtx::herd`). `rod_senses` (`ai::RodSense`: a seat standing still from
-    `SeatStill`, a slow one led, a player tower, the frog; never on an ally; the seat it keeps its
+    `SeatStill`, a slow one led, a player tower, the bong; never on an ally; the seat it keeps its
     distance from) is what the AI is handed - a rod tank fires no shells and stands off a band out
     of its own circle. No RNG of its own. Tests: `rod_tests.rs`.
   - `well.rs` (docs/gravity-well.md) — the gravity well's world half (`well.rs` at the top is the
@@ -557,10 +559,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     whatever the reload (`take_anchor_press`, in `drive_player` and `enemy_trigger`), as does what
     its sweep meets or its range (`resolve_orbs`); the well is a `Zone` (`ZoneKind::Well`, forming
     then pulling, `until` the stage's end) that `well_phase` turns on the clock - lifting the drums
-    in reach into `held_drums` at the pull's start, pulling frogs and crates (`Pickup::drift`),
+    in reach into `held_drums` at the pull's start, pulling bongs and crates (`Pickup::drift`),
     burning held fuses, scrubbing tread marks and bowing grass (`drain_marks`, `lean_grass`, a
     replica's too in `tick_presentation`) - and collapses (`collapse_well`: held drums off together
-    where they circle, every hull flung by `knock_from`, the side opposing its owner hurt, frogs
+    where they circle, every hull flung by `knock_from`, the side opposing its owner hurt, bongs
     hopped out, grenades thrown out in a ring, what flies turned out, crates slid out). The pull
     reaches hulls through the drive (`Footing::pulled`: the current along the tracks, the side pull
     across them against the grip), shots through `Projectile::bend` and a swallow at the core in
@@ -586,7 +588,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     strike, `Event::AircraftDowned`). No RNG but the blasts' damage rolls. Tests:
     `air_support_tests.rs`.
   - `hits.rs` — **the only projectile hit test**: `Terrain` (per-frame snapshot of seam-closed
-    boxes, frogs, walls) and `Terrain::sweep_rewound`, a nearest-entry segment-vs-box sweep over the
+    boxes, bongs, walls) and `Terrain::sweep_rewound`, a nearest-entry segment-vs-box sweep over the
     whole frame's movement (wrecks skipped). A player's shot is tested against an enemy's hull and
     turret grown by `player_shot_hit_pad_px` (read into the snapshot at `build`), while enemy shots,
     the seats, tiles and walls keep the exact boxes. A tower's shot flies over the tiles its aim
@@ -595,15 +597,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     (`portals.rs`). `Terrain::line_of_sight` is the AI's fire gate. **Lag compensation**
     (docs/online-coop-prd.md §4.16, favour the shooter): `HitBoxHistory` is a ring of the last
     `REWIND_MAX_TICKS` (15, 250 ms) ticks of every live enemy's hull and turret boxes and every
-    frog, recorded at the end of each simulated tick and cleared by `init`; a seat's shot carries
+    bong, recorded at the end of each simulated tick and cleared by `init`; a seat's shot carries
     the ticks its client was drawing behind the room (`weapons::Rewind`, a component attached only
     when non-zero, from `Game::seat_rewind` = the room's frame less
     `IntentMsg::view_tick`/`view_frac`, set through `Game::set_seat_view`), and `sweep_rewound`
-    moves only the enemy and frog boxes back to that tick - who is a candidate is decided in the
+    moves only the enemy and bong boxes back to that tick - who is a candidate is decided in the
     present, a tank with no entry is tested where it stands, and seats, tiles and walls stay
     current. The laser takes the firing seat's rewind; a shield deflection zeroes a shot's. A round
     with no seat views - every local round - rewinds nothing, and recording draws no RNG.
-  - `combat.rs` — `apply_hit` (damage, knockback, frog hop, `Ai::notify_hit`), `ram` (impact speed
+  - `combat.rs` — `apply_hit` (damage, knockback, bong hop, `Ai::notify_hit`), `ram` (impact speed
     from the bodies' *real* velocities; enemy pairs walked sorted i<j with a distance cull so the
     RNG draw order is fixed), explosions.
   - `engage.rs` — the engagement-slot ring (`EngageRing`; a seat ring's firing slots stand half a
@@ -614,12 +616,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   - `debug.rs` — the tooling surface the dev server calls between frames: `debug_snapshot`,
     teleport, `debug_set_tank`, `debug_kill` (queued into `Frame::kills` so it explodes like a real
     kill), `debug_spawn_enemy` (the one mutator that draws round RNG), `nav_grid_ascii`,
-    `field_dump` (the flow field toward a player or the frog as arrows and costs),
+    `field_dump` (the flow field toward a player or the bong as arrows and costs),
     `debug_track_rows`, `clusters`/`CLUSTER_RADIUS_PX` (shared with the probe).
   - `props.rs` (docs/sandbags-barrels-fences.md, docs/barrel-explosion-variety.md) —
     `damage_obstacle` is the one place a tile loses health (fence one-shot odds, barrels on a `Fuse`
     scaled by the drum kind, direct hit/ram pops at once); `apply_blast` (a `PendingBlast`: falloff
-    damage and knockback to both sides, frogs and tiles, sooted wall faces, oil pools, thrown and
+    damage and knockback to both sides, bongs and tiles, sooted wall faces, oil pools, thrown and
     re-thrown decals, flattened grass, burnt-in tracks, cook-offs); `tick_fires` (`GroundFire`:
     pools and oil-trail cells burn, spread, damage hulls, fuse drums, char the grass in them
     (`char_grass` - and `light_cell_as` chars a cell's grass the moment it is lit, whatever phase
@@ -744,7 +746,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     (`ai::Brain::home_leash`/`seek`, `act_patrol`). **A wave is called** (`FieldMind::called`, set
     on arrival): it routes at the nearest live seat (`call_target`) until one is within sight range
     or it is hit - the call is never an alert, so it does not travel the chain. **Far enemies think
-    less** (`mind`): farther than `enemy_far_px` from every live seat and the players' frog, a tank
+    less** (`mind`): farther than `enemy_far_px` from every live seat and the players' bong, a tank
     `Think`s when `frame + slot` falls on `enemy_far_think_ticks`, its timers covering the skipped
     ticks (`think_debt`), and `Coast`s on its last intent, trigger released, in between; one nothing
     has woken `Sleep`s - no think, no route. **Spawns and gates by walk, out of sight**
@@ -759,10 +761,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     contract). No RNG beyond the spawn draws; ties on slot or cell order.
     `TankSnapshot::asleep`/`leashed` tell the probe which holds are deliberate. **Stragglers**
     (`Game::reroll_stragglers`, once a second, `field_reroll`): a wave tank (`FieldMind::wave`) that
-    has gone `field_reroll_after_seconds` with no live seat or the frog in its sight (`lost`), is
+    has gone `field_reroll_after_seconds` with no live seat or the bong in its sight (`lost`), is
     farther by walk than any gate is paced for (`far_by_walk` of `WalkCosts::from_hull`) and stands
     past every outline a `view_local_max_cells` view can take round every seat's sight box
-    (`beyond_every_screen`) - never a guard keeping its frog or a burning hull - is taken off and
+    (`beyond_every_screen`) - never a guard keeping its bong or a burning hull - is taken off and
     rolled in again through a free lane `pick_gate` would give a wave, outside every sight box and
     shorter by walk (`reroll_gates`), keeping its slot, role, damage and weapons (`Rejoin` through
     its `RollIn`) and arriving called; `Event::Rerolled` is not sent, and the lane is drawn from the
@@ -770,7 +772,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `field` tuning group. Tests: the field cases at the end of `mechanics_tests`.
   - `director.rs` (docs/large-maps-patterns.md, "Pacing director") — a field map's wave breather:
     each seat's intensity (0-1) jumps with what its tank loses (health and shield,
-    `director_hurt_full` of a pool the whole way; the players' frog's losses raise every seat), is
+    `director_hurt_full` of a pool the whole way; the players' bong's losses raise every seat), is
     held up by live enemies in its sight box (`director_crowd_full`) and falls back over
     `director_fall_seconds`; the team is its most pressed seat on the field. `wave_phase` takes the
     breather from it (`breather_length`, then `pace_breather` each tick): held at `director_peak`,
@@ -783,30 +785,30 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   - `training.rs` (docs/training-stage.md) — a training map's rules: the map's `[[training.beat]]`
     script (`crate::training`) run one beat at a time by `training_phase` (after the frame's blasts
     and wreck removals, before the cleanup that sweeps the doors it opens). A beat starts what it
-    names (`shoot_frog`: one heavy enemy shell from inside an edge at the frog; `drop`: air-dropped
+    names (`shoot_bong`: one heavy enemy shell from inside an edge at the bong; `drop`: air-dropped
     crates; `roll_in`: tanks through `pick_gate`'s lane, `Game::training_roll_in`, arriving with the
     script's role) and is done once every trigger it sets holds (`flags`, `collect`, `destroyed` -
-    any of its cells -, `destroyed_all` - every one -, `past_col`, `frog_full`, `wrecks`, and no
+    any of its cells -, `destroyed_all` - every one -, `past_col`, `bong_full`, `wrecks`, and no
     roll-in still to come); then every `Material::Door` whose `variant` is that beat (1-based) is
     marked destroyed - no rubble, no `ObstacleDestroyed`, `Event::DoorOpened` - and the next beat
     begins. Never lost: `check_round_end` defers to the run, a wrecked seat comes back after
-    `training_respawn_seconds` in the last door opened (`TankEntered`), a fallen frog gets up after
-    `training_frog_revive_seconds` (`FrogRevived`) and its beat starts again. Nothing a player does
+    `training_respawn_seconds` in the last door opened (`TankEntered`), a fallen bong gets up after
+    `training_bong_revive_seconds` (`BongRevived`) and its beat starts again. Nothing a player does
     stalls a beat: an enemy wreck fades off after `training_wreck_seconds` (`fade_training_wrecks`;
     a band round keeps its wrecks, and one in a gate's lane would keep the next beat's tank out), a
     roll-in with no free lane for `training_lane_wait_seconds` drops in out of sight
-    (`spawn_in_band`), `shoot_frog` fires once the frog stands on its beat's cell and again every
-    `training_frog_shot_retry_seconds` until it has hurt the frog, and a beat started again takes
+    (`spawn_in_band`), `shoot_bong` fires once the bong stands on its beat's cell and again every
+    `training_bong_shot_retry_seconds` until it has hurt the bong, and a beat started again takes
     back its tanks and crates. No RNG of its own; a map without a script runs none of it.
-    `BeatDone`/`DoorOpened`/`FlagTaken`/`FrogRevived` are `NOT_SENT` (a training map is never
+    `BeatDone`/`DoorOpened`/`FlagTaken`/`BongRevived` are `NOT_SENT` (a training map is never
     `hostable`, and `map::hostable_maps` - what the lobby's stepper walks - leaves it out).
-    `open_every_door` is what the linter checks a course on. The frog walks to each beat's `frog`
-    cell a hop at a time (`walk_frog`, routed on `NavCache::layer` - the tiles with no frog in them -
-    so it waits behind a shut door) and does not shy from tanks while it walks (`frog_walking`); a
+    `open_every_door` is what the linter checks a course on. The bong walks to each beat's `bong`
+    cell a hop at a time (`walk_bong`, routed on `NavCache::layer` - the tiles with no bong in them -
+    so it waits behind a shut door) and does not shy from tanks while it walks (`bong_walking`); a
     script that sets `start_shells` holds the seats' shell refill until one opens an ammo crate
     (`Run::shells_held`). `status.training` is `training_status`. A beat's `ai = "dummy"` tank is a
-    hunter with `Ai::frog_only`, which `Brain::may_fire_at_seat` reads: it never fires at a seat. A
-    round with a script says `TRAINING`, `FOLLOW THE FROG!` and `TRAINING DONE!` whatever its
+    hunter with `Ai::bong_only`, which `Brain::may_fire_at_seat` reads: it never fires at a seat. A
+    round with a script says `TRAINING`, `FOLLOW THE BONG!` and `TRAINING DONE!` whatever its
     mission. It seats one: `init` sets a couch's count aside (`Game::couch_players`) on a map with a
     script and puts it back on the next without one, and the players button and dialog are not
     offered there. Tests: `simulation::training::tests`.
@@ -814,7 +816,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     mid-frame readers - wave gates, stragglers, band spawns -, the dev server's tools, tests);
     `NavCache` is the grid the round keeps (`refresh_nav` at the top of `update`). Its layer (the
     boundary, seam-closed tiles, deep water) is rebuilt when the world's tiles in order, the field
-    size or the portal and ford knobs change; its base (the layer plus frogs and fires,
+    size or the portal and ford knobs change; its base (the layer plus bongs and fires,
     `with_portals`, `weigh`, `label`) when the occupancy differs (`Grid::same_occupancy`), and
     `update` prices a `without_fields` copy. Exact because `Grid::open` plus `block` equals `build`,
     held by `nav::tests` (`Grid::same_as`, `Game::scratch_nav`); `init` clears it. A kept `Grid`
@@ -852,7 +854,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 ## AI
 
 - `ai.rs`, `bt.rs`, `pathfind.rs` — AI reasons over snapshots, never the world. `Ai::steer` routes
-  through `Grid`; on top: an obstacle-ahead override of the heading commitment, a stuck escape on
+  through `Grid`; on top: an obstacle-ahead override of the heading commitment (a wall turning a
+  hull straight back over a turning it drove past while `ai_dir_hold_seconds` ran keeps the hold,
+  so the turning is open to it on the way back - `Ai::passed_turning`; restarted, a turning crossed
+  quicker than the hold with a wall a cell past it either way would be crossed to and fro; a heading
+  the hull turned to fire along in `hold_and_fire` gives way to a route turning straight back over
+  it on the first steer out of the tier that fired - `Ai::aimed`; held, the margin, blind to a
+  reversal, drove a tank leaving the fight on at what it fought, into the tanks in its lane), a stuck
+  escape on
   *displacement projected onto the commanded heading* (never a physics velocity - the solver reports
   motion for a jammed tank; stuck under `stuck_speed_eps` or `stuck_progress_fraction` of its own top
   speed, whichever is more, so a hull shoving another along at a crawl counts) held for
@@ -862,12 +871,23 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   aimed by `sapper_aim` at a chunk still in the way; a tank cut off from its target heads for the
   wall its `Sap` plan names - `Game::plan_saps`, docs/WALLS_SPEC.md §13), and the personal-space brake (`crowded_ahead`/`yield_timer`: a brake, not a sidestep;
   `enemy_yield_seconds` is load-bearing because the stuck escape only counts commanded movement).
+  **The sidestep** (`Ai::avoid_collisions`, `first_contact`): the other tank's offset runs `p + v t`
+  with `v` its velocity less this one's, and only a tank *ahead* counts - one beside or behind is
+  driving into this one and sidesteps itself. A tank standing still (under `avoid_min_speed`) is
+  looked for only `avoid_still_lookahead` ahead (further out `route_crowd_cost` bends the route
+  round it, and an early sidestep the route undoes is a dance), and a teammate standing within
+  `avoid_near_target_px` of the spot the tank heads for (the ring slot beside its own) is left to the
+  brake. The sidestep goes toward the target's side of the heading (away from the other tank with
+  the target dead ahead), and a route that turns straight back across it once it is over resumes the
+  heading it left (`Ai::sidestepped`) - the margin is blind to a reversal, and a held sidestep would
+  drive on to the next wall. Until BB-95 the relative velocity had the wrong sign: tanks sidestepped
+  what was behind them and never what they were about to hit.
   **The sight box** (docs/large-maps-follow-camera.md §5): an enemy fires at a seat only while its
   centre stands inside that seat's box, `sight_box_half_cols` x `sight_box_half_rows` cells (11.5 x
   7.5, +-368 x +-240 px, `Tuning::sight_box_half_px`), with `ai::in_sight_box` the one test
   (`in_sight_box_of` with the half extents read once, for a loop) - `Brain::may_fire_at_seat` gates
   `act_attack`'s alignment (a tank lined up outside the box repositions and closes in) and the
-  hunter's snipe; shots at a frog, a tower or a tile are not bound. `Ai::shot_at_seat` (inspection
+  hunter's snipe; shots at a bong, a tower or a tile are not bound. `Ai::shot_at_seat` (inspection
   only) names the seat a trigger pull was aimed at. **Backing away** (`Brain::back_away`, the flee
   and retreat tiers): to a `Refuge` - of points along eight bearings at `enemy_retreat_range` and
   half that, the reachable one farthest from the seat on the tank's own side of it, no RNG - held
@@ -875,9 +895,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `HOLDS` row); a heading still pointing at the seat is dropped on entering the tier. The mirror of
   the seat across the tank is only the fallback with no refuge in reach - it moves with the tank, so
   steering for it ran hurt tanks into the field's edge and round dead ends. Roles Player/Hunter/Guard are rolled last
-  (`roll_role`). **Dangers** (`Danger`: a `DangerShape` and an optional owner; docs/emp-burst.md
-  §3.3): the places an enemy keeps out of, built by `enemy_phase` only while a weapon makes one -
-  the `dodge` tier walks out through steering (`Brain::steer_out`: on foot, avoidance and the stuck
+  (`roll_role`). **Holding a seat in sight**: the chase tier and the engagement ring
+  (`engage_status`) read `Ai::sees` - the seat within the tank's sight, or `enemy_sight_hold_px` past
+  it while `Ai::in_sight` holds from the last think (cover clears it; never set on a hunter's bong,
+  which would hand it a slot on the bong's ring from past its sight every other tick) - and a tank
+  that loses its seat looks for it where the alert says it was (the `search` tier, patrol's errand,
+  `Brain::searching`) for `enemy_lost_seconds` before a crate tier may take it. Hysteresis both, so a
+  chase route bending out past the edge of sight, or a seat ducking in and out of tall grass, does not
+  flip a tank between the chase and a crate every few frames (`churn`/`spin` on the probe).
+  **Dangers** (`Danger`: a `DangerShape` and an optional owner; docs/emp-burst.md §3.3): the places
+  an enemy keeps out of, built by `enemy_phase` only while a weapon makes one - the `dodge` tier walks out through steering (`Brain::steer_out`: on foot, avoidance and the stuck
   escape, the turn from a heading leading away put on first) to the exit it chose (`Ai::dodge_exit`,
   a point kept while out of every danger and walkable), every steering target and every pickup
   headed for is kept outside (`out_of_danger`, `seek`, `nearest_pickup`; a seat at its own danger's
@@ -896,7 +923,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   ask - rebuilt only where the terrain changed), priced by `Game::route_grid_on` with the tactical
   `surcharge`s - the cells down each player's barrel (`route_lane_cost`/`route_lane_cells`) and the
   cell each enemy stands in (`route_crowd_cost`; 0 turns either off) - then a field per live player
-  and for the player's frog; `route_grid` builds the same from scratch. Engage slots, waypoints and
+  and for the player's bong; `route_grid` builds the same from scratch. Engage slots, waypoints and
   pickups still go through A*, on per-node tables the thread keeps between searches (`SearchTables`,
   stamped per search), so a query costs the cells it reaches rather than the whole grid. **Crates a
   tank would leave** are its own, not the grid's: `Game::keep_off_cells` hands each enemy's `think`
@@ -907,6 +934,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   and then a search priced the same way goes to the first cell of the route past them
   (`round_kept`, within `KEEP_OFF_LOOK`). A price, never a wall (a crate in the only gap is driven
   over); a tank never goes round a crate it would take; 0 or no crates routes exactly as without.
+  **One tank per crate** (`ai::claim_crates`, `Game::crate_claims`): a crate is held by the tank
+  that headed for it at its last think (`Ai::sought`, set by the seek tiers and the flee and
+  retreat pickup runs - `Brain::head_for_crate`); of two or more that turned for it on the same
+  think, the nearest by route (`Grid::path_cost`), ties on slot - no RNG, and nothing is routed
+  unless a crate is contended. Each tank's `think` is handed only the crates no other tank holds,
+  so the others carry on (another crate, the tier below) and a held crate cannot flip between two
+  tanks; the claim lapses when its holder heads elsewhere. **Giving a crate up**
+  (`Ai::track_crate_run`): a tank that gains no route step on its crate for
+  `enemy_crate_give_up_seconds` (jammed in a lane, circling one it cannot reach; no route at all is
+  no headway) forsakes it for `enemy_crate_forget_seconds` (`Ai::forsaken`, four kept) - `seek` and
+  `nearest_pickup` pass it over, and its claim lapses; 0 seconds never gives up.
   **Lanes**
   (field maps only, `ai_lane_turns`; docs/large-maps-follow-camera.md §12): a hull slides `v^2/2a`
   past a turn (`tank_turn_grip_force` over its mass), so the switch margin alone
@@ -969,13 +1007,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   pickup phase re-checks `wants_pickup` crate by crate, so a hull over two crates takes the second
   only while it still wants it. Tests: `health_ring_tests`, `weapon_inventory_tests`,
   `chassis_tests`.
-- `frog.rs` (docs/FROG_SPEC.md) — `Frog`/`Side`; one struct serves the player's frog and the Hunt
-  mission's enemy frog. Art faces right and is mirrored. **A frog only bites the other side**; the
-  evasive hop shies from any tank (`combat::frog_hop_target`, a box test via `Terrain::frog_fits`).
-  `damage`/`heal` are the only health paths and no-op once dead; healing comes only from the frog
+- `bong.rs` (docs/BONG_SPEC.md) — `Bong`/`Side`/`BongKind`; one struct serves the player's bong and
+  the Hunt mission's enemy bong. `BongKind` is the character (Spike, Oggle, Gloop for the player;
+  Blip, Puff, Capi, Fuzz for the enemy, `BongKind::of`), the map's pick (`MapFile::bong_kind`),
+  cosmetic only: `Game::init` spawns each side's with it and keeps the colour roll's old draw so
+  every seed's stream is unchanged. Art (generated, `tools/spritegen/bongs/`) faces right and is
+  mirrored. **A bong only bites the other side**; the
+  evasive hop shies from any tank (`combat::bong_hop_target`, a box test via `Terrain::bong_fits`).
+  `damage`/`heal` are the only health paths and no-op once dead; healing comes only from the bong
   health pack.
 - `pickup.rs` — kinds Health, Ammo, Laser, Minigun, Plasma, Missiles, SpeedUp, Shield, Flamethrower,
-  FrogHealth, TowerPack, HeatShield (player-only; `heat_shield_timer` keeps every kind of heat off,
+  BongHealth, TowerPack, HeatShield (player-only; `heat_shield_timer` keeps every kind of heat off,
   docs/volcano.md), Grenades (player-only, `grenade.rs`), SonicHammer (`sonic.rs`), Emp
   (`emp_burst`, `emp.rs`), GaussRail (`gauss_rail`, `gauss.rs`), FpvSwarm (`fpv_swarm`, `fpv.rs`),
   RodFromGod (`rod_from_god`, `rod.rs`), GravityWell (`gravity_well`, `well.rs`), AirHeli and
@@ -992,18 +1034,19 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   slots. **Enemies only collect what they would use** (a weapon crate while on shells, or of the
   weapon carried while short of its carry limit, so one never trades away a stocked weapon;
   `Tank::wants_pickup`, the same predicate `ai::build`'s seek tiers call - collection must never
-  be stricter than seeking or a tank parks on a pickup forever), and **drive round what they would
-  leave** where there is room (`TakeRules`, the one rule `pickup_phase` collects by and the routes
-  keep off - see `pathfind.rs` above);
+  be stricter than seeking or a tank parks on a pickup forever), **one tank goes for a crate** and
+  a tank that cannot get to one gives it up (`ai::claim_crates`, `Ai::track_crate_run` - see AI),
+  and they **drive round what they would leave** where there is room (`TakeRules`, the one rule
+  `pickup_phase` collects by and the routes keep off - see `pathfind.rs` above);
   players always collect. SpeedUp refreshes its timer, never stacks. **Shield is a pool on a
   clock**: full heal plus `shield_hp` and `shield_timer` (`Tank::raise_shield`; it shatters when
   `shield_seconds` run out, 6 by default, or when spent - about four enemy shells), spent at two
   seams - `take_damage` (absorb path) and `resolve_projectiles` (shots deflect and cost
   `shield_deflect_cost_factor` x damage); a live shield recharges after a delay, a shattered one
-  never returns; `drain_shield_breaks` emits `ShieldBroken`. Shield and FrogHealth also ride the
-  Health-slot bonus roll (`maybe_spawn_health_slot_bonuses`; the frog gate is checked before any RNG
-  draw). FrogHealth heals the collector's own side's frog and is taken unless that frog is alive and
-  full (docs/frog-health-pack-prd.md).
+  never returns; `drain_shield_breaks` emits `ShieldBroken`. Shield and BongHealth also ride the
+  Health-slot bonus roll (`maybe_spawn_health_slot_bonuses`; the bong gate is checked before any RNG
+  draw). BongHealth heals the collector's own side's bong and is taken unless that bong is alive and
+  full (docs/bong-health-pack-prd.md).
 - `obstacle.rs` — `Obstacle` is a wall (`Material` Brick/Iron/Wood/Glass/Concrete), a prop
   (Sandbag/Barrel/Fence, and Target - the range board, docs/range-target-prd.md: never rolled
   flammable, so a shot splinters it, yet `catches_fire` from the stream, a burning cell beside it or
@@ -1166,7 +1209,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   carries a stopped hull south; the sky adds its own - wet grip, a gust's flow - and under snow
   `WaterLayout::freeze` makes every water cell `Depth::Ice`, whose footing keeps the pace and loses
   grip, traction and brake) and costs `water_ford_path_cost` per step to the router (`Grid::weigh`,
-  occupancy untouched); water takes no heat, no fire, no scorch, and puts afterburn out; the frog's
+  occupancy untouched); water takes no heat, no fire, no scorch, and puts afterburn out; the bong's
   hop prefers a wet landing; tread marks stop in water, a wading hull stirs the ford's silt and its
   tracks print wet for `wear_wet_carry_px` once out (docs/ground-memory.md); `fx.rs` throws spray
   and foam.
@@ -1197,7 +1240,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the attack range capped by it -, the engagement ring and a hunter's snipe read), `grip_factor`
   (rain and storm, `rain_grip_factor` on every hull's grip), `freezes` (snow:
   `ground::WaterLayout::freeze` turns every water cell into `Depth::Ice` - no deep colliders, open
-  to the nav grid and spawns, no current, tracks but no wet marks, spray, fire-dousing or frog
+  to the nav grid and spawns, no current, tracks but no wet marks, spray, fire-dousing or bong
   refuge; `Footing` gives it `ice_grip_factor`/`ice_traction_factor`/`ice_brake_factor`) and
   `gusts`/`gust_at` (a sandstorm's gust front crossing the field every `sand_gust_gap_seconds` or
   so, a pure function of the round clock like `lightning`, added to `Footing::flow` so a hull drives
@@ -1217,7 +1260,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   gathers every light the round throws - headlight cones from each chassis's lamps
   (`tank_art::HEADLIGHTS`, half of them out at the second damage tier, all at the third) and
   team-coloured hull glows, fires, fuses, portals, blasts, every shot and flash, the particle
-  layer's hits, faint pickup and frog glows - each cast against `Occluders` (the cells whose
+  layer's hits, faint pickup and bong glows - each cast against `Occluders` (the cells whose
   `Material::blocks_light`, walked Amanatides-Woo, the light's own cell never stopping it) into a
   per-ray reach. `lightning(time, t)` is a pure function of the round clock. Reads `Game`, never
   writes it, draws no RNG; nothing in `simulation/` reads it. `render/weather.rs` is `WeatherFx`:
@@ -1355,7 +1398,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   read off the zones' clock - `at`, `pull`, `hull_pull`, `shot_accel`, `core_hit`, `strongest`),
   `strength`, `bend` (a heading turned at its own speed), `HeldDrum`/`held_at` and
   `GrenadeOrbit`/`orbit_at` (pure functions of the round clock), `holds_broadside`, `escape_dir`,
-  `brace_dir`, `frog_fling_target`, `module_cell`, `Swallow`, `WellFx`, and the composers
+  `brace_dir`, `bong_fling_target`, `module_cell`, `Swallow`, `WellFx`, and the composers
   `compose_orb`, `compose_snap`, `compose_well` (the core drawn after every light by
   `compose_core`), `compose_swirl`, `compose_collapse`, `compose_collapse_dust`, `compose_swallow`
   in `pyro::VOID`; `curved_streak` lays a shell's or a bullet's tracer along the path the pull bent.
@@ -1387,7 +1430,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   headless: `paint_floor` (ground, floor shade, tracks, scorches, landed rubble, oil and its prints,
   portals - `paint_ground` then `paint_floor_marks`, the seam the weather's ground pass draws in),
   `paint_tiles` (walls/props with shadows and caps, then the flames on burning timber,
-  `tile_flames`), `paint_standing(PaintOptions)` (pickups, the y-sorted tanks/frogs/grass walk - a
+  `tile_flames`), `paint_standing(PaintOptions)` (pickups, the y-sorted tanks/bongs/grass walk - a
   tank's layers (`tank::draw_tank`) and then its flames, `damage_stage.rs` - trees, a burning one
   with its flames), `paint_field` = all three; reads state, never mutates it.
   `PaintOptions::locate_cue` is the one thing a thumbnail leaves out. `Game::plain_canvas` (flat
@@ -1421,7 +1464,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   halves part; `Zoom` presents the establishing shot's whole-field composite a second time through
   the second half's zoom (`present_zoom_half`, `draw_zoom_divider`).
 - `canvas.rs` (docs/mapshot-prd.md) — the drawing surface the field's leaf draw fns (`ground`,
-  `grass`, `obstacle`, `frog`, `pickup`, `tank` rings/hull/turret/modules, `damage_stage`, `track`,
+  `grass`, `obstacle`, `bong`, `pickup`, `tank` rings/hull/turret/modules, `damage_stage`, `track`,
   `blast::draw_scorch`, `decal::draw_decal`) are generic over: `Sheet` names a sprite sheet
   (`Sheet::path` is the one asset-path table every loader reads; `Ground`/`Grass` carry the map's
   `Theme`, so `Sheet::all` holds both themes' files and `ground::draw`/`grass::draw_tuft` name the
@@ -1622,7 +1665,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `WeaponSlot::of` -, the speed and shield gauges - each readout beside the symbol of the crate that
   fills it, `pickup_glyphs.png`, dim while it is empty; a couch's player 2 block beside or under
   it), the right cluster the level button (`LEVEL N`, `LEVEL_BUTTON_W`, opens the level select) or
-  the free-play mission word with the wave count, the enemies and the frog gauge under the frog
+  the free-play mission word with the wave count, the enemies and the bong gauge under the bong
   pack's symbol, then the `CornerButton`s (`BUILD` or, online, `LEAVE` - `Session::leave_online`,
   the way out with no keyboard -, left of the mode button a local round's pause icon -
   `CornerButton::Pause`, the P key's `Input::pause_pressed`, two bars or a play triangle by
@@ -1666,7 +1709,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `Awareness::frame(&Scene, &ViewFrame, &Tuning)` is every rule, which the tests drive without a
   `Game`. Arrows are cast from the seat's tank to the inset rect and slid clear of the keep-outs
   (`cast`, `slide`), sized and faded by screens away, merged within `indicator_cluster_pt`, at most
-  `indicator_max_arrows` (lane threats, then teammates and frogs - never merged, never dropped -,
+  `indicator_max_arrows` (lane threats, then teammates and bongs - never merged, never dropped -,
   gates, the nearest enemies; the rest folded into a count per edge). `lined_up` is the AI's aim
   (alignment and range) without the sight box, on purpose: the box is always on screen, so an
   arrow's warning is the heads-up that an off-screen enemy is lined up and closing in. `concealed`
@@ -1676,7 +1719,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   picture composed once a frame. Arrows are notched arrowheads of whole 2 px blocks at the eight
   compass headings (`arrow_cells`; free rotation read as a smudge that crawled as a target drifted),
   rimmed near-black, tips on their edge points: hostile red, a teammate's `team_color` with
-  `P2`..`P8`, the FROG gauge's green with the distance in cells (the enemy frog rimmed red), gates
+  `P2`..`P8`, the BONG gauge's green with the distance in cells (the enemy bong rimmed red), gates
   amber blinking at `indicator_gate_blink_hz`. A lane warning is a ring pulsing at
   `indicator_pulse_hz`, dark red while the aim settles and bright once it has, the arrow swelling by
   `indicator_pulse_swell`; on the shot the arrow turns white on a white disc. Counts and `+N` sit on
@@ -1701,7 +1744,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`app.rs` keeps one) bakes once per round (seed, map, sky, or the frame counter going back) and
   patches when the live tile count drops. `Marks::gather`/`picture`: the view rect, the live seats
   in `team_color` (the screen's own rimmed white, the others numbered in a round of two or more),
-  the frogs (the enemy frog rimmed red), gates flashing while a wave rolls in, and only the enemies
+  the bongs (the enemy bong rimmed red), gates flashing while a wave rolls in, and only the enemies
   in `indicators::ScreenAwareness::shown` (`Indicators::in_sight`, the arrows' concealment rule) -
   never the world; terrain, not light. `MinimapRules` (the `minimap` tuning group): `minimap_show` 0
   never / 1 not on phones / 2 always, `is_phone` (a short side under `minimap_phone_short_pt`, or
@@ -1860,7 +1903,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `MapEditor::render`, the bar and popup painters, the tool and brush icons, `EditorTextures` and
   `ThumbnailTextures`, the drawing's own slot offsets and labels, and `bar_tests`. `Tool`s in bar
   order (`TOOLS`, 52 with the eraser and the select tool; `name`/`parse` are the dev-server
-  spelling) in five categories that remember their current tool; singletons (start, start2, frogs)
+  spelling) in five categories that remember their current tool; singletons (start, start2, bongs)
   move. A **stroke** paints once per cell crossed (a drag that skips cells between frames fills the
   gap edge to edge, `drag_to`; the tools' `stroke` takes its cells as given) under the
   **toggle-erase rule** decided on its first cell: right button, the eraser, or a first cell already
@@ -1884,7 +1927,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   STAMP, STAMPS, or PLACE, the flips and CANCEL while a paste ghost stands) and Ctrl+C/X/V and
   Delete act on it; a paste or a stamp is a `Ghost` that follows a hovering mouse until a press puts
   it down (the right button takes it away), or that a finger drags by the cells it moves, taps
-  elsewhere to move and taps to put down. A `Clip` is transparent; a start or a frog moves with a
+  elsewhere to move and taps to put down. A `Clip` is transparent; a start or a bong moves with a
   moved selection and a paste places one only where the map holds none, so it never leaves two;
   gates and portals are carried like any cell; cells past the field are dropped. Stamps are
   `select::SHIPPED_STAMPS` (`maps/stamps/`: fort, bunker, river bend, worded `stamp-<name>`) then
@@ -2006,11 +2049,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   applied and `net::mailbox::Mailbox::wire_state` -, keyed families sorted by key - `TankState`,
   `ShotState`, `MissileState`, `GrenadeState` (position, height and the fuse in hundredths, so the
   lamp's quickening blink never jerks), `DroneState` (an FPV drone in the air: ground point, height,
-  heading, stage, halo slot, owner and lock), `FrogState`, `TileState`, `FireState` (with `lava`, a
+  heading, stage, halo slot, owner and lock), `BongState`, `TileState`, `FireState` (with `lava`, a
   bomb's pool), `BonusPickup`, `CrateState` (a crate that is not whole: hurt, burning or spilled),
   `LampState` (the lanterns set down), `ZoneState` and `CraterState` (a rod's calls and craters,
   docs/rod-from-god.md), the volcanoes' shifts, `smoke_cells` (the cells thick smoke hides a hull in
-  under `smoke_cover`, docs/aftermath.md; protocol 29) -, `RoundState` (the wave, the live and pending
+  under `smoke_cover`, docs/aftermath.md; protocol 29), `GrassFlatState` (a cell a sonic wave or a
+  rod flattened, `Game::grass_flat`, with the round tick it hides again - a tick, not the time
+  left, so an entry changes only when the cell is flattened again; protocol 31) -, `RoundState` (the wave, the live and pending
   counts, the mission banner's, the `WAVE N` breather's and the end screen's restart countdown's
   time left, the outcome), `events`), `Welcome` (`WireOverrides` mirrors `LevelOverrides`), the JSON
   `Lobby` enum, and the quantisation helpers (positions quarter pixels as `i16`, velocities `i8` at
@@ -2029,7 +2074,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the module docs. The two files that do touch a `Game` (docs/online-coop-prd.md §4.2, §4.5):
   **`encode.rs`** — `snapshot(game, acked)` fills every family from the round through
   `simulation/replica.rs` (tanks by owner slot with the chassis `row`, shots by the per-round
-  `Shell::id`/`Bullet::id`/`Plasma::id` counter with their sprite `variant`, frogs, the pickup
+  `Shell::id`/`Bullet::id`/`Plasma::id` counter with their sprite `variant`, bongs, the pickup
   bitmask over `pickup_slots` plus bonus cells, only the tiles that differ from fresh in whole
   points, fires, `RoundState`, the frame's events; a tile death is an `ObstacleDestroyed` event and
   a `DESTROYED` entry cut from it, since the world drops a dead tile the same frame), `welcome(game,
@@ -2050,9 +2095,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (absent = fresh), tanks
   (spawned without `Ai`, body placed with `Physics::set_position`/`set_velocity`; the hull's facing
   snaps and the *drawn* angles stay put, for `tick_presentation` to swing across), shots by id,
-  frogs, pickups, fires (the grass under each chars; a cell the snapshot stops listing burnt out,
+  bongs, pickups, fires (the grass under each chars; a cell the snapshot stops listing burnt out,
   the one way a fire ever leaves the list, so the replica darkens the ground and spends the oil
-  there), round scalars, `frame`, and
+  there), the flattened grass whole (`Game::grass_flat` with each cell's time to its `until`, run
+  down by `tick_presentation` between snapshots; a replica's sonic picture lays tufts and never adds
+  cover, and `welcome` pins the tufts of every flat cell, so a joiner's grass lies down too), round
+  scalars, `frame`, and
   the round clock as `tick * PHYSICS_FIXED_DT` - exact because a room server's round runs without
   the mission banner. Never `update`d, no RNG; what the wire omits is hashed (wreck art, shadow
   heights), a full timer (a flag) or the replica's own to run (`Game::tick_presentation` between
@@ -2080,7 +2128,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     the frame drains - a hidden tab's backlog is caught up, never trimmed, or the delta chain
     breaks; `loopback.rs`, the rig's in-process pair with dialled delay, jitter and loss off a
     seeded `SmallRng` per direction, head-of-line like the socket it stands in for, drivable at a
-    given `Instant` so its tests need no sleeping. `rooms.rs` is the one URL rule: host from
+    given `Instant` so its tests need no sleeping. `now.rs` is `Now`, where the client's half reads
+    the time: the wall in every build that plays, or `Now::manual()`, a clock that moves only on
+    `advance`. A test hands one manual clock to both loopback ends (`Loopback::set_clock`) and the
+    round (`OnlineRound::set_clock`, which passes it to its `RoomClient`), so render time, every
+    arrival stamp and every timeout read the same instants on every run however loaded the machine
+    - a test driven on the wall measures the machine, since a slow run spreads its arrivals and the
+    interpolator sizes its delay from that spread. `net::round`'s tests run on one, and so do `net::rig`'s windowed ones, with the rig's room ticked on it (docs/tooling.md). `rooms.rs` is the one URL rule: host from
     `--rooms`, else `BONGBONG_ROOMS`, else `wss://rooms.bongbong.io`; **one server holds every
     room**, so hosting and joining both dial that host's own `/ws` and a code picks no path
     (`socket_url` takes no code; spreading rooms over several servers is deferred work,
@@ -2186,7 +2240,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     projectile's state machine (`ProvisionalShot::advance` in `simulation/present.rs` rebuilds the
     shell/bullet/bolt and steps its `update`, muzzle frames first), is swept each frame against the
     drawn world (`Game::present_world` / `PresentWorld::shot_contact`: tiles, the field edge, every
-    live tank but the shooter's, frogs - `Terrain::sweep` cannot serve, it finds enemies by their
+    live tank but the shooter's, bongs - `Terrain::sweep` cannot serve, it finds enemies by their
     `Ai`, which a replica strips) and stops there with its impact drawn at once; the room's copies
     of this seat's shots (`ShotState::owner`, `Game::seat_shots`) are paired with the provisionals
     by the `Fired` that names the press's input tick
@@ -2271,7 +2325,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     (`Predictor::shove`). `Predictor::report` (corrections by `ERROR_BUCKETS_PX`, nudges, snaps,
     shots drawn/refused, inputs in flight) plus the lead's counts is `status.round.prediction`, with
     **decision 9's instrument**: a provisional that `advance_shots` stops against a drawn tank or
-    frog is a `crossing`, its paired room copy bursting within `HIT_MATCH_PX` of that stop makes it
+    bong is a `crossing`, its paired room copy bursting within `HIT_MATCH_PX` of that stop makes it
     `crossings_hit`, and its copy flying on past `MISS_MARGIN_PX` or bursting anywhere else
     `crossings_missed` (the room's shot then shown) - the rate that says whether lag compensation's
     rewind is right. `rig.rs` is the offline rig - see docs/tooling.md.

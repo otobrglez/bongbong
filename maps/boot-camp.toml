@@ -1,7 +1,7 @@
 # boot-camp - the training stage, level 0 (docs/training-stage.md)
 # Saved from the builder drops these comments; put them back after a save.
 #
-# Five pens along one east-west road (row 11), the frog the only guide: it
+# Five pens along one east-west road (row 11), the bong the only guide: it
 # starts in pen 1 and hops on to each beat's cell as the doors open.
 # Pen 1 (cols 0-9): drive over the three flags; door 1 opens. Pen 2 (cols
 # 11-18): no shells until the ammo crate; door 2 opens. Pen 3 (cols
@@ -13,11 +13,11 @@
 # cluster of two oil and two fuel drums (35-36, 6-7) under a wooden shed,
 # with a fence, wood and brick by them: one shot at any drum sets the rest
 # off - the oil drums burn, the trail carries the fire, the fuel drums are
-# thrown north and east and blast where they land. The frog watches from
+# thrown north and east and blast where they land. The bong watches from
 # behind sandbags in the south (33,15); door 5 opens once the last drum has
-# gone up. Pen 5 (cols 41-59): the frog's pad, a pond and sandbag cover; a
-# shell from the east gate hurts the frog, its kit drops, then a scout
-# rolls in through the gate that goes for the frog, then a shield drops
+# gone up. Pen 5 (cols 41-59): the bong's pad, a pond and sandbag cover; a
+# shell from the east gate hurts the bong, its kit drops, then a scout
+# rolls in through the gate that goes for the bong, then a shield drops
 # and a scout that fights back follows.
 #
 # The course runs through rows 5-17 of the 60 x 24 field. The iron pen
@@ -27,10 +27,11 @@
 # ponds.
 #
 # Training is never lost: a wrecked tank comes back in the last door
-# opened, a fallen frog gets up and its beat starts again. No enemy at the
+# opened, a fallen bong gets up and its beat starts again. No enemy at the
 # start (`tanks = 0`), so only the script brings any.
 
 version = 1
+bong = "spike"
 tanks = 0
 tank = "glacier"
 size = [60.0, 24.0]
@@ -250,7 +251,7 @@ cells."28,8" = { kind = "wall", material = "iron" }
 cells."40,8" = { kind = "wall", material = "iron" }
 cells."53,8" = { kind = "sandbag" }
 cells."54,8" = { kind = "sandbag" }
-cells."5,9" = { kind = "frog" }
+cells."5,9" = { kind = "bong" }
 cells."10,9" = { kind = "wall", material = "iron" }
 cells."19,9" = { kind = "wall", material = "iron" }
 cells."21,9" = { kind = "wall", material = "brick" }
@@ -602,64 +603,64 @@ start_shells = 0
 
 [[training.beat]]
 id = "drive"
-frog = [5, 9]
-say = ["frog-hello", "frog-drive", "frog-flags"]
-nudge = "frog-flags-nudge"
+bong = [5, 9]
+say = ["bong-hello", "bong-drive", "bong-flags"]
+nudge = "bong-flags-nudge"
 done = { flags = 3 }
 
 [[training.beat]]
 id = "supply"
-frog = [13, 9]
-say = ["frog-crates", "frog-health"]
-nudge = "frog-crates-nudge"
+bong = [13, 9]
+say = ["bong-crates", "bong-health"]
+nudge = "bong-crates-nudge"
 done = { collect = "ammo" }
 
 [[training.beat]]
 id = "fire"
-frog = [23, 11]
-say = ["frog-fire", "frog-materials", "frog-iron"]
-nudge = "frog-fire-nudge"
+bong = [23, 11]
+say = ["bong-fire", "bong-materials", "bong-iron"]
+nudge = "bong-fire-nudge"
 done = { destroyed = [[25, 10], [25, 11], [25, 12]] }
 
 [[training.beat]]
 id = "through"
-frog = [33, 15]
-say = ["frog-wall"]
+bong = [33, 15]
+say = ["bong-wall"]
 done = { past_col = 28 }
 
 [[training.beat]]
 id = "barrels"
-frog = [33, 15]
-say = ["frog-drums", "frog-drum-kinds", "frog-oil"]
-nudge = "frog-drums-nudge"
+bong = [33, 15]
+say = ["bong-drums", "bong-drum-kinds", "bong-oil"]
+nudge = "bong-drums-nudge"
 done = { destroyed_all = [[31, 7], [35, 6], [36, 6], [35, 7], [36, 7]] }
 
 [[training.beat]]
 id = "onward"
-frog = [46, 11]
-say = ["frog-boom"]
+bong = [46, 11]
+say = ["bong-boom"]
 done = { past_col = 40 }
 
 [[training.beat]]
-id = "frog"
-frog = [46, 11]
-say = ["frog-pad"]
-nudge = "frog-kit-nudge"
-start = { shoot_frog = "east", drop = [{ kind = "frog_health", at = [43, 15] }] }
-done = { collect = "frog_health" }
+id = "bong"
+bong = [46, 11]
+say = ["bong-pad"]
+nudge = "bong-kit-nudge"
+start = { shoot_bong = "east", drop = [{ kind = "bong_health", at = [43, 15] }] }
+done = { collect = "bong_health" }
 
 [[training.beat]]
 id = "enemy"
-frog = [46, 11]
-say = ["frog-enemy", "frog-line-up"]
-nudge = "frog-enemy-nudge"
+bong = [46, 11]
+say = ["bong-enemy", "bong-line-up"]
+nudge = "bong-enemy-nudge"
 start = { roll_in = [{ tank = "scout", ai = "dummy", after = 1.5 }] }
 done = { wrecks = 1 }
 
 [[training.beat]]
 id = "shield"
-frog = [46, 11]
-say = ["frog-shield", "frog-shoots-back"]
-nudge = "frog-wave-nudge"
+bong = [46, 11]
+say = ["bong-shield", "bong-shoots-back"]
+nudge = "bong-wave-nudge"
 start = { drop = [{ kind = "shield", at = [43, 9] }], roll_in = [{ tank = "scout", after = 6.0 }] }
 done = { wrecks = 1 }

@@ -15,7 +15,7 @@ For enemy tanks. When health gets low this should appear/be visible. Same as whe
 Decisions from the 2026-09-09 interview, then what the code does.
 
 - **The heart sheet is gone.** `static/health_bar.png` is deleted along with its
-  `HEALTH_BAR_*` constants, the overhead bars over tanks and frogs, and the HUD
+  `HEALTH_BAR_*` constants, the overhead bars over tanks and bongs, and the HUD
   corner's icon. The HUD keeps the `HP: n` number (white, orange, red by
   `hud_warn_threshold`/`hud_critical_threshold`).
 - **The ground ring is the gauge** (`tank.rs`, `RingStyle::Gauge`, drawn by the
@@ -27,8 +27,8 @@ Decisions from the 2026-09-09 interview, then what the code does.
   The ring sits under the hull, so only its flanks show on most chassis and
   nothing on titan or leviathan; accepted rather than growing the ring.
 - **Colour steps, never blends** (`HealthRamp`, one colour per quarter of health,
-  `health_ring_step`): tanks and the player's frog use white, GOLD_BRIGHT `#EEA343`,
-  RED_BRIGHT `#FF421A`, RED_DEEP `#9C3527`; the enemy frog uses RED_BRIGHT, RED_DEEP,
+  `health_ring_step`): tanks and the player's bong use white, GOLD_BRIGHT `#EEA343`,
+  RED_BRIGHT `#FF421A`, RED_DEEP `#9C3527`; the enemy bong uses RED_BRIGHT, RED_DEEP,
   RED_DK `#812F27`, RED_DARKEST `#4A2221`, so it is red at any health. All Puny
   Palette entries (`tools/punypalette.py`).
 - **Player tank** (`draw_player_ring`): always on. The arc draws at
@@ -49,9 +49,9 @@ Decisions from the 2026-09-09 interview, then what the code does.
   ring draws its missing part (dimmed white for the player, the dark band for an
   enemy). It still cross-fades into the health ring over its last
   `shield_glow_fade_fraction` of its charge.
-- **Frogs** (`frog::draw_frog_ring`): always on while alive; the player's frog uses
-  the white ramp on dimmed white, the enemy frog the red ramp on dimmed RED_MD
-  `#E44219`. `Frog::hit_flash_timer` is gone; nothing was left for it to time.
+- **Bongs** (`bong::draw_bong_ring`): always on while alive; the player's bong uses
+  the white ramp on dimmed white, the enemy bong the red ramp on dimmed RED_MD
+  `#E44219`. `Bong::hit_flash_timer` is gone; nothing was left for it to time.
 - **Knobs** (`tuning.rs`, group `cosmetics`, all live): `health_ring_hit_seconds`,
   `health_ring_hit_fade_seconds`, `enemy_health_ring_below`,
   `health_ring_base_opacity`, `health_ring_gap_opacity`.

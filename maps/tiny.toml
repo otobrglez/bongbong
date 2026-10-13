@@ -233,7 +233,7 @@ kind = "pickup"
 pickup = "ammo"
 
 [cells."6,18"]
-kind = "frog"
+kind = "bong"
 
 [cells."11,17"]
 kind = "pickup"

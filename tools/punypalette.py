@@ -212,7 +212,7 @@ OOZE = ((0xF4, 0xFF, 0xC4), (0xC8, 0xFF, 0x4D), (0x93, 0xE2, 0x3D), (0x52, 0xA9,
 # symbol is the one thing on it that has to be spotted from across the
 # field, so it keeps the old pickup icons' exemption and stays loud. The
 # HUD's weapon colours are the bases where the HUD has one (laser, plasma,
-# minigun, missiles, flame, speed, the frog). Admitted by check_sheets.py on
+# minigun, missiles, flame, speed, the bong). Admitted by check_sheets.py on
 # crates_sheet.png and pickup_glyphs.png alone; `pickup::PickupKind::ink`
 # holds the same values in the game.
 PICKUP_INK = {
@@ -225,7 +225,7 @@ PICKUP_INK = {
     'speedup': ((0xC7, 0x9A, 0x1A), (0xFF, 0xD9, 0x3D), (0xFF, 0xF2, 0xA8)),
     'shield': ((0x6B, 0x49, 0xC9), (0xA7, 0x7B, 0xFF), (0xD3, 0xBC, 0xFF)),
     'flamethrower': ((0xC2, 0x50, 0x1A), (0xFF, 0x8A, 0x2B), (0xFF, 0xC2, 0x7A)),
-    'frog_health': ((0x3F, 0x9A, 0x35), (0x7E, 0xDB, 0x5A), (0xC2, 0xF7, 0xA0)),
+    'bong_health': ((0x3F, 0x9A, 0x35), (0x7E, 0xDB, 0x5A), (0xC2, 0xF7, 0xA0)),
     'tower_pack': ((0x4F, 0x6F, 0xC7), (0x8F, 0xB0, 0xFF), (0xCF, 0xDC, 0xFF)),
     # The heat shield is two-tone (docs/volcano.md): molten red over black
     # basalt - its shade is the basalt the lower half is painted in.
@@ -275,7 +275,7 @@ PICKUP_INK = {
     # helicopter in a pale olive, the jet in a pale battleship grey, each
     # with its lights in a strobe's amber (the HUD's countdown). Military
     # airframes on the stained wood: the olive is yellower and duller than
-    # the frog pack's green and the grey lighter than the rod's steel, and
+    # the bong pack's green and the grey lighter than the rod's steel, and
     # the amber lights tell both from every other crate.
     'air_heli': ((0x5A, 0x6A, 0x28), (0xB4, 0xC4, 0x58), (0xFF, 0xB0, 0x2E)),
     'air_jet': ((0x4A, 0x52, 0x58), (0x9A, 0xA4, 0xAA), (0xFF, 0xB0, 0x2E)),

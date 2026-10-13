@@ -20,7 +20,7 @@ fn map_with(crates: &[(i32, i32, &str)]) -> String {
         r#"
 version = 1
 tanks = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."20,18" = { kind = "start" }
 cells."10,10" = { kind = "barrel", drum = "oil" }
 "#,

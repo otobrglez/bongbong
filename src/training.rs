@@ -4,7 +4,7 @@
 //! `canvas::Canvas`. The rules that run it are `simulation/training.rs`.
 //!
 //! A beat is one lesson: what it starts when it begins (`BeatStart`), what
-//! has to be true for it to be done (`BeatDone`), and the frog's spot and
+//! has to be true for it to be done (`BeatDone`), and the bong's spot and
 //! lines while it runs. Beats run in order; a door cell names the beat
 //! whose end opens it (`map::CellObject::Door`).
 
@@ -37,13 +37,13 @@ pub struct Beat {
     /// A name for the dev server and the linter; nothing keys off it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
-    /// The cell the frog stands on while this beat runs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frog: Option<(i32, i32)>,
-    /// The frog's lines when the beat starts, as `text` message keys.
+    /// The cell the bong stands on while this beat runs.
+    #[serde(default, alias = "frog", skip_serializing_if = "Option::is_none")]
+    pub bong: Option<(i32, i32)>,
+    /// The bong's lines when the beat starts, as `text` message keys.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub say: Vec<String>,
-    /// The line the frog repeats when the beat has gone quiet too long.
+    /// The line the bong repeats when the beat has gone quiet too long.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nudge: Option<String>,
     #[serde(default, skip_serializing_if = "BeatStart::is_empty")]
@@ -55,11 +55,11 @@ pub struct Beat {
 /// What a beat sets going the frame it starts.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct BeatStart {
-    /// A shell fired at the frog from this edge of the field, along the
-    /// frog's row or column: the frog is hurt by something the player
+    /// A shell fired at the bong from this edge of the field, along the
+    /// bong's row or column: the bong is hurt by something the player
     /// cannot see yet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shoot_frog: Option<Edge>,
+    #[serde(default, alias = "shoot_frog", skip_serializing_if = "Option::is_none")]
+    pub shoot_bong: Option<Edge>,
     /// Crates air-dropped onto cells.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drop: Vec<Drop>,
@@ -70,7 +70,7 @@ pub struct BeatStart {
 
 impl BeatStart {
     pub fn is_empty(&self) -> bool {
-        self.shoot_frog.is_none() && self.drop.is_empty() && self.roll_in.is_empty()
+        self.shoot_bong.is_none() && self.drop.is_empty() && self.roll_in.is_empty()
     }
 }
 
@@ -110,7 +110,7 @@ fn is_zero(v: &f32) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TrainingAi {
-    /// It goes for the frog rather than the player.
+    /// It goes for the bong rather than the player.
     Dummy,
 }
 
@@ -134,9 +134,9 @@ pub struct BeatDone {
     /// The first seat's hull stands east of this column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub past_col: Option<i32>,
-    /// The players' frog is at full health.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub frog_full: bool,
+    /// The players' bong is at full health.
+    #[serde(default, alias = "frog_full", skip_serializing_if = "std::ops::Not::not")]
+    pub bong_full: bool,
     /// This many enemy tanks wrecked since the beat began.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrecks: Option<u32>,
@@ -198,14 +198,14 @@ start_shells = 0
 
 [[beat]]
 id = "drive"
-frog = [5, 4]
-say = ["frog-hello"]
+bong = [5, 4]
+say = ["bong-hello"]
 done = { flags = 3 }
 
 [[beat]]
-id = "frog"
-start = { shoot_frog = "east", drop = [{ kind = "frog_health", at = [31, 10] }] }
-done = { frog_full = true }
+id = "bong"
+start = { shoot_bong = "east", drop = [{ kind = "bong_health", at = [31, 10] }] }
+done = { bong_full = true }
 
 [[beat]]
 id = "enemy"
@@ -217,15 +217,26 @@ id = "barrels"
 done = { destroyed_all = [[31, 7], [35, 6]] }
 "#;
 
+    /// A training map saved with the frog's keys still reads, as the bong's.
+    #[test]
+    fn a_script_with_the_old_frog_keys_still_reads() {
+        let old = "[[beat]]\nfrog = [5, 4]\nstart = { shoot_frog = \"east\", drop = [{ kind = \"frog_health\", at = [3, 1] }] }\ndone = { frog_full = true }\n";
+        let t: Training = toml::from_str(old).expect("the old keys parse");
+        assert_eq!(t.beat[0].bong, Some((5, 4)));
+        assert_eq!(t.beat[0].start.shoot_bong, Some(Edge::East));
+        assert_eq!(t.beat[0].start.drop, vec![Drop { kind: PickupKind::BongHealth, at: (3, 1) }]);
+        assert!(t.beat[0].done.bong_full);
+    }
+
     #[test]
     fn a_script_reads_its_beats_in_order_and_writes_back_the_same() {
         let t: Training = toml::from_str(SCRIPT).expect("script parses");
         assert_eq!(t.beat.len(), 4);
         assert_eq!(t.beat[0].done.flags, Some(3));
-        assert_eq!(t.beat[0].frog, Some((5, 4)));
-        assert_eq!(t.beat[1].start.shoot_frog, Some(Edge::East));
-        assert_eq!(t.beat[1].start.drop, vec![Drop { kind: PickupKind::FrogHealth, at: (31, 10) }]);
-        assert!(t.beat[1].done.frog_full);
+        assert_eq!(t.beat[0].bong, Some((5, 4)));
+        assert_eq!(t.beat[1].start.shoot_bong, Some(Edge::East));
+        assert_eq!(t.beat[1].start.drop, vec![Drop { kind: PickupKind::BongHealth, at: (31, 10) }]);
+        assert!(t.beat[1].done.bong_full);
         let roll = t.beat[2].start.roll_in[0];
         assert_eq!((roll.tank, roll.ai, roll.after), (TankKind::Scout, Some(TrainingAi::Dummy), 1.5));
         assert_eq!(t.beat[2].done.destroyed, vec![(28, 6), (28, 5)]);

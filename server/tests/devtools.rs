@@ -157,7 +157,7 @@ async fn a_rooms_own_tuning_is_its_alone() {
 version = 1
 tanks = 4
 spawn.kind = "band"
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."4,12" = { kind = "start" }
 "#;
     let hub = hub();

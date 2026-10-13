@@ -15,12 +15,12 @@ use crate::tuning::tuning;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Mission {
-    /// Keep the frog alive until every enemy is a wreck.
+    /// Keep the bong alive until every enemy is a wreck.
     #[default]
     Protect,
-    /// Kill the enemy frog before the enemies kill yours.
+    /// Kill the enemy bong before the enemies kill yours.
     Hunt,
-    /// No frog at all: wreck every enemy.
+    /// No bong at all: wreck every enemy.
     Destroy,
 }
 
@@ -36,13 +36,13 @@ impl Mission {
         }
     }
 
-    /// Whether the player's frog is on the field.
-    pub fn has_player_frog(self) -> bool {
+    /// Whether the player's bong is on the field.
+    pub fn has_player_bong(self) -> bool {
         !matches!(self, Mission::Destroy)
     }
 
-    /// Whether an enemy frog is on the field.
-    pub fn has_enemy_frog(self) -> bool {
+    /// Whether an enemy bong is on the field.
+    pub fn has_enemy_bong(self) -> bool {
         matches!(self, Mission::Hunt)
     }
 }

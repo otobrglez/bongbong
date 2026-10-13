@@ -13,7 +13,7 @@ use crate::ai::{Ai, in_sight_box};
 use crate::air::AirStrike;
 use crate::air_support::{self, AirCall, AirStage, Aircraft, Sortie};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
-use crate::frog::Side;
+use crate::bong::Side;
 use crate::math::Vec2;
 use crate::missile::Missile;
 use crate::obstacle::Obstacle;

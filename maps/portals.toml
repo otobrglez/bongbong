@@ -3,7 +3,7 @@
 #
 # Three portals in a triangle - two up in the corners, one down at the
 # bottom centre - each with a clear 5x5 of ground. Four 3x3 brick blocks
-# ring the centre where the player starts with the frog just above; two
+# ring the centre where the player starts with the bong just above; two
 # short iron walls beside the corner portals make each of them a real
 # shortcut around the wall rather than a detour. Enemies spawn in the
 # border band and can hop from a corner straight into the middle; the
@@ -13,13 +13,14 @@
 # centre by the third portal.
 
 version = 1
+bong = "oggle"
 size = [48, 24]
 mission.kind = "protect"
 spawn.kind = "band"
 tanks = 5
 
 cells."24,13" = { kind = "start" }
-cells."24,7" = { kind = "frog" }
+cells."24,7" = { kind = "bong" }
 cells."8,6" = { kind = "portal" }
 cells."38,6" = { kind = "portal" }
 cells."24,18" = { kind = "portal" }

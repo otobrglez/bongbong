@@ -5,26 +5,28 @@
 # swallow every `cells.` line after it.
 #
 # hunt-basic: Hunt mission on the band plan, four tanks. The player starts
-# on the right (col 38) with its frog (col 50) behind a brick screen at
-# col 42; the enemy frog sits far left (col 6) behind its own brick screen
+# on the right (col 38) with its bong (col 50) behind a brick screen at
+# col 42; the enemy bong sits far left (col 6) behind its own brick screen
 # at col 11.
 # Two iron wall segments at col 28 (rows 6-10 and 21-26) leave a ten-cell
 # central gap (rows 11-20) and four-nav-cell lanes along the top and bottom
-# edges, so both sides round something on the way to the other's frog
+# edges, so both sides round something on the way to the other's bong
 # without any single-cell corridor. A contested health pack sits in the
-# gap, ammo in each open quarter, and a frog health pack in each of the
-# outer lanes - either side can take one, and it only heals the frog of
-# whoever picks it up (docs/frog-health-pack-prd.md).
+# gap, ammo in each open quarter, and a bong health pack in each of the
+# outer lanes - either side can take one, and it only heals the bong of
+# whoever picks it up (docs/bong-health-pack-prd.md).
 
 version = 1
+bong = "gloop"
+enemy_bong = "capi"
 size = [56, 31.5]
 tanks = 4
 mission.kind = "hunt"
 spawn.kind = "band"
 
 cells."38,15" = { kind = "start" }
-cells."50,15" = { kind = "frog" }
-cells."6,15" = { kind = "enemy_frog" }
+cells."50,15" = { kind = "bong" }
+cells."6,15" = { kind = "enemy_bong" }
 
 cells."11,11" = { kind = "wall", material = "brick" }
 cells."42,11" = { kind = "wall", material = "brick" }
@@ -64,5 +66,5 @@ cells."20,6" = { kind = "pickup", pickup = "ammo" }
 cells."36,6" = { kind = "pickup", pickup = "ammo" }
 cells."20,25" = { kind = "pickup", pickup = "ammo" }
 cells."36,25" = { kind = "pickup", pickup = "ammo" }
-cells."28,3" = { kind = "pickup", pickup = "frog_health" }
-cells."28,28" = { kind = "pickup", pickup = "frog_health" }
+cells."28,3" = { kind = "pickup", pickup = "bong_health" }
+cells."28,28" = { kind = "pickup", pickup = "bong_health" }

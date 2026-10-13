@@ -14,7 +14,7 @@
 //!
 //! A blast takes its mid damage times its falloff off a crate - no roll -
 //! and a crate's fire runs on the round clock, so this draws no RNG until
-//! a crate cooks off; a cook-off rolls its damage on tanks, frogs and tiles
+//! a crate cooks off; a cook-off rolls its damage on tanks, bongs and tiles
 //! as a drum's blast does. With the knob off nothing here touches a crate,
 //! and every round replays as it did.
 
@@ -23,7 +23,7 @@ use std::collections::HashSet;
 
 use crate::blast::{BlastFx, BlastKind, BlastShape, Scorch};
 use crate::decal::Decal;
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::map::world_to_cell;
 use crate::obstacle::{face_toward, Material, Obstacle};
 use crate::pickup::{Pickup, PickupKind};
@@ -35,7 +35,7 @@ use crate::ai::Ai;
 
 use super::combat::{explosion_hit, BlastParams};
 use super::props::DamageCause;
-use super::{Event, Frame, Game, Spectacle, SHOCK_BARREL, SHOCK_FROG};
+use super::{Event, Frame, Game, Spectacle, SHOCK_BARREL, SHOCK_BONG};
 
 impl Game {
     /// A blast at `center` reaching the crates: each whole crate within
@@ -135,10 +135,10 @@ impl Game {
     }
 
     /// A crate's contents going off at `center`: an oil drum's blast scaled
-    /// by `crate_cookoff_scale` on both sides, the frogs, the tiles and the
+    /// by `crate_cookoff_scale` on both sides, the bongs, the tiles and the
     /// other crates, and for the flamethrower's fuel a pool of fire on its
     /// cell. The damage rolls are the round's RNG, drawn in a drum's order:
-    /// the seats, then the enemies, the frogs, the tiles.
+    /// the seats, then the enemies, the bongs, the tiles.
     fn crate_cookoff(&mut self, f: &mut Frame, center: Position, kind: PickupKind, live: bool) {
         let t = tuning();
         let params = cookoff_params();
@@ -153,19 +153,19 @@ impl Game {
             for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
                 explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
             }
-            let mut dead_frogs = Vec::new();
-            for frog in self.world.query::<&mut Frog>().iter() {
-                let dist = frog.position.distance_to(center);
-                if frog.is_dead() || dist > params.radius {
+            let mut dead_bongs = Vec::new();
+            for bong in self.world.query::<&mut Bong>().iter() {
+                let dist = bong.position.distance_to(center);
+                if bong.is_dead() || dist > params.radius {
                     continue;
                 }
-                frog.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
-                if frog.is_dead() {
-                    dead_frogs.push(frog.position);
+                bong.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
+                if bong.is_dead() {
+                    dead_bongs.push(bong.position);
                 }
             }
-            for pos in dead_frogs {
-                f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
+            for pos in dead_bongs {
+                f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
             }
             let hits: Vec<(Entity, Material, f32)> = self
                 .world

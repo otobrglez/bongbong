@@ -118,9 +118,10 @@ it was.
   the engagement ring's range and a hunter's snipe all read it, and the
   attack tier never reaches past it (`Ai::think`'s `sight`; under
   `enemy_attack_range / enemy_view_range` it shortens the attack too). A
-  hit still alerts an enemy from anywhere, and grass hides a tank as it
-  always did. Towers aim by their weapons' reach, well inside any sky's
-  sight, so no sky changes them.
+  tank already chasing a seat holds it `enemy_sight_hold_px` past that
+  range under every sky (`Ai::sees`). A hit still alerts an enemy from
+  anywhere, and grass hides a tank as it always did. Towers aim by their
+  weapons' reach, well inside any sky's sight, so no sky changes them.
 - **Grip** (`weather::grip_factor`): wet ground scales `Footing::grip`,
   so a hull drifts further through a turn and a shove carries it further
   sideways (measured: a hard turn at speed carries 73 px instead of 42).
@@ -128,13 +129,13 @@ it was.
 - **Ice** (`weather::freezes`): `Game::init` freezes the round's water
   (`ground::WaterLayout::freeze`, every water cell `Depth::Ice`) before
   anything is placed, so a lake has no colliders, the nav grid routes
-  over it, enemies, frogs and bonuses can spawn on it, no current runs
+  over it, enemies, bongs and bonuses can spawn on it, no current runs
   and nothing is refused a pose there. A hull on ice keeps its top speed
   but its grip (`ice_grip_factor`), its drive (`ice_traction_factor`) and
   its brake (`ice_brake_factor`) fall away: a released hull coasts about
   100 px where dry ground stops it in 9. Ice takes tread marks (scratches
   only, docs/ground-memory.md) and wets
-  none, throws no spray, does not put a burning hull out and is no frog's
+  none, throws no spray, does not put a burning hull out and is no bong's
   refuge; like water it takes no heat, fire or scorch. The ground pass
   draws it solid.
 - **Gusts** (`weather::gusts`, `gust_at`): in most `sand_gust_gap_seconds`
@@ -283,7 +284,7 @@ against the walls:
 - **Shots**: shells, bullets, plasma bolts, missiles, flame jets, laser
   beams along their length, muzzle and impact flashes, and every hit the
   particle layer is playing.
-- **The frogs and the pickups**, faintly, in their own colours
+- **The bongs and the pickups**, faintly, in their own colours
   (`pickup_glow_strength`), so a lamp can find them.
 
 **Shadows** come from `weather::Occluders`: the map's cells, marked where a

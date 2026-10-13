@@ -7,8 +7,8 @@
 # the middle; everything else is tall grass in big drifts and 2x2 groves of
 # trees and pines. Concealment is a cell test (`Terrain::conceals`): a tank
 # sitting in the grass is not seen, not chased and not rammed until it
-# fires or gets hit, so the frog beside the road can be defended from
-# ambush rather than from a wall. Frog health on both flanks, health top
+# fires or gets hit, so the bong beside the road can be defended from
+# ambush rather than from a wall. Bong health on both flanks, health top
 # left, ammo in two corners, a speed-up and a shield bottom right.
 
 version = 1
@@ -120,19 +120,19 @@ cells."23,7" = { kind = "tall_grass" }
 cells."24,7" = { kind = "tall_grass" }
 cells."25,7" = { kind = "tall_grass" }
 cells."26,7" = { kind = "tall_grass" }
-cells."3,8" = { kind = "pickup", pickup = "frog_health" }
+cells."3,8" = { kind = "pickup", pickup = "bong_health" }
 cells."9,8" = { kind = "tall_grass" }
 cells."10,8" = { kind = "tall_grass" }
 cells."11,8" = { kind = "tall_grass" }
 cells."12,8" = { kind = "tall_grass" }
-cells."15,8" = { kind = "frog" }
+cells."15,8" = { kind = "bong" }
 cells."17,8" = { kind = "road" }
 cells."18,8" = { kind = "road" }
 cells."20,8" = { kind = "start" }
 cells."23,8" = { kind = "tall_grass" }
 cells."24,8" = { kind = "tall_grass" }
 cells."25,8" = { kind = "tall_grass" }
-cells."30,8" = { kind = "pickup", pickup = "frog_health" }
+cells."30,8" = { kind = "pickup", pickup = "bong_health" }
 cells."17,9" = { kind = "road" }
 cells."18,9" = { kind = "road" }
 cells."2,10" = { kind = "tall_grass" }

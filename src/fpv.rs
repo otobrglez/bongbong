@@ -91,17 +91,17 @@ pub enum DroneLock {
     None,
     /// A tank, by its entity and owner slot.
     Tank { entity: hecs::Entity, slot: usize },
-    /// A frog: the players' (`Side::Player`) or the Hunt mission's enemy
-    /// frog.
-    Frog { entity: hecs::Entity, side: crate::frog::Side },
+    /// A bong: the players' (`Side::Player`) or the Hunt mission's enemy
+    /// bong.
+    Bong { entity: hecs::Entity, side: crate::bong::Side },
 }
 
 /// `DroneLock::code` of a drone locked on nothing.
 pub const LOCK_NONE: u16 = u16::MAX;
-/// `DroneLock::code` of a drone locked on the players' frog.
-pub const LOCK_FROG: u16 = u16::MAX - 1;
-/// `DroneLock::code` of a drone locked on the Hunt mission's enemy frog.
-pub const LOCK_ENEMY_FROG: u16 = u16::MAX - 2;
+/// `DroneLock::code` of a drone locked on the players' bong.
+pub const LOCK_BONG: u16 = u16::MAX - 1;
+/// `DroneLock::code` of a drone locked on the Hunt mission's enemy bong.
+pub const LOCK_ENEMY_BONG: u16 = u16::MAX - 2;
 
 impl DroneLock {
     /// The owner slot of a locked tank.
@@ -113,26 +113,26 @@ impl DroneLock {
     }
 
     /// What it is locked on as one number, the wire's
-    /// (`net::wire::DroneState::lock`): a tank's owner slot, `LOCK_FROG`,
-    /// `LOCK_ENEMY_FROG` or `LOCK_NONE`.
+    /// (`net::wire::DroneState::lock`): a tank's owner slot, `LOCK_BONG`,
+    /// `LOCK_ENEMY_BONG` or `LOCK_NONE`.
     pub fn code(self) -> u16 {
         match self {
             DroneLock::None => LOCK_NONE,
-            DroneLock::Tank { slot, .. } => slot.min(LOCK_ENEMY_FROG as usize - 1) as u16,
-            DroneLock::Frog { side: crate::frog::Side::Player, .. } => LOCK_FROG,
-            DroneLock::Frog { side: crate::frog::Side::Enemy, .. } => LOCK_ENEMY_FROG,
+            DroneLock::Tank { slot, .. } => slot.min(LOCK_ENEMY_BONG as usize - 1) as u16,
+            DroneLock::Bong { side: crate::bong::Side::Player, .. } => LOCK_BONG,
+            DroneLock::Bong { side: crate::bong::Side::Enemy, .. } => LOCK_ENEMY_BONG,
         }
     }
 }
 
 /// What an enemy's drone is to lock (`ai::SpecialUse::Launch`): the seat
-/// its rule chose, the players' frog, or a point - a tree's crown - with no
+/// its rule chose, the players' bong, or a point - a tree's crown - with no
 /// lock. A seat's press asks for `Nearest`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AirWant {
     Nearest,
     Seat(u8),
-    Frog,
+    Bong,
     Point(Position),
 }
 
@@ -503,7 +503,7 @@ fn launch_path_with(t: &Tuning, origin: Position, out: Vec2, age: f32) -> (Posit
     (origin + out * (t.fpv_launch_speed * age), FPV_HALO_HEIGHT_PX + (t.fpv_cruise_height - FPV_HALO_HEIGHT_PX) * k)
 }
 
-/// A candidate lock: an owner slot (or a frog's tie key) and where it
+/// A candidate lock: an owner slot (or a bong's tie key) and where it
 /// stands.
 #[derive(Clone, Copy, Debug)]
 pub struct LockCandidate {

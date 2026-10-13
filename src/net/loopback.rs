@@ -24,6 +24,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::net::codec::{self, Msg};
+use crate::net::now::Now;
 use crate::net::transport::{Closed, ConnState, Transport};
 
 /// How bad the link is.
@@ -91,6 +92,9 @@ pub struct Loopback {
     rng: SmallRng,
     /// Set once the inbox has closed and run dry.
     finished: Option<Closed>,
+    /// What `send` and `drain` call now: the wall unless a test winds it
+    /// (`set_clock`).
+    clock: Now,
 }
 
 /// The two ends of a fresh link, `(a, b)`: what `a` sends, `b` drains.
@@ -106,6 +110,7 @@ pub fn pair(quality: LinkQuality, seed: u64) -> (Loopback, Loopback) {
         quality,
         rng: SmallRng::seed_from_u64(seed),
         finished: None,
+        clock: Now::wall(),
     };
     let b = Loopback {
         inbox: a_to_b,
@@ -115,6 +120,7 @@ pub fn pair(quality: LinkQuality, seed: u64) -> (Loopback, Loopback) {
         // ratio, the same constant the hashes elsewhere are salted with.
         rng: SmallRng::seed_from_u64(seed ^ 0x9E37_79B9_7F4A_7C15),
         finished: None,
+        clock: Now::wall(),
     };
     (a, b)
 }
@@ -123,6 +129,12 @@ impl Loopback {
     /// This end's link quality; the two directions can differ.
     pub fn set_quality(&mut self, quality: LinkQuality) {
         self.quality = quality;
+    }
+
+    /// The clock `send` and `drain` read: hand both ends the manual clock
+    /// the round over them reads, and a parcel arrives on that clock.
+    pub fn set_clock(&mut self, clock: Now) {
+        self.clock = clock;
     }
 
     /// `send` at a given moment, the seam the tests drive so they need
@@ -198,15 +210,15 @@ impl Transport for Loopback {
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        self.send_at(Instant::now(), bytes);
+        self.send_at(self.clock.now(), bytes);
     }
 
     fn drain(&mut self, out: &mut Vec<Msg>) {
-        self.drain_at(Instant::now(), out);
+        self.drain_at(self.clock.now(), out);
     }
 
     fn drain_stamped(&mut self, out: &mut Vec<(Msg, Instant)>) {
-        self.drain_stamped_at(Instant::now(), out);
+        self.drain_stamped_at(self.clock.now(), out);
     }
 
     fn close(&mut self) {

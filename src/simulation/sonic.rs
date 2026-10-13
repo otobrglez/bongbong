@@ -3,7 +3,7 @@
 //! casts it into a wave once the tank loops are done, and
 //! `tick_sonic_waves` strikes whatever the wave's front passes, once -
 //! hulls knocked off their tracks (`knock`), glass shattered, grass
-//! flattened, drums thrown, frogs stunned, lanterns broken, grenades
+//! flattened, drums thrown, bongs stunned, lanterns broken, grenades
 //! pushed. Also the general pieces later weapons share: `knock`, the
 //! cover a flattened cell leaves (`Game::cover_cells`) and the hashed
 //! spawn swap (`swap_spawn_special`). No RNG anywhere here.
@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hecs::Entity;
 
 use crate::ai::{Ai, HammerAim, HammerSense, Role};
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::math::Vec2;
 use crate::obstacle::Obstacle;
 use crate::physics::Physics;
@@ -246,7 +246,7 @@ const CLOSER_SPOT_CLEAR_PX: f32 = OBSTACLE_GRID_SIZE * 1.25;
 
 impl Game {
     /// The cells `Terrain` and the indicators take as hiding a hull: the
-    /// tall grass, less the cells a sonic wave flattened a while ago
+    /// tall grass, less the cells a sonic wave or a rod flattened a while ago
     /// (`grass_flat`) and the cells hulls trampled for the round
     /// (`grass_trampled`, `simulation::trample`), the trails through the
     /// woods (`woods.rs`), and the cells thick smoke fills under
@@ -342,7 +342,7 @@ impl Game {
                 continue;
             }
             let (from, to) = (wave.swept, wave.front(&t));
-            self.flatten_swept(wave, from, to);
+            self.flatten_swept(wave, from, to, true);
             if live {
                 self.strike(f, wave, from, to, &t);
             }
@@ -354,8 +354,10 @@ impl Game {
     }
 
     /// A replica's waves (docs/sonic-hammer.md "Wire"): age them, flatten
-    /// the grass the front passes in the picture, drop the done ones. A
-    /// round that simulates its waves never calls this.
+    /// the grass the front passes in the picture, drop the done ones. The
+    /// cover the grass gives is the room's (`Snapshot::grass_flat`), so
+    /// the picture's sweep lays only the tufts. A round that simulates its
+    /// waves never calls this.
     pub(crate) fn tick_sonic_pictures(&mut self, dt: f32) {
         if self.sonic_waves.is_empty() {
             return;
@@ -366,7 +368,7 @@ impl Game {
             wave.age += dt;
             if wave.swept <= wave.cone.longest() {
                 let (from, to) = (wave.swept, wave.front(&t));
-                self.flatten_swept(wave, from, to);
+                self.flatten_swept(wave, from, to, false);
                 wave.swept = to;
             }
         }
@@ -376,9 +378,10 @@ impl Game {
     }
 
     /// The tall grass in the cells `wave`'s front entered between `from`
-    /// and `to`: it hides nobody for `sonic_grass_flat_seconds`
-    /// (`grass_flat`) and its tufts lie flat as long (`grass::pin`).
-    fn flatten_swept(&mut self, wave: &SonicWave, from: f32, to: f32) {
+    /// and `to`: its tufts lie flat for `sonic_grass_flat_seconds`
+    /// (`grass::pin`) and, with `cover` (the round that simulates the
+    /// wave), it hides nobody as long (`grass_flat`).
+    fn flatten_swept(&mut self, wave: &SonicWave, from: f32, to: f32, cover: bool) {
         if self.grass_cells.is_empty() {
             return;
         }
@@ -388,15 +391,17 @@ impl Game {
         }
         let grass: BTreeSet<(i32, i32)> = self.grass_cells.iter().map(|&c| crate::map::world_to_cell(c)).collect();
         for c in wave.cone.cells.iter().filter(|c| c.at >= from && c.at <= to && grass.contains(&c.cell)) {
-            let left = self.grass_flat.entry(c.cell).or_insert(0.0);
-            *left = left.max(seconds);
+            if cover {
+                let left = self.grass_flat.entry(c.cell).or_insert(0.0);
+                *left = left.max(seconds);
+            }
             crate::grass::pin(&mut self.grass, c.cell, seconds);
         }
     }
 
     /// Everything `wave` reaches between the front's radii `from` and `to`,
     /// struck once, in a fixed order: panes, drums, the hulls (the seats in
-    /// index order, then the enemies by slot), the frogs, the lanterns, the
+    /// index order, then the enemies by slot), the bongs, the lanterns, the
     /// grenades, the drones in the air of the side opposing the shooter.
     fn strike(&mut self, f: &mut Frame, wave: &mut SonicWave, from: f32, to: f32, t: &Tuning) {
         let band = |d: f32| d >= from && d <= to;
@@ -459,13 +464,13 @@ impl Game {
                 self.strike_hull(f, entity, d, wave.cone.origin, shooter, t);
             }
         }
-        // Frogs are stunned.
-        for frog in self.world.query_mut::<&mut Frog>() {
-            if frog.is_dead() {
+        // Bongs are stunned.
+        for bong in self.world.query_mut::<&mut Bong>() {
+            if bong.is_dead() {
                 continue;
             }
-            if wave.cone.reaches(frog.position).is_some_and(|d| d <= to && d >= from - FRONT_SLACK_PX) {
-                frog.stun(t.sonic_frog_stun_seconds);
+            if wave.cone.reaches(bong.position).is_some_and(|d| d <= to && d >= from - FRONT_SLACK_PX) {
+                bong.stun(t.sonic_bong_stun_seconds);
             }
         }
         // A seat's lanterns are broken, as a blast breaks them.
@@ -655,11 +660,11 @@ impl Game {
                 // An offline tower (an EMP) is no trouble while it is out.
                 self.towers
                     .values()
-                    .find(|tw| tw.position == at && tw.side == crate::frog::Side::Enemy && tw.disabled <= 0.0)
+                    .find(|tw| tw.position == at && tw.side == crate::bong::Side::Enemy && tw.disabled <= 0.0)
                     .map(|tw| (at, tw.kind.range()))
             })
             .collect();
-        let quarry = self.frog.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|fr| !fr.is_dead()).map(|fr| (fr.position, fr.is_stunned())));
+        let quarry = self.bong.and_then(|e| self.world.get::<&Bong>(e).ok().filter(|fr| !fr.is_dead()).map(|fr| (fr.position, fr.is_stunned())));
         let all_tanks: Vec<(usize, Position)> = self
             .world
             .query::<&Tank>()
@@ -700,7 +705,7 @@ impl Game {
                     ..HammerAim::default()
                 };
                 for seat in seats.iter().filter(|s| s.live) {
-                    if ai.frog_only || !crate::ai::in_sight_box_of((half_w, half_h), seat.pos, me) {
+                    if ai.bong_only || !crate::ai::in_sight_box_of((half_w, half_h), seat.pos, me) {
                         continue;
                     }
                     let hidden = seat.concealed && !ai.is_hit_alerted();
@@ -743,7 +748,7 @@ impl Game {
                 if ai.role == Role::Hunter
                     && let Some((at, stunned)) = quarry
                 {
-                    aim.frog = !stunned && cone.reaches(at).is_some();
+                    aim.bong = !stunned && cone.reaches(at).is_some();
                 }
                 sense.aims[dir.index()] = aim;
             }

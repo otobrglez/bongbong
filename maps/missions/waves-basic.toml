@@ -7,7 +7,7 @@
 # waves-basic: Destroy mission on the waves plan - four waves of 2, 3, 4
 # and 5 tanks climbing light -> super, rolling in through the two explicit
 # gates at the middle of the left and right edges (map cols 0 and 55 sit
-# on the nav grid's first and last column). No frog: Destroy spawns none.
+# on the nav grid's first and last column). No bong: Destroy spawns none.
 # The player starts at the centre between four 4x4 wall blocks, two brick
 # and two iron, placed so every edge lane and the centre cross stay open
 # and the roll-in lanes are never walled. Ammo top and bottom centre,

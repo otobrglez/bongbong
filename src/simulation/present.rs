@@ -10,7 +10,7 @@
 //! tank for the round trip it takes the room to say so. These are those
 //! tests: **presentation only**, over the replica's drawn world - its
 //! tiles, the field's edge, every live tank but the shooter's own as it
-//! is drawn this frame, the frogs - with the room's lag compensation
+//! is drawn this frame, the bongs - with the room's lag compensation
 //! (the room judges a seat's shots against the enemies as that seat drew
 //! them) making the two agree.
 //!
@@ -40,7 +40,7 @@ use crate::tuning::tuning;
 pub enum Contact {
     /// A live tank: a seat's (`Some`) or an enemy's.
     Tank { seat: Option<u8> },
-    Frog,
+    Bong,
     Tile,
     /// The field's edge.
     Edge,
@@ -76,7 +76,7 @@ struct TankBoxes {
 pub struct PresentWorld {
     terrain: Terrain,
     tanks: Vec<TankBoxes>,
-    frogs: Vec<Position>,
+    bongs: Vec<Position>,
     width: f32,
     height: f32,
     /// The portals a shot goes into (`Game::shot_portals`).
@@ -88,7 +88,7 @@ pub struct PresentWorld {
 
 impl Game {
     /// The world as this replica draws it this frame: tiles, the field's
-    /// edge, every live tank with a body, the frogs.
+    /// edge, every live tank with a body, the bongs.
     pub fn present_world(&self) -> PresentWorld {
         let (width, height) = self.map.field_size();
         let terrain = Terrain::build(&self.world, width, height, &self.cover_cells(), &self.water);
@@ -106,12 +106,12 @@ impl Game {
                 turret: t.turret_bbox_world(),
             })
             .collect();
-        let frogs = [self.frog, self.enemy_frog]
+        let bongs = [self.bong, self.enemy_bong]
             .into_iter()
             .flatten()
-            .filter_map(|e| self.world.get::<&crate::frog::Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position))
+            .filter_map(|e| self.world.get::<&crate::bong::Bong>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position))
             .collect();
-        PresentWorld { terrain, tanks, frogs, width, height, portals: self.shot_portals().to_vec(), air: self.air_targets() }
+        PresentWorld { terrain, tanks, bongs, width, height, portals: self.shot_portals().to_vec(), air: self.air_targets() }
     }
 
     /// Kick one seat's hull back from a shot it just fired along
@@ -509,7 +509,7 @@ impl Game {
 impl PresentWorld {
     /// Where a shot `shooter` fired, `half` wide, first meets something
     /// along `p0..p1` - a tank that is not the shooter's (grown by the
-    /// player shot's pad against enemies, as the room grows it), a frog, a
+    /// player shot's pad against enemies, as the room grows it), a bong, a
     /// tile or the field's edge - or `None` if the segment is clear.
     pub fn shot_contact(&self, shooter: Option<u8>, p0: Position, p1: Position, half: f32) -> Option<(Position, Contact)> {
         let pad = Position::new(half, half);
@@ -537,9 +537,9 @@ impl PresentWorld {
             consider(segment_box(p0, p1, tank.hull.0, tank.hull.1 + grow), Contact::Tank { seat: tank.seat });
             consider(segment_box(p0, p1, tank.turret.0, tank.turret.1 + grow), Contact::Tank { seat: tank.seat });
         }
-        let frog_half = Position::new(crate::FROG_COLLIDER_HALF_EXTENT.0, crate::FROG_COLLIDER_HALF_EXTENT.1);
-        for &frog in &self.frogs {
-            consider(segment_box(p0, p1, frog, frog_half + pad), Contact::Frog);
+        let bong_half = Position::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
+        for &bong in &self.bongs {
+            consider(segment_box(p0, p1, bong, bong_half + pad), Contact::Bong);
         }
         consider(self.terrain.first_solid_along(p0, p1), Contact::Tile);
         consider(self.edge_along(p0, p1), Contact::Edge);
@@ -548,7 +548,7 @@ impl PresentWorld {
 
     /// Where a gravity well's orb `shooter` launched, `half` wide, first
     /// meets something along `p0..p1` - a tank that is not the shooter's, a
-    /// frog, a tile that blocks sight or the field's edge: where it anchors
+    /// bong, a tile that blocks sight or the field's edge: where it anchors
     /// (`Game::resolve_orbs`'s rule, drawn ahead).
     pub fn orb_contact(&self, shooter: u8, p0: Position, p1: Position, half: f32) -> Option<Position> {
         let pad = Position::new(half, half);
@@ -568,9 +568,9 @@ impl PresentWorld {
             consider(segment_box(p0, p1, tank.hull.0, tank.hull.1 + pad));
             consider(segment_box(p0, p1, tank.turret.0, tank.turret.1 + pad));
         }
-        let frog_half = Position::new(crate::FROG_COLLIDER_HALF_EXTENT.0, crate::FROG_COLLIDER_HALF_EXTENT.1);
-        for &frog in &self.frogs {
-            consider(segment_box(p0, p1, frog, frog_half + pad));
+        let bong_half = Position::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
+        for &bong in &self.bongs {
+            consider(segment_box(p0, p1, bong, bong_half + pad));
         }
         consider(self.terrain.first_tall_along(p0, p1, half));
         consider(self.edge_along(p0, p1));
@@ -622,7 +622,7 @@ impl PresentWorld {
     /// Whether an enemy at `from` sees `to`: the line of sight an enemy
     /// needs before it settles its aim (`Terrain::line_of_sight` - every
     /// tile but the knee-high sandbags and see-through fences, and the
-    /// frogs, block it). The off-screen arrows' lane warning asks it
+    /// bongs, block it). The off-screen arrows' lane warning asks it
     /// (`indicators.rs`).
     pub fn line_of_sight(&self, from: Position, to: Position) -> bool {
         self.terrain.line_of_sight(from, to)
@@ -633,7 +633,7 @@ impl PresentWorld {
     /// "Online"): where it stops - a permanent tile (iron unless
     /// `overcharged`) or the field's edge - and everything it goes through
     /// on the way, in order: every tank that is not `shooter`'s (grown as
-    /// `shot_contact` grows them), the frogs and the tiles, each with where
+    /// `shot_contact` grows them), the bongs and the tiles, each with where
     /// it went in. The room's `Terrain::pierce_rewound` on the drawn world:
     /// what a client draws its own slug with, and how an enemy's charging
     /// lane is known to reach a seat.
@@ -659,10 +659,10 @@ impl PresentWorld {
                 through.push((t, at(t), Contact::Tank { seat: tank.seat }, Pierced::Tank));
             }
         }
-        let frog_half = Position::new(crate::FROG_COLLIDER_HALF_EXTENT.0, crate::FROG_COLLIDER_HALF_EXTENT.1);
-        for &frog in &self.frogs {
-            if let Some(t) = segment_box(p0, p1, frog, frog_half + pad).filter(|&t| t <= stop) {
-                through.push((t, at(t), Contact::Frog, Pierced::Frog));
+        let bong_half = Position::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
+        for &bong in &self.bongs {
+            if let Some(t) = segment_box(p0, p1, bong, bong_half + pad).filter(|&t| t <= stop) {
+                through.push((t, at(t), Contact::Bong, Pierced::Bong));
             }
         }
         for (t, _, material) in tiles {

@@ -74,8 +74,8 @@ row-block layout.
 Engine side the chassis tables stay 12 wide: `Tank::row` is still the
 chassis, and the atlas row is `row + TANK_ROWS_PER_TEAM * team`, where team
 comes from `Tank::owner` (`Enemy` = 0, `Player(0)` = 1, `Player(1)` = 2).
-`source_rec` is the one place that adds the offset. `damage.png`, the
-minigun mount and `tracks.png` are shared art and unchanged.
+`source_rec` is the one place that adds the offset. `damage.png` and the
+minigun mount are shared art and unchanged.
 
 Rejected: a runtime multiply tint (can only darken; already tried and
 rejected for plasma), and a palette-swap shader (needs a hand-ported GLSL
@@ -104,9 +104,9 @@ Enemies may still roll the player's chassis and player 2 may roll player
   (`draw_ground_ring_scaled`). Marker, gauge and shield rings all use it,
   players and enemies alike, so the cross-fade stays concentric and an
   enemy's hit ring sits at the same radius as the player's marker; the
-  frogs' rings keep the unscaled radius.
+  bongs' rings keep the unscaled radius.
 - The enemy ring stops sharing player 1's ramp: it draws with
-  `HealthRamp::Red`, the enemy frog's ramp, so red-on-hit reads hostile.
+  `HealthRamp::Red`, the enemy bong's ramp, so red-on-hit reads hostile.
 - `PLAYER2_RING_COLOR` is replaced by `tank::TEAM_COLORS: [Color; 2]`
   (plus the full ramps), the single source every surface below imports.
   Colours are `pub const`s in `tank.rs`, not tunables - the knob table has
@@ -127,7 +127,7 @@ Enemies may still roll the player's chassis and player 2 may roll player
   has none); `start2` draws the hot-pink ring (was `PLAYER2_RING_COLOR`).
 - The palette icons use the team rows: `icon_source_rec` takes a team, so
   the start brushes show a blue and a pink scout.
-- `ENEMY_RING_COLOR` for the enemy frog stays red.
+- `ENEMY_RING_COLOR` for the enemy bong stays red.
 
 ## Round-start locate cue
 

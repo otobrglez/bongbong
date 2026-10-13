@@ -14,7 +14,7 @@ probe-sweep:
     cargo run --bin probe -- --scenario afk --mission protect --spawn band --enemies 4 --frames 1800 --rounds 30 --heatmap --budget offbox-fire=0
 
 # Waves spawn plan health check: the maps/missions/ waves fixture, Destroy
-# mission (no frog, so an AFK player only loses to gunfire), 30 seeded
+# mission (no bong, so an AFK player only loses to gunfire), 30 seeded
 # rounds. Rolling-in tanks are exempt from the anomaly checks until they
 # arrive. See docs/maps-to-levels.md.
 probe-waves:
@@ -43,7 +43,7 @@ probe-waves:
 # totals came back exactly, so those differences were the stream, not the
 # hunters. Then after hunters learned to shoot through destructible walls
 # (line of fire), got a snipe cooldown and a ring slot even when alone:
-# jitter 2 -> 6 and churn 7 -> 10. frog-block carries the jitter=6 (and
+# jitter 2 -> 6 and churn 7 -> 10. bong-block carries the jitter=6 (and
 # churn=3, clustering=4) and every one of them is a hunter - the totals are
 # 0/0/4 with the share zeroed; traced frame by frame they are the normal
 # diagonal-slot approach (right/down legs each held the full commitment
@@ -83,6 +83,21 @@ probe-waves:
 # (`--mission destroy`, `player_armor_factor` 0.1, every fixture and field
 # map) from 1159 anomalies to 1005: tank-grind 50 -> 9, low-progress 35 -> 3,
 # wall-grind 20 -> 0, stall 7 -> 1, never-arrived 6 -> 3.
+# Re-baselined for BB-95, jitter 8 -> 9: the predictive sidestep
+# (`Ai::avoid_collisions`) had predicted backwards since the first commit,
+# sidestepping tanks behind a hull and never the one it was about to hit.
+# Tanks that really sidestep turn away and back, which the jitter count
+# reads as a flip-flop: maze reads jitter=9 (8 before; rounds 0x3ea, 0x3eb,
+# 0x3ed, 0x3ee and 0x3f0, tanks meeting in its lanes). Every other kind fell
+# or held: the totals at this seed are border-stuck 3 -> 2, jitter 38 -> 33,
+# spin 2 -> 1, churn 25 -> 26, clustering 9 -> 0 and pile-up 2 -> 0, 79 -> 62
+# in all, and enemy-pair rams 166 -> 83, rams into the player 42 -> 1. The
+# long-round sweep (`--mission destroy`, `player_armor_factor` 0.1, every
+# fixture and field map, 10 x 60 s at seeds 1000, 2000 and 3000) reads
+# 1045/996/935 -> 798/717/720 anomalies: pile-up 123/108/96 -> 32/24/15,
+# clustering 206/177/151 -> 85/60/50, tank-grind 12/7/4 -> 2/1/0, spin
+# 73/70/71 -> 29/17/19, churn 327/307/313 -> 305/305/311, jitter
+# 272/304/277 -> 318/287/304, never-arrived 5/0/0 -> 6/1/0.
 # The probe is built once and the fixtures run side by side, one per core,
 # each into its own log, printed in fixture order once all are done; every
 # fixture runs even after one fails, and the recipe fails if any did. CI
@@ -93,7 +108,7 @@ probe-waves:
 probe-fixtures *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=8 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=3 --budget offbox-fire=0 {{args}}"
+    budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=9 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=3 --budget offbox-fire=0 {{args}}"
     cargo build --bin probe
     probe="${CARGO_TARGET_DIR:-target}/debug/probe"
     logs=$(mktemp -d)
@@ -135,7 +150,7 @@ probe-fixtures *args:
 # (5 -> 8, tanks circling its islands' shores); clustering=10 is hedge-maze
 # (5 -> 10; the old ceiling, 6, was archipelago's, now 3); stall=1 is
 # archipelago (round 7, 0x3ef: a hunter standing to fire at the players'
-# frog, a hold the probe mutes only for a seat); low-progress=1 is
+# bong, a hold the probe mutes only for a seat); low-progress=1 is
 # archipelago (round 7 again: a tank pressed for three seconds against
 # another's hull, on a route of its own the margin still steers, before its
 # stuck escape). border-stuck=3 (hedge-maze, 3 -> 3: enemies spawned in the
@@ -173,7 +188,7 @@ probe-fixtures *args:
 # third again as long); spin=9 and churn=39 are hedge-maze (2 -> 9 and
 # 12 -> 39: its walks run longer, and a tank with nobody in sight wanders
 # more of them); wall-grind=1 is harbor-lights (0 -> 1: in round 0x3ef a
-# tank pressed toward the frog against the pier beside it on the beach).
+# tank pressed toward the bong against the pier beside it on the beach).
 # Every other ceiling stands: jitter 24 on hedge-maze (from 30) and 20 on
 # harbor-lights (from 28), clustering=10 on both, pile-up 5 on hedge-maze
 # (from 6). The fight comes later on the larger fields: longwater about
@@ -193,14 +208,24 @@ probe-fixtures *args:
 # spreads over it. archipelago, hedge-maze and the study map bunch less with
 # it, longwater and castle-moat read as before, black-gold within a few
 # points of jitter and churn.
+# Re-baselined for one tank per crate and giving a crate up
+# (`ai::claim_crates`, `enemy_crate_give_up_seconds` 4): a tank shuttling
+# on its way to a crate now leaves it after four seconds, so rounds re-time
+# from there. jitter=31 is harbor-lights (23 -> 31 here: 0x3e8, 0x3ee and
+# 0x3f0 two more each, in 0x3f0 a pack in the chase on a re-timed round);
+# over three more blocks it reads 16, 20 and 40 against 23, 25 and 37
+# (seeds 2000, 3000; 5000 at 20 rounds), 107 against 108 in all. These ten
+# rounds' totals over the seven maps, before -> after: churn 93 -> 79,
+# clustering 22 -> 11, jitter 104 -> 107, spin 17 -> 19, border-stuck
+# 10 -> 9, pile-up 10 -> 10; every other ceiling stands.
 # Not in CI: well over two minutes in a debug build, the study map alone
 # more than one.
 probe-fields *args:
-    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=30 --budget spin=12 --budget churn=43 --budget clustering=12 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=8 --budget offbox-fire=0 {{args}} || exit 1; done
+    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=31 --budget spin=12 --budget churn=43 --budget clustering=12 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=8 --budget offbox-fire=0 {{args}} || exit 1; done
 
 # The perfect defence (docs/large-maps-follow-camera.md section 12): the
 # probe's `defend` scenario - every enemy destroyed the moment it comes
-# within 400 px of a live seat or the players' frog, so nobody is ever
+# within 400 px of a live seat or the players' bong, so nobody is ever
 # attacked - on the two maps that need the follow camera, ten seven-minute
 # rounds each at a pinned seed. A round lasts exactly as long as its last
 # straggler keeps it waiting, and never-arrived counts one still out. Every

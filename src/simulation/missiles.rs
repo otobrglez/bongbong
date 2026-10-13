@@ -12,7 +12,7 @@ use crate::math::Vec2;
 
 use crate::ai::{Ai, in_sight_box};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
-use crate::frog::{Frog, Side};
+use crate::bong::{Bong, Side};
 use crate::missile::Missile;
 use crate::obstacle::{face_toward, Obstacle};
 use crate::shell::Owner;
@@ -22,7 +22,7 @@ use crate::Position;
 
 use super::combat::{explosion_hit, BlastParams};
 use super::props::DamageCause;
-use super::{Event, Frame, Game, Spectacle, SHOCK_FROG};
+use super::{Event, Frame, Game, Spectacle, SHOCK_BONG};
 
 /// How hard one missile's burst shakes the screen, relative to a tank
 /// dying (see `SHOCK_KILL`): a volley is four of these in quick succession,
@@ -160,14 +160,14 @@ impl Game {
     /// takes linear-falloff damage and every live tank in range is shoved
     /// (the wreck blast's rule - `explosion_hit` - so one draw per tank in
     /// range, players first, then enemies; a seat's shove goes on
-    /// `Frame::shoves`, which tells a client-owned hull's client); frogs of
+    /// `Frame::shoves`, which tells a client-owned hull's client); bongs of
     /// the opposing side take damage; tiles crack and barrels go off
     /// (`damage_obstacle`, as any blast), and crates break.
     pub(super) fn side_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams) {
         self.side_blast_sparing(f, center, owner, params, &[]);
     }
 
-    /// `side_blast` with the tanks and frogs in `spared` left out whole -
+    /// `side_blast` with the tanks and bongs in `spared` left out whole -
     /// neither hurt nor shoved: an FPV drone's burst spares what stands
     /// under a tree's crown (docs/fpv-swarm.md "Trees"). With nothing
     /// spared it is `side_blast`, draw for draw.
@@ -192,22 +192,22 @@ impl Game {
             explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, params);
         }
         let own_side = if owner.is_player() { Side::Player } else { Side::Enemy };
-        let mut dead_frogs = Vec::new();
-        for (entity, frog) in self.world.query::<(Entity, &mut Frog)>().iter() {
-            if frog.is_dead() || frog.side == own_side || spared.contains(&entity) {
+        let mut dead_bongs = Vec::new();
+        for (entity, bong) in self.world.query::<(Entity, &mut Bong)>().iter() {
+            if bong.is_dead() || bong.side == own_side || spared.contains(&entity) {
                 continue;
             }
-            let dist = frog.position.distance_to(center);
+            let dist = bong.position.distance_to(center);
             if dist > params.radius {
                 continue;
             }
-            frog.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
-            if frog.is_dead() {
-                dead_frogs.push(frog.position);
+            bong.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
+            if bong.is_dead() {
+                dead_bongs.push(bong.position);
             }
         }
-        for pos in dead_frogs {
-            f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
+        for pos in dead_bongs {
+            f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
         }
         // Collect first: `damage_obstacle` needs the world free.
         let hits: Vec<(Entity, f32)> = self

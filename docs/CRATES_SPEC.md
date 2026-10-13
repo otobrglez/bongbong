@@ -24,7 +24,7 @@ just check-sheets
 
 Never edit them by hand. The rows are `PickupKind` in declaration order
 (`PickupKind::row`, the generator's `KINDS`): health, ammo, laser, minigun,
-plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack,
+plasma, missiles, speedup, shield, flamethrower, bong_health, tower_pack,
 heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm,
 rod_from_god, gravity_well, air_heli, air_jet (docs/air-support.md: a
 helicopter's crossed blades and a jet from above, each in its airframe's
@@ -79,7 +79,7 @@ ink with its lights in a strobe's amber).
 | speedup | a lightning bolt | `#FFD93D` |
 | shield | a shield, rainbow | `#A77BFF` |
 | flamethrower | a flame | `#FF8A2B` |
-| frog_health | a frog from above | `#7EDB5A` |
+| bong_health | a bong: a round body with two eyes, a smile and feet | `#7EDB5A` |
 | tower_pack | a spanner | `#8FB0FF` |
 | heat_shield | a shield, molten red over black basalt (docs/volcano.md) | `#F0461E` |
 | grenades | four grenades, each with its lamp lit in the light ink (`#F4B6FF`; white on the symbol sheet) | `#D656F5` |
@@ -121,9 +121,9 @@ scale centred on the icon, so every block stays: the crate where it fits
 that fills it, at the symbol sheet's own 24 pt: the vitals' health (the
 cross) and what the trigger fires - the special weapon carried
 (`hud::weapon_pickup`), else shells (ammo) -, the speed and shield gauges
-(the bolt and the shield) and the frog's gauge in the right cluster (the
-frog pack). A symbol whose readout is empty - no shells, no boost, no
-shield, no frog - is drawn dim (`SYMBOL_UNLIT`), so the row says at a glance
+(the bolt and the shield) and the bong's gauge in the right cluster (the
+bong pack). A symbol whose readout is empty - no shells, no boost, no
+shield, no bong - is drawn dim (`SYMBOL_UNLIT`), so the row says at a glance
 what is running. The gauges carry no words.
 
 ## 4. The shows
@@ -170,8 +170,8 @@ round. Off, nothing touches a crate and every round replays as before.
 - **How it breaks** (`PickupKind::cooks_off`): ordnance (ammo, minigun,
   missiles, flamethrower) and energy (laser, plasma) **cook off** - a blast
   of an oil drum's scaled by `crate_cookoff_scale`, on both sides, the
-  frogs, the tiles and the other crates, the flamethrower's fuel leaving a
-  pool of fire; the crate is gone. Health, shield, speed and the frog and
+  bongs, the tiles and the other crates, the flamethrower's fuel leaving a
+  pool of fire; the crate is gone. Health, shield, speed and the bong and
   tower packs **spill**: the pickup lies loose on its cell for
   `crate_spill_seconds`, taken like any other, then goes and the slot
   refills as usual.

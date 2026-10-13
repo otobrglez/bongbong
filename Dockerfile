@@ -19,7 +19,7 @@
 # the game crate and the server alone. In CI the layers are kept in
 # GitHub's Actions cache (scope `rooms-server`, written on master by
 # ci.yml's `rooms-cache` job), so a runner starting from nothing finds them.
-FROM rust:1.98.1-bookworm AS chef
+FROM rust:1.99.0-bookworm AS chef
 RUN cargo install cargo-chef --version 0.1.78 --locked
 WORKDIR /src
 

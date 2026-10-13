@@ -5,7 +5,7 @@
 # tower that hurt them and still reach the player. Hand-authored:
 # re-saving from the map editor would drop these comments.
 #
-# towers: the player's tesla beside the frog (cols 30-34, row 11) and a
+# towers: the player's tesla beside the bong (cols 30-34, row 11) and a
 # player gun tower up the right side; an enemy gun tower and an enemy
 # tesla out in the field; an enemy bio slush mortar (13,15) covering the
 # lower corridor between two brick runs (rows 13 and 17), with a short
@@ -24,7 +24,7 @@ view = "whole"
 tanks = 4
 
 cells."30,11" = { kind = "start" }
-cells."34,11" = { kind = "frog" }
+cells."34,11" = { kind = "bong" }
 
 cells."32,11" = { kind = "tesla" }
 cells."30,5" = { kind = "gun_tower" }

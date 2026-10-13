@@ -34,7 +34,7 @@ kind = "wall"
 material = "wood"
 
 [cells."19,16"]
-kind = "frog"
+kind = "bong"
 
 [cells."20,18"]
 kind = "wall"

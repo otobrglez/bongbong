@@ -48,7 +48,7 @@ pub struct Decal {
     /// Peak height of the throw in px, 0 for anything that never flew.
     /// The game looks straight down with no perspective, so "height" is
     /// only a draw-time y-offset plus a shrinking shadow - the same trick
-    /// `Frog`'s hop uses.
+    /// `Bong`'s hop uses.
     pub arc: f32,
     /// Cosmetic seed - mirror and quarter-turn. A position hash, never a
     /// draw from the round RNG.

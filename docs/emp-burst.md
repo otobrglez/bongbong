@@ -12,7 +12,7 @@ A ring of pale blue blocks runs out five cells from the hull, and
 everything electric it crosses dies for a while: an enemy's brain stops and
 the tank coasts on its last intent, turrets sag, headlights and the light
 layer go out, live rainbow shields pop, towers go offline, missiles in the
-air fall dead. The frog does not care - it is organic. The cost: the
+air fall dead. The bong does not care - it is organic. The cost: the
 shooter's own special goes offline for as long, and its HUD says
 `WPN OFFLINE`. At night the pulse puts out every lamp post on the map for
 ten seconds. Counter: range - keep five cells from a tank that just took a
@@ -135,7 +135,7 @@ enemies by slot), towers (cell order), missiles (id order).
   and light nobody up for an enemy (`Game::is_lit`, so `Game::sight_on`
   falls to the night's range by them). A second pulse refreshes it. By
   day a pulse does nothing to them: they are not lit by day.
-- **What it leaves alone**: the frogs (both sides - organic), lanterns
+- **What it leaves alone**: the bongs (both sides - organic), lanterns
   (a flame, not a circuit - the seats' light when the posts go dark),
   crates and breakable crates, portals, grenades (a burning fuse, its lamp
   that fuse's glow), shells, bullets, plasma bolts and laser beams already
@@ -503,7 +503,7 @@ posts.
 BB-46 (docs/levels.md, "The weapons along the way"): Carnival (level 5) has
 the EMP's crate at 19,11, five cells from the start among the lasers: eight
 tanks and a field of missile crates the enemies arm from, so a pulse stops a
-crowd and kills a volley in the air, and there is no player frog or tower of
+crowd and kills a volley in the air, and there is no player bong or tower of
 the players' to switch off.
 
 ## 4. AI
@@ -570,7 +570,7 @@ half height), and the flag keeps the rule true on any knobs.
 ### The rule (`emp_rule`), in priority order
 
 1. **The tell holds** (`special_rule`'s first arm, hammer §3.1).
-2. **A training dummy** (`Ai::frog_only`) never uses it: `None`. Every
+2. **A training dummy** (`Ai::bong_only`) never uses it: `None`. Every
    pulse reaches whatever seat stands in the ring.
 3. **`off_box`**: `None`. The sight box binds the pulse whole.
 4. **It pays** - `value >= emp_ai_fire_value` (1: any seat in reach, or
@@ -591,7 +591,7 @@ half height), and the flag keeps the rule true on any knobs.
    3. otherwise `Fire { face: facing, at_seat, why: "pulse" }` - the
       facing it has (a pulse is all round), through the tell.
 5. **Approach**: a `closer`, under `enemy_flee_damage`, not a guard that
-   holds, not hunting the frog, whose seat is within `attack_range`, in
+   holds, not hunting the bong, whose seat is within `attack_range`, in
    its line of sight, not hidden from it, worth a detour alone
    (`target_value >= emp_ai_approach_value`, 2) and not crowded
    (`!target_crowded` - it would only hold beside an ally there), closes
@@ -1069,7 +1069,7 @@ field with the seat at (3, 6) facing east and enemies placed by hand):
   alert), `a_disabled_enemy_neither_spots_nor_relays_on_a_field_map`,
   `a_disabled_enemy_keeps_its_target_until_it_reboots` (the retarget
   pass), and in `mechanics_tests` the straggler's exemptions
-  (`a_guard_keeping_its_frog_a_burning_hull_and_a_disabled_one_are_never_rolled_in_again`);
+  (`a_guard_keeping_its_bong_a_burning_hull_and_a_disabled_one_are_never_rolled_in_again`);
   each fails with its rule taken out.
 - The rest: `a_disabled_enemy_has_no_lane_warning` (the indicators),
   `the_weapon_slot_flickers_offline_while_the_special_is_down` (the HUD's
@@ -1124,7 +1124,7 @@ measures each line of the offline words; `corner_tests` pins
 
 Not written as tests, and read off the code and the probe instead: a
 rolling-in tank not
-struck (`strike_emp` skips a `RollIn`), frogs, lanterns, crates, grenades
+struck (`strike_emp` skips a `RollIn`), bongs, lanterns, crates, grenades
 and shots left alone (nothing in the strike walk reaches them), a
 burning tower burning on while offline (`tower_upkeep` runs before the
 offline branch).
@@ -1244,7 +1244,7 @@ brain) - a scratch build, not in the tree:
 | Towers | Offline for `emp_tower_seconds`, either side; fire burns on; a player tower offline is no detour for the enemies; an enemy tower in reach keeps an enemy from pulsing |
 | Missiles | Fall dead as duds |
 | Shells, bullets, plasma, the laser, the flamethrower's jet already out, grenades | Left alone; a held flame goes out on its tank |
-| Frogs (both sides) | Left alone: organic |
+| Bongs (both sides) | Left alone: organic |
 | Crates, drums, fires, oil, ooze, glass, walls, trees, grass | Left alone |
 | Range boards (docs/range-target-prd.md) | Left alone: a board is wood and paint, nothing electric, and the ring passes it as it passes every tile |
 | Lava, the volcano | Crossed; a coasting enemy can drive into a lava ford or a hot bank and burn |
@@ -1303,7 +1303,7 @@ brain) - a scratch build, not in the tree:
    light when the posts go out. *For Oto.*
 8. **Only the rainbow shield pops** - an energy field. The heat shield is
    a coat, the speed boost a burn of fuel, ooze a slime.
-9. **Grenades, plasma bolts, portals, crates, frogs and fish are left
+9. **Grenades, plasma bolts, portals, crates, bongs and fish are left
    alone**: a burning fuse, a bolt already loosed, an anomaly, wood,
    organic.
 10. **A disabled enemy's brain is frozen, not paid back**: no thinking, no

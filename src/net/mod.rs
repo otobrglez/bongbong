@@ -32,6 +32,8 @@
 //!   host or join, the code, the roster, the seat, and the snapshots
 //!   with the deltas already applied. A round that ends puts it back in
 //!   the lobby phase with how it went, since the snapshots stop there.
+//! - `now`: where the client, the round and the loopback link read the
+//!   time - the wall, or a manual clock a test advances by hand.
 //!
 //! On top of that again, the window's own half (docs/online-coop-prd.md
 //! §4.5, §4.13):
@@ -58,7 +60,7 @@
 //! holding one frame cannot know.
 //!
 //! Measured on the snapshot the PRD sizes (eight tanks, twenty-four
-//! shells, both frogs, a fresh field; `delta::tests::sizes_of_the_prd_snapshot`
+//! shells, both bongs, a fresh field; `delta::tests::sizes_of_the_prd_snapshot`
 //! prints them under `--nocapture`): a full snapshot is 487 B (about 20 B
 //! per tank and 11 B per shell); the delta for an interval in which every
 //! hull and shell moved is 172 B, one in which two hulls were also hit,
@@ -81,6 +83,7 @@ pub mod events;
 pub mod interp;
 pub mod loopback;
 pub mod mailbox;
+pub mod now;
 // Your own tank on the frame you pressed the key (stage 2,
 // docs/online-coop-prd.md §4.12). It owns a `Game` it only ever calls
 // `predict_seat` on, so it needs no socket and no renderer and its tests
@@ -111,7 +114,7 @@ pub mod wire;
 /// variant index), a change to a `codec::kind` tag or to a quantisation
 /// scale. A new optional field in a `Lobby` message (JSON, `serde(default)`)
 /// needs no bump.
-pub const PROTOCOL_VERSION: u16 = 30;
+pub const PROTOCOL_VERSION: u16 = 32;
 
 /// This build's version, the `bongbong` crate's: what a client reports
 /// about itself in `wire::ClientInfo` and the room server labels its

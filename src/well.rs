@@ -120,7 +120,7 @@ pub enum WellStage {
 pub enum AnchorBy {
     /// Its shooter's second press.
     Press,
-    /// Its orb met a tile, a hull, a frog or the field's edge.
+    /// Its orb met a tile, a hull, a bong or the field's edge.
     Contact,
     /// Its orb flew `well_orb_range_px`.
     Range,
@@ -494,10 +494,10 @@ pub fn brace_dir(me: Position, core: Position, prefer: Option<Position>, facing:
 }
 
 /// The farthest point along the line from `centre` through `from`, up to
-/// `cells` cells out from `from`, where a frog `fits`, walked back a cell at
+/// `cells` cells out from `from`, where a bong `fits`, walked back a cell at
 /// a time toward `from`; `None` if none fits (docs/gravity-well.md "The
-/// collapse": a frog hops out with no jitter).
-pub fn frog_fling_target(centre: Position, from: Position, cells: i32, fits: impl Fn(Position) -> bool) -> Option<Position> {
+/// collapse": a bong hops out with no jitter).
+pub fn bong_fling_target(centre: Position, from: Position, cells: i32, fits: impl Fn(Position) -> bool) -> Option<Position> {
     let off = from - centre;
     let len = off.length();
     let dir = if len > 1e-3 { off / len } else { Vec2::new(0.0, -1.0) };
@@ -869,12 +869,12 @@ mod tests {
     }
 
     #[test]
-    fn frog_fling_target_walks_back_to_a_fit() {
+    fn bong_fling_target_walks_back_to_a_fit() {
         let c = Position::new(0.0, 0.0);
         let from = Position::new(32.0, 0.0);
-        assert_eq!(frog_fling_target(c, from, 3, |_| true), Some(Position::new(128.0, 0.0)));
-        assert_eq!(frog_fling_target(c, from, 3, |p| p.x < 100.0), Some(Position::new(96.0, 0.0)));
-        assert_eq!(frog_fling_target(c, from, 3, |_| false), None);
+        assert_eq!(bong_fling_target(c, from, 3, |_| true), Some(Position::new(128.0, 0.0)));
+        assert_eq!(bong_fling_target(c, from, 3, |p| p.x < 100.0), Some(Position::new(96.0, 0.0)));
+        assert_eq!(bong_fling_target(c, from, 3, |_| false), None);
     }
 
     #[test]

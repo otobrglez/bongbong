@@ -29,7 +29,7 @@ else
 fi
 
 cd "$EMSDK_DIR"
-# Pinned to 6.0.10, verified with Rust 1.98.1 (see devenv.nix) by building
+# Pinned to 6.0.10, verified with Rust 1.99.0 (see devenv.nix) by building
 # and playing the web build. sola-raylib's own docs pin 5.0.6 because emsdk
 # 5.0.7's wasm-opt `--asyncify` pass fails on wasm built with
 # `-fwasm-exceptions`, which rustc 1.93+ emits; bongbong links no

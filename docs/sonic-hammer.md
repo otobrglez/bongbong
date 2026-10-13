@@ -11,7 +11,7 @@ stack the one it carries (`Tank::wants_pickup`) and uses it by its own rule (§4
 A cone of sound from the turret. Very little damage and a very big shove:
 it knocks tanks off their tracks, shatters glass, flattens tall grass so
 whoever hid in it shows, throws drums at whoever stands behind them,
-scatters the fish and stuns frogs. Walls stop it. Counter: a wall between,
+scatters the fish and stuns bongs. Walls stop it. Counter: a wall between,
 distance, a heavy chassis.
 
 This doc is also where the **shared path** the five later weapons build on
@@ -137,12 +137,14 @@ tool and the `armory` map.
   long (`GrassTuft::pinned`), then stand back up over the ordinary
   `grass_crush_recover_seconds`. A seat or an enemy in it is in plain
   sight - the AI's concealment rule and `Terrain::conceals` both answer
-  false - until the cell hides again.
-- **Frogs** (either side's) whose centre is in the cone are **stunned** for
-  `sonic_frog_stun_seconds` (1.5): `Frog::stun_timer`; while it runs the
-  frog neither hops (`can_hop`) nor bites (`can_attack`) - no evasive hop
+  false - until the cell hides again. Online the flat cells are the
+  room's: `Snapshot::grass_flat` carries each with the tick it hides again
+  (§8).
+- **Bongs** (either side's) whose centre is in the cone are **stunned** for
+  `sonic_bong_stun_seconds` (1.5): `Bong::stun_timer`; while it runs the
+  bong neither hops (`can_hop`) nor bites (`can_attack`) - no evasive hop
   away from a shell, no bite on a tank beside it, no training walk. It takes
-  no damage. Your own frog is stunned too: a stunned frog cannot hop away
+  no damage. Your own bong is stunned too: a stunned bong cannot hop away
   from the enemy's shells.
 - **Grenades** (on the ground or in the air) whose centre is in the cone are
   pushed along the line from the pivot at `sonic_grenade_push_speed` times
@@ -195,28 +197,28 @@ screen hurts nobody.
 | File | What |
 |---|---|
 | `src/sonic.rs` (new) | The weapon's headless half. `SonicCone` (`cast` from a pivot and facing over a `Block` per cell - open, a wall, glass - and a `Floor` per cell, inside the field; `rays`, the `cells` it entered in entry order with their floor, the glass `panes` it struck; `reaches(p)`, `entered(cell)`, `nearest_reached(points)`, `longest`), `SonicWave` (cone, owner, age, `swept` radius, `struck` hulls, a seed), `falloff`, `shove_speed(mass_factor, d)`, `skid_friction`, `skid_seconds`, `slide(v, grip)` (the skid's slide, what the AI predicts with), `drum_landing`, `tree_push`, the composers `wave_arcs`, `wave_dust` and `tell_arcs` (pure, `pyro::Shape`s), the `STONE` ramp, `module_cell` |
-| `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `tick_sonic_pictures` (a replica's waves and flattened grass), `Game::hammer_senses` with `lands_in_trouble` and `closer_spots` (what the AI is handed, §4), `seat_sonic`, `swap_spawn_special` (§3.4), `debug_spawn_pickup` |
+| `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `tick_sonic_pictures` (a replica's waves and the tufts they lay flat), `Game::hammer_senses` with `lands_in_trouble` and `closer_spots` (what the AI is handed, §4), `seat_sonic`, `swap_spawn_special` (§3.4), `debug_spawn_pickup` |
 | `src/simulation/sonic_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::SonicHammer` dispatch arm |
-| `src/simulation/mod.rs` | `Frame::pending_sonic`; `Game::{sonic_waves, grass_flat, seat_knock}` (`SeatKnock`, §3.6), `cover_cells`; the phase calls (`resolve_sonic` and `tick_sonic_waves` after `resolve_flames`, before `step_world`, so the shoves land in this tick's solver step; `tick_sonic_waves(f, false)` on the end screen); the tell in `enemy_phase` (§3.2); the skid in `drive_tank_with`, `tick_timers` and `predict_seat`; `accept_seat_pose`'s knock allowance; the spawn swap in `roll_enemy_tank` (§3.4); a hammer hunter woken and leashed as any tank (`field::mind`'s `hunting`, `TankSnapshot::leashed`), `TankSnapshot::guarding`; the `pickup_phase` arm; `tick_presentation` (waves, tells, skids, frog stuns, flattened grass); `Event::{SonicBlast, TellStarted}`, `Event::Hit::cause` (`HitCause`), `Event::Shoved::skid`, `Event::DrumLaunched::drum` |
+| `src/simulation/mod.rs` | `Frame::pending_sonic`; `Game::{sonic_waves, grass_flat, seat_knock}` (`SeatKnock`, §3.6), `cover_cells`; the phase calls (`resolve_sonic` and `tick_sonic_waves` after `resolve_flames`, before `step_world`, so the shoves land in this tick's solver step; `tick_sonic_waves(f, false)` on the end screen); the tell in `enemy_phase` (§3.2); the skid in `drive_tank_with`, `tick_timers` and `predict_seat`; `accept_seat_pose`'s knock allowance; the spawn swap in `roll_enemy_tank` (§3.4); a hammer hunter woken and leashed as any tank (`field::mind`'s `hunting`, `TankSnapshot::leashed`), `TankSnapshot::guarding`; the `pickup_phase` arm; `tick_presentation` (waves, tells, skids, bong stuns, flattened grass); `Event::{SonicBlast, TellStarted}`, `Event::Hit::cause` (`HitCause`), `Event::Shoved::skid`, `Event::DrumLaunched::drum` |
 | `src/tank.rs` | `sonic_ammo`, `ActiveWeapon::SonicHammer` (`name`, `full_load`, `tell_seconds`), `SPECIAL_WEAPONS`, `Tank::special` (§3.0), `Windup`/`Tank::windup` (§3.2), `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`, `Tell`/`tell`, `skid`/`skid_speed`, `sonic_flash`/`kick_sonic`, the module's cell in `module_cols` |
 | `src/pickup.rs` | `PickupKind::SonicHammer` (`sonic_hammer`, row 13, its ink, spills rather than cooks off), `PickupKind::{name, parse, weapon}` |
 | `src/obstacle.rs` | `Material::blocks_sound`, `Material::breaks_by_sound` |
 | `src/ai.rs` | The special hook (§3.1): `SpecialSense`, `HammerSense`/`HammerAim`, `SpecialUse`, `special_rule` / `hammer_rule`, `act_special`, `generic_fire`, the `special` tier, the `seek_special` tier, the stuck and breach clocks paused under a skid, `AiSnapshot::special`, `Ai::holds_beat` |
-| `src/frog.rs` | `stun_timer`, `stun`, `is_stunned`, the gates in `can_hop`/`can_attack`, `stun_marks` |
+| `src/bong.rs` | `stun_timer`, `stun`, `is_stunned`, the gates in `can_hop`/`can_attack`, `stun_marks` |
 | `src/grass.rs` | `GrassTuft::pinned`, `pin` |
 | `src/fish.rs`, `src/ground.rs` | The waves among the scares; `Flop` (the fish on the bank), never off the map (`WaterLayout::contains`) |
 | `src/pyro.rs` | `Shape::Arc`, `block_arc` (shared, §5) |
 | `src/indicators.rs` | `TankView::windup`, `ArrowKind::Windup`, the hit arc from a sonic blast |
 | `src/hud.rs`, `src/render/hud.rs` | `HUD_SONIC_COLOR`, the `weapon_color`/`weapon_pickup` arms; the weapon slot's readout drawn by one function (`draw_weapon_readout`), which a weapon whose readout is a gauge or words replaces by its weapon |
-| `src/game.rs`, `src/render/game.rs` | Trees leaning, frog stun marks, the waves, dust and tells in their passes (§5), the dev stats arm |
+| `src/game.rs`, `src/render/game.rs` | Trees leaning, bong stun marks, the waves, dust and tells in their passes (§5), the dev stats arm |
 | `src/fx.rs` | Dust off a skidding hull; a sonic hit's flash and dust, no fire |
-| `src/net/wire.rs` | `WeaponKind::SonicHammer`, `WeaponKind::drawn_on_press`, `TankState::{tell, skid}`, `frog_flags::STUNNED` |
+| `src/net/wire.rs` | `WeaponKind::SonicHammer`, `WeaponKind::drawn_on_press`, `TankState::{tell, skid}`, `bong_flags::STUNNED` |
 | `src/net/events.rs` | `WireEvent::SonicBlast`, `Shoved::skid`, `DrumLaunched::drum`, `WireEvent::press_show`, `tell_started` on `NOT_SENT` |
 | `src/net/encode.rs`, `src/net/apply.rs` | The new fields; `Show::OwnShotsDrawn { seat, presses }`, `presses_drawn`; `SonicBlast`'s spectacle |
 | `src/net/predict.rs`, `src/net/round.rs` | The press show (§3.3), `Predictor::shove(dv, skid)` |
 | `src/simulation/present.rs` | `Game::{draw_press_show, seat_kick}` |
-| `src/simulation/replica.rs` | `DrawableTank::{tell, skid}`, `DrawableFrog::stunned` |
+| `src/simulation/replica.rs` | `DrawableTank::{tell, skid}`, `DrawableBong::stunned` |
 | `src/simulation/debug.rs`, `src/devserver.rs` | `spawn_pickup`, `set_tank`'s `sonic_ammo`, the snapshot's `sonic`, `tell`, `skid`, `stun` and `sonic_waves` |
 | `src/bin/probe.rs` | `--crate`, the tank line's `sonic=`, the holds, a guard on its beat no never-arrived, a hold just ended no stale-start (§11) |
 | `src/editor/mod.rs` | `Tool::Pickup(PickupKind::SonicHammer)` (`sonic_hammer`) |
@@ -342,7 +344,7 @@ fn generic_fire(weapon: ActiveWeapon) -> bool;
 - **The sight box binds by construction**: a sense names a seat only if
   this tank stands inside that seat's sight box
   (`ai::in_sight_box_of`, measured in the simulation against the seat's
-  real position) and the tank is not a training dummy (`Ai::frog_only`),
+  real position) and the tank is not a training dummy (`Ai::bong_only`),
   so no arm can use a weapon on a seat from off the box; the probe's
   `offbox-fire` reads the same `shot_at_seat` it always has.
 - **No RNG**: a rule chooses by fixed priority, then the facing the tank
@@ -416,10 +418,10 @@ pub fn windup(&self) -> Option<Windup>;
   progress, 0..1) from `Tank::windup`, so it works on a replica and a later
   weapon's charge feeds it too; an enemy winding up, off the screen and not
   concealed, gets an `ArrowKind::Windup { weapon, progress }`
-  arrow, put with the teammates, frogs and volcanoes - never merged, never
+  arrow, put with the teammates, bongs and volcanoes - never merged, never
   left out past `indicator_max_arrows`. A tell also reveals its tank as
   firing does (`Awareness::fired`). The arrow is drawn in the weapon's HUD
-  accent (`hud::weapon_color`), rimmed hostile red as the enemy frog's is -
+  accent (`hud::weapon_color`), rimmed hostile red as the enemy bong's is -
   an accent can be a seat's own colour (the hammer's sky blue is player
   1's), and this is no teammate - blinking at
   `indicator_pulse_hz * (1 + 2 * progress)`.
@@ -490,9 +492,10 @@ the general case:
 - **What stays the room's**: the shoves (a client-owned hull hears of its
   own through `Shoved`, now with its skid, §3.6), the damage (`Hit`), tile
   deaths (`ObstacleDestroyed`), thrown drums (`DrumLaunched`, now naming
-  the drum), frog stuns (`FrogState`), lanterns (`LanternBroken`). The
-  client's own wave flattens its picture's grass and scatters its fish at
-  once, which is presentation.
+  the drum), bong stuns (`BongState`), lanterns (`LanternBroken`). The
+  client's own wave lays its picture's grass flat and scatters its fish at
+  once, which is presentation; the cover is the room's
+  (`Snapshot::grass_flat`).
 
 ### 3.4 The probe's `--crate` and the spawn swap
 
@@ -581,7 +584,7 @@ the general case:
   | `g` glass house | the ring 12..16 x 1..5 | Shatters; it stops the wave as it does; the AI's glass breach |
   | `s` shield | 14,3 | Inside the glass, what an enemy seeks (tier 5.9) and has to break in for |
   | `P` player tesla | 3,4 | A player tower the wave stops at |
-  | `F` the frog | 2,12 | The stun; the hunters (Protect) come for it, so the frog-pin arm shows |
+  | `F` the bong | 2,12 | The stun; the hunters (Protect) come for it, so the bong-pin arm shows |
   | `I` iron | 20..21 x 3..4 | The counter: cover the wave cannot pass |
   | `b` brick | 26,3..5 and 28,13..14 | Walls stop it too, not only iron |
   | `*` lamp post | 17,8 | One the wave leaves standing (the EMP's to put out, BB-38); try `--weather night` |
@@ -673,7 +676,7 @@ pub struct HammerAim {
     pub drum: Option<u8>,     // a seat a thrown drum would land on
     pub flush: Option<u8>,    // the hidden seat whose grass it would flatten
     pub breaker: Option<u8>,  // a seat within `sonic_ai_breaker_px`
-    pub frog: bool,           // the hunter's quarry, not stunned
+    pub bong: bool,           // the hunter's quarry, not stunned
     pub friend: bool,         // a live fellow enemy in the cone
 }
 ```
@@ -731,8 +734,8 @@ the wave's run out), so one driving into the cone is not shouted at either.
    4. **Breaker** (`"breaker"`): a seat in the cone within
       `sonic_ai_breaker_px` (144, about seven tenths of the reach, so the
       shove there is about half the shove at the pivot).
-   5. **Pin the frog** (`"frog"`): a hunter (`Brain::hunting_frog`) with
-      its quarry in the cone, not stunned. A hammer cannot hurt a frog; a
+   5. **Pin the bong** (`"bong"`): a hunter (`Brain::hunting_bong`) with
+      its quarry in the cone, not stunned. A hammer cannot hurt a bong; a
       stunned one cannot hop away from the pack's shells. Bounded: seven
       blasts, then shells.
 4. **Hold for the timer**: a fire arm that matched while `Ai::fire_timer`
@@ -767,11 +770,11 @@ the wave's run out), so one driving into the cone is not shouted at either.
    ever).
 
 **A hunter carrying the hammer fights the seat** (`enemy_phase`'s
-`target_of`): the hammer cannot hurt a frog, and a frog hops away from a
+`target_of`): the hammer cannot hurt a bong, and a bong hops away from a
 tank closing in on it, so a hunter chasing its quarry with it only drove
-round after a frog it could never kill. It takes the seat's ring like
-everyone else until its blasts are spent, and the frog arm still pins the
-frog when the frog stands in its cone.
+round after a bong it could never kill. It takes the seat's ring like
+everyone else until its blasts are spent, and the bong arm still pins the
+bong when the bong stands in its cone.
 
 **The tell** (§3.2): every fire arm goes through it - `sonic_tell_seconds`
 (0.55) of the dish pulsing and arcs gathering into it (§5) before the
@@ -844,9 +847,9 @@ wave or the tank and its age, hashed, never rolled.
   a sideways slide leaves sideways marks.
 - **Trees** lean `sonic_tree_lean_px` (4) away from the pivot as the front
   passes and swing back over a quarter second (whole 2 px bands, as a ram's
-  lean). **Frogs** stunned: the hurt clip held on its first frame and three
+  lean). **Bongs** stunned: the hurt clip held on its first frame and three
   `#F0F0F0` blocks, each with a `#C1C1C1` block under it, circling over the
-  head (`frog::stun_marks`, the stone ramp). **Fish** on the bank: the fish's own blocks
+  head (`bong::stun_marks`, the stone ramp). **Fish** on the bank: the fish's own blocks
   (`fish::compose`) lying on the grass, flipping heading every 0.15 s with
   a block's hop.
 - **The module** (`tankdesign`, `lines/vanguard.py`, `module_fn('sonic')`):
@@ -919,7 +922,7 @@ enemies' group:
 | `sonic_grass_flat_seconds` | 6 | 0..=60 | How long a cell of flattened tall grass hides nobody before it stands back up. |
 | `sonic_drum_throw_cells` | 4 | 1..=12 | Cells a drum at the pivot is thrown, scaled by the falloff, at least one. |
 | `sonic_drum_aim_deg` | 25 | 0..=90 | A tank within this of a thrown drum's line, beyond it, draws the drum onto its cell. |
-| `sonic_frog_stun_seconds` | 1.5 | 0..=10 | How long a frog the wave reaches neither hops nor bites. |
+| `sonic_bong_stun_seconds` | 1.5 | 0..=10 | How long a bong the wave reaches neither hops nor bites. |
 | `sonic_grenade_push_speed` | 260 | 0..=1000 | A grenade's push at the pivot (px/s), falling off like the shove. |
 | `sonic_tell_seconds` | 0.55 | 0..=3 | An enemy's wind-up before its blast; 0 fires on the decision. |
 | `sonic_wave_seconds` | 0.6 | 0.05..=3 | How long the wave's picture lingers after its front is out. |
@@ -972,14 +975,18 @@ Protocol 16 (from 15), once in the PR.
   ever launched).
 - `TankState::tell: u8` (tenths left, 0 none) and `TankState::skid: u8`
   (tenths). `tank_flags` stays a byte.
-- `frog_flags::STUNNED` (bit 4). A replica holds `Frog::stun_timer` up while
+- `bong_flags::STUNNED` (bit 4). A replica holds `Bong::stun_timer` up while
   the flag is set and lets it run out when it clears.
 - `Event::TellStarted` is on `NOT_SENT`.
 - **What a replica draws**: on a `SonicBlast`, `sonic_show` (the wave cast
   against its own tiles - the pane the wave shatters is still standing
   then, the death comes in a later snapshot - the ripple, the dish's flash),
-  whose cosmetic sweep flattens its picture's grass and scatters its fish as
-  the front passes (`tick_presentation`); an enemy's tell from
+  whose cosmetic sweep lays its picture's grass flat and scatters its fish
+  as the front passes (`tick_presentation`); the cover that grass gives is
+  the room's `Snapshot::grass_flat` (`GrassFlatState`: the cell and the
+  tick it hides again, protocol 31), taken whole on every snapshot and in
+  the welcome, so a client that joins inside the window reads it too and
+  its tufts lie flat; an enemy's tell from
   `TankState::tell`; skids from `TankState::skid`; the rest is state and
   the existing events.
 - **What is predicted**: the seat's own press show (§3.3) and its recoil on
@@ -994,7 +1001,7 @@ Protocol 16 (from 15), once in the PR.
 - **The hammer draws no RNG at all.** No damage roll, no misfire, no
   launch roll (the throw is computed), no spread. Its walk is fixed: per
   wave in the order they were fired, the seats in index order then the
-  enemies by slot, then frogs (player's, enemy's), cells by entry distance
+  enemies by slot, then bongs (player's, enemy's), cells by entry distance
   then cell, lanterns by id, grenades by id. A thrown drum's blast draws its
   damage rolls as every blast does, where it lands.
 - **The swap** is a hash (§3.4); the AI's choices are fixed priorities with
@@ -1042,7 +1049,7 @@ seat at cell (3, 6) facing east, parked enemies placed by hand):
   `a_drum_is_thrown_onto_the_tank_behind_it`,
   `a_drum_with_no_tank_behind_it_is_thrown_along_the_wave`,
   `a_fused_drum_is_thrown_too`,
-  `a_frog_the_wave_reaches_is_stunned_and_neither_hops_nor_bites`,
+  `a_bong_the_wave_reaches_is_stunned_and_neither_hops_nor_bites`,
   `the_hammer_hurts_only_the_other_side_and_shoves_everyone` (a sonic `Hit`
   says `HitCause::Sonic`), `a_shield_soaks_the_damage_not_the_shove`,
   `a_grenade_in_the_cone_is_pushed_away`, `a_wreck_is_left_alone`,
@@ -1068,7 +1075,7 @@ seat at cell (3, 6) facing east, parked enemies placed by hand):
   on the only clear side leaving the second none).
 
 `ai::hammer_tests` (the rule on a made-up `HammerSense`):
-`every_arm_fires_the_way_it_names` (trouble, drum, flush, breaker, frog -
+`every_arm_fires_the_way_it_names` (trouble, drum, flush, breaker, bong -
 each fires facing its way, then holds while `sonic_ai_fire_interval` runs),
 `the_arms_go_in_order_and_its_own_facing_first`,
 `it_never_fires_where_a_fellow_enemy_stands`,
@@ -1123,7 +1130,7 @@ Wire:
 - `apply.rs`: `a_sonic_blast_reaches_the_replica` (the same cone from the
   same pivot, run out on the replica's clock),
   `a_sonic_blast_this_client_drew_is_not_drawn_again`,
-  `an_enemys_tell_reaches_the_replica`, `a_stunned_frog_reaches_the_replica`,
+  `an_enemys_tell_reaches_the_replica`, `a_stunned_bong_reaches_the_replica`,
   `a_sonic_hit_flashes_no_impact_on_the_replica`, and the beam tests on
   `presses`.
 - `predict.rs`: `a_sonic_blast_is_drawn_on_the_press` (from the predicted
@@ -1154,10 +1161,10 @@ Wire:
   not a stall, low progress, jitter or grind.
 - Three more deliberate states, which a pack that shoves an AFK seat about
   rather than killing it shows only because its rounds outlast the
-  budgets: a guard keeping its beat while the seat is far from its frog
+  budgets: a guard keeping its beat while the seat is far from its bong
   (`TankSnapshot::guarding`) is no never-arrived, as a leashed or sleeping
   tank is not; a hunter carrying the hammer, which fights the seat rather
-  than the frog, is leashed and woken as any tank (`leashed`,
+  than the bong, is leashed and woken as any tank (`leashed`,
   `field::mind`); and a hold within the last half second
   (`HOLD_REACTION_FRAMES`) vetoes stale-start, since a tank that held a
   firing solution at its spawn until its seat was knocked off the line is
@@ -1199,7 +1206,7 @@ A pack that shoves the seat about rather than killing it keeps the round
 going to the frame cap, and every kind but `invariant` is counted per
 tank per stretch of time, so the same AI over three times the time trips
 them. The fair yardstick is a shells pack over as long: the same sweeps
-with `--mission destroy` (no frog to lose the round by) and
+with `--mission destroy` (no bong to lose the round by) and
 `player_armor_factor` 0.1 (a seat that outlives the cap), with and
 without the hammer. Totals over the same minutes of play (fixtures 44,
 fields 67 and 70):
@@ -1230,7 +1237,7 @@ partner keeps shoving to a new spot. Read round by round (`--log-every
   fixtures spin 19 -> 15, stall 1 -> 0, tank-grind 5 -> 1, low-progress
   4 -> 0; fields stall 11 -> 0, tank-grind 21 -> 8, spin 61 -> 58.
 - **The probe misreading a deliberate state** (§11 above): never-arrived
-  were guards keeping their beat by the enemy frog (archipelago) and
+  were guards keeping their beat by the enemy bong (archipelago) and
   hammer hunters, which fight the seat, read as never leashed (hedge-maze);
   the one stale-start was a tank holding a firing solution at its spawn
   until its seat was knocked off the line two frames before the check.
@@ -1274,7 +1281,7 @@ events on the two maps). How such a pack should play is a question for Oto (§12
 | Night, fog | The wave and the tell drawn unlit, so they read; the AI's sight rules as ever |
 | Lava, the volcano | Crossed; a cone cell stops it; a shove into a ford or onto a hot bank burns - the AI's trouble |
 | Towers | Stop the wave, take nothing; an enemy tower's reach is trouble |
-| Frogs | Stunned (either side's, your own too); Hunt's enemy frog stunned is a shot frog |
+| Bongs | Stunned (either side's, your own too); Hunt's enemy bong stunned is a shot bong |
 | Crates | Untouched, not broken |
 | Range boards (docs/range-target-prd.md) | Passed over as a fence is, and left whole: a board stops no sound and the wave breaks only glass; what stands behind one is shoved |
 | Drums, oil, ground fires | Drums thrown and going off where they land (fused or not); oil and fires untouched; a thrown oil drum leaves its pool |
@@ -1322,7 +1329,7 @@ events on the two maps). How such a pack should play is a question for Oto (§12
    be pushed as a body; a thrown drum always goes off where it lands, which
    is "sets fuses off early". Rejected: lighting fuses in place only (no
    "toward whoever stands behind").
-7. **Only the opposing side is hurt, everyone is shoved**, frogs of both
+7. **Only the opposing side is hurt, everyone is shoved**, bongs of both
    sides stunned - the side blast's rule (grenades, missiles).
 8. **The AI owns the trigger**: an enemy carrying the hammer never fires it
    through the generic tiers; it fires by its rule, two per seat close in,
@@ -1337,8 +1344,8 @@ events on the two maps). How such a pack should play is a question for Oto (§12
    change in how such an enemy plays: while it carries the hammer it is a
    close-range threat only - it never fires the hammer at range and fires
    no shells - until its seven blasts are spent.
-9. **A hunter carrying the hammer fights the seat**, pinning the frog only
-   when the frog stands in its cone - seven blasts, then shells and the frog
+9. **A hunter carrying the hammer fights the seat**, pinning the bong only
+   when the bong stands in its cone - seven blasts, then shells and the bong
    again. *For Oto.*
 10. **The tell commits**: it goes off along its facing even if the seat
     stepped out, which is the dodge.
@@ -1415,7 +1422,7 @@ events on the two maps). How such a pack should play is a question for Oto (§12
     seat knocked while fleeing the shooter is not snapped back.
 27. **The wind-up arrow is the weapon's accent rimmed hostile red**
     (review): the accent names the weapon, and the red rim, the enemy
-    frog's, says it is no teammate - the hammer's sky blue is player 1's
+    bong's, says it is no teammate - the hammer's sky blue is player 1's
     own colour.
 28. **A range board lets the wave through** (docs/range-target-prd.md): it
     is a prop - a plank on an easel, seam-closed like a fence - so the wave

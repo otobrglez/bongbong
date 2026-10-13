@@ -1461,7 +1461,7 @@ kind = "barrel"
 kind = "barrel"
 
 [cells."2,11"]
-kind = "enemy_frog"
+kind = "enemy_bong"
 
 [cells."21,17"]
 kind = "barrel"

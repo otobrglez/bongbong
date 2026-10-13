@@ -83,7 +83,7 @@ impl std::hash::Hasher for CellHasher {
 /// Whether the index keeps a list of `obj`'s kind beside the cells: a
 /// portal, a singleton or a tower.
 fn kept(obj: &CellObject) -> bool {
-    matches!(obj, CellObject::Portal | CellObject::Frog | CellObject::Start | CellObject::Start2 | CellObject::EnemyFrog) || obj.tower().is_some()
+    matches!(obj, CellObject::Portal | CellObject::Bong | CellObject::Start | CellObject::Start2 | CellObject::EnemyBong) || obj.tower().is_some()
 }
 
 /// Every placed cell of a map in `MapFile::iter_cells`'s order - row by
@@ -97,10 +97,10 @@ pub struct CellIndex {
     /// any order, kept up through every change `update` takes in.
     digest: u64,
     portals: Vec<(i32, i32)>,
-    frog: Option<(i32, i32)>,
+    bong: Option<(i32, i32)>,
     start: Option<(i32, i32)>,
     start2: Option<(i32, i32)>,
-    enemy_frog: Option<(i32, i32)>,
+    enemy_bong: Option<(i32, i32)>,
     towers: Vec<TowerKind>,
 }
 
@@ -170,17 +170,17 @@ impl CellIndex {
     fn derive(&mut self) {
         self.portals.clear();
         self.towers.clear();
-        (self.frog, self.start, self.start2, self.enemy_frog) = (None, None, None, None);
+        (self.bong, self.start, self.start2, self.enemy_bong) = (None, None, None, None);
         for &(col, row, obj) in &self.cells {
             let slot = match obj {
                 CellObject::Portal => {
                     self.portals.push((col, row));
                     None
                 }
-                CellObject::Frog => Some(&mut self.frog),
+                CellObject::Bong => Some(&mut self.bong),
                 CellObject::Start => Some(&mut self.start),
                 CellObject::Start2 => Some(&mut self.start2),
-                CellObject::EnemyFrog => Some(&mut self.enemy_frog),
+                CellObject::EnemyBong => Some(&mut self.enemy_bong),
                 _ => None,
             };
             if let Some(slot) = slot {
@@ -234,9 +234,9 @@ impl CellIndex {
         &self.portals
     }
 
-    /// The frog's cell - the first, on a map that placed more than one.
-    pub fn frog(&self) -> Option<(i32, i32)> {
-        self.frog
+    /// The bong's cell - the first, on a map that placed more than one.
+    pub fn bong(&self) -> Option<(i32, i32)> {
+        self.bong
     }
 
     /// Player 1's start.
@@ -249,16 +249,16 @@ impl CellIndex {
         self.start2
     }
 
-    /// The enemy frog's cell.
-    pub fn enemy_frog(&self) -> Option<(i32, i32)> {
-        self.enemy_frog
+    /// The enemy bong's cell.
+    pub fn enemy_bong(&self) -> Option<(i32, i32)> {
+        self.enemy_bong
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frog::Side;
+    use crate::bong::Side;
     use crate::map;
     use crate::obstacle::Material;
 
@@ -276,7 +276,7 @@ mod tests {
             }
         }
         map.set_cell(5, 7, CellObject::Start);
-        map.set_cell(50, 31, CellObject::Frog);
+        map.set_cell(50, 31, CellObject::Bong);
         map.set_cell(9, 1, CellObject::Start2);
         map.set_cell(3, 2, CellObject::Portal);
         map.set_cell(40, 35, CellObject::Portal);
@@ -294,8 +294,8 @@ mod tests {
         assert_eq!(index.cells(), &walked[..]);
         assert_eq!(index.portals(), &map.portal_cells()[..]);
         assert_eq!(
-            (index.start(), index.start2(), index.frog(), index.enemy_frog()),
-            (map.start_cell(), map.start2_cell(), map.frog_cell(), map.enemy_frog_cell())
+            (index.start(), index.start2(), index.bong(), index.enemy_bong()),
+            (map.start_cell(), map.start2_cell(), map.bong_cell(), map.enemy_bong_cell())
         );
     }
 
@@ -339,8 +339,8 @@ mod tests {
             Some(CellObject::Road),
             Some(CellObject::Portal),
             Some(CellObject::Start),
-            Some(CellObject::Frog),
-            Some(CellObject::EnemyFrog),
+            Some(CellObject::Bong),
+            Some(CellObject::EnemyBong),
             Some(CellObject::GunTower { side: None }),
             None,
             Some(CellObject::Wall { material: Material::Iron }),
