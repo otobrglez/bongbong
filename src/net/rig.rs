@@ -571,16 +571,91 @@ impl Room {
 mod tests {
     use super::*;
     use crate::net::client::{Identity, RoomClient, RoomSetup};
+    use crate::net::now::Now;
     use crate::net::round::OnlineRound;
     use crate::tank::Dir;
     use crate::tuning::tuning;
 
     const DEFAULT_MAP: &str = include_str!("../../maps/default.toml");
 
-    /// How long a frame of the window is here: 60 Hz, paced by the clock
-    /// like the real one, since the rig's authority and the interpolator
-    /// both run on real time.
+    /// How long a frame of the window is on the wall, for the one test
+    /// left on the rig's thread (`the_rigs_thread_runs_a_round_over_a_lossy_link`).
     const FRAME: Duration = Duration::from_millis(16);
+
+    /// The rig's room on a hand-wound clock (`net::now`), and the window
+    /// over it: the round, its client and both ends of the link read one
+    /// `Now::manual()`, and the room takes its ticks from `frame`, each on
+    /// the instant it falls due, rather than on a thread sleeping to the
+    /// wall. `start`'s thread is the same room on `TickClock`'s schedule,
+    /// and a test driven there measures the machine as much as the code: a
+    /// loaded run stalls the room or the window, the two drift apart, and
+    /// how many packets a press rides in and when the room's copy of a
+    /// shot reaches the picture drift with them. Here a frame is `step` on
+    /// the clock and the room takes exactly the ticks that fell due in it,
+    /// so the frames, the link's delay and jitter and every arrival land
+    /// on the same instants on every run.
+    struct Wound {
+        room: Room,
+        clock: Now,
+        /// A frame on the clock, and the `dt` each frame hands the round:
+        /// a whole tick at 60 Hz, half of one at 120 Hz.
+        step: Duration,
+        dt: f32,
+        /// The room's tick on the clock: `step` times the frames per tick.
+        tick: Duration,
+        /// The instant the room's next tick falls due.
+        due: Instant,
+    }
+
+    impl Wound {
+        /// The room and a 60 Hz window over it, one frame a tick.
+        fn open(options: RigOptions) -> (Wound, OnlineRound<Loopback>) {
+            Wound::at(options, 1)
+        }
+
+        /// The room and a window drawing `per_tick` frames to each of its
+        /// ticks.
+        fn at(options: RigOptions, per_tick: u32) -> (Wound, OnlineRound<Loopback>) {
+            let clock = Now::manual();
+            let (mut client_end, mut room_end) = loopback::pair(options.quality, options.link_seed);
+            client_end.set_clock(clock.clone());
+            room_end.set_clock(clock.clone());
+            let mut room = Room::new(room_end, options);
+            room.opened = clock.now();
+            room.now = room.opened;
+            let client = RoomClient::host(client_end, Identity::new("rig", "tok-rig"), RoomSetup::default());
+            let mut round = OnlineRound::new(client, "RIG");
+            round.set_clock(clock.clone());
+            let step = Duration::from_secs_f32(PHYSICS_FIXED_DT) / per_tick;
+            let due = clock.now();
+            (Wound { room, clock, step, dt: PHYSICS_FIXED_DT / per_tick as f32, tick: step * per_tick, due }, round)
+        }
+
+        /// One frame of `round`, a `step` after the last: the room takes
+        /// every tick that fell due by then - answering what the seat said,
+        /// then ticking, as `run` does - and the window draws.
+        fn frame(&mut self, round: &mut OnlineRound<Loopback>, intent: Intent) {
+            self.clock.advance(self.step);
+            while self.due <= self.clock.now() {
+                self.room.now = self.due;
+                if self.room.pump() {
+                    self.room.tick();
+                }
+                self.due += self.tick;
+            }
+            round.frame(&intent, self.dt);
+        }
+
+        /// The authoritative round's tick.
+        fn tick(&self) -> u64 {
+            self.room.tick.load(Ordering::Relaxed)
+        }
+
+        /// The newest snapshot the room cut, as `Rig::authority`.
+        fn authority(&self) -> Option<Snapshot> {
+            self.room.latest.lock().expect("nothing else holds this lock").clone()
+        }
+    }
 
     /// One hull as both sides spell it: slot, and quarter pixels.
     type Hull = (usize, i32, i32);
@@ -643,31 +718,25 @@ mod tests {
 
     /// One rig, one window, `frames` frames of it: what the window drew
     /// each frame, and every authoritative snapshot the run produced.
-    fn play(quality: LinkQuality, frames: usize) -> (Rig, OnlineRound<Loopback>, Vec<Drawn>, Vec<Said>) {
-        play_at(quality, frames, FRAME)
+    fn play(quality: LinkQuality, frames: usize) -> (Wound, OnlineRound<Loopback>, Vec<Drawn>, Vec<Said>) {
+        play_at(quality, frames, 1)
     }
 
-    /// `play`, at a given display rate. The rate matters to what the
-    /// interpolator has to do: the room cuts a snapshot every tick, so a
-    /// 60 fps window gets roughly one per frame and has little to bridge,
-    /// while a 120 Hz one - `app.rs`'s native `target_fps` - draws two
-    /// frames per snapshot and every other one is interpolated.
-    fn play_at(
-        quality: LinkQuality,
-        frames: usize,
-        frame: Duration,
-    ) -> (Rig, OnlineRound<Loopback>, Vec<Drawn>, Vec<Said>) {
-        let (rig, link) = start(options(quality));
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+    /// `play`, at `per_tick` frames to each of the room's ticks. The rate
+    /// matters to what the interpolator has to do: the room cuts a
+    /// snapshot every tick, so a 60 fps window gets one per frame and has
+    /// little to bridge, while a 120 Hz one - `app.rs`'s native
+    /// `target_fps` - draws two frames per snapshot and every other one is
+    /// interpolated.
+    fn play_at(quality: LinkQuality, frames: usize, per_tick: u32) -> (Wound, OnlineRound<Loopback>, Vec<Drawn>, Vec<Said>) {
+        let (mut rig, mut round) = Wound::at(options(quality), per_tick);
         let mut seen: Vec<Drawn> = Vec::new();
         let mut authority: Vec<Said> = Vec::new();
         let drive = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
         for _ in 0..frames {
-            round.frame(&drive, frame.as_secs_f32());
-            // The truth, as often as the loop catches it: every snapshot
-            // the authority cut, for the drawn frames to be checked
-            // against.
+            rig.frame(&mut round, drive);
+            // The truth: every snapshot the authority cut, for the drawn
+            // frames to be checked against.
             if let Some(snapshot) = rig.authority()
                 && authority.last().is_none_or(|said| said.tick != snapshot.tick)
             {
@@ -684,14 +753,13 @@ mod tests {
                     eased: state.tanks.iter().map(|t| t.slot).filter(|&slot| interp.easing(slot as u16)).collect(),
                 });
             }
-            thread::sleep(frame);
         }
         (rig, round, seen, authority)
     }
 
-    /// The whole lane end to end: an authoritative round on a thread, a
-    /// link with delay and jitter, and a replica that draws a round it
-    /// never simulates.
+    /// The whole lane end to end: the rig's authoritative round, a link
+    /// with delay and jitter, and a replica that draws a round it never
+    /// simulates.
     #[test]
     fn the_rig_draws_a_round_it_does_not_simulate() {
         // At 120 Hz - what a native window actually runs at - two frames
@@ -700,7 +768,7 @@ mod tests {
         // gets about a snapshot a frame and has almost nothing to bridge,
         // which says the cadence is generous, not that the interpolation
         // stopped working.
-        let (rig, round, seen, authority) = play_at(LinkQuality::new(40, 10, 0.0), 300, FRAME / 2);
+        let (rig, round, seen, authority) = play_at(LinkQuality::new(40, 10, 0.0), 300, 2);
         let replica = round.game().expect("the rig welcomed the window into its round");
         assert!(replica.player().is_some(), "the seat's tank is there for the HUD to read");
         assert!(rig.tick() > 60, "the authority ran its own round: tick {}", rig.tick());
@@ -1067,22 +1135,17 @@ mod tests {
     /// never corrected - the rig models the room it stands in for.
     #[test]
     fn an_owned_hull_is_followed_by_the_rigs_room_with_no_corrections() {
-        let (rig, link) = start(options(LinkQuality::PERFECT));
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options(LinkQuality::PERFECT));
         round.set_client_hull(true);
         while round.game().is_none() {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
         }
         let start = round.own_hull_at().expect("a hull");
         for _ in 0..40 {
-            round.frame(&Intent { move_dir: Some(Dir::Right), ..Intent::default() }, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         }
         for _ in 0..12 {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
         }
         let mine = round.own_hull_at().expect("a hull");
         let truth = rig.authority().expect("a snapshot");
@@ -1113,38 +1176,32 @@ mod tests {
             quality: LinkQuality::new(40, 5, 0.0),
             ..RigOptions::default()
         };
-        let (_rig, link) = start(options);
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options);
         round.set_client_hull(true);
-        let give_up = Instant::now() + Duration::from_secs(10);
         let seat = |round: &OnlineRound<Loopback>| round.game().and_then(|g| g.drawable_state().tanks.into_iter().find(|t| t.slot == 0));
+        let mut frames = 0;
         while seat(&round).is_none_or(|t| t.weapon != crate::tank::ActiveWeapon::GaussRail) {
-            round.frame(&Intent { move_dir: Some(Dir::Right), ..Intent::default() }, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
-            assert!(Instant::now() < give_up, "never armed");
+            rig.frame(&mut round, Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+            frames += 1;
+            assert!(frames < 600, "never armed");
         }
         for _ in 0..10 {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
         }
-        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         assert!(seat(&round).is_some_and(|t| t.charge > 0), "the charge is drawn from the press frame");
         for _ in 0..crate::tank::ticks_of(tuning().gauss_charge_seconds) + 10 {
-            thread::sleep(FRAME);
-            round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+            rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         }
         // The trigger comes up in the packet after the fire hold's
         // (`client::FIRE_HOLD_TICKS`), the frame the slug is drawn on.
         for _ in 0..crate::net::client::FIRE_HOLD_TICKS {
-            thread::sleep(FRAME);
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            rig.frame(&mut round, Intent::default());
         }
         assert_eq!(round.game().map(|g| g.rail_slugs.len()), Some(1), "the slug is drawn on the release");
         let mut most = 0;
         for _ in 0..60 {
-            thread::sleep(FRAME);
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            rig.frame(&mut round, Intent::default());
             most = most.max(round.game().map_or(0, |g| g.rail_slugs.len()));
         }
         assert_eq!(most, 1, "the room's slug for it is never drawn as well");
@@ -1161,15 +1218,13 @@ mod tests {
         if !tuning().online_predict_own_tank || !tuning().online_predict_shots {
             return;
         }
-        let (_rig, link) = start(options(LinkQuality::new(40, 5, 0.0)));
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options(LinkQuality::new(40, 5, 0.0)));
         round.set_client_hull(true);
-        let give_up = Instant::now() + Duration::from_secs(10);
+        let mut frames = 0;
         while round.game().is_none_or(|g| g.frame() < 30) {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
-            assert!(Instant::now() < give_up, "the rig never got going");
+            rig.frame(&mut round, Intent::default());
+            frames += 1;
+            assert!(frames < 600, "the rig never got going");
         }
         let heading = round
             .game()
@@ -1177,14 +1232,12 @@ mod tests {
             .map(|t| t.rotation.to_radians())
             .expect("the seat");
         let along = |x: i32, y: i32| (x as f32 / 4.0) * crate::math::sin(heading) - (y as f32 / 4.0) * crate::math::cos(heading);
-        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
-        thread::sleep(FRAME);
+        rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         let mut last: Option<f32> = None;
         let mut worst_back = 0.0f32;
         let mut seen = 0;
         for _ in 0..90 {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
             let game = round.game().expect("a replica");
             // The seat's shots on screen: at most one here, the one fired.
             let rooms: Vec<u32> = game.seat_shots(0).iter().map(|s| s.id as u32).collect();
@@ -1229,20 +1282,16 @@ mod tests {
         if !tuning().online_predict_own_tank {
             return;
         }
-        let (_rig, link) = start(options(LinkQuality::PERFECT));
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options(LinkQuality::PERFECT));
 
         // Long enough that the room is welcoming, ticking and agreeing
         // that this hull faces right.
         for _ in 0..90 {
-            round.frame(&Intent { move_dir: Some(Dir::Right), ..Intent::default() }, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         }
         // Then turn, and look before the room's word can catch up.
         for _ in 0..4 {
-            round.frame(&Intent { move_dir: Some(Dir::Down), ..Intent::default() }, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent { move_dir: Some(Dir::Down), ..Intent::default() });
         }
 
         let replica = round.game().expect("a replica");
@@ -1277,24 +1326,19 @@ mod tests {
         for (label, quality) in
             [("perfect link", LinkQuality::PERFECT), ("40 ms rtt", LinkQuality::new(20, 0, 0.0)), ("80 ms rtt", LinkQuality::new(40, 0, 0.0))]
         {
-            let (_rig, link) = start(options(quality));
-            let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-            let mut round = OnlineRound::new(client, "RIG");
+            let (mut rig, mut round) = Wound::open(options(quality));
             for _ in 0..120 {
-                round.frame(&Intent::default(), FRAME.as_secs_f32());
-                thread::sleep(FRAME);
+                rig.frame(&mut round, Intent::default());
             }
             let before = round.game().map_or(0, |g| g.drawable_state().shots.len());
             // The frame of the press.
-            round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
             let mut frames = 1;
             while frames < 60 {
-                round.frame(&Intent::default(), FRAME.as_secs_f32());
+                rig.frame(&mut round, Intent::default());
                 if round.game().is_some_and(|g| g.drawable_state().shots.len() > before) {
                     break;
                 }
-                thread::sleep(FRAME);
                 frames += 1;
             }
             eprintln!(
@@ -1316,12 +1360,9 @@ mod tests {
     /// Every pull owes a `Fired` back from the room.
     #[test]
     fn a_tapped_trigger_reaches_the_room() {
-        let (_rig, link) = start(options(LinkQuality::PERFECT));
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options(LinkQuality::PERFECT));
         for _ in 0..60 {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
         }
         let (mut pulls, mut fired) = (0usize, 0usize);
         for i in 0..240 {
@@ -1329,7 +1370,7 @@ mod tests {
             if i % 12 == 0 {
                 pulls += 1;
             }
-            round.frame(&Intent { fire, ..Intent::default() }, FRAME.as_secs_f32());
+            rig.frame(&mut round, Intent { fire, ..Intent::default() });
             if let Some(game) = round.game() {
                 fired += game
                     .events()
@@ -1337,7 +1378,6 @@ mod tests {
                     .filter(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. }))
                     .count();
             }
-            thread::sleep(FRAME);
         }
         eprintln!("pulled the trigger {pulls} times, {fired} shells came back");
         assert!(pulls >= 15, "the test never got going: {pulls} pulls");
@@ -1361,9 +1401,7 @@ mod tests {
             // the arithmetic.
             return;
         }
-        let (_rig, link) = start(options(LinkQuality::new(60, 0, 0.0)));
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options(LinkQuality::new(60, 0, 0.0)));
         // Up, where the default map has nothing to drive over: a pickup a
         // row off the drive line is within a hull's reach
         // (`Pickup::in_reach`), and a laser or a missile pod collected on
@@ -1371,13 +1409,12 @@ mod tests {
         // bullets are drawn ahead of the room.
         let hold = Intent { move_dir: Some(Dir::Up), ..Intent::default() };
         for _ in 0..90 {
-            round.frame(&hold, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, hold);
         }
         let before = round.game().expect("a replica").drawable_state().shots.len();
 
         // Pull the trigger and look on that very frame.
-        round.frame(&Intent { fire: true, ..hold }, FRAME.as_secs_f32());
+        rig.frame(&mut round, Intent { fire: true, ..hold });
         let after = round.game().expect("a replica").drawable_state().shots.len();
         assert!(
             after > before,
@@ -1666,9 +1703,7 @@ mod tests {
             quality: LinkQuality::new(60, 0, 0.0),
             ..RigOptions::default()
         };
-        let (_rig, link) = start(options);
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options);
         let armed = |round: &OnlineRound<Loopback>| {
             round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| t.sonic_ammo > 0)).unwrap_or(false)
         };
@@ -1678,21 +1713,18 @@ mod tests {
             if armed(&round) {
                 break;
             }
-            round.frame(&right, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, right);
         }
         assert!(armed(&round), "the seat took the crate");
         for _ in 0..20 {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
         }
         assert_eq!(waves_by(round.game().unwrap(), 0), 0);
-        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         assert_eq!(waves_by(round.game().unwrap(), 0), 1, "the wave is on screen the frame of the press");
         let mut most = 1;
         for _ in 0..40 {
-            thread::sleep(FRAME);
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            rig.frame(&mut round, Intent::default());
             most = most.max(waves_by(round.game().unwrap(), 0));
         }
         assert_eq!(most, 1, "the room's blast for it is not drawn again");
@@ -1800,47 +1832,37 @@ mod tests {
             quality: LinkQuality::new(60, 0, 0.0),
             ..RigOptions::default()
         };
-        let (_rig, link) = start(options);
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options);
         let armed = |round: &OnlineRound<Loopback>| {
             round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| t.wells > 0)).unwrap_or(false)
         };
         let orbs = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.orbs().iter().filter(|o| o.owner == crate::shell::Owner::Player(0)).count());
         let wells = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.zones().iter().filter(|z| z.well().is_some()).count());
         let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
-        // Each frame one tick of the clock, however long the sleep took:
-        // a 16 ms frame against a 16.7 ms tick sends no packet one frame
-        // in 25, and a press on that frame goes with the next.
-        const TICK: f32 = crate::PHYSICS_FIXED_DT;
         for _ in 0..180 {
             if armed(&round) {
                 break;
             }
-            round.frame(&right, TICK);
-            thread::sleep(FRAME);
+            rig.frame(&mut round, right);
         }
         assert!(armed(&round), "the seat took the crate");
         for _ in 0..20 {
-            round.frame(&Intent::default(), TICK);
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
         }
-        round.frame(&Intent { fire: true, ..Intent::default() }, TICK);
+        rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         assert_eq!(orbs(&round), 1, "the orb is on screen the frame of the press");
         let mut most = 1;
         for _ in 0..30 {
-            thread::sleep(FRAME);
-            round.frame(&Intent::default(), TICK);
+            rig.frame(&mut round, Intent::default());
             most = most.max(orbs(&round));
         }
         assert_eq!(most, 1, "the room's orb for it is not drawn beside it");
-        round.frame(&Intent { fire: true, ..Intent::default() }, TICK);
+        rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         assert_eq!(wells(&round), 1, "the well is on screen the frame of the anchor");
         assert_eq!(orbs(&round), 0, "and the orb gone into it");
         let mut most = 1;
         for _ in 0..40 {
-            thread::sleep(FRAME);
-            round.frame(&Intent::default(), TICK);
+            rig.frame(&mut round, Intent::default());
             most = most.max(wells(&round));
         }
         assert_eq!(most, 1, "the room's well for it is not drawn beside it");
@@ -1860,9 +1882,7 @@ mod tests {
             quality: LinkQuality::new(60, 0, 0.0),
             ..RigOptions::default()
         };
-        let (_rig, link) = start(options);
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options);
         let armed = |round: &OnlineRound<Loopback>| {
             round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| t.wells > 0)).unwrap_or(false)
         };
@@ -1873,28 +1893,23 @@ mod tests {
             if armed(&round) {
                 break;
             }
-            round.frame(&right, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, right);
         }
         assert!(armed(&round), "the seat took the crate");
         for _ in 0..20 {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
         }
         let fire = Intent { fire: true, ..Intent::default() };
-        round.frame(&fire, FRAME.as_secs_f32());
+        rig.frame(&mut round, fire);
         assert_eq!(orbs(&round), 1, "the orb on the frame of the press");
         for _ in 0..3 {
-            thread::sleep(FRAME);
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            rig.frame(&mut round, Intent::default());
         }
-        thread::sleep(FRAME);
-        round.frame(&fire, FRAME.as_secs_f32());
+        rig.frame(&mut round, fire);
         assert_eq!((orbs(&round), wells(&round)), (0, 1), "anchored on the frame of the second press");
         let (mut most_orbs, mut most_wells) = (0, 1);
         for _ in 0..40 {
-            thread::sleep(FRAME);
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            rig.frame(&mut round, Intent::default());
             most_orbs = most_orbs.max(orbs(&round));
             most_wells = most_wells.max(wells(&round));
         }
@@ -1918,43 +1933,38 @@ mod tests {
             quality: LinkQuality::PERFECT,
             ..RigOptions::default()
         };
-        let (rig, link) = start(options);
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options);
         round.set_client_hull(true);
         let armed = |round: &OnlineRound<Loopback>| {
             round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| t.wells > 0)).unwrap_or(false)
         };
         let wells = |round: &OnlineRound<Loopback>| round.game().map_or(0, |g| g.zones().iter().filter(|z| z.well().is_some()).count());
-        let frame = |round: &mut OnlineRound<Loopback>, intent: Intent| {
-            round.frame(&intent, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
-        };
-        let give_up = Instant::now() + Duration::from_secs(10);
+        let mut frames = 0;
         while !armed(&round) {
-            frame(&mut round, Intent { move_dir: Some(Dir::Right), ..Intent::default() });
-            assert!(Instant::now() < give_up, "never armed");
+            rig.frame(&mut round, Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+            frames += 1;
+            assert!(frames < 600, "never armed");
         }
         for _ in 0..10 {
-            frame(&mut round, Intent::default());
+            rig.frame(&mut round, Intent::default());
         }
         // An orb off the gun line, anchored a few frames out: its well
         // pulls the seat that fired it.
-        frame(&mut round, Intent { fire: true, ..Intent::default() });
+        rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         for _ in 0..16 {
-            frame(&mut round, Intent::default());
+            rig.frame(&mut round, Intent::default());
         }
-        frame(&mut round, Intent { fire: true, ..Intent::default() });
+        rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         assert_eq!(wells(&round), 1, "anchored");
         let start = round.own_hull_at().expect("a hull");
         let drive = |dir| Intent { move_dir: Some(dir), ..Intent::default() };
         for (intent, frames) in [(Intent::default(), 20), (drive(Dir::Right), 20), (drive(Dir::Up), 30), (drive(Dir::Left), 40)] {
             for _ in 0..frames {
-                frame(&mut round, intent);
+                rig.frame(&mut round, intent);
             }
         }
         for _ in 0..12 {
-            frame(&mut round, Intent::default());
+            rig.frame(&mut round, Intent::default());
         }
         let mine = round.own_hull_at().expect("a hull");
         assert!((mine.0 - start.0).abs() + (mine.1 - start.1).abs() > 20.0, "the hull moved: {start:?} -> {mine:?}");
@@ -1981,9 +1991,7 @@ mod tests {
             quality: LinkQuality::new(60, 0, 0.0),
             ..RigOptions::default()
         };
-        let (_rig, link) = start(options);
-        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
-        let mut round = OnlineRound::new(client, "RIG");
+        let (mut rig, mut round) = Wound::open(options);
         let seat = |round: &OnlineRound<Loopback>| {
             round.game().and_then(|g| g.world.query::<&crate::tank::Tank>().iter().find(|t| t.owner_slot() == 0).map(|t| (t.emp_charges, t.special_offline)))
         };
@@ -1994,22 +2002,19 @@ mod tests {
             if seat(&round).is_some_and(|(charges, _)| charges > 0) {
                 break;
             }
-            round.frame(&right, FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, right);
         }
         assert!(seat(&round).is_some_and(|(charges, _)| charges > 0), "the seat took the crate");
         for _ in 0..20 {
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
-            thread::sleep(FRAME);
+            rig.frame(&mut round, Intent::default());
         }
         assert_eq!(rings(round.game().unwrap()), 0);
-        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        rig.frame(&mut round, Intent { fire: true, ..Intent::default() });
         assert_eq!(rings(round.game().unwrap()), 1, "the ring is on screen the frame of the press");
         assert!(seat(&round).is_some_and(|(_, offline)| offline > 0.0), "the special offline on the press frame");
         let mut most = 1;
         for _ in 0..40 {
-            thread::sleep(FRAME);
-            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            rig.frame(&mut round, Intent::default());
             most = most.max(rings(round.game().unwrap()));
         }
         assert_eq!(most, 1, "the room's pulse for it is not drawn again");
@@ -2023,6 +2028,31 @@ mod tests {
         assert!(round.game().is_some(), "the welcome arrived over a lossy link");
         assert!(rig.tick() > 40, "the authority kept ticking");
         let ticks: Vec<u64> = seen.iter().map(|f| f.tick).collect();
+        assert!(ticks.windows(2).all(|w| w[1] >= w[0]), "a lost snapshot rewound the picture: {ticks:?}");
+        assert!(ticks.last() > ticks.first(), "the round went nowhere: {ticks:?}");
+    }
+
+    /// `--rig` itself: the room on its own thread, ticking on the wall
+    /// (`run`, `TickClock`), with a window over a lossy link. Every other
+    /// test here with a window winds the clock by hand (`Wound`); this one
+    /// asks only what no load can take away - the welcome arrives, the
+    /// room ticks, and the picture never runs backwards.
+    #[test]
+    fn the_rigs_thread_runs_a_round_over_a_lossy_link() {
+        let (rig, link) = start(options(LinkQuality::new(60, 20, 0.05)));
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        let drive = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        let mut ticks: Vec<u64> = Vec::new();
+        for _ in 0..100 {
+            round.frame(&drive, FRAME.as_secs_f32());
+            if let Some(game) = round.game() {
+                ticks.push(game.frame());
+            }
+            thread::sleep(FRAME);
+        }
+        assert!(round.game().is_some(), "the welcome arrived over a lossy link");
+        assert!(rig.tick() > 40, "the authority kept ticking");
         assert!(ticks.windows(2).all(|w| w[1] >= w[0]), "a lost snapshot rewound the picture: {ticks:?}");
         assert!(ticks.last() > ticks.first(), "the round went nowhere: {ticks:?}");
     }
