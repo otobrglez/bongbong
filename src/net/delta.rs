@@ -3,7 +3,7 @@
 //! keeps one `Snapshot` per room and the client one per socket, and both
 //! step them with `apply_delta`. `Welcome` carries the first full one.
 //!
-//! Per keyed family (`tanks`, `shots`, `missiles`, `grenades`, `drones`, `frogs`, `tiles`, `fires`, `crates`) a delta
+//! Per keyed family (`tanks`, `shots`, `missiles`, `grenades`, `drones`, `frogs`, `tiles`, `fires`, `crates`, `grass_flat`) a delta
 //! carries three lists: entries that are new or changed (in full),
 //! entries that only moved by less than 32 px on each axis (`Moved`: the
 //! key and two `i8` quarter-pixel steps, the common case for every hull
@@ -25,7 +25,7 @@ use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
     AirState,
-    BonusPickup, CraterState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
+    BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
     ZoneState, TileState, side_code,
 };
 
@@ -105,6 +105,9 @@ pub struct SnapshotDelta {
     pub volcano_shifts: Option<Vec<i32>>,
     /// The smoke cells, whole, when they changed.
     pub smoke_cells: Option<Vec<u16>>,
+    /// Newly flattened (or flattened again) grass, in full.
+    pub grass_flat: Vec<GrassFlatState>,
+    pub grass_flat_gone: Vec<u16>,
     pub round: Option<RoundState>,
     pub events: Vec<WireEvent>,
 }
@@ -275,6 +278,12 @@ impl Keyed for CraterState {
     }
 }
 
+impl Keyed for GrassFlatState {
+    fn key(&self) -> u16 {
+        self.cell
+    }
+}
+
 impl Keyed for RubbleState {
     fn key(&self) -> u16 {
         self.cell
@@ -365,6 +374,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (rubble, rubble_gone) = diff_keyed(&prev.rubble, &next.rubble);
     let (well_drums, well_drums_gone) = diff_keyed(&prev.well_drums, &next.well_drums);
     let (air, air_moved, air_gone) = diff_positioned(&prev.air, &next.air);
+    let (grass_flat, grass_flat_gone) = diff_keyed(&prev.grass_flat, &next.grass_flat);
     let mut bonus_pickups = next.bonus_pickups.clone();
     bonus_pickups.sort();
     bonus_pickups.dedup();
@@ -417,6 +427,8 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         air_gone,
         volcano_shifts: (next.volcano_shifts != prev.volcano_shifts).then(|| next.volcano_shifts.clone()),
         smoke_cells: (next.smoke_cells != prev.smoke_cells).then(|| next.smoke_cells.clone()),
+        grass_flat,
+        grass_flat_gone,
         round: (next.round != prev.round).then_some(next.round),
         events: next.events.clone(),
     }
@@ -456,6 +468,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         air: apply_positioned(&prev.air, &delta.air, &delta.air_moved, &delta.air_gone),
         volcano_shifts: delta.volcano_shifts.clone().unwrap_or_else(|| prev.volcano_shifts.clone()),
         smoke_cells: delta.smoke_cells.clone().unwrap_or_else(|| prev.smoke_cells.clone()),
+        grass_flat: apply_keyed(&prev.grass_flat, &delta.grass_flat, &delta.grass_flat_gone),
         round: delta.round.unwrap_or(prev.round),
         events: delta.events.clone(),
     }
@@ -631,6 +644,7 @@ mod tests {
         let air = random_keys(rng, 3, 400).into_iter().map(|id| random_air(rng, id)).collect();
         let volcano_shifts = if rng.random() { vec![rng.random_range(-4000..4000)] } else { Vec::new() };
         let smoke_cells = random_keys(rng, 3, 600);
+        let grass_flat = random_keys(rng, 6, 600).into_iter().map(|cell| GrassFlatState { cell, until: rng.random_range(0..200_000) }).collect();
         let mut s = Snapshot {
             tick: rng.random_range(0..200_000),
             server_ms: rng.random(),
@@ -655,6 +669,7 @@ mod tests {
             air,
             volcano_shifts,
             smoke_cells,
+            grass_flat,
             round: RoundState {
                 wave: rng.random_range(0..10),
                 alive: rng.random_range(0..40),
@@ -787,6 +802,11 @@ mod tests {
         if rng.random_ratio(1, 4) {
             next.smoke_cells = random_keys(rng, 3, 600);
         }
+        // Grass standing back up, and grass flattened (again).
+        next.grass_flat.retain(|_| !rng.random_ratio(1, 4));
+        for cell in random_keys(rng, 2, 600) {
+            next.grass_flat.push(GrassFlatState { cell, until: next.tick + rng.random_range(1..600) });
+        }
         next.events = random_events(rng);
         // Later pushes of an existing key must win, the way the server's
         // fresh state would; normalise keeps the first, so drop the older.
@@ -797,6 +817,7 @@ mod tests {
         next.lamps.reverse();
         next.crates.reverse();
         next.well_drums.reverse();
+        next.grass_flat.reverse();
         next.normalise();
         next
     }
@@ -981,10 +1002,11 @@ mod tests {
         // (protocol 21); the rubble's list one, the delta two for it
         // (protocol 23); the smoke cells' list one, the delta one for
         // them (protocol 29); air support's list one, the delta three for it
-        // (protocol 30).
-        assert!(full <= 502, "full snapshot {full} B");
-        assert!(moving <= 216, "moving delta {moving} B");
-        assert!(busy <= 282, "busy delta {busy} B");
-        assert!(idle <= 65, "idle delta {idle} B");
+        // (protocol 30); the flattened grass's list one, the delta two for
+        // it (protocol 31).
+        assert!(full <= 503, "full snapshot {full} B");
+        assert!(moving <= 218, "moving delta {moving} B");
+        assert!(busy <= 284, "busy delta {busy} B");
+        assert!(idle <= 67, "idle delta {idle} B");
     }
 }

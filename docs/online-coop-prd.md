@@ -313,6 +313,7 @@ Snapshot { tick: u32, server_ms: u32,
            pickups: u64, bonus_shields: [u16],
            tiles:  [{ cell: u16, hp: u8, flags: u8, faces: u8 }],
            fires:  [{ cell: u16, left: u8 }],
+           grass_flat: [{ cell: u16, until: u32 }],  // grass a sonic wave or a rod flattened: hides nobody until tick `until`
            round:  { wave: u8, alive: u8, pending: u8, intro: u8, outcome: u8 },
            events: [Event] }              // AI trace variants filtered out
 
@@ -325,6 +326,12 @@ Welcome  { protocol: u16, sim_version: &str, seat: u8, roster: [{ seat, nick, ch
 // lobby, JSON over the same socket
 Lobby    { Create { nick, device_token, map, mission } | Join { nick, device_token, code } | Ready | Start | Leave | Kick { seat } | Chat { text } }
 ```
+
+A timed cell that decides what hides a hull travels as the tick it ends on,
+not the time left, so its entry changes only when it is set again:
+`grass_flat` is the room's `Game::grass_flat`, which a replica and a joiner
+take whole, so every client's arrows and minimap read the room's
+`cover_cells` (protocol 31).
 
 Positions in quarter pixels fit an `i16` on fields up to 8192 px wide. Encode
 with `postcard`; JSON for the lobby. Events and tile deltas are reliable by

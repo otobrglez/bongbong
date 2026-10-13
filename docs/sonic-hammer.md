@@ -137,7 +137,9 @@ tool and the `armory` map.
   long (`GrassTuft::pinned`), then stand back up over the ordinary
   `grass_crush_recover_seconds`. A seat or an enemy in it is in plain
   sight - the AI's concealment rule and `Terrain::conceals` both answer
-  false - until the cell hides again.
+  false - until the cell hides again. Online the flat cells are the
+  room's: `Snapshot::grass_flat` carries each with the tick it hides again
+  (§8).
 - **Frogs** (either side's) whose centre is in the cone are **stunned** for
   `sonic_frog_stun_seconds` (1.5): `Frog::stun_timer`; while it runs the
   frog neither hops (`can_hop`) nor bites (`can_attack`) - no evasive hop
@@ -195,7 +197,7 @@ screen hurts nobody.
 | File | What |
 |---|---|
 | `src/sonic.rs` (new) | The weapon's headless half. `SonicCone` (`cast` from a pivot and facing over a `Block` per cell - open, a wall, glass - and a `Floor` per cell, inside the field; `rays`, the `cells` it entered in entry order with their floor, the glass `panes` it struck; `reaches(p)`, `entered(cell)`, `nearest_reached(points)`, `longest`), `SonicWave` (cone, owner, age, `swept` radius, `struck` hulls, a seed), `falloff`, `shove_speed(mass_factor, d)`, `skid_friction`, `skid_seconds`, `slide(v, grip)` (the skid's slide, what the AI predicts with), `drum_landing`, `tree_push`, the composers `wave_arcs`, `wave_dust` and `tell_arcs` (pure, `pyro::Shape`s), the `STONE` ramp, `module_cell` |
-| `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `tick_sonic_pictures` (a replica's waves and flattened grass), `Game::hammer_senses` with `lands_in_trouble` and `closer_spots` (what the AI is handed, §4), `seat_sonic`, `swap_spawn_special` (§3.4), `debug_spawn_pickup` |
+| `src/simulation/sonic.rs` (new) | The world half. `fire_sonic` (called from the dispatch arm), `resolve_sonic` (casts the frame's presses into waves), `tick_sonic_waves(f, live)` (the strike walk), `knock` (the shove and skid any later weapon may use), `throw_drum`, `sonic_show` (the cosmetic half - the wave on the list, the ripple, the dish's flash - which a replica's `SonicBlast` and a client's press call too), `tick_sonic_pictures` (a replica's waves and the tufts they lay flat), `Game::hammer_senses` with `lands_in_trouble` and `closer_spots` (what the AI is handed, §4), `seat_sonic`, `swap_spawn_special` (§3.4), `debug_spawn_pickup` |
 | `src/simulation/sonic_tests.rs` (new) | The scenario tests (§10) |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::SonicHammer` dispatch arm |
 | `src/simulation/mod.rs` | `Frame::pending_sonic`; `Game::{sonic_waves, grass_flat, seat_knock}` (`SeatKnock`, §3.6), `cover_cells`; the phase calls (`resolve_sonic` and `tick_sonic_waves` after `resolve_flames`, before `step_world`, so the shoves land in this tick's solver step; `tick_sonic_waves(f, false)` on the end screen); the tell in `enemy_phase` (§3.2); the skid in `drive_tank_with`, `tick_timers` and `predict_seat`; `accept_seat_pose`'s knock allowance; the spawn swap in `roll_enemy_tank` (§3.4); a hammer hunter woken and leashed as any tank (`field::mind`'s `hunting`, `TankSnapshot::leashed`), `TankSnapshot::guarding`; the `pickup_phase` arm; `tick_presentation` (waves, tells, skids, frog stuns, flattened grass); `Event::{SonicBlast, TellStarted}`, `Event::Hit::cause` (`HitCause`), `Event::Shoved::skid`, `Event::DrumLaunched::drum` |
@@ -491,8 +493,9 @@ the general case:
   own through `Shoved`, now with its skid, §3.6), the damage (`Hit`), tile
   deaths (`ObstacleDestroyed`), thrown drums (`DrumLaunched`, now naming
   the drum), frog stuns (`FrogState`), lanterns (`LanternBroken`). The
-  client's own wave flattens its picture's grass and scatters its fish at
-  once, which is presentation.
+  client's own wave lays its picture's grass flat and scatters its fish at
+  once, which is presentation; the cover is the room's
+  (`Snapshot::grass_flat`).
 
 ### 3.4 The probe's `--crate` and the spawn swap
 
@@ -978,8 +981,12 @@ Protocol 16 (from 15), once in the PR.
 - **What a replica draws**: on a `SonicBlast`, `sonic_show` (the wave cast
   against its own tiles - the pane the wave shatters is still standing
   then, the death comes in a later snapshot - the ripple, the dish's flash),
-  whose cosmetic sweep flattens its picture's grass and scatters its fish as
-  the front passes (`tick_presentation`); an enemy's tell from
+  whose cosmetic sweep lays its picture's grass flat and scatters its fish
+  as the front passes (`tick_presentation`); the cover that grass gives is
+  the room's `Snapshot::grass_flat` (`GrassFlatState`: the cell and the
+  tick it hides again, protocol 31), taken whole on every snapshot and in
+  the welcome, so a client that joins inside the window reads it too and
+  its tufts lie flat; an enemy's tell from
   `TankState::tell`; skids from `TankState::skid`; the rest is state and
   the existing events.
 - **What is predicted**: the seat's own press show (§3.3) and its recoil on

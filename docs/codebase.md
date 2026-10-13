@@ -2017,7 +2017,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   bomb's pool), `BonusPickup`, `CrateState` (a crate that is not whole: hurt, burning or spilled),
   `LampState` (the lanterns set down), `ZoneState` and `CraterState` (a rod's calls and craters,
   docs/rod-from-god.md), the volcanoes' shifts, `smoke_cells` (the cells thick smoke hides a hull in
-  under `smoke_cover`, docs/aftermath.md; protocol 29) -, `RoundState` (the wave, the live and pending
+  under `smoke_cover`, docs/aftermath.md; protocol 29), `GrassFlatState` (a cell a sonic wave or a
+  rod flattened, `Game::grass_flat`, with the round tick it hides again - a tick, not the time
+  left, so an entry changes only when the cell is flattened again; protocol 31) -, `RoundState` (the wave, the live and pending
   counts, the mission banner's, the `WAVE N` breather's and the end screen's restart countdown's
   time left, the outcome), `events`), `Welcome` (`WireOverrides` mirrors `LevelOverrides`), the JSON
   `Lobby` enum, and the quantisation helpers (positions quarter pixels as `i16`, velocities `i8` at
@@ -2059,7 +2061,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   snaps and the *drawn* angles stay put, for `tick_presentation` to swing across), shots by id,
   frogs, pickups, fires (the grass under each chars; a cell the snapshot stops listing burnt out,
   the one way a fire ever leaves the list, so the replica darkens the ground and spends the oil
-  there), round scalars, `frame`, and
+  there), the flattened grass whole (`Game::grass_flat` with each cell's time to its `until`, run
+  down by `tick_presentation` between snapshots; a replica's sonic picture lays tufts and never adds
+  cover, and `welcome` pins the tufts of every flat cell, so a joiner's grass lies down too), round
+  scalars, `frame`, and
   the round clock as `tick * PHYSICS_FIXED_DT` - exact because a room server's round runs without
   the mission banner. Never `update`d, no RNG; what the wire omits is hashed (wreck art, shadow
   heights), a full timer (a flag) or the replica's own to run (`Game::tick_presentation` between

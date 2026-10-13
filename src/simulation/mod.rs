@@ -994,9 +994,10 @@ pub struct Game {
     /// (docs/emp-burst.md "At 11"), 0 while they are lit
     /// (`lit_lamp_posts`). Counted down in `tick_timers`.
     pub(crate) lamps_out: f32,
-    /// Tall-grass cells a sonic wave flattened, with the seconds they hide
-    /// nobody for yet: taken out of the cover `Terrain` reads
-    /// (`cover_cells`). Ordered, ticked down in `tick_timers`.
+    /// Tall-grass cells a sonic wave or a rod's impact flattened, with the
+    /// seconds they hide nobody for yet: taken out of the cover `Terrain`
+    /// reads (`cover_cells`). Ordered, ticked down in `tick_timers`; a
+    /// replica's is the room's (`Snapshot::grass_flat`).
     pub(crate) grass_flat: BTreeMap<(i32, i32), f32>,
     /// Passes counted so far into each grass cell not yet trampled
     /// (`simulation::trample`): a hull's centre entering the cell. Empty
@@ -3175,8 +3176,9 @@ impl Game {
                 frog.stun_timer = (frog.stun_timer - dt).max(f32::EPSILON);
             }
         }
-        // The sonic waves run out over the picture, flattening the grass
-        // they pass; flattened grass stands back up.
+        // The room's flattened grass (`Snapshot::grass_flat`) stands back
+        // up on the replica's clock between snapshots; the sonic waves run
+        // out over the picture, laying the grass they pass flat.
         self.grass_flat.retain(|_, left| {
             *left -= dt;
             *left > 0.0

@@ -175,7 +175,9 @@ solver step), in this order, all measured from the struck cell's centre `c`:
   - *tall grass* hides nobody for `rod_grass_flat_seconds` (8)
     (`Game::grass_flat`, the hammer's - docs/sonic-hammer.md §1), and its
     tufts out to the shove radius are laid flat (`grass::flatten`,
-    cosmetic).
+    cosmetic). The flat cells reach every client, a joiner's included, in
+    `Snapshot::grass_flat` (protocol 31), so its arrows and minimap read
+    the room's cover.
 - **The shove ring** (`rod_shove_radius_px`, 208, six and a half cells):
   - *every live tank on the field outside the kill circle* whose hull box's
     nearest point `d` is within the radius is **knocked** (`Game::knock`,
