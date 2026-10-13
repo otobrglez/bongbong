@@ -16,7 +16,7 @@ to be spotted at a glance.
 crates_sheet.png, 7 columns x 21 rows of 40 px:
 
     row = PickupKind in declaration order (health, ammo, laser, minigun,
-          plasma, missiles, speedup, shield, flamethrower, frog_health,
+          plasma, missiles, speedup, shield, flamethrower, bong_health,
           tower_pack, heat_shield, grenades, sonic_hammer, emp_burst,
           gauss_rail, fpv_swarm, rod_from_god, gravity_well, air_heli,
           air_jet)
@@ -54,7 +54,7 @@ TOKEN = SIDE + 2    # design pixels per symbol cell side (the symbol and its out
 
 # PickupKind's declaration order: the sheets' row order.
 KINDS = ['health', 'ammo', 'laser', 'minigun', 'plasma', 'missiles', 'speedup', 'shield', 'flamethrower',
-         'frog_health', 'tower_pack', 'heat_shield', 'grenades', 'sonic_hammer', 'emp_burst', 'gauss_rail',
+         'bong_health', 'tower_pack', 'heat_shield', 'grenades', 'sonic_hammer', 'emp_burst', 'gauss_rail',
          'fpv_swarm', 'rod_from_god', 'gravity_well', 'air_heli', 'air_jet']
 
 # The symbols, 10 x 10 design pixels each.
@@ -167,17 +167,18 @@ GLYPHS = {
         '..XXX.....',
         '.XX.......',
     ],
-    'frog_health': [
-        '.XX....XX.',
-        '.XXXXXXXX.',
+    # A bong, any of them: a round body with two eyes, a smile and feet.
+    'bong_health': [
         '..XXXXXX..',
-        'X.XXXXXX.X',
+        '.XXXXXXXX.',
+        'XXX.XX.XXX',
+        'XXX.XX.XXX',
         'XXXXXXXXXX',
-        '..XXXXXX..',
-        '..XXXXXX..',
-        '.XXXXXXXX.',
         'XX.XXXX.XX',
-        'X........X',
+        'XXX....XXX',
+        '.XXXXXXXX.',
+        '..XXXXXX..',
+        '..XX..XX..',
     ],
     'tower_pack': [
         'X...X.....',

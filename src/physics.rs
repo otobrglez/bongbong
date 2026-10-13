@@ -3,7 +3,7 @@
 //! Tanks are rotation-locked dynamic bodies, accelerated toward their
 //! commanded velocity by a mass-aware impulse every frame rather than
 //! snapped to it (see `simulation::drive_tank`); the battlefield edges,
-//! obstacles and the frog are static colliders. Ram/explosion/projectile
+//! obstacles and the bong are static colliders. Ram/explosion/projectile
 //! knockback is a real impulse too (`apply_impulse`). Projectiles have no
 //! physics body at all: they are hand-integrated and hit-tested by a swept
 //! segment check in `simulation::hits`, so rapier only ever sees solid
@@ -99,7 +99,7 @@ impl Physics {
     /// `Event::PhysicsQuarantine` for the probe's `invariant` anomaly and
     /// the dev server to surface. Counts rather than handles: the caller
     /// already knows which tank is broken from its own snapshot, and this
-    /// also covers the wall/obstacle/frog bodies nothing else inspects.
+    /// also covers the wall/obstacle/bong bodies nothing else inspects.
     pub fn quarantined(&self) -> (usize, usize) {
         let q = self.world.quarantine();
         (q.bodies().len(), q.colliders().len())
@@ -107,19 +107,19 @@ impl Physics {
 
     /// Spawn a static, fixed-body cuboid collider: the battlefield boundary
     ///
-    /// The frog uses this too, and is then teleported with `set_position`
+    /// The bong uses this too, and is then teleported with `set_position`
     /// every frame. That looks wrong - a moving body "should" be
     /// `KinematicPositionBased` so the solver pushes contacts aside rather
     /// than letting depenetration fling them out - and it was **tried and
-    /// measured worse**: `maps/test/frog-block.toml`, the fixture built for
+    /// measured worse**: `maps/test/bong-block.toml`, the fixture built for
     /// exactly this failure class, went from 0 to 10 `clustering` and 0 to
     /// 2 `low-progress` anomalies, breaching its pinned budgets, while the
     /// default-map sweep did not move at all.
     ///
-    /// The reason is that a frog *hops*: its position jumps discretely
+    /// The reason is that a bong *hops*: its position jumps discretely
     /// rather than travelling. A kinematic body asked to be somewhere far
     /// away by the next step drags whatever is in between along with it, so
-    /// a hopping frog started shoving tanks across the map. For a discretely
+    /// a hopping bong started shoving tanks across the map. For a discretely
     /// teleporting entity, "fixed body, relocated" is the more faithful
     /// model, not the lazier one. Re-measure with `just probe-fixtures`
     /// before revisiting.
@@ -289,7 +289,7 @@ impl Physics {
     }
 
     /// The sole collider attached to a body (every body here carries
-    /// exactly one: a tank's solid movement collider, a wall/obstacle/frog
+    /// exactly one: a tank's solid movement collider, a wall/obstacle/bong
     /// cuboid).
     pub fn collider_of(&self, body: RigidBodyHandle) -> ColliderHandle {
         self.world
@@ -358,8 +358,8 @@ impl Physics {
     ///
     /// Every body here is solid (projectiles have no physics body at all),
     /// so the pairs iterated are exactly the hull against walls,
-    /// obstacles, the frog (all `fixed` bodies -> `touching_static` - the
-    /// frog counting as terrain is deliberate, it's the historical
+    /// obstacles, the bong (all `fixed` bodies -> `touching_static` - the
+    /// bong counting as terrain is deliberate, it's the historical
     /// stuck-against case) and other tanks' hulls (`dynamic` ->
     /// `touching_tank`). `max_impulse` is the strongest per-point normal
     /// impulse rapier's solver applied among those active contacts this
@@ -420,7 +420,7 @@ impl Physics {
 #[derive(Default, Clone, Copy)]
 pub struct ContactStats {
     /// Actively contacting any `fixed` body: boundary wall, obstacle tile,
-    /// or the frog.
+    /// or the bong.
     pub touching_static: bool,
     /// Actively contacting another tank's hull (`dynamic` body).
     pub touching_tank: bool,

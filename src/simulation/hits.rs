@@ -1,5 +1,5 @@
 //! Projectile hit geometry. `Terrain` is a per-frame snapshot of the static
-//! things a shot can hit (obstacle tiles with their seams closed, the frog,
+//! things a shot can hit (obstacle tiles with their seams closed, the bong,
 //! the four boundary walls) and `Terrain::sweep` is the one hit test every
 //! shell, bullet, plasma bolt and laser beam resolves against: a
 //! segment-vs-box sweep over the projectile's whole movement this frame,
@@ -8,7 +8,7 @@
 //! involved - projectiles have no physics body.
 //!
 //! `HitBoxHistory` is lag compensation's memory (docs/online-coop-prd.md
-//! §4.16, "favor the shooter"): the enemy tanks' and frogs' boxes at the
+//! §4.16, "favor the shooter"): the enemy tanks' and bongs' boxes at the
 //! end of each of the last `REWIND_MAX_TICKS` ticks, so a seat's shot can
 //! be swept against the world that seat's client was drawing. Only those
 //! are rewound - tiles, walls and the seats stay current.
@@ -19,12 +19,12 @@ use hecs::Entity;
 
 use crate::ai::Ai;
 use crate::battlefield;
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::obstacle::{Material, Obstacle};
 use crate::shell::Owner;
 use crate::tank::Tank;
 use crate::tuning::tuning;
-use crate::{FROG_COLLIDER_HALF_EXTENT, Position};
+use crate::{BONG_COLLIDER_HALF_EXTENT, Position};
 
 use super::with_tank;
 
@@ -34,7 +34,7 @@ use super::with_tank;
 pub(crate) enum ShellTarget {
     /// Any tank, a player's or an enemy's; `Tank::owner` says whose.
     Tank(Entity),
-    Frog(Entity),
+    Bong(Entity),
     Obstacle(Entity),
     Wall,
 }
@@ -76,17 +76,17 @@ impl TerrainBox {
 }
 
 /// Static terrain snapshot for one frame - see the module doc. Built once
-/// per `Game::update`, after the frog's hop tick, and shared by the AI's
+/// per `Game::update`, after the bong's hop tick, and shared by the AI's
 /// line-of-sight checks, engagement-slot validation and every hit test.
 pub(crate) struct Terrain {
     obstacles: Vec<TerrainBox>,
-    frogs: Vec<(Entity, Position)>,
+    bongs: Vec<(Entity, Position)>,
     walls: [(Position, Position); 4],
     /// Centres of the map's tall-grass cells (`grass.rs`). Not obstacles:
     /// they block nothing and are not in the nav grid - they only answer
     /// `conceals`.
     grass: Vec<Position>,
-    /// The map's water (docs/water.md), for the frog's hop. Not an
+    /// The map's water (docs/water.md), for the bong's hop. Not an
     /// obstacle here: deep water stops hulls through its physics
     /// colliders and never a shot, so `sweep` must not see it.
     water: crate::ground::WaterLayout,
@@ -119,7 +119,7 @@ pub(crate) struct TankBoxes {
 pub(crate) struct HitBoxFrame {
     pub frame: u64,
     pub tanks: Vec<TankBoxes>,
-    pub frogs: Vec<(Entity, Position)>,
+    pub bongs: Vec<(Entity, Position)>,
     /// Every air target's strike box (`air::AirTarget::strike_box`), by
     /// key: a seat's bullet meets an enemy drone where its client drew it.
     pub air: Vec<(crate::air::AirKey, (Position, Position))>,
@@ -137,15 +137,15 @@ impl HitBoxFrame {
         self.air.binary_search_by_key(&key, |&(k, _)| k).ok().map(|i| self.air[i].1)
     }
 
-    pub fn frog(&self, entity: Entity) -> Option<Position> {
-        self.frogs
+    pub fn bong(&self, entity: Entity) -> Option<Position> {
+        self.bongs
             .binary_search_by_key(&entity.to_bits(), |&(e, _)| e.to_bits())
             .ok()
-            .map(|i| self.frogs[i].1)
+            .map(|i| self.bongs[i].1)
     }
 }
 
-/// The last `REWIND_MAX_TICKS` ticks of enemy and frog hit boxes, newest
+/// The last `REWIND_MAX_TICKS` ticks of enemy and bong hit boxes, newest
 /// last. `Game::update` records one entry at the end of every tick it
 /// simulates; a paused tick or the intro banner records none, and a tick
 /// with no entry is judged against the present. Recording draws no RNG
@@ -159,7 +159,7 @@ pub(crate) struct HitBoxHistory {
 impl HitBoxHistory {
     /// Record the boxes the world holds now as tick `frame`'s: every live
     /// enemy (a tank with an `Ai` - a seat and a tank still rolling in
-    /// through a gate carry none) and every frog. The oldest entry's
+    /// through a gate carry none) and every bong. The oldest entry's
     /// buffers are reused once the ring is full.
     pub fn record(&mut self, world: &hecs::World, frame: u64) {
         let mut entry = if self.frames.len() >= REWIND_MAX_TICKS as usize {
@@ -169,7 +169,7 @@ impl HitBoxHistory {
         };
         entry.frame = frame;
         entry.tanks.clear();
-        entry.frogs.clear();
+        entry.bongs.clear();
         entry.air.clear();
         entry.tanks.extend(
             world
@@ -180,8 +180,8 @@ impl HitBoxHistory {
                 .map(|(entity, t)| TankBoxes { entity, hull: t.hull_bbox_world(), turret: t.turret_bbox_world() }),
         );
         entry.tanks.sort_by_key(|t| t.entity.to_bits());
-        entry.frogs.extend(world.query::<(Entity, &Frog)>().iter().map(|(e, f)| (e, f.position)));
-        entry.frogs.sort_by_key(|&(e, _)| e.to_bits());
+        entry.bongs.extend(world.query::<(Entity, &Bong)>().iter().map(|(e, f)| (e, f.position)));
+        entry.bongs.sort_by_key(|&(e, _)| e.to_bits());
         entry.air.extend(
             world
                 .query::<&crate::fpv::Drone>()
@@ -203,8 +203,8 @@ impl HitBoxHistory {
     }
 }
 
-fn frog_half() -> Position {
-    Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1)
+fn bong_half() -> Position {
+    Position::new(BONG_COLLIDER_HALF_EXTENT.0, BONG_COLLIDER_HALF_EXTENT.1)
 }
 
 impl Terrain {
@@ -238,14 +238,14 @@ impl Terrain {
                 }
             })
             .collect();
-        let frogs = world
-            .query::<(Entity, &Frog)>()
+        let bongs = world
+            .query::<(Entity, &Bong)>()
             .iter()
             .map(|(e, f)| (e, f.position))
             .collect();
         Terrain {
             obstacles,
-            frogs,
+            bongs,
             walls: battlefield::wall_rects(width, height),
             grass: grass.to_vec(),
             water: water.clone(),
@@ -352,30 +352,30 @@ impl Terrain {
         self.obstacles.iter().find(|b| b.entity == entity)
     }
 
-    /// Whether a frog-sized box centred on `p` clears every obstacle tile -
-    /// the landing test for the evasive hop (`combat::frog_hop_target`).
+    /// Whether a bong-sized box centred on `p` clears every obstacle tile -
+    /// the landing test for the evasive hop (`combat::bong_hop_target`).
     ///
     /// A box-vs-box test against the tiles' own hulls, not a radius from
-    /// their centres: a tile is 32 px across and the frog 44 x 32, so the
+    /// their centres: a tile is 32 px across and the bong 44 x 32, so the
     /// contact distance is ~38 px. A radial cordon any wider than that
     /// spreads over whole cells of open ground and, on a map with any real
-    /// amount of terrain on it, leaves a crowded frog with nowhere at all
+    /// amount of terrain on it, leaves a crowded bong with nowhere at all
     /// to land - which reads as the hop being broken rather than tight.
-    pub fn frog_fits(&self, p: Position) -> bool {
-        let half = frog_half();
+    pub fn bong_fits(&self, p: Position) -> bool {
+        let half = bong_half();
         !self.obstacles.iter().any(|b| {
             (p.x - b.center.x).abs() < b.half.x + half.x && (p.y - b.center.y).abs() < b.half.y + half.y
         })
     }
 
     /// Whether a zero-width line from `from` to `to` clears every obstacle
-    /// and the frog - "could a shot get there". Deliberately not the
+    /// and the bong - "could a shot get there". Deliberately not the
     /// pathfinding grid (its cells are inflated by a tank's clearance
     /// margin, far wider than a shell, and reject plenty of clear shots on
     /// a dense map). Blind to tanks (`ai::Brain::friendly_blocks_shot`'s
     /// job) and to the boundary walls (both endpoints are always interior).
     pub fn line_of_sight(&self, from: Position, to: Position) -> bool {
-        self.line_of_sight_to_frog(from, to, None)
+        self.line_of_sight_to_bong(from, to, None)
     }
 
     /// `line_of_sight` from inside the tile `own`: a tower looking out of
@@ -385,55 +385,55 @@ impl Terrain {
             .iter()
             .filter(|b| b.entity != own && b.material.blocks_sight())
             .all(|b| !b.blocks_line(from, to))
-            && self.frogs.iter().all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
+            && self.bongs.iter().all(|&(_, p)| segment_hits_aabb(from, to, p, bong_half()).is_none())
     }
 
-    /// `line_of_sight` for a shot aimed *at* the frog `target`: that frog's
+    /// `line_of_sight` for a shot aimed *at* the bong `target`: that bong's
     /// own box is not an obstruction (a segment ending at its centre always
-    /// enters it), every other frog and tile still is. `None` ignores
+    /// enters it), every other bong and tile still is. `None` ignores
     /// nothing - the plain `line_of_sight`. Tiles that don't block sight
     /// (sandbags, fences - `Material::blocks_sight`) are looked over, and
     /// a holed one is looked through (`TerrainBox::blocks_line`).
-    pub fn line_of_sight_to_frog(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
+    pub fn line_of_sight_to_bong(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
         self.obstacles
             .iter()
             .filter(|b| b.material.blocks_sight())
             .all(|b| !b.blocks_line(from, to))
             && self
-                .frogs
+                .bongs
                 .iter()
                 .filter(|&&(e, _)| Some(e) != target)
-                .all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
+                .all(|&(_, p)| segment_hits_aabb(from, to, p, bong_half()).is_none())
     }
 
-    /// `line_of_sight_to_frog` for a hunter deciding whether a shot at the
-    /// frog `target` is worth taking: destructible tiles in the way do not
+    /// `line_of_sight_to_bong` for a hunter deciding whether a shot at the
+    /// bong `target` is worth taking: destructible tiles in the way do not
     /// count, since shells that stop short knock them down and open the
-    /// line - only Iron (never destroyed) and other frogs obstruct. This
+    /// line - only Iron (never destroyed) and other bongs obstruct. This
     /// is what lets a hunter shoot its way into a brick bunker instead of
     /// circling it for a line of sight that never comes.
-    pub fn line_of_fire_to_frog(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
+    pub fn line_of_fire_to_bong(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
         self.obstacles
             .iter()
             .filter(|b| b.material.is_permanent())
             .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
             && self
-                .frogs
+                .bongs
                 .iter()
                 .filter(|&&(e, _)| Some(e) != target)
-                .all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
+                .all(|&(_, p)| segment_hits_aabb(from, to, p, bong_half()).is_none())
     }
 
     /// The first thing the segment `p0..p1`, inflated by `half_extent` per
     /// side, hits. Every candidate box - each player's hull and turret,
-    /// each enemy's hull and turret, the frog, every obstacle tile, the
+    /// each enemy's hull and turret, the bong, every obstacle tile, the
     /// four walls - is scored by its entry time and the nearest wins, so a
     /// long segment can never skip what it would really have struck first.
     /// A player's shot is tested against an enemy's hull and turret grown
     /// by `player_shot_hit_pad_px` besides - the forgiveness a thumb
     /// needs, on the one target it is aimed at - while enemy shots, the
-    /// seats, the frog, tiles and walls keep the exact boxes.
-    /// Exact ties go players > enemies > frog > obstacles > walls. The
+    /// seats, the bong, tiles and walls keep the exact boxes.
+    /// Exact ties go players > enemies > bong > obstacles > walls. The
     /// shooter's own boxes are skipped. `players` is `Game::players()` -
     /// the seats in index order, `None` where a seat holds no tank.
     /// Returns the target plus `t` in `0..=1` along `p0..p1` (so a beam
@@ -456,7 +456,7 @@ impl Terrain {
     /// `sweep`, the one hit test, with two additions. The obstacle tiles
     /// in `ignore` are left out - the ones a projectile already rolled a
     /// pass-over on (`Projectile::passed_over`), so it keeps flying past
-    /// them to whatever is behind. And the enemy tanks and the frogs stand
+    /// them to whatever is behind. And the enemy tanks and the bongs stand
     /// where `past` had them: lag compensation for a seat's shot
     /// (docs/online-coop-prd.md §4.16). Only the boxes move back - who is
     /// a candidate is decided now, so a tank wrecked or gone since is not
@@ -516,9 +516,9 @@ impl Terrain {
             consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + enemy_pad), 1, ShellTarget::Tank(entity));
         }
 
-        for &(entity, now) in &self.frogs {
-            let pos = past.and_then(|p| p.frog(entity)).unwrap_or(now);
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, pos, frog_half() + pad), 2, ShellTarget::Frog(entity));
+        for &(entity, now) in &self.bongs {
+            let pos = past.and_then(|p| p.bong(entity)).unwrap_or(now);
+            consider_hit(&mut best, segment_hits_aabb(p0, p1, pos, bong_half() + pad), 2, ShellTarget::Bong(entity));
         }
 
         for b in &self.obstacles {
@@ -551,10 +551,10 @@ impl Terrain {
     /// candidates, boxes, pads and rewind - in order along it, cut after
     /// the first **stopper**: the field's edge, or a permanent tile (iron,
     /// a volcano's cone, a training door), iron only while `iron_stops`
-    /// (an overcharged slug cuts it). Each tank and frog appears once, at
+    /// (an overcharged slug cuts it). Each tank and bong appears once, at
     /// the first of its boxes the segment enters; the shooter never does.
-    /// Order: entry `t`, then the sweep's rank (seats, enemies, frogs,
-    /// tiles, the edge), then owner slot, frog or the tile's cell. Every
+    /// Order: entry `t`, then the sweep's rank (seats, enemies, bongs,
+    /// tiles, the edge), then owner slot, bong or the tile's cell. Every
     /// box is first held to the segment's own swept box (`SlugBand`), so a
     /// trace costs a comparison a tile.
     #[allow(clippy::too_many_arguments)]
@@ -601,10 +601,10 @@ impl Terrain {
                 hits.push((t, 1, tank.owner_slot() as i64, ShellTarget::Tank(entity)));
             }
         }
-        for (i, &(entity, now)) in self.frogs.iter().enumerate() {
-            let pos = past.and_then(|p| p.frog(entity)).unwrap_or(now);
-            if let Some(t) = first(&[(pos, frog_half() + pad)]) {
-                hits.push((t, 2, i as i64, ShellTarget::Frog(entity)));
+        for (i, &(entity, now)) in self.bongs.iter().enumerate() {
+            let pos = past.and_then(|p| p.bong(entity)).unwrap_or(now);
+            if let Some(t) = first(&[(pos, bong_half() + pad)]) {
+                hits.push((t, 2, i as i64, ShellTarget::Bong(entity)));
             }
         }
         let cell_key = |c: Position| ((c.y / crate::OBSTACLE_GRID_SIZE).floor() as i64) * 65_536 + (c.x / crate::OBSTACLE_GRID_SIZE).floor() as i64;
@@ -643,10 +643,10 @@ impl Terrain {
         out
     }
 
-    /// The frog `entity`'s box where it stands now, grown by a slug's
-    /// `half_extent` as `pierce_rewound` grows it. `None` for no such frog.
-    pub fn frog_box(&self, entity: Entity, half_extent: f32) -> Option<(Position, Position)> {
-        self.frogs.iter().find(|&&(e, _)| e == entity).map(|&(_, p)| (p, frog_half() + Position::new(half_extent, half_extent)))
+    /// The bong `entity`'s box where it stands now, grown by a slug's
+    /// `half_extent` as `pierce_rewound` grows it. `None` for no such bong.
+    pub fn bong_box(&self, entity: Entity, half_extent: f32) -> Option<(Position, Position)> {
+        self.bongs.iter().find(|&&(e, _)| e == entity).map(|&(_, p)| (p, bong_half() + Position::new(half_extent, half_extent)))
     }
 
     /// The tiles a slug along `p0..p1`, `half_extent` wide, goes into, in

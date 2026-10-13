@@ -949,7 +949,7 @@ mod tests {
             }
         }
         let won_at = won_at.expect("the round never ended");
-        assert_eq!(rig.ended(), Some(RoundOutcome::Won), "the hunt is won by killing the enemy frog");
+        assert_eq!(rig.ended(), Some(RoundOutcome::Won), "the hunt is won by killing the enemy bong");
 
         // The end screen was played, not skipped: the room went on
         // ticking for the whole countdown and only then said so.
@@ -1694,7 +1694,7 @@ mod tests {
     /// is not drawn a second time.
     #[test]
     fn a_seats_blast_is_drawn_on_the_press_and_only_once() {
-        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"sonic_hammer\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"sonic_hammer\" }\ncells.\"2,14\" = { kind = \"bong\" }\n";
         let options = RigOptions {
             map: MapFile::from_toml_str(map).expect("the map parses"),
             seed: Some(0xB0B5),
@@ -1823,7 +1823,7 @@ mod tests {
     /// either are never drawn beside them (docs/gravity-well.md "Wire").
     #[test]
     fn a_seats_orb_and_anchor_are_drawn_on_the_press_and_only_once() {
-        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"bong\" }\n";
         let options = RigOptions {
             map: MapFile::from_toml_str(map).expect("the map parses"),
             seed: Some(0xB0B5),
@@ -1873,7 +1873,7 @@ mod tests {
     /// of it, when it comes, is kept off the picture as the well's.
     #[test]
     fn a_quick_anchor_draws_no_second_orb() {
-        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"bong\" }\n";
         let options = RigOptions {
             map: MapFile::from_toml_str(map).expect("the map parses"),
             seed: Some(0xB0B5),
@@ -1924,7 +1924,7 @@ mod tests {
     /// it.
     #[test]
     fn an_owned_hull_in_a_well_is_placed_where_its_client_says() {
-        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"gravity_well\" }\ncells.\"2,14\" = { kind = \"bong\" }\n";
         let options = RigOptions {
             map: MapFile::from_toml_str(map).expect("the map parses"),
             seed: Some(0xB0B5),
@@ -1982,7 +1982,7 @@ mod tests {
     /// not drawn a second time.
     #[test]
     fn a_seats_pulse_is_drawn_on_the_press_and_only_once() {
-        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"emp_burst\" }\ncells.\"2,14\" = { kind = \"frog\" }\n";
+        let map = "version = 1\ntanks = 0\nmission.kind = \"protect\"\ncells.\"3,6\" = { kind = \"start\" }\ncells.\"5,6\" = { kind = \"pickup\", pickup = \"emp_burst\" }\ncells.\"2,14\" = { kind = \"bong\" }\n";
         let options = RigOptions {
             map: MapFile::from_toml_str(map).expect("the map parses"),
             seed: Some(0xB0B5),

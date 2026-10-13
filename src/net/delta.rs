@@ -3,7 +3,7 @@
 //! keeps one `Snapshot` per room and the client one per socket, and both
 //! step them with `apply_delta`. `Welcome` carries the first full one.
 //!
-//! Per keyed family (`tanks`, `shots`, `missiles`, `grenades`, `drones`, `frogs`, `tiles`, `fires`, `crates`, `grass_flat`) a delta
+//! Per keyed family (`tanks`, `shots`, `missiles`, `grenades`, `drones`, `bongs`, `tiles`, `fires`, `crates`, `grass_flat`) a delta
 //! carries three lists: entries that are new or changed (in full),
 //! entries that only moved by less than 32 px on each axis (`Moved`: the
 //! key and two `i8` quarter-pixel steps, the common case for every hull
@@ -25,7 +25,7 @@ use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
     AirState,
-    BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, FrogState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
+    BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
     ZoneState, TileState, side_code,
 };
 
@@ -33,7 +33,7 @@ use crate::net::wire::{
 /// (`dx`, `dy`) quarter pixels since the previous snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Moved {
-    /// The family's key: a tank's or shot's id, a frog's `side_code`.
+    /// The family's key: a tank's or shot's id, a bong's `side_code`.
     pub key: u16,
     pub dx: i8,
     pub dy: i8,
@@ -66,11 +66,11 @@ pub struct SnapshotDelta {
     pub drones: Vec<DroneState>,
     pub drones_moved: Vec<Moved>,
     pub drones_gone: Vec<u16>,
-    /// New or changed frogs, in full.
-    pub frogs: Vec<FrogState>,
-    pub frogs_moved: Vec<Moved>,
+    /// New or changed bongs, in full.
+    pub bongs: Vec<BongState>,
+    pub bongs_moved: Vec<Moved>,
     /// Keys are `side_code`s.
-    pub frogs_gone: Vec<u16>,
+    pub bongs_gone: Vec<u16>,
     pub pickups: Option<u64>,
     pub bonus_pickups: Option<Vec<BonusPickup>>,
     /// New or changed tiles, in full.
@@ -220,19 +220,19 @@ impl Positioned for AirState {
     }
 }
 
-impl Keyed for FrogState {
+impl Keyed for BongState {
     fn key(&self) -> u16 {
         side_code(self.side) as u16
     }
 }
 
-impl Positioned for FrogState {
+impl Positioned for BongState {
     fn xy(&self) -> (i16, i16) {
         (self.x, self.y)
     }
 
     fn with_xy(&self, x: i16, y: i16) -> Self {
-        FrogState { x, y, ..*self }
+        BongState { x, y, ..*self }
     }
 }
 
@@ -364,7 +364,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (missiles, missiles_moved, missiles_gone) = diff_positioned(&prev.missiles, &next.missiles);
     let (grenades, grenades_moved, grenades_gone) = diff_positioned(&prev.grenades, &next.grenades);
     let (drones, drones_moved, drones_gone) = diff_positioned(&prev.drones, &next.drones);
-    let (frogs, frogs_moved, frogs_gone) = diff_positioned(&prev.frogs, &next.frogs);
+    let (bongs, bongs_moved, bongs_gone) = diff_positioned(&prev.bongs, &next.bongs);
     let (tiles, tiles_gone) = diff_keyed(&prev.tiles, &next.tiles);
     let (fires, fires_gone) = diff_keyed(&prev.fires, &next.fires);
     let (lamps, lamps_gone) = diff_keyed(&prev.lamps, &next.lamps);
@@ -401,9 +401,9 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         drones,
         drones_moved,
         drones_gone,
-        frogs,
-        frogs_moved,
-        frogs_gone,
+        bongs,
+        bongs_moved,
+        bongs_gone,
         pickups: (next.pickups != prev.pickups).then_some(next.pickups),
         bonus_pickups: (bonus_pickups != prev_bonus).then_some(bonus_pickups),
         tiles,
@@ -454,7 +454,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         missiles: apply_positioned(&prev.missiles, &delta.missiles, &delta.missiles_moved, &delta.missiles_gone),
         grenades: apply_positioned(&prev.grenades, &delta.grenades, &delta.grenades_moved, &delta.grenades_gone),
         drones: apply_positioned(&prev.drones, &delta.drones, &delta.drones_moved, &delta.drones_gone),
-        frogs: apply_positioned(&prev.frogs, &delta.frogs, &delta.frogs_moved, &delta.frogs_gone),
+        bongs: apply_positioned(&prev.bongs, &delta.bongs, &delta.bongs_moved, &delta.bongs_gone),
         pickups: delta.pickups.unwrap_or(prev.pickups),
         bonus_pickups,
         tiles: apply_keyed(&prev.tiles, &delta.tiles, &delta.tiles_gone),
@@ -480,7 +480,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::frog::Side;
+    use crate::bong::Side;
     use crate::net::codec::{Msg, encode};
     use crate::net::wire::{RoundOutcome, ShotKind, WeaponKind, quantise_pos, quantise_velocity};
     use crate::pickup::PickupKind;
@@ -535,8 +535,8 @@ mod tests {
         }
     }
 
-    fn random_frog(rng: &mut SmallRng, side: Side) -> FrogState {
-        FrogState {
+    fn random_bong(rng: &mut SmallRng, side: Side) -> BongState {
+        BongState {
             side,
             x: rng.random_range(0..4000),
             y: rng.random_range(0..2000),
@@ -608,15 +608,15 @@ mod tests {
                 lock: rng.random(),
             })
             .collect();
-        let mut frogs = Vec::new();
+        let mut bongs = Vec::new();
         for side in [Side::Player, Side::Enemy] {
             if rng.random::<bool>() {
-                frogs.push(random_frog(rng, side));
+                bongs.push(random_bong(rng, side));
             }
         }
         let bonus_pickups = random_keys(rng, 3, 600)
             .into_iter()
-            .map(|cell| BonusPickup { cell, kind: if rng.random() { PickupKind::Shield } else { PickupKind::FrogHealth } })
+            .map(|cell| BonusPickup { cell, kind: if rng.random() { PickupKind::Shield } else { PickupKind::BongHealth } })
             .collect();
         let tiles = random_keys(rng, 20, 600)
             .into_iter()
@@ -655,7 +655,7 @@ mod tests {
             missiles,
             grenades,
             drones,
-            frogs,
+            bongs,
             pickups: rng.random(),
             bonus_pickups,
             tiles,
@@ -721,7 +721,7 @@ mod tests {
                 }
             }
         }
-        for f in &mut next.frogs {
+        for f in &mut next.bongs {
             if rng.random_ratio(1, 4) {
                 f.x = f.x.wrapping_add(rng.random_range(-20..=20));
             }
@@ -887,7 +887,7 @@ mod tests {
     }
 
     /// The snapshot the PRD sizes: eight tanks and twenty-four shots on
-    /// the default field, both frogs, nothing damaged yet.
+    /// the default field, both bongs, nothing damaged yet.
     fn busy_snapshot() -> Snapshot {
         let mut rng = SmallRng::seed_from_u64(0xB0B5);
         let tanks = (0..8u16)
@@ -924,16 +924,16 @@ mod tests {
                 variant: (id % 18) as u8, owner: 255,
             })
             .collect();
-        let frogs = vec![
-            FrogState { side: Side::Player, x: quantise_pos(544.0), y: quantise_pos(272.0), hp: 40, state: 0, phase: 0, hop_x: 0, hop_y: 0 },
-            FrogState { side: Side::Enemy, x: quantise_pos(96.0), y: quantise_pos(96.0), hp: 40, state: 0, phase: 0, hop_x: 0, hop_y: 0 },
+        let bongs = vec![
+            BongState { side: Side::Player, x: quantise_pos(544.0), y: quantise_pos(272.0), hp: 40, state: 0, phase: 0, hop_x: 0, hop_y: 0 },
+            BongState { side: Side::Enemy, x: quantise_pos(96.0), y: quantise_pos(96.0), hp: 40, state: 0, phase: 0, hop_x: 0, hop_y: 0 },
         ];
         let mut s = Snapshot {
             tick: 3600,
             server_ms: 60_000,
             tanks,
             shots,
-            frogs,
+            bongs,
             pickups: 0b1011,
             round: RoundState { wave: 2, alive: 7, pending: 4, intro: 0, next_wave: 0, restart: 0, outcome: RoundOutcome::Playing, lamps_out: 0 },
             ..Default::default()

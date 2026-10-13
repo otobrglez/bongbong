@@ -176,7 +176,7 @@ tuning table, the design docs and the wire all mean knocks to go past 400.
 no longer have a physics body at all, and tanks no longer carry hit-sensor
 colliders. Hit detection is `simulation::hits::Terrain::sweep`: a per-frame
 snapshot of the static terrain (obstacle tiles with their seams closed via
-`battlefield::tile_hull_half_extent`, the frog, the four walls from
+`battlefield::tile_hull_half_extent`, the bong, the four walls from
 `battlefield::wall_rects`) plus the live tanks' `hull_bbox_world`/
 `turret_bbox_world` boxes, swept by the projectile's whole movement segment
 this frame (`prev_position..position`, integrated inside the fixed-step
@@ -188,7 +188,7 @@ fallback and was in practice running every frame anyway), the two tests
 could disagree on hit priority, and dropping the sensor plumbing removed
 `owner_group`/`add_hit_sensor`/`resize_hit_sensor`/`spawn_shell`/
 `set_kinematic_position`/`intersecting` from `physics.rs` outright. Rapier
-now only ever sees solid bodies: tanks, walls, obstacles, the frog.
+now only ever sees solid bodies: tanks, walls, obstacles, the bong.
 
 ### Collision groups (replacing `Owner`-based filtering) - superseded
 

@@ -818,95 +818,94 @@ pub const GROUND_SCALE: f32 = 2.0;
 pub const GROUND_WORLD_TILE: f32 = GROUND_TEXTURE_SIZE * GROUND_SCALE; // = OBSTACLE_GRID_SIZE
 
 
-// ToxicFrog (src/frog.rs): the player's protect-objective - a static NPC
-// that ends the round in a loss the instant its health reaches zero, same
-// severity as the player's own tank being destroyed. See
-// static/toxic_frog/SOURCE.md for the sprite's provenance and
-// docs/FROG_SPEC.md for the full frame/animation layout - each of the five
-// animation PNGs is a plain 48x48-cell filmstrip, no slicing math beyond
-// `col * FROG_TEXTURE_SIZE`.
-pub const FROG_TEXTURE_SIZE: f32 = 48.0;
+// The bong (src/bong.rs): a side's objective - a static NPC that ends the
+// round in a loss the instant the player's reaches zero health, same
+// severity as the player's own tank being destroyed. Its art is generated
+// (tools/spritegen/bongs/, one folder per `bong::BongKind` under
+// static/bongs/); docs/BONG_SPEC.md has the frame/animation layout - each
+// of the five animation PNGs is a plain 48x48-cell filmstrip, no slicing
+// math beyond `col * BONG_TEXTURE_SIZE`.
+pub const BONG_TEXTURE_SIZE: f32 = 48.0;
 // On-screen scale - deliberately matches Tank::scale (2.0) for the same
 // reason: consistent on-screen pixel density across every sprite in the
-// game. The frog's actual content is a
-// small glyph within the 48x48 cell (see docs/FROG_SPEC.md), so this reads
+// game. The bong's actual content is a
+// small glyph within the 48x48 cell (see docs/BONG_SPEC.md), so this reads
 // as a modest, tank-sized presence on the field, not an oversized 96px prop.
-pub const FROG_SCALE: f32 = 2.0;
-pub const FROG_IDLE_FRAMES: i32 = 8;
-pub const FROG_HURT_FRAMES: i32 = 4;
-pub const FROG_HOP_FRAMES: i32 = 7;
-pub const FROG_ATTACK_FRAMES: i32 = 6;
-pub const FROG_EXPLOSION_FRAMES: i32 = 9;
-pub const FROG_IDLE_FPS: f32 = 6.0;
-pub const FROG_HURT_FPS: f32 = 10.0;
-pub const FROG_HOP_FPS: f32 = 10.0;
-pub const FROG_ATTACK_FPS: f32 = 10.0;
-pub const FROG_EXPLOSION_FPS: f32 = 10.0;
-// How long each one-shot clip plays before `Frog::anim` falls back to a
+pub const BONG_SCALE: f32 = 2.0;
+// Frame counts and rates: FRAMES / FPS is each clip's length, the idle loop
+// 1.33 s and the one-shots their `BONG_*_SECONDS`. The generator writes the
+// same counts (`CLIPS` in tools/spritegen/bongs/sprites.js) - change both.
+pub const BONG_IDLE_FRAMES: i32 = 24;
+pub const BONG_HURT_FRAMES: i32 = 12;
+pub const BONG_HOP_FRAMES: i32 = 21;
+pub const BONG_ATTACK_FRAMES: i32 = 18;
+pub const BONG_EXPLOSION_FRAMES: i32 = 27;
+pub const BONG_IDLE_FPS: f32 = 18.0;
+pub const BONG_HURT_FPS: f32 = 30.0;
+pub const BONG_HOP_FPS: f32 = 30.0;
+pub const BONG_ATTACK_FPS: f32 = 30.0;
+pub const BONG_EXPLOSION_FPS: f32 = 30.0;
+// How long each one-shot clip plays before `Bong::anim` falls back to a
 // lower-priority state - exactly FRAMES/FPS (one full pass); kept as their
-// own constants since `Frog::anim` needs a value, not an expression, to
+// own constants since `Bong::anim` needs a value, not an expression, to
 // compute "seconds elapsed since the trigger" for frame timing.
-pub const FROG_HURT_SECONDS: f32 = 0.4;
-pub const FROG_HOP_SECONDS: f32 = 0.7;
-pub const FROG_ATTACK_SECONDS: f32 = 0.6;
+pub const BONG_HURT_SECONDS: f32 = 0.4;
+pub const BONG_HOP_SECONDS: f32 = 0.7;
+pub const BONG_ATTACK_SECONDS: f32 = 0.6;
 // Health: deliberately much lower than MAX_DAMAGE - a couple of hits end
-// the round, so "protect the frog" is a real constraint on where the player
+// the round, so "protect the bong" is a real constraint on where the player
 // fights, not a background stat that never comes into play.
 // Physics collider half-extents (px) - sized to the sprite's actual visible
-// footprint (see docs/FROG_SPEC.md's per-frame bbox measurements), not the
+// footprint (see docs/BONG_SPEC.md's per-frame bbox measurements), not the
 // full padded 48x48 cell. Same `Physics::spawn_static` fixed-body shape as
 // an Obstacle: blocks tank movement and doubles as the shell-hit target,
 // no separate sensor collider needed.
-pub const FROG_COLLIDER_HALF_EXTENT: (f32, f32) = (22.0, 16.0);
+pub const BONG_COLLIDER_HALF_EXTENT: (f32, f32) = (22.0, 16.0);
 
 // Evasion: hop away from incoming fire. Both this and the attack range
-// below are expressed as a factor of `Frog::size()` (the on-screen sprite
-// footprint, FROG_TEXTURE_SIZE * FROG_SCALE) rather than an independent
+// below are expressed as a factor of `Bong::size()` (the on-screen sprite
+// footprint, BONG_TEXTURE_SIZE * BONG_SCALE) rather than an independent
 // pixel constant, so a hit/attack "reach" that reads as fair right now
-// keeps reading as fair if the frog's own on-screen size is ever retuned -
+// keeps reading as fair if the bong's own on-screen size is ever retuned -
 // per-instance data, not a fixed magic number unrelated to what's actually
 // on screen. 0.75 (was 1.5, itself halved from an original 3.0 - a full 3x
 // its own size, read as an unnaturally huge leap for a creature this small;
 // halved again so a hop now covers roughly three-quarters of a body-length
 // instead of one and a half - user feedback, 2026-08).
 // Debounce so a rapid volley of hits doesn't trigger a hop every single
-// frame one lands - roughly one hop per FROG_HOP_COOLDOWN_SECONDS even
+// frame one lands - roughly one hop per BONG_HOP_COOLDOWN_SECONDS even
 // under sustained fire.
-// `simulation::frog_hop_target`'s search shape - where it looks for a
+// `simulation::bong_hop_target`'s search shape - where it looks for a
 // landing spot, not how far a hop carries (that is the
-// `frog_hop_distance_factor` knob). It tries the ideal dead-away-from-the-
+// `bong_hop_distance_factor` knob). It tries the ideal dead-away-from-the-
 // threat angle first (plus a little random jitter so hops don't all look
 // mechanically identical), then this fan of offsets from it, and for each
-// angle in turn the lengths in FROG_HOP_DISTANCE_STEPS.
+// angle in turn the lengths in BONG_HOP_DISTANCE_STEPS.
 //
 // The fan stops at a quarter turn either way on purpose: past 90 degrees a
-// "hop away" carries the frog back toward whatever it is fleeing. Within
-// that it is deliberately dense, because terrain is what a cornered frog
+// "hop away" carries the bong back toward whatever it is fleeing. Within
+// that it is deliberately dense, because terrain is what a cornered bong
 // has to thread its way out of.
-pub const FROG_HOP_ANGLE_FAN_DEG: [f32; 13] =
+pub const BONG_HOP_ANGLE_FAN_DEG: [f32; 13] =
     [0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0, 75.0, -75.0, 90.0, -90.0];
 // Fractions of the full hop distance the search tries, longest first: a
 // short scramble out of a gap between two tiles beats standing still, and
-// a frog against a wall has nothing else left.
-pub const FROG_HOP_DISTANCE_STEPS: [f32; 3] = [1.0, 0.7, 0.45];
-// The pack is authored facing *right*: on every non-tongue frame of every
-// clip, in all six colour variants, the body's alpha bbox is x 11..31, and
-// the attack clip's tongue lashes out to +x (the bbox grows to x 11..47 on
-// frames 3-5). `frog::Facing::Left` is therefore drawn mirrored - there is
-// no left-facing art and no generator to make any, the pack is copied in
-// unmodified (static/toxic_frog/SOURCE.md).
+// a bong against a wall has nothing else left.
+pub const BONG_HOP_DISTANCE_STEPS: [f32; 3] = [1.0, 0.7, 0.45];
+// Every bong is drawn facing *right*: its strike reaches out to +x, to the
+// cell's edge at x 47. `bong::Facing::Left` is therefore drawn mirrored -
+// there is no left-facing art.
 //
-// The body's centre, 21.0, is 2.5 design px *left* of the 48 px cell's own
-// centre of 23.5, so mirroring the cell about that centre slides the body 5
-// design px right - 10 screen px at FROG_SCALE. `frog::mirror` hands that
-// back as a destination offset, so a mirrored frog sits exactly where an
-// unmirrored one does instead of jumping sideways when its facing flips.
-pub const FROG_SPRITE_BODY_CENTER_X: f32 = 21.0;
+// The generator centres every body on the cell's own axis, 23.5 between
+// pixel columns 23 and 24 (docs/BONG_SPEC.md), so mirroring the cell leaves
+// the body on the same ground and `bong::mirror`'s destination offset is
+// zero. The offset stays in `mirror` for art that is not centred.
+pub const BONG_SPRITE_BODY_CENTER_X: f32 = 23.5;
 // A hop with less horizontal travel than this reads as vertical, and the
-// frog keeps whatever facing it had. The hop fan reaches a quarter turn
-// either way (FROG_HOP_ANGLE_FAN_DEG), so a dead-vertical leap is a real
+// bong keeps whatever facing it had. The hop fan reaches a quarter turn
+// either way (BONG_HOP_ANGLE_FAN_DEG), so a dead-vertical leap is a real
 // case, and the sign of its near-zero dx would otherwise be float noise.
-pub const FROG_FACING_DEADBAND_PX: f32 = 4.0;
+pub const BONG_FACING_DEADBAND_PX: f32 = 4.0;
 
 // Pickups (pickup.rs): spawn only at the map's own `Pickup` cells (see
 // `map::CellObject::Pickup`, `battlefield::spawn_from_map`) - the map's
@@ -1041,7 +1040,7 @@ pub mod decal;
 pub mod devserver;
 pub mod editor;
 pub mod establish;
-pub mod frog;
+pub mod bong;
 pub mod fireball;
 pub mod fish;
 pub mod follow;

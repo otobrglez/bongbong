@@ -97,8 +97,8 @@ site. About 200 of them:
 
 | Where | Roughly | Examples |
 |---|---|---|
-| HUD bar and round (`render/hud.rs`, `render/game.rs`, `hud.rs`, `mode.rs`) | 30 | `SPEED`, `SHIELD`, `FROG`, `LEAVE`, `YOU WIN`, `YOU LOSE`, `Restarting in`, `Back to the lobby in`, `PAUSED`, the two dialogs |
-| Mission and wave banners (`level.rs:29-35`, `simulation/waves.rs:118-123`) | 5 | `PROTECT THE FROG!`, `HUNT THE FROG!`, `DESTROY!`, `WAVE N`, `FINAL WAVE` |
+| HUD bar and round (`render/hud.rs`, `render/game.rs`, `hud.rs`, `mode.rs`) | 30 | `SPEED`, `SHIELD`, `BONG`, `LEAVE`, `YOU WIN`, `YOU LOSE`, `Restarting in`, `Back to the lobby in`, `PAUSED`, the two dialogs |
+| Mission and wave banners (`level.rs:29-35`, `simulation/waves.rs:118-123`) | 5 | `PROTECT THE BONG!`, `HUNT THE BONG!`, `DESTROY!`, `WAVE N`, `FINAL WAVE` |
 | Lobby (`lobby.rs`, `render/lobby.rs`) | 40 | six stage titles, eight subtitles, `HOST A ROOM`, `I'M READY`, `REMATCH`, `+N MORE`, `AWAY`/`HOST`/`READY`/`WAITING` |
 | Online status and notes (`net/round.rs:579-604`, `net/client.rs`, `net/native.rs`, `net/web.rs`) | 25 | `CONNECTING`, `ASKING FOR A SEAT`, `OFFLINE: {reason}`, the close reasons |
 | Room server refusals (`server/src/{conn,hub,room}.rs`) | 25 | `room full`, `the host removed you from this room`, `no room X here` |
@@ -301,7 +301,7 @@ them, by three rules:
    language, the key, the width and the budget. A language file that does not
    fit does not merge, the way a probe fixture over its ceiling does not.
 3. **Where a budget is tight by nature, the fit rule is declared**, not
-   improvised: the bar's small labels (`SPEED`, `SHIELD`, `FROG`) fall to the
+   improvised: the bar's small labels (`SPEED`, `SHIELD`, `BONG`) fall to the
    next smaller size before truncating; button labels truncate with `~` at
    their budget; titles and subtitles in the lobby wrap to a second line, for
    which the panel's `Room` face has the room (the subtitle sits at

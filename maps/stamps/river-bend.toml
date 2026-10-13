@@ -2,7 +2,7 @@
 # "Selection, copy and stamps"): offered in the builder's STAMPS list,
 # where choosing it makes it the paste ghost. Not a map to play - `size`
 # is the stamp's own extent in cells, from its top-left - and it holds no
-# start, frog or gate, so putting it down never moves one. Embedded in the
+# start, bong or gate, so putting it down never moves one. Embedded in the
 # binary (`editor::select::SHIPPED_STAMPS`), so every build offers it.
 #
 # river-bend: a one-cell river turning from south to east, 8 x 6 cells,

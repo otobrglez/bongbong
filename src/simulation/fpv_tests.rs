@@ -524,7 +524,7 @@ fn launches_by(events: &[Event], slot: usize) -> Vec<(u32, Option<usize>, bool)>
     events
         .iter()
         .filter_map(|e| match *e {
-            Event::DroneLaunched { id, slot: s, target, frog, .. } if s == slot => Some((id, target, frog)),
+            Event::DroneLaunched { id, slot: s, target, bong, .. } if s == slot => Some((id, target, bong)),
             _ => None,
         })
         .collect()
@@ -577,16 +577,16 @@ fn the_swarm_launches_one_at_a_time_with_its_gap() {
     assert!(out_at_launch.iter().all(|&n| n == 1), "only the one just launched in the air: {out_at_launch:?}");
 }
 
-/// A hunter sends its drones at the players' frog.
+/// A hunter sends its drones at the players' bong.
 #[test]
-fn a_hunter_sends_its_drones_at_the_frog() {
-    let mut game = round_as("cells.\"14,12\" = { kind = \"frog\" }\n", Mission::Protect);
+fn a_hunter_sends_its_drones_at_the_bong() {
+    let mut game = round_as("cells.\"14,12\" = { kind = \"bong\" }\n", Mission::Protect);
     let seat = game.player().unwrap();
     game.place_tank(seat, cell(3, 1), Some(90.0)).unwrap();
     let enemy = fpv_enemy(&mut game, cell(20, 12), Role::Hunter, false);
     let events = idle(&mut game, 300);
     let l = launches_by(&events, slot_of(&game, enemy));
-    assert!(l.iter().any(|&(_, _, frog)| frog), "{l:?}");
+    assert!(l.iter().any(|&(_, _, bong)| bong), "{l:?}");
 }
 
 /// A seat hidden in tall grass is not launched at.
@@ -605,7 +605,7 @@ fn the_swarm_never_launches_at_a_seat_hidden_in_grass() {
 fn a_training_dummy_never_launches() {
     let mut game = round_as("", Mission::Destroy);
     let enemy = fpv_enemy(&mut game, cell(14, 6), Role::Hunter, false);
-    game.world.get::<&mut crate::ai::Ai>(enemy).unwrap().frog_only = true;
+    game.world.get::<&mut crate::ai::Ai>(enemy).unwrap().bong_only = true;
     let events = idle(&mut game, 300);
     assert!(launches_by(&events, slot_of(&game, enemy)).is_empty());
 }
@@ -617,7 +617,7 @@ fn a_training_dummy_fires_no_flak() {
     let mut game = round("");
     let enemy = parked(&mut game, cell(14, 6));
     with_tank_mut(&game.world, enemy, |t| t.minigun_ammo = 60);
-    game.world.get::<&mut crate::ai::Ai>(enemy).unwrap().frog_only = true;
+    game.world.get::<&mut crate::ai::Ai>(enemy).unwrap().bong_only = true;
     let slot = slot_of(&game, enemy);
     let events = launch(&mut game, 300);
     assert!(!events.iter().any(|e| matches!(e, Event::Fired { slot: s, weapon: "minigun" } if *s == slot)));

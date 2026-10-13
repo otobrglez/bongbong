@@ -49,11 +49,11 @@ Contents
 
 Everything a map places today is passive. Walls, props and trees block, burn
 and explode when something else acts on them; the only map-placed things that
-act on their own are the two frogs, and a frog is a fail state, not a weapon.
+act on their own are the two bongs, and a bong is a fail state, not a weapon.
 A map maker can shape where a fight happens but never who holds a position.
 
 Towers are the first placed thing that fights. For the player they are a way
-to hold ground in a Protect round: put a tesla coil beside the frog and the
+to hold ground in a Protect round: put a tesla coil beside the bong and the
 hunters that reach it pay for it. For a map maker they are the first way to
 make a *place* dangerous: an enemy gun tower on a bridge makes the bridge a
 decision. And for the AI they are a new kind of pressure that the routing
@@ -123,7 +123,7 @@ phase walks it and draws RNG (section 14). `init` builds it from the map;
 ```rust
 pub struct Tower {
     pub kind: TowerKind,          // Tesla | Gun | Bio
-    pub side: Side,               // frog::Side: Player | Enemy
+    pub side: Side,               // bong::Side: Player | Enemy
     pub heading: f32,             // gun and bio: turret heading, degrees, 0 = up
     pub target: Option<Entity>,   // the tank it is tracking or charging at
     pub charge: f32,              // tesla: 0..=1
@@ -142,7 +142,7 @@ is the full cell and it takes part in seam-closing like a wall.
 
 **Drawn standing, not flat.** The art rises north of its base, so a tank that
 drives behind (north of) a tower must be drawn behind it. Towers go into
-`paint_standing`'s y-sorted walk with the tanks and frogs, not into
+`paint_standing`'s y-sorted walk with the tanks and bongs, not into
 `paint_tiles`. Their shadow is drawn in `paint_tiles`' shadow pass so it falls
 under everything.
 
@@ -193,7 +193,7 @@ nearest *other* opposing tank within `tesla_chain_radius` (64 px), with line
 of sight, for `tesla_chain_factor` (0.5) of the rolled damage.
 `tesla_chain_jumps` 0 turns it off.
 
-**What it zaps.** Tanks only. Not frogs, not tiles, not its own side.
+**What it zaps.** Tanks only. Not bongs, not tiles, not its own side.
 Concealment in tall grass does not hide a tank from it (decision 8).
 
 **Events.** `Event::TeslaStrike { cell, x0, y0, x1, y1, target: HitTarget,
@@ -285,7 +285,7 @@ do not block the nav grid; the router pays `bio_puddle_path_cost` (3) per
 step through one, the way it pays for a ford. A cell that catches fire loses
 its ooze. Puddles are cleared by `init` like fires.
 
-**What it never touches.** Frogs, tiles and grass. The splash coats tanks
+**What it never touches.** Bongs, tiles and grass. The splash coats tanks
 only, as the request says.
 
 **Death.** The vat bursts: the ruin's cell and its eight neighbours get a
@@ -373,11 +373,11 @@ test and only their blast touches a tower. Nothing passes over a tower
 Written against decisions 2, 3 and 4. Decision 2 settled the artifact's R1
 (the shield also repairs) out; R2 and R3 are the two icons left to choose.
 
-**A new pickup, `PickupKind::TowerPack`**, built like the frog pack
-(docs/frog-health-pack-prd.md): a map slot `{ kind = "pickup", pickup =
+**A new pickup, `PickupKind::TowerPack`**, built like the bong pack
+(docs/bong-health-pack-prd.md): a map slot `{ kind = "pickup", pickup =
 "tower_pack" }`, respawning on `pickup_respawn_seconds`.
 
-**The rule**, in the frog pack's shape:
+**The rule**, in the bong pack's shape:
 
 > A tank collects a tower pack **unless every standing tower on its side is
 > already at full health and not burning.**
@@ -386,12 +386,12 @@ Written against decisions 2, 3 and 4. Decision 2 settled the artifact's R1
 |---|---|
 | has a hurt or burning tower | collected; every standing tower of that side restored to full and put out |
 | has towers, all full | **not collected**; the pack stays |
-| has no standing tower | collected and wasted (denial, as the frog pack) |
+| has no standing tower | collected and wasted (denial, as the bong pack) |
 
 The pack does not clean ooze off the ground or off the collector. Enemies
-collect it by driving over it, as with the frog pack; no AI seek tier.
+collect it by driving over it, as with the bong pack; no AI seek tier.
 
-**Bonus drop.** Beside a Health slot, like the shield and the frog pack
+**Bonus drop.** Beside a Health slot, like the shield and the bong pack
 (`maybe_spawn_health_slot_bonuses`), at `tower_pack_near_health_chance`
 (0.25), gated on "a player tower is hurt" **before** any RNG draw, so a map
 without towers - or with pristine ones - draws exactly what it drew before.
@@ -400,14 +400,14 @@ without towers - or with pristine ones - draws exactly what it drew before.
 `Event::TowerRepaired { cell, x, y }` per tower, which `fx.rs` turns into the
 rainbow burst at the tower.
 
-The icon is derived from `health.png` the way the shield's and the frog
+The icon is derived from `health.png` the way the shield's and the bong
 pack's are, by a `tools/gen_tower_pack_pickup.py` in the same raw-PNG-bytes
 convention: the box swept through the rainbow, the cross replaced by the
 chosen glyph (R2 a wrench, R3 a small coil tower).
 
 ## 10. Sides, friendly fire and the AI
 
-**Side.** `frog::Side`, set per tower in the map (decision 1). A player tower
+**Side.** `bong::Side`, set per tower in the map (decision 1). A player tower
 targets enemies; an enemy tower targets seats that are on the field
 (`seats_on_field()` - never a seat in a gate lane).
 
@@ -423,13 +423,13 @@ targets enemies; an enemy tower targets seats that are on the field
   `Owner::Tower`) remembers that tower for `enemy_tower_grudge_seconds` (4);
   while no player is within its attack range, it attacks the tower through
   the existing attack tier - a tower is a position plus a line-of-fire check
-  that ignores its own tile, which is what the frog already is to a hunter.
+  that ignores its own tile, which is what the bong already is to a hunter.
 - **Breach.** Unchanged: a tower blocking the way is a destructible tile and
   gets shot like one.
 
 **Players and enemy towers** need nothing: they shoot them.
 
-**Hunt** gets its natural shape for free: enemy towers around the enemy frog
+**Hunt** gets its natural shape for free: enemy towers around the enemy bong
 guard it.
 
 ## 11. Map format, builder and linter
@@ -479,7 +479,7 @@ no playfield cell, for the bio slush none beyond its minimum range) and
 `too-many-towers` (info: more than six on one side).
 
 **Fixtures.** `maps/test/towers.toml` - all three kinds, both sides, a tesla
-beside the frog, a bio tower covering a corridor with a stream nearby -
+beside the bong, a bio tower covering a corridor with a stream nearby -
 joins `just probe-fixtures` with recorded ceilings.
 
 ## 12. Presentation
@@ -661,7 +661,7 @@ A new `group towers` in `tuning.rs`:
    full charge; a tank that backs out before full charge takes nothing.
 2. The strike chains once to a second tank within the chain radius, for half
    the rolled damage, and not to a tank behind a wall.
-3. A tesla never charges at its own side, a frog, or a tank behind a wall.
+3. A tesla never charges at its own side, a bong, or a tank behind a wall.
 4. A gun tower turns toward a target at its turn rate and fires only inside
    its fire cone; its bullets pass through its own side's tanks; it holds fire
    while a friend is in the line.
@@ -689,7 +689,7 @@ A new `group towers` in `tuning.rs`:
     puts it out; it is not collected when all are full; an enemy collecting it
     repairs enemy towers only.
 15. A map without towers draws exactly the RNG it drew before (a same-seed
-    comparison, the frog pack's `a_pristine_frogs_health_slot...` pattern),
+    comparison, the bong pack's `a_pristine_bongs_health_slot...` pattern),
     and a round with only bio towers draws exactly what the same round draws
     without them.
 
@@ -707,7 +707,7 @@ Non-goals:
 
 - **Building towers in a round.** Towers come from the map; there is no
   in-round construction, currency or upgrade.
-- **Towers that move, turn to face walls, or target tiles and frogs.**
+- **Towers that move, turn to face walls, or target tiles and bongs.**
 - **A tower HUD.** No counts, no bar slot.
 - **A fourth tower.** The three share the `Tower` struct and the turret rule,
   so a fourth (a flame tower, say) is a variant, not a new system - but it is
@@ -722,7 +722,7 @@ Open questions beyond section 2's table, each with a lean:
   (1.5) more from a strike. Lean: yes, as a knob that defaults to 1.0 until
   play-tested. It pairs with the ooze: the water that washes slime off makes
   you a better conductor.
-- **Ooze on frogs.** Should a puddle slow the frog's hop, or the frog be
+- **Ooze on bongs.** Should a puddle slow the bong's hop, or the bong be
   unaffected? Lean: unaffected; the request is about tanks.
 - **AI and water.** A slimed enemy could route for the nearest water to wash.
   Lean: not in this PRD; the routing surcharge already keeps enemies out of
@@ -730,7 +730,7 @@ Open questions beyond section 2's table, each with a lean:
 - **Limits.** Should a map cap its towers (the linter warning past N per
   side)? Lean: no cap, a lint `too-many-towers` as info past 6.
 - **A shipped map.** One of `SHIPPED_MAPS` gaining towers (a Protect map with
-  a tesla at the frog) makes the feature discoverable on the web build, where
+  a tesla at the bong) makes the feature discoverable on the web build, where
   the builder is the only other way in. Lean: yes, in phase 3.
 - **Wave difficulty.** An enemy tower is extra difficulty the wave scaling
   (`wave_size_scale`) does not know about. Lean: leave it to the map maker.

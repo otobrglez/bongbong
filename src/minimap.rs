@@ -21,7 +21,7 @@
 //!   cells, as they do on the field.
 //! - **The marks** (`Marks`, `picture`): what goes over the image each
 //!   frame - the camera's view, every seat in its ring colour with its
-//!   number, the frogs, the gates flashing while a wave rolls in, and the
+//!   number, the bongs, the gates flashing while a wave rolls in, and the
 //!   enemies the screen's off-screen arrows could point at
 //!   (`indicators::Indicators::in_sight`: the one concealment rule, tall
 //!   grass and the sky's sight), so the minimap never shows what the field
@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::canvas::BlockImage;
 use crate::framing::Screen;
-use crate::frog::{Frog, Side};
+use crate::bong::{Bong, Side};
 use crate::ground::Depth;
 use crate::indicators::{Fill, Indicators, Label};
 use crate::map::{CellObject, MapFile, Theme};
@@ -585,9 +585,9 @@ pub struct SeatMark {
     pub local: bool,
 }
 
-/// A live frog: the player's, or the enemy's a Hunt round is after.
+/// A live bong: the player's, or the enemy's a Hunt round is after.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FrogMark {
+pub struct BongMark {
     pub side: Side,
     pub at: Position,
 }
@@ -611,7 +611,7 @@ pub struct Marks {
     pub second_view: Option<Rectangle>,
     /// Every live seat, in seat order.
     pub seats: Vec<SeatMark>,
-    pub frogs: Vec<FrogMark>,
+    pub bongs: Vec<BongMark>,
     /// The enemies the screen's seats have in sight, each once.
     pub enemies: Vec<Position>,
     pub gates: Vec<GateMark>,
@@ -650,10 +650,10 @@ impl Marks {
                 (!tank.is_wreck()).then(|| SeatMark { seat, at: onto_field(tank.position, field), local: local.contains(&seat) })
             })
             .collect();
-        let frogs = [game.frog, game.enemy_frog]
+        let bongs = [game.bong, game.enemy_bong]
             .into_iter()
             .flatten()
-            .filter_map(|e| game.world.get::<&Frog>(e).ok().filter(|f| !f.is_dead()).map(|f| FrogMark { side: f.side, at: f.position }))
+            .filter_map(|e| game.world.get::<&Bong>(e).ok().filter(|f| !f.is_dead()).map(|f| BongMark { side: f.side, at: f.position }))
             .collect();
         let t = crate::tuning::tuning();
         let volcanoes = game
@@ -671,7 +671,7 @@ impl Marks {
             .iter()
             .map(|a| (onto_field(a.ground, field), a.seat, a.stage == crate::air_support::AirStage::Attack))
             .collect();
-        Marks { view: Some(view), seats, frogs, volcanoes, zones, wells, aircraft, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
+        Marks { view: Some(view), seats, bongs, volcanoes, zones, wells, aircraft, time: game.time, numbered: game.players.count() > 1, ..Marks::from_shown(shown) }
     }
 
     /// The enemies and gates `shown` - one `Indicators` per seat the screen
@@ -702,10 +702,10 @@ fn onto_field(p: Position, field: (f32, f32)) -> Position {
 // ---- the picture ------------------------------------------------------------------------
 
 /// A mark's body and the near-black rim round it, in points: enemies the
-/// smallest, then frogs and seats; a flashing gate's frame; the view's
+/// smallest, then bongs and seats; a flashing gate's frame; the view's
 /// outline.
 const ENEMY_PT: i32 = 3;
-const FROG_PT: i32 = 4;
+const BONG_PT: i32 = 4;
 const SEAT_PT: i32 = 4;
 const RIM_PT: i32 = 1;
 const GATE_FRAME_PT: i32 = 9;
@@ -728,12 +728,12 @@ pub struct Picture {
 /// mark of theirs wears: the gates flashing in amber, blinking at
 /// `indicator_gate_blink_hz` on the round clock; the view's outline in
 /// white, both halves' on a split screen; the enemies in sight in the
-/// hostile red; the frogs in the FROG gauge's green, the enemy frog rimmed
+/// hostile red; the bongs in the BONG gauge's green, the enemy bong rimmed
 /// red; and the seats in their ring colours, the screen's own rimmed white
 /// and the others numbered in a round of two or more - the numbers set in
 /// `font` on dark plates.
 pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: &Tuning) -> Picture {
-    use crate::indicators::{FROG_GREEN, GATE_AMBER, HOSTILE, RIM, WHITE};
+    use crate::indicators::{BONG_GREEN, GATE_AMBER, HOSTILE, RIM, WHITE};
     let mut out = Picture::default();
     // Inside the rectangle's last whole point, or on its corner where it
     // is under a point across.
@@ -814,9 +814,9 @@ pub fn picture(marks: &Marks, rect: Rectangle, field: (f32, f32), font: i32, t: 
     for &enemy in &marks.enemies {
         square(&mut out.fills, at(enemy), ENEMY_PT, HOSTILE, RIM, inside);
     }
-    for frog in &marks.frogs {
-        let rim = if frog.side == Side::Enemy { HOSTILE } else { RIM };
-        square(&mut out.fills, at(frog.at), FROG_PT, FROG_GREEN, rim, inside);
+    for bong in &marks.bongs {
+        let rim = if bong.side == Side::Enemy { HOSTILE } else { RIM };
+        square(&mut out.fills, at(bong.at), BONG_PT, BONG_GREEN, rim, inside);
     }
     // The other seats, then the screen's own over them.
     let mut seats: Vec<&SeatMark> = marks.seats.iter().collect();
@@ -1067,7 +1067,7 @@ mod minimap_tests {
         assert!(Marks::from_shown(&[Awareness::new().frame(&dark, &view, &t)]).enemies.is_empty());
     }
 
-    /// Through a whole round: the seats, the frogs and the view.
+    /// Through a whole round: the seats, the bongs and the view.
     #[test]
     fn the_marks_read_the_round() {
         let mut game = Game::default();
@@ -1082,7 +1082,7 @@ mod minimap_tests {
         assert_eq!(marks.view, Some(view));
         assert_eq!(marks.seats.iter().map(|s| (s.seat, s.local)).collect::<Vec<_>>(), vec![(0, true), (1, false)]);
         assert!(marks.numbered);
-        assert_eq!(marks.frogs.len(), 1, "the player's frog");
+        assert_eq!(marks.bongs.len(), 1, "the player's bong");
         // A wrecked seat drops off.
         let entity = game.seat(1).expect("seat 1");
         game.world.get::<&mut Tank>(entity).expect("a tank").damage = crate::MAX_DAMAGE;
@@ -1173,7 +1173,7 @@ mod minimap_tests {
                 SeatMark { seat: 0, at: Position::new(1280.0, 720.0), local: true },
                 SeatMark { seat: 1, at: Position::new(2560.0, 0.0), local: false },
             ],
-            frogs: vec![FrogMark { side: Side::Enemy, at: Position::new(0.0, 1440.0) }],
+            bongs: vec![BongMark { side: Side::Enemy, at: Position::new(0.0, 1440.0) }],
             enemies: vec![Position::new(50.0, 50.0), Position::new(-400.0, 3000.0)],
             gates: vec![GateMark { at: Position::new(1200.0, 0.0), flash: 1.0 }],
             volcanoes: vec![(Position::new(2560.0, 1440.0), true)],
@@ -1192,7 +1192,7 @@ mod minimap_tests {
         assert!(l.plate.x >= 100 && l.plate.x + l.plate.w <= 260 && l.plate.y >= 50 && l.plate.y + l.plate.h <= 140, "{l:?}");
         let has = |c: Color| pic.fills.iter().any(|f| f.color.r == c.r && f.color.g == c.g && f.color.b == c.b);
         assert!(has(crate::indicators::GATE_AMBER), "a gate lit at time 0");
-        assert!(has(crate::indicators::HOSTILE) && has(crate::indicators::FROG_GREEN) && has(crate::tank::team_color(1)));
+        assert!(has(crate::indicators::HOSTILE) && has(crate::indicators::BONG_GREEN) && has(crate::tank::team_color(1)));
         let dark = picture(&Marks { time: 0.5 / t.indicator_gate_blink_hz + 0.01, ..marks.clone() }, rect, field, 10, &t);
         let amber = |p: &Picture| p.fills.iter().filter(|f| (f.color.r, f.color.g, f.color.b) == (0xEE, 0xA3, 0x43)).count();
         assert_eq!(amber(&dark), 0, "and dark in the other half");

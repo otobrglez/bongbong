@@ -75,7 +75,7 @@ what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
 
 ```
  ┌──────────────────────────────────────────────────────────────────────┐
- │PROTECT·WAVE 2/5  ENEMIES ▮▮▮▮▯▯▯  ♥ 100  ▬ 12  [L 3][P 6][M --]  SPD ▬ SHD ▬ FROG ▬  [BUILD]│ 32
+ │PROTECT·WAVE 2/5  ENEMIES ▮▮▮▮▯▯▯  ♥ 100  ▬ 12  [L 3][P 6][M --]  SPD ▬ SHD ▬ BONG ▬  [BUILD]│ 32
  ├──────────────────────────────────────────────────────────────────────┤
  │                                                                      │
  │                  battlefield 1280 x 720, origin (0, 32)               │
@@ -96,7 +96,7 @@ what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
   right): mission + wave (~250 px at 20 px), `ENEMIES` pips (12x10, ten
   max then `+N`), heart + HP, shell + count, three weapon slots of ~80 px
   (32 px icon + count, the active one outlined in its accent), three thin
-  bars with 11 px labels (`SPD`, `SHD`, `FROG`), and the `BUILD` toggle at
+  bars with 11 px labels (`SPD`, `SHD`, `BONG`), and the `BUILD` toggle at
   the right end. About 1200 of 1280 px. The version string moves into the
   window title (`BongBong! v0.0.9`); the dev-only `DEV overlays:` label and
   the multi-line per-tank stats readout stay where they are today, over the field.
@@ -104,7 +104,7 @@ what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
   fit inline next to the file actions, so the bar carries **category
   buttons** that open a dropdown over the field: `WALL` (brick/iron/wood/
   glass/concrete), `PROP` (sandbag/barrel/fence), `GROUND` (road, gate), `ACTOR`
-  (frog, enemy frog, start), `PICKUP` (the seven kinds). Each button shows
+  (bong, enemy bong, start), `PICKUP` (the seven kinds). Each button shows
   its category's *current* tool as its 32 px icon plus the tool name in
   11 px, so the active brush is always visible without opening anything;
   clicking the button selects that tool, clicking its caret opens the
@@ -141,7 +141,7 @@ what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
  │              world origin stays (0,0)              │ [P]  6   │
  │                                                    │ [M]  --  │
  │                                                    │ SPEED ▭  │  timed buffs
- │                                                    │ FROG  ▭  │  objective HP
+ │                                                    │ BONG  ▭  │  objective HP
  │                                                    │          │
  │                                                    │ [BUILD]  │  map-editor builds only
  │                                                    │ v0.0.9   │
@@ -160,14 +160,14 @@ what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
   and read better stacked; and it is the Battle City arrangement the game
   is pastiching, enemies-remaining column included.
 - Play-mode stack, top to bottom (all from `Game` read-only accessors that
-  `render` already uses: `with_tank`, `wave_status`, mission, frog):
+  `render` already uses: `with_tank`, `wave_status`, mission, bong):
   mission + wave, enemy pips (alive solid, pending outlined - the wave
   plan's `pending` count is already in `wave_status`), heart glyph + HP,
   shell glyph + count, the weapon queue as **icon + count rows** (the
   pickup icons already identify laser/plasma/minigun; a 26 px `MINIGUN 120`
   word label is ~150 px and does not fit a 136 px column) with the active
   row outlined in its accent colour instead of the current `>` marker,
-  speed/shield timer bars, the objective frog's HP (Protect and Hunt), then
+  speed/shield timer bars, the objective bong's HP (Protect and Hunt), then
   the footer: the dev `DEV overlays:` preset label and stats readout, the
   `BUILD` toggle (only with `map-editor`), the version line.
 - The mission intro banner, pause/end-screen dims and the barrel flash

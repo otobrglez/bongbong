@@ -5,7 +5,7 @@
 # `cargo run -- --map maps/crossplay/crossroads.toml --resolution 768x448`.
 # Hand-authored: re-saving from the map editor would drop these comments.
 #
-# crossroads: an open Protect arena. A road ring around the frog with the
+# crossroads: an open Protect arena. A road ring around the bong with the
 # player beside it, wood screens on both flanks, glass/iron caps top and
 # bottom, barrels in the corners. Every corridor is at least three cells.
 
@@ -51,7 +51,7 @@ cells."18,5" = { kind = "wall", material = "wood" }
 cells."1,6" = { kind = "pickup", pickup = "health" }
 cells."4,6" = { kind = "wall", material = "wood" }
 cells."9,6" = { kind = "road" }
-cells."11,6" = { kind = "frog" }
+cells."11,6" = { kind = "bong" }
 cells."13,6" = { kind = "road" }
 cells."18,6" = { kind = "wall", material = "wood" }
 cells."21,6" = { kind = "pickup", pickup = "ammo" }

@@ -88,7 +88,7 @@ level's banner.
 band, or the sum of every wave's size). A wreck is credited to the seat
 that last damaged it - `Tank::last_hit_by`, set through `Tank::credit` by a
 seat's shell, bullet, bolt, beam, flame, missile burst or ram. A wreck no
-seat touched (a drum, a fire, a frog's bite) counts for the team alone. All
+seat touched (a drum, a fire, a bong's bite) counts for the team alone. All
 of it is bookkeeping: no RNG, so every seeded replay and probe fixture is
 unchanged.
 
@@ -141,7 +141,7 @@ enemy there carries one of the six BB-36 weapons.
 | 8 Archipelago | laser, missiles, plasma | |
 | 9 Harbor Lights | laser (6,7), plasma, missiles, gauss rail (4,20) | gauss rail - through brick and glass warehouses, little iron |
 | 10 Serpent River | plasma, missiles, laser | |
-| 11 No Man's Land | missiles, minigun, flamethrower, rod from god (25,19) | rod from god - waves in the open, no frog to lose |
+| 11 No Man's Land | missiles, minigun, flamethrower, rod from god (25,19) | rod from god - waves in the open, no bong to lose |
 | 12 Scrapyard | flamethrower, missiles, minigun | |
 | 13 Black Gold | flamethrower, plasma, minigun, missiles, gravity well (1,13) | gravity well - drums pulled together on the fuse lines |
 | 14 Castle Moat | laser, minigun, missiles | |
@@ -153,7 +153,7 @@ The placements follow these rules:
   its sight box where it can, so the players reach it before an enemy does.
   Enemies collect a weapon crate while they are on shells
   (`Tank::wants_pickup`), so an enemy that gets there first fights with it.
-- **No rod or rail on a Hunt.** The rod's circle kills any frog in it and
+- **No rod or rail on a Hunt.** The rod's circle kills any bong in it and
   two slugs do too, so on a Hunt map either would end the hunt in one press.
 - **Kept setup draws.** A crate takes over a spare ammo or speed-up cell, or
   one cell of a cluster, never a health cell (only health draws its bonus

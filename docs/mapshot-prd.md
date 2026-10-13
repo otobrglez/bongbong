@@ -11,7 +11,7 @@ nothing in `site/`, `docs/` or the README mentioned thumbnails.
 Add a bin, `src/bin/mapshot.rs`, that takes map TOML files (or
 directories of them) and writes one PNG per map showing **the first frame
 of a fresh round on that map, field only, at 1:1 pixels**: ground
-tileset, road, oil pools, grass, walls, props, trees, frogs, pickups and
+tileset, road, oil pools, grass, walls, props, trees, bongs, pickups and
 the player start tank(s) with their steady ring, and nothing that moves or
 fights - no enemies, no intro banner, no round-start locate cue. It has
 **two renderers behind one flag, `--renderer cpu|gpu`, default `cpu`**.
@@ -75,10 +75,10 @@ Non-goals, for now
   fixed order: ground and edge shade, tread marks, scorches, landed
   rubble, oil pools, burning cells, non-tree obstacles with shadow and
   cap, the additive glows, pickups, the y-sorted `Standing` walk that
-  merges tanks and frogs with grass tufts by root, trees sorted by y, the
+  merges tanks and bongs with grass tufts by root, trees sorted by y, the
   player labels, projectiles, blasts, airborne rubble and drums, then
   particles. Every leaf draw function takes `d: &mut impl RaylibDraw` plus
-  a texture ref (`draw_obstacle`, `draw_tree`, `draw_tuft`, `draw_frog`,
+  a texture ref (`draw_obstacle`, `draw_tree`, `draw_tuft`, `draw_bong`,
   `draw_pickup`, `draw_tank`, ...). Between them they use seven raylib
   draw calls: `draw_texture_pro` (16 sites), `draw_rectangle` (6),
   `draw_ring` (5), `draw_circle_v` (4), `draw_text` (2),
@@ -97,7 +97,7 @@ Non-goals, for now
   `enemy_count_override = Some(0)` places no enemies for a Band plan (a
   Waves plan places none in `init` either, src/simulation/mod.rs:828, and
   ignores the count, src/level.rs:163). Pickups spawn in `init`
-  (src/simulation/mod.rs:1001), so do the frogs (:962, :997); ground and
+  (src/simulation/mod.rs:1001), so do the bongs (:962, :997); ground and
   grass are built at :1023 from the round RNG, so `seed_override` pins
   every cosmetic tile pick.
 - **The first frame is init plus one update.** The windowed game always
@@ -138,7 +138,7 @@ Non-goals, for now
   destination sizes differ (tanks draw at `tank.scale`, grass at
   `grass_scale`, pickups at `PICKUP_SCALE` - every scaled sprite would
   blur), ignores a negative source width (no mirroring, which
-  src/grass.rs:222 and src/frog.rs:495 rely on), `ImageDrawRectangle`
+  src/grass.rs:222 and src/bong.rs:495 rely on), `ImageDrawRectangle`
   copies bytes without alpha blending, and `ImageDrawText` lazily loads
   the default font through a GL texture. Hence an own rasteriser, with
   raylib only decoding the sheets and encoding the PNG.
@@ -159,14 +159,14 @@ pub enum Sheet {
     Ground, Tanks, Walls, Props, Trees, Grass, Damage, MinigunMount,
     Tracks, BarrelExplosion,
     Pickup(PickupKind),
-    Frog { variant: u8, clip: FrogAnim },
+    Bong { variant: u8, clip: BongAnim },
 }
 ```
 
 It replaces `obstacle::Sheet` (src/obstacle.rs:74, the three-variant
 Walls/Props/Trees enum) so there are not two enums of that name; the
 pickup `match` at src/game.rs:317-329 folds into `Sheet::Pickup(kind)`,
-and `Sheet::Frog` addresses `textures.frog_variants[variant].<clip>`. A
+and `Sheet::Bong` addresses `textures.bong_variants[variant].<clip>`. A
 single path table (`Sheet::path()` or `pub const` items beside it) is the
 one list the GPU loaders in src/app.rs:477-560, the ntk demo and the CPU
 loader all read.
@@ -239,7 +239,7 @@ gradients become the trait calls.
 | src/ground.rs:292, 325 | `draw_edge_shade`, `draw` |
 | src/grass.rs:205 | `draw_tuft` |
 | src/obstacle.rs:636-963 | `draw_oil_cell`, `draw_obstacle`, `draw_obstacle_cap` (and the private scorched-faces helper), `draw_tree`, `draw_tree_shadow`, `draw_obstacle_shadow`, `draw_flying_drum`; `ObstacleTextures` leaves the draw path |
-| src/frog.rs:460, 479 | `draw_frog_ring`, `draw_frog`; `FrogTextures::as_frog_textures` goes |
+| src/bong.rs:460, 479 | `draw_bong_ring`, `draw_bong`; `BongTextures::as_bong_textures` goes |
 | src/pickup.rs:106 | `draw_pickup` |
 | src/tank.rs:1260-1800 | `draw_tank`, `draw_tank_shadow`, `draw_ground_ring`, `draw_ground_ring_at`, `draw_ground_ring_scaled`, `draw_tank_shield`, `draw_player_ring`, `draw_enemy_ring`, `draw_player_locate`, `draw_minigun_mount`, `draw_minigun_mount_shadow` |
 | src/damage_stage.rs:83 | `draw_damage` |
@@ -266,7 +266,7 @@ impl Game {
     pub fn paint_floor(&self, c: &mut impl Canvas);
     /// Walls and props with their shadows and caps. Not trees.
     pub fn paint_tiles(&self, c: &mut impl Canvas);
-    /// Pickups, the y-sorted tanks/frogs/grass walk, then the trees.
+    /// Pickups, the y-sorted tanks/bongs/grass walk, then the trees.
     pub fn paint_standing(&self, c: &mut impl Canvas, opts: PaintOptions);
     /// The three above in order: the static field as a fresh round shows it.
     pub fn paint_field(&self, c: &mut impl Canvas, opts: PaintOptions);
@@ -388,7 +388,7 @@ attempted. `#[cfg(target_os = "emscripten")] fn main() {}` as in `bbmcp`.
    with the loader, rasteriser and PNG encoding, the rasteriser tests.
 2. Convert the leaf draw functions of 4.2 and the editor's `ground::draw`
    call; `obstacle::Sheet` becomes a re-export, `ObstacleTextures`,
-   `texture_for` and `FrogTextures` go (`FrogVariantTextures::clip`
+   `texture_for` and `BongTextures` go (`BongVariantTextures::clip`
    replaces the last).
 3. Split `Game::render` pass 1 into `paint_floor` / `paint_tiles` /
    `paint_standing` / `paint_field`, verified byte-identical (section 7).
@@ -423,7 +423,7 @@ attempted. `#[cfg(target_os = "emscripten")] fn main() {}` as in `bbmcp`.
   `--quiet` silences it entirely. The tests do the same for the sheets
   they decode.
 - **Time-dependent cosmetics** (grass sway, the trees' shimmer column,
-  the frog's idle frame) are functions of `time = 1/60` and position
+  the bong's idle frame) are functions of `time = 1/60` and position
   hashes, so they are deterministic and the pinned hashes catch any
   drift. Ground and grass tile picks come from the round RNG and are
   pinned by `--seed`.
@@ -461,5 +461,5 @@ attempted. `#[cfg(target_os = "emscripten")] fn main() {}` as in `bbmcp`.
 - **Speed**: the CPU renderer does all 30 maps under `maps/` in under five
   seconds in a debug build, sheet decoding included.
 - The CPU thumbnail of `default.toml` was eyeballed beside the GPU one:
-  ground, road, walls, props, trees, grass, pickups, the frog with its
+  ground, road, walls, props, trees, grass, pickups, the bong with its
   ring and the player tank with its steady ring, no cue, no enemies.

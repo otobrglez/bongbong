@@ -53,7 +53,7 @@ knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
   (`barrel_ram_damage_per_second` 40) detonates it at once. The blast
   (`barrel_blast_radius` 96, `barrel_blast_damage_min/max` 15/30 with
   linear falloff, `barrel_blast_knockback_speed` 140) hurts everyone — both
-  sides, frogs, walls and props — and puts every barrel in range on a
+  sides, bongs, walls and props — and puts every barrel in range on a
   fuse of about `barrel_fuse_seconds` (0.18; shorter near the centre,
   longer at the edge, then times the drum's own factor), so a cluster
   cascades outward. Shots fly over at `barrel_pass_over_chance` (0.08) and

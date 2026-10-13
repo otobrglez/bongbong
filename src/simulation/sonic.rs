@@ -3,7 +3,7 @@
 //! casts it into a wave once the tank loops are done, and
 //! `tick_sonic_waves` strikes whatever the wave's front passes, once -
 //! hulls knocked off their tracks (`knock`), glass shattered, grass
-//! flattened, drums thrown, frogs stunned, lanterns broken, grenades
+//! flattened, drums thrown, bongs stunned, lanterns broken, grenades
 //! pushed. Also the general pieces later weapons share: `knock`, the
 //! cover a flattened cell leaves (`Game::cover_cells`) and the hashed
 //! spawn swap (`swap_spawn_special`). No RNG anywhere here.
@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hecs::Entity;
 
 use crate::ai::{Ai, HammerAim, HammerSense, Role};
-use crate::frog::Frog;
+use crate::bong::Bong;
 use crate::math::Vec2;
 use crate::obstacle::Obstacle;
 use crate::physics::Physics;
@@ -401,7 +401,7 @@ impl Game {
 
     /// Everything `wave` reaches between the front's radii `from` and `to`,
     /// struck once, in a fixed order: panes, drums, the hulls (the seats in
-    /// index order, then the enemies by slot), the frogs, the lanterns, the
+    /// index order, then the enemies by slot), the bongs, the lanterns, the
     /// grenades, the drones in the air of the side opposing the shooter.
     fn strike(&mut self, f: &mut Frame, wave: &mut SonicWave, from: f32, to: f32, t: &Tuning) {
         let band = |d: f32| d >= from && d <= to;
@@ -464,13 +464,13 @@ impl Game {
                 self.strike_hull(f, entity, d, wave.cone.origin, shooter, t);
             }
         }
-        // Frogs are stunned.
-        for frog in self.world.query_mut::<&mut Frog>() {
-            if frog.is_dead() {
+        // Bongs are stunned.
+        for bong in self.world.query_mut::<&mut Bong>() {
+            if bong.is_dead() {
                 continue;
             }
-            if wave.cone.reaches(frog.position).is_some_and(|d| d <= to && d >= from - FRONT_SLACK_PX) {
-                frog.stun(t.sonic_frog_stun_seconds);
+            if wave.cone.reaches(bong.position).is_some_and(|d| d <= to && d >= from - FRONT_SLACK_PX) {
+                bong.stun(t.sonic_bong_stun_seconds);
             }
         }
         // A seat's lanterns are broken, as a blast breaks them.
@@ -660,11 +660,11 @@ impl Game {
                 // An offline tower (an EMP) is no trouble while it is out.
                 self.towers
                     .values()
-                    .find(|tw| tw.position == at && tw.side == crate::frog::Side::Enemy && tw.disabled <= 0.0)
+                    .find(|tw| tw.position == at && tw.side == crate::bong::Side::Enemy && tw.disabled <= 0.0)
                     .map(|tw| (at, tw.kind.range()))
             })
             .collect();
-        let quarry = self.frog.and_then(|e| self.world.get::<&Frog>(e).ok().filter(|fr| !fr.is_dead()).map(|fr| (fr.position, fr.is_stunned())));
+        let quarry = self.bong.and_then(|e| self.world.get::<&Bong>(e).ok().filter(|fr| !fr.is_dead()).map(|fr| (fr.position, fr.is_stunned())));
         let all_tanks: Vec<(usize, Position)> = self
             .world
             .query::<&Tank>()
@@ -705,7 +705,7 @@ impl Game {
                     ..HammerAim::default()
                 };
                 for seat in seats.iter().filter(|s| s.live) {
-                    if ai.frog_only || !crate::ai::in_sight_box_of((half_w, half_h), seat.pos, me) {
+                    if ai.bong_only || !crate::ai::in_sight_box_of((half_w, half_h), seat.pos, me) {
                         continue;
                     }
                     let hidden = seat.concealed && !ai.is_hit_alerted();
@@ -748,7 +748,7 @@ impl Game {
                 if ai.role == Role::Hunter
                     && let Some((at, stunned)) = quarry
                 {
-                    aim.frog = !stunned && cone.reaches(at).is_some();
+                    aim.bong = !stunned && cone.reaches(at).is_some();
                 }
                 sense.aims[dir.index()] = aim;
             }

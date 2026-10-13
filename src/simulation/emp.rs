@@ -14,7 +14,7 @@ use hecs::Entity;
 
 use crate::ai::{Ai, Danger, DangerShape, EmpSense};
 use crate::emp::{self, EmpPulse};
-use crate::frog::Side;
+use crate::bong::Side;
 use crate::math::Vec2;
 use crate::missile::Missile;
 use crate::obstacle::Obstacle;

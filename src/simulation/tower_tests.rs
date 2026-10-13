@@ -25,7 +25,7 @@ fn map_with(extra: &str) -> String {
         r#"
 version = 1
 tanks = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."20,18" = { kind = "start" }
 "#,
     );
@@ -192,9 +192,9 @@ fn a_strike_does_not_chain_through_a_wall() {
     assert_eq!(snapshot(&game, 1).damage, 0.0);
 }
 
-// 3. A tesla never charges at its own side, a frog, or a tank behind a wall.
+// 3. A tesla never charges at its own side, a bong, or a tank behind a wall.
 #[test]
-fn a_tesla_ignores_its_own_side_frogs_and_tanks_behind_walls() {
+fn a_tesla_ignores_its_own_side_bongs_and_tanks_behind_walls() {
     let map = map_with(
         "cells.\"20,12\" = { kind = \"tesla\" }\n\
          cells.\"4,2\" = { kind = \"tesla\", side = \"enemy\" }\n",
@@ -204,7 +204,7 @@ fn a_tesla_ignores_its_own_side_frogs_and_tanks_behind_walls() {
     let events = idle(&mut game, 150);
     assert!(strikes(&events).is_empty());
     assert_eq!(tower(&game, (20, 12)).charge, 0.0, "its own side's tank");
-    assert_eq!(tower(&game, (4, 2)).charge, 0.0, "the frog two cells away");
+    assert_eq!(tower(&game, (4, 2)).charge, 0.0, "the bong two cells away");
 
     let map = map_with(&(enemy_tesla((20, 12)) + "cells.\"20,13\" = { kind = \"wall\", material = \"iron\" }\n"));
     let mut game = game_on(&map, PlayerCount::ONE, 3);

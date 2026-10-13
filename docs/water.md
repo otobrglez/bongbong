@@ -2,7 +2,7 @@
 
 `docs/GROUND_SPEC.md` §9 is the picture: how a painted `water` cell becomes
 a river or a lake, the animation and the current's marks. This document is
-the rules - what that water does to a hull, a shot, a fire, a frog and the
+the rules - what that water does to a hull, a shot, a fire, a bong and the
 AI's routing - and where each rule lives.
 
 ## One reading, two consumers
@@ -23,7 +23,7 @@ is ringed by that shore too. Water painted to the map's edge runs off it
 in the picture; the rules stop at the map. `WaterLayout` is built at the
 top of `Game::init` from the map's cells alone (no RNG, no world), before
 anything is placed, and lives on `Game::water`; `hits::Terrain` carries a
-copy for the frog. A map without water leaves every rule a no-op, and no
+copy for the bong. A map without water leaves every rule a no-op, and no
 rule draws RNG, so every existing seed replays unchanged.
 
 ## Deep water: a wall to hulls, nothing to shots
@@ -39,7 +39,7 @@ rule draws RNG, so every existing seed replays unchanged.
 - **The nav grid** (`Game::nav_grid`) chains the deep cells in as obstacles
   at a cell's half-extent, so the AI routes round a lake exactly as round a
   wall, `blocked_ahead` steers off its edge, and `maplint`'s breach grid
-  counts it as permanent. Enemy clearance rolls, frog and bonus placement
+  counts it as permanent. Enemy clearance rolls, bong and bonus placement
   all treat deep cells as terrain (`obstacle_positions`), so nothing spawns
   in a lake.
 - **The player's start.** A cell holds one object, so a `start` cell can
@@ -91,15 +91,15 @@ rule draws RNG, so every existing seed replays unchanged.
 - A blast or a death on water leaves no scorch; `fx.rs` throws spray
   instead.
 
-## Frogs love water
+## Bongs love water
 
-`combat::frog_hop_target` runs its ladder twice: first taking only a
+`combat::bong_hop_target` runs its ladder twice: first taking only a
 landing in water (any depth), then any landing. One jitter draw either
-way, so a map without water hops exactly as before. A frog in deep water is
-out of every hull's reach - a sanctuary beside the player's frog in
+way, so a map without water hops exactly as before. A bong in deep water is
+out of every hull's reach - a sanctuary beside the player's bong in
 Protect, a fortress to shell from the bank in Hunt - but still in every
-shot's reach. It does not heal there; healing stays with the frog health
-pack (docs/frog-health-pack-prd.md).
+shot's reach. It does not heal there; healing stays with the bong health
+pack (docs/bong-health-pack-prd.md).
 
 ## Presentation
 

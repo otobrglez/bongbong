@@ -1,5 +1,5 @@
 use crate::math;
-use crate::frog::Side;
+use crate::bong::Side;
 use crate::tuning::tuning;
 use crate::math::Vec2;
 

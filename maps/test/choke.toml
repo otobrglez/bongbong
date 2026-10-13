@@ -29,7 +29,7 @@ cells."20,13" = { kind = "wall", material = "iron" }
 cells."20,14" = { kind = "wall", material = "iron" }
 cells."20,15" = { kind = "wall", material = "iron" }
 cells."20,16" = { kind = "wall", material = "iron" }
-cells."10,17" = { kind = "frog" }
+cells."10,17" = { kind = "bong" }
 cells."20,17" = { kind = "wall", material = "iron" }
 cells."20,18" = { kind = "wall", material = "iron" }
 cells."20,19" = { kind = "wall", material = "iron" }

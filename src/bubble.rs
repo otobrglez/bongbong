@@ -1,11 +1,11 @@
-//! The frog's voice in a training round (docs/training-stage.md), headless
-//! like `indicators.rs`: what the frog says and when (`FrogVoice`), and the
+//! The bong's voice in a training round (docs/training-stage.md), headless
+//! like `indicators.rs`: what the bong says and when (`BongVoice`), and the
 //! speech bubble it says it in, laid out in the bitmap's pixels (`layout`);
 //! `render/bubble.rs` paints it.
 //!
 //! The round never reads a word (nothing under `simulation/` does): the
 //! script names each beat's lines by message key, and the events the round
-//! already sends say when the frog has something to add. `FrogVoice` is
+//! already sends say when the bong has something to add. `BongVoice` is
 //! owned by `app.rs` the way `fx::Fx` is - it reads the round after every
 //! step and never writes it, and keeps its queue and clock on the time the
 //! round advanced, so a frozen round says nothing more.
@@ -16,16 +16,16 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use crate::frog::Side;
+use crate::bong::Side;
 use crate::math::{Rectangle, Vec2};
 use crate::pickup::PickupKind;
 use crate::simulation::{Event, Game, HitTarget, Outcome};
 use crate::tuning::Tuning;
 
-/// What the frog says and when: the lines waiting, the one showing, how
+/// What the bong says and when: the lines waiting, the one showing, how
 /// long nothing has been said, and the lines it says only once a round.
 #[derive(Debug, Default)]
-pub struct FrogVoice {
+pub struct BongVoice {
     queue: VecDeque<String>,
     line: Option<Showing>,
     quiet: f32,
@@ -46,7 +46,7 @@ pub struct Showing {
     pub age: f32,
 }
 
-impl FrogVoice {
+impl BongVoice {
     /// The line up, if any.
     pub fn showing(&self) -> Option<&Showing> {
         self.line.as_ref()
@@ -61,7 +61,7 @@ impl FrogVoice {
             return;
         }
         if game.frame() < self.last_frame || game.round_seed() != self.seed {
-            *self = FrogVoice { seed: game.round_seed(), ..FrogVoice::default() };
+            *self = BongVoice { seed: game.round_seed(), ..BongVoice::default() };
         }
         self.last_frame = game.frame();
         let (Some(status), Some(script)) = (game.training_status(), game.map.training.as_ref()) else {
@@ -73,7 +73,7 @@ impl FrogVoice {
             if !self.finished {
                 self.finished = true;
                 self.queue.clear();
-                self.say(crate::text::keys::FROG_READY.0);
+                self.say(crate::text::keys::BONG_READY.0);
             }
             return;
         }
@@ -92,17 +92,17 @@ impl FrogVoice {
         let seats = game.players.count();
         for event in game.events() {
             match *event {
-                Event::Hit { target: HitTarget::Frog { side: Side::Player }, .. } if status.id == "frog" => {
-                    self.say_once(crate::text::keys::FROG_OW.0);
-                    self.say_once(crate::text::keys::FROG_KIT.0);
+                Event::Hit { target: HitTarget::Bong { side: Side::Player }, .. } if status.id == "bong" => {
+                    self.say_once(crate::text::keys::BONG_OW.0);
+                    self.say_once(crate::text::keys::BONG_KIT.0);
                 }
-                Event::Hit { target: HitTarget::Enemy { .. }, .. } if status.id == "enemy" => self.say_once(crate::text::keys::FROG_ONLY_ME.0),
-                Event::FrogHealed { side: Side::Player, .. } => self.say_once(crate::text::keys::FROG_HEALED.0),
-                Event::FrogBite { side: Side::Player, .. } => self.say_once(crate::text::keys::FROG_CHOMP.0),
-                Event::PickupCollected { slot, kind: PickupKind::Minigun, .. } if slot < seats => self.say_once(crate::text::keys::FROG_MINIGUN.0),
+                Event::Hit { target: HitTarget::Enemy { .. }, .. } if status.id == "enemy" => self.say_once(crate::text::keys::BONG_ONLY_ME.0),
+                Event::BongHealed { side: Side::Player, .. } => self.say_once(crate::text::keys::BONG_HEALED.0),
+                Event::BongBite { side: Side::Player, .. } => self.say_once(crate::text::keys::BONG_CHOMP.0),
+                Event::PickupCollected { slot, kind: PickupKind::Minigun, .. } if slot < seats => self.say_once(crate::text::keys::BONG_MINIGUN.0),
                 Event::Wreck { slot, .. } if slot < seats => {
-                    if !self.queue.iter().any(|k| k == crate::text::keys::FROG_DOWN.0) {
-                        self.say(crate::text::keys::FROG_DOWN.0);
+                    if !self.queue.iter().any(|k| k == crate::text::keys::BONG_DOWN.0) {
+                        self.say(crate::text::keys::BONG_DOWN.0);
                     }
                 }
                 _ => {}
@@ -148,7 +148,7 @@ impl FrogVoice {
     }
 
     fn say(&mut self, key: &str) {
-        self.queue.push_back(key.to_string());
+        self.queue.push_back(line_key(key));
         self.quiet = 0.0;
     }
 
@@ -156,6 +156,15 @@ impl FrogVoice {
         if self.once.insert(key) {
             self.say(key);
         }
+    }
+}
+
+/// The catalogue key a script's line names: a player's saved training map
+/// may spell its lines with the old `frog-` prefix, which reads as `bong-`.
+pub fn line_key(key: &str) -> String {
+    match key.strip_prefix("frog-") {
+        Some(rest) => format!("bong-{rest}"),
+        None => key.to_string(),
     }
 }
 
@@ -222,7 +231,7 @@ pub struct Bubble {
     pub size: f32,
     pub line_height: f32,
     /// Where the tail meets the body and where it points, or `None` when
-    /// the frog is off the view and the bubble stands at its edge.
+    /// the bong is off the view and the bubble stands at its edge.
     pub tail: Option<(Vec2, Vec2)>,
     /// The bitmap's pixels per UI point, for the outline and the keys.
     pub px: f32,
@@ -232,9 +241,9 @@ pub struct Bubble {
 pub const TEXT_PT: f32 = 12.0;
 pub const PAD_PT: f32 = 7.0;
 pub const MAX_WIDTH_PT: f32 = 220.0;
-/// How far above the frog's middle the tail's tip stands.
+/// How far above the bong's middle the tail's tip stands.
 pub const ABOVE_PT: f32 = 22.0;
-/// How far below the frog's middle a bubble that has no room above it
+/// How far below the bong's middle a bubble that has no room above it
 /// starts.
 pub const BELOW_PT: f32 = 24.0;
 /// How far the tail reaches out of the body.
@@ -243,13 +252,13 @@ pub const TAIL_PT: f32 = 8.0;
 pub const INSET_PT: f32 = 6.0;
 
 /// Lay out `text`, its first `shown` words revealed, as a bubble pointing
-/// at `frog` (bitmap px) inside `view` (the field the screen shows, bitmap
+/// at `bong` (bitmap px) inside `view` (the field the screen shows, bitmap
 /// px), at `px` bitmap pixels a point; `measure` is a word's width at a
 /// text size (`text::width`'s answer). The body is sized for the whole
-/// line, so it never grows as the words come in; it stands above the frog,
+/// line, so it never grows as the words come in; it stands above the bong,
 /// under it where there is no room above, and slid along the view's edge -
-/// tail-less - while the frog is off the view.
-pub fn layout(text: &str, shown: usize, frog: Vec2, view: Rectangle, keep_out: &[Rectangle], px: f32, measure: impl Fn(&str, f32) -> f32) -> Bubble {
+/// tail-less - while the bong is off the view.
+pub fn layout(text: &str, shown: usize, bong: Vec2, view: Rectangle, keep_out: &[Rectangle], px: f32, measure: impl Fn(&str, f32) -> f32) -> Bubble {
     let size = (TEXT_PT * px).round().max(10.0);
     let line_height = (size * 1.25).round();
     let space = measure(" ", size).max(size * 0.3);
@@ -294,18 +303,18 @@ pub fn layout(text: &str, shown: usize, frog: Vec2, view: Rectangle, keep_out: &
     let inset = INSET_PT * px;
     let (left, right) = (view.x + inset, view.x + view.width - inset - w);
     let (top, bottom) = (view.y + inset, view.y + view.height - inset - h);
-    let on_view = view.contains(frog);
-    let x = (frog.x - w / 2.0).clamp(left, right.max(left));
-    let above = frog.y - ABOVE_PT * px - TAIL_PT * px - h;
+    let on_view = view.contains(bong);
+    let x = (bong.x - w / 2.0).clamp(left, right.max(left));
+    let above = bong.y - ABOVE_PT * px - TAIL_PT * px - h;
     let overlaps = |y: f32| keep_out.iter().any(|k| overlap(Rectangle::new(x, y, w, h), *k));
     let (y, tail) = if !on_view {
-        (frog.y.clamp(top, bottom.max(top)), None)
+        (bong.y.clamp(top, bottom.max(top)), None)
     } else if above >= top && !overlaps(above) {
-        let tip = Vec2::new(frog.x.clamp(x + 2.0 * PAD_PT * px, x + w - 2.0 * PAD_PT * px), frog.y - ABOVE_PT * px);
+        let tip = Vec2::new(bong.x.clamp(x + 2.0 * PAD_PT * px, x + w - 2.0 * PAD_PT * px), bong.y - ABOVE_PT * px);
         (above, Some((Vec2::new(tip.x, above + h), tip)))
     } else {
-        let y = (frog.y + BELOW_PT * px + TAIL_PT * px).min(bottom.max(top));
-        let tip = Vec2::new(frog.x.clamp(x + 2.0 * PAD_PT * px, x + w - 2.0 * PAD_PT * px), frog.y + BELOW_PT * px);
+        let y = (bong.y + BELOW_PT * px + TAIL_PT * px).min(bottom.max(top));
+        let tip = Vec2::new(bong.x.clamp(x + 2.0 * PAD_PT * px, x + w - 2.0 * PAD_PT * px), bong.y + BELOW_PT * px);
         (y, Some((Vec2::new(tip.x, y), tip)))
     };
     Bubble {
@@ -365,21 +374,21 @@ mod tests {
     }
 
     #[test]
-    fn the_bubble_stands_above_the_frog_and_under_it_near_the_top() {
-        let high = layout("Hi! I'm your frog.", 99, Vec2::new(400.0, 300.0), VIEW, &[], 1.0, measure);
+    fn the_bubble_stands_above_the_bong_and_under_it_near_the_top() {
+        let high = layout("Hi! I'm your bong.", 99, Vec2::new(400.0, 300.0), VIEW, &[], 1.0, measure);
         let (_, tip) = high.tail.expect("a tail on view");
         assert!(high.rect.y + high.rect.height < 300.0 && tip.y < 300.0, "above");
-        let low = layout("Hi! I'm your frog.", 99, Vec2::new(400.0, 20.0), VIEW, &[], 1.0, measure);
-        assert!(low.rect.y > 20.0, "under the frog where there is no room above");
-        let edge = layout("Hi! I'm your frog.", 99, Vec2::new(5.0, 200.0), VIEW, &[], 1.0, measure);
+        let low = layout("Hi! I'm your bong.", 99, Vec2::new(400.0, 20.0), VIEW, &[], 1.0, measure);
+        assert!(low.rect.y > 20.0, "under the bong where there is no room above");
+        let edge = layout("Hi! I'm your bong.", 99, Vec2::new(5.0, 200.0), VIEW, &[], 1.0, measure);
         assert!(edge.rect.x >= INSET_PT, "slid inside the view");
         let hud = [Rectangle::new(0.0, 0.0, 800.0, 280.0)];
-        let clear = layout("Hi! I'm your frog.", 99, Vec2::new(400.0, 300.0), VIEW, &hud, 1.0, measure);
-        assert!(clear.rect.y > 300.0, "under the frog rather than under a corner cluster");
+        let clear = layout("Hi! I'm your bong.", 99, Vec2::new(400.0, 300.0), VIEW, &hud, 1.0, measure);
+        assert!(clear.rect.y > 300.0, "under the bong rather than under a corner cluster");
     }
 
     #[test]
-    fn a_frog_off_the_view_speaks_from_its_edge_with_no_tail() {
+    fn a_bong_off_the_view_speaks_from_its_edge_with_no_tail() {
         let b = layout("Here it comes!", 99, Vec2::new(1400.0, 200.0), VIEW, &[], 1.0, measure);
         assert!(b.tail.is_none());
         assert!(b.rect.x + b.rect.width <= VIEW.width - INSET_PT + 0.5);
@@ -387,19 +396,19 @@ mod tests {
 
     #[test]
     fn a_touch_screen_takes_a_lines_touch_twin_where_there_is_one() {
-        let has = |k: &str| k == "frog-fire-touch";
-        assert_eq!(key_for("frog-fire", true, has), "frog-fire-touch");
-        assert_eq!(key_for("frog-fire", false, has), "frog-fire");
-        assert_eq!(key_for("frog-hello", true, has), "frog-hello");
+        let has = |k: &str| k == "bong-fire-touch";
+        assert_eq!(key_for("bong-fire", true, has), "bong-fire-touch");
+        assert_eq!(key_for("bong-fire", false, has), "bong-fire");
+        assert_eq!(key_for("bong-hello", true, has), "bong-hello");
     }
 
     /// A course of one door and a flag, its two beats' lines and nudges.
     fn round() -> Game {
         let mut map = String::from(
-            "version = 1\ntanks = 0\nsize = [16.0, 9.0]\ncells.\"2,4\" = { kind = \"start\" }\ncells.\"6,4\" = { kind = \"flag\" }\ncells.\"12,4\" = { kind = \"frog\" }\n",
+            "version = 1\ntanks = 0\nsize = [16.0, 9.0]\ncells.\"2,4\" = { kind = \"start\" }\ncells.\"6,4\" = { kind = \"flag\" }\ncells.\"12,4\" = { kind = \"bong\" }\n",
         );
-        map.push_str("\n[[training.beat]]\nsay = [\"frog-hello\", \"frog-flags\"]\nnudge = \"frog-flags-nudge\"\ndone = { flags = 1 }\n");
-        map.push_str("\n[[training.beat]]\nsay = [\"frog-crates\"]\ndone = { past_col = 14 }\n");
+        map.push_str("\n[[training.beat]]\nsay = [\"bong-hello\", \"bong-flags\"]\nnudge = \"bong-flags-nudge\"\ndone = { flags = 1 }\n");
+        map.push_str("\n[[training.beat]]\nsay = [\"bong-crates\"]\ndone = { past_col = 14 }\n");
         let mut game = Game::default();
         game.seed_override = Some(3);
         game.map = crate::map::MapFile::from_toml_str(&map).expect("parses");
@@ -408,7 +417,7 @@ mod tests {
         game
     }
 
-    fn run(game: &mut Game, voice: &mut FrogVoice, frames: usize, said: &mut Vec<String>) {
+    fn run(game: &mut Game, voice: &mut BongVoice, frames: usize, said: &mut Vec<String>) {
         let (w, h) = game.map.field_size();
         let t = crate::tuning::Tuning::DEFAULT;
         for _ in 0..frames {
@@ -424,17 +433,35 @@ mod tests {
     }
 
     #[test]
-    fn the_frog_says_each_beats_lines_in_turn_and_nudges_when_it_goes_quiet() {
+    fn the_bong_says_each_beats_lines_in_turn_and_nudges_when_it_goes_quiet() {
         let mut game = round();
-        let mut voice = FrogVoice::default();
+        let mut voice = BongVoice::default();
         let mut said = Vec::new();
         let t = crate::tuning::Tuning::DEFAULT;
         let line = t.training_line_seconds + t.training_line_seconds_per_char * 20.0;
         run(&mut game, &mut voice, ((2.0 * line + t.training_nudge_seconds + 1.0) * 60.0) as usize, &mut said);
-        assert_eq!(said, ["frog-hello", "frog-flags", "frog-flags-nudge"]);
+        assert_eq!(said, ["bong-hello", "bong-flags", "bong-flags-nudge"]);
         game.debug_teleport(0, crate::map::cell_to_world(6, 4), None).expect("seat 0");
         run(&mut game, &mut voice, 30, &mut said);
-        assert_eq!(said.last().map(String::as_str), Some("frog-crates"), "the next beat's line: {said:?}");
+        assert_eq!(said.last().map(String::as_str), Some("bong-crates"), "the next beat's line: {said:?}");
+    }
+
+    /// A saved training map may name its lines with the old `frog-` prefix;
+    /// they are the bong's lines.
+    #[test]
+    fn an_old_frog_line_key_reads_as_the_bongs() {
+        assert_eq!(line_key("frog-hello"), "bong-hello");
+        assert_eq!(line_key("bong-hello"), "bong-hello");
+        assert_eq!(line_key("frogger"), "frogger", "only the prefix is the old spelling");
+    }
+
+    /// The first line names the bong speaking it.
+    #[test]
+    fn the_hello_line_names_the_bong() {
+        let english = crate::text::Catalogue::new("en");
+        let name = english.get(crate::bong::BongKind::Oggle.title());
+        let line = english.message("bong-hello", &[("name", fluent_bundle::FluentValue::from(name.as_str()))]).unwrap();
+        assert_eq!(line, "Hi! I'm Bong Oggle.");
     }
 
     #[test]

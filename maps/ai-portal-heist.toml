@@ -3,13 +3,13 @@
 # comments. Level tables as dotted keys on purpose.
 # 
 # Hunt on the band plan, five tanks, the player in a longbow. The player's
-# frog sits in an iron bunker bottom-left, the enemy frog in one top-right,
+# bong sits in an iron bunker bottom-left, the enemy bong in one top-right,
 # each with a five-cell door. Four portals (docs/teleporting.md) - one
 # beside each bunker door and two in the open middle - share one network,
 # and where a tank comes out is random: a hop from the middle may drop you
 # at the enemy's door or straight back at your own. Sandbags cover each
 # door from the outside, tall grass and trees break the long sight lines a
-# longbow loves. Frog health on each side of the middle, laser top-left,
+# longbow loves. Bong health on each side of the middle, laser top-left,
 # health and ammo in the open.
 
 version = 1
@@ -37,7 +37,7 @@ cells."9,3" = { kind = "tall_grass" }
 cells."10,3" = { kind = "tall_grass" }
 cells."14,3" = { kind = "tree" }
 cells."22,3" = { kind = "wall", material = "iron" }
-cells."27,3" = { kind = "enemy_frog" }
+cells."27,3" = { kind = "enemy_bong" }
 cells."32,3" = { kind = "wall", material = "iron" }
 cells."9,4" = { kind = "tall_grass" }
 cells."10,4" = { kind = "tall_grass" }
@@ -75,9 +75,9 @@ cells."26,11" = { kind = "tall_grass" }
 cells."30,11" = { kind = "tree" }
 cells."1,12" = { kind = "wall", material = "iron" }
 cells."11,12" = { kind = "wall", material = "iron" }
-cells."18,12" = { kind = "pickup", pickup = "frog_health" }
+cells."18,12" = { kind = "pickup", pickup = "bong_health" }
 cells."1,13" = { kind = "wall", material = "iron" }
-cells."6,13" = { kind = "frog" }
+cells."6,13" = { kind = "bong" }
 cells."11,13" = { kind = "wall", material = "iron" }
 cells."24,13" = { kind = "pine" }
 cells."1,14" = { kind = "wall", material = "iron" }

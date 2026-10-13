@@ -10,7 +10,7 @@
 #     west side of the oasis and into the shrine, the other drops down the
 #     east side to the depot gate.
 #   - The oasis at the centre: a reed bed (tall grass, the only cover in
-#     the open) between two tree clumps and two pines, the frog health pack
+#     the open) between two tree clumps and two pines, the bong health pack
 #     in the middle of it. Whoever wants it sits in the reeds to take it.
 #   - A ruined fort in the west: iron corner towers, a brick curtain with a
 #     four-cell breach on the north and east sides, the minigun in the
@@ -20,7 +20,7 @@
 #     gate down to a sandbag berm with a fifth drum in it. One shot into the
 #     yard lights the trail and blows the berm - a trap either side can
 #     spring, on itself as easily as on the other.
-#   - The frog's shrine at the bottom centre: two brick piers with the frog
+#   - The bong's shrine at the bottom centre: two brick piers with the bong
 #     between them, sandbags on the flanks, the player's start just
 #     outside. A ruined wooden hut in the south-west corner.
 # Every lane is at least two nav cells wide: the nav grid pads a solid
@@ -32,6 +32,7 @@
 # flamethrower by the shrine's east flank.
 
 version = 1
+bong = "spike"
 size = [48, 24]
 theme = "desert"
 tanks = 5
@@ -41,7 +42,7 @@ spawn.kind = "band"
 
 cells."24,17" = { kind = "start" }
 
-cells."24,21" = { kind = "frog" }
+cells."24,21" = { kind = "bong" }
 
 cells."3,1" = { kind = "pickup", pickup = "laser" }
 cells."24,1" = { kind = "pickup", pickup = "speedup" }
@@ -51,7 +52,7 @@ cells."11,21" = { kind = "pickup", pickup = "ammo" }
 cells."35,21" = { kind = "pickup", pickup = "ammo" }
 cells."38,8" = { kind = "pickup", pickup = "plasma" }
 cells."10,10" = { kind = "pickup", pickup = "minigun" }
-cells."24,10" = { kind = "pickup", pickup = "frog_health" }
+cells."24,10" = { kind = "pickup", pickup = "bong_health" }
 cells."1,17" = { kind = "pickup", pickup = "health" }
 cells."45,17" = { kind = "pickup", pickup = "health" }
 cells."32,21" = { kind = "pickup", pickup = "flamethrower" }

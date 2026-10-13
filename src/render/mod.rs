@@ -22,7 +22,7 @@ pub mod bullet;
 pub mod canvas;
 pub mod decal;
 pub mod fish;
-pub mod frog;
+pub mod bong;
 pub mod fx;
 pub mod game;
 pub mod hud;

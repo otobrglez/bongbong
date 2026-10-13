@@ -28,7 +28,7 @@ view = "whole"
 tanks = 4
 
 cells."30,11" = { kind = "start" }
-cells."34,11" = { kind = "frog" }
+cells."34,11" = { kind = "bong" }
 
 cells."12,8" = { kind = "sandbag" }
 cells."13,8" = { kind = "sandbag" }

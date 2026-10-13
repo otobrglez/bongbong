@@ -12,7 +12,7 @@
 //! `Rerolled` (a straggler taken off out of every seat's sight - the
 //! replica sees the hull leave and come back through its gate by itself),
 //! `PhysicsQuarantine` (logged server-side) and a training round's
-//! `BeatDone`, `DoorOpened`, `FlagTaken` and `FrogRevived` (a training map
+//! `BeatDone`, `DoorOpened`, `FlagTaken` and `BongRevived` (a training map
 //! is never hosted) never travel.
 //!
 //! `to_event` gives the replica the `Event` its presentation layer already
@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::frog::Side;
+use crate::bong::Side;
 use crate::laser::LaserVariant;
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::net::wire::{RoundOutcome, WeaponKind, dequantise_heading, dequantise_pos, dir_from_index, dir_index, quantise_heading, quantise_pos};
@@ -38,7 +38,7 @@ pub const NOT_SENT: [&str; 19] = [
     "beat_done",
     "door_opened",
     "flag_taken",
-    "frog_revived",
+    "bong_revived",
     "rerolled",
     "ai_action",
     "engage_slot",
@@ -111,7 +111,7 @@ impl IgnitedWhat {
 pub enum WireHitTarget {
     Player { player: u8 },
     Enemy { slot: u16 },
-    Frog { side: Side },
+    Bong { side: Side },
     Obstacle { material: Material },
     Wall,
 }
@@ -121,7 +121,7 @@ impl From<HitTarget> for WireHitTarget {
         match t {
             HitTarget::Player { player } => WireHitTarget::Player { player },
             HitTarget::Enemy { slot } => WireHitTarget::Enemy { slot: slot_u16(slot) },
-            HitTarget::Frog { side } => WireHitTarget::Frog { side },
+            HitTarget::Bong { side } => WireHitTarget::Bong { side },
             HitTarget::Obstacle { material } => WireHitTarget::Obstacle { material },
             HitTarget::Wall => WireHitTarget::Wall,
         }
@@ -133,7 +133,7 @@ impl From<WireHitTarget> for HitTarget {
         match t {
             WireHitTarget::Player { player } => HitTarget::Player { player },
             WireHitTarget::Enemy { slot } => HitTarget::Enemy { slot: slot as usize },
-            WireHitTarget::Frog { side } => HitTarget::Frog { side },
+            WireHitTarget::Bong { side } => HitTarget::Bong { side },
             WireHitTarget::Obstacle { material } => HitTarget::Obstacle { material },
             WireHitTarget::Wall => HitTarget::Wall,
         }
@@ -161,8 +161,8 @@ pub enum WireEvent {
     Deflected { slot: u16, x: i16, y: i16 },
     ShieldBroken { slot: u16, x: i16, y: i16 },
     ShellsCollided { x: i16, y: i16 },
-    FrogBite { side: Side, slot: u16, damage: f32, killed: bool },
-    FrogHealed { side: Side, slot: u16, amount: f32, x: i16, y: i16 },
+    BongBite { side: Side, slot: u16, damage: f32, killed: bool },
+    BongHealed { side: Side, slot: u16, amount: f32, x: i16, y: i16 },
     WaveStarted { wave: u16, size: u16, tier: Tier },
     TankEntered { slot: u16 },
     WreckRemoved { slot: u16 },
@@ -247,9 +247,9 @@ pub enum WireEvent {
     /// `Event::ChargeEnded`.
     ChargeEnded { slot: u16, weapon: WeaponKind, end: crate::tank::ChargeEnd },
     /// A drone `id` left `slot`'s halo from (`x`, `y`), locked on the tank
-    /// in owner slot `target` (`NO_TARGET` for none) or the players' frog
-    /// (`frog`); `Event::DroneLaunched`.
-    DroneLaunched { id: u16, slot: u16, x: i16, y: i16, target: u16, frog: bool },
+    /// in owner slot `target` (`NO_TARGET` for none) or the players' bong
+    /// (`bong`); `Event::DroneLaunched`.
+    DroneLaunched { id: u16, slot: u16, x: i16, y: i16, target: u16, bong: bool },
     /// The drone `id` of `slot` burst at (`x`, `y`), in a crown or on the
     /// ground; `Event::DroneBurst`.
     DroneBurst { id: u16, slot: u16, x: i16, y: i16, crown: bool },
@@ -372,11 +372,11 @@ impl WireEvent {
                 WireEvent::ShieldBroken { slot: slot_u16(slot), x: q(x), y: q(y) }
             }
             Event::ShellsCollided { x, y } => WireEvent::ShellsCollided { x: q(x), y: q(y) },
-            Event::FrogBite { side, slot, damage, killed } => {
-                WireEvent::FrogBite { side, slot: slot_u16(slot), damage, killed }
+            Event::BongBite { side, slot, damage, killed } => {
+                WireEvent::BongBite { side, slot: slot_u16(slot), damage, killed }
             }
-            Event::FrogHealed { side, slot, amount, x, y } => {
-                WireEvent::FrogHealed { side, slot: slot_u16(slot), amount, x: q(x), y: q(y) }
+            Event::BongHealed { side, slot, amount, x, y } => {
+                WireEvent::BongHealed { side, slot: slot_u16(slot), amount, x: q(x), y: q(y) }
             }
             Event::WaveStarted { wave, size, tier } => {
                 WireEvent::WaveStarted { wave: count_u16(wave), size: count_u16(size), tier }
@@ -471,13 +471,13 @@ impl WireEvent {
             Event::WellCollapsed { id, x, y, early } => WireEvent::WellCollapsed { id: (id & 0xFFFF) as u16, x: q(x), y: q(y), early },
             Event::Swallowed { what, x, y } => WireEvent::Swallowed { what, x: q(x), y: q(y) },
             Event::OrbFizzled { id, x, y } => WireEvent::OrbFizzled { id: (id & 0xFFFF) as u16, x: q(x), y: q(y) },
-            Event::DroneLaunched { id, slot, x, y, target, frog } => WireEvent::DroneLaunched {
+            Event::DroneLaunched { id, slot, x, y, target, bong } => WireEvent::DroneLaunched {
                 id: (id & 0xFFFF) as u16,
                 slot: slot_u16(slot),
                 x: q(x),
                 y: q(y),
                 target: target.map_or(NO_TARGET, slot_u16),
-                frog,
+                bong,
             },
             Event::DroneBurst { id, slot, x, y, crown } => {
                 WireEvent::DroneBurst { id: (id & 0xFFFF) as u16, slot: slot_u16(slot), x: q(x), y: q(y), crown }
@@ -576,7 +576,7 @@ impl WireEvent {
             Event::PhysicsQuarantine { .. } => return None,
             // Never sent: a training map is never hosted
             // (`MapFile::hostable`), so no room runs its script.
-            Event::BeatDone { .. } | Event::DoorOpened { .. } | Event::FlagTaken { .. } | Event::FrogRevived { .. } => return None,
+            Event::BeatDone { .. } | Event::DoorOpened { .. } | Event::FlagTaken { .. } | Event::BongRevived { .. } => return None,
             // Never sent: the hull's leaving and its roll-in through the
             // new gate are in the snapshots.
             Event::Rerolled { .. } => return None,
@@ -619,11 +619,11 @@ impl WireEvent {
             WireEvent::Deflected { slot, x, y } => Event::Deflected { slot: slot as usize, x: d(x), y: d(y) },
             WireEvent::ShieldBroken { slot, x, y } => Event::ShieldBroken { slot: slot as usize, x: d(x), y: d(y) },
             WireEvent::ShellsCollided { x, y } => Event::ShellsCollided { x: d(x), y: d(y) },
-            WireEvent::FrogBite { side, slot, damage, killed } => {
-                Event::FrogBite { side, slot: slot as usize, damage, killed }
+            WireEvent::BongBite { side, slot, damage, killed } => {
+                Event::BongBite { side, slot: slot as usize, damage, killed }
             }
-            WireEvent::FrogHealed { side, slot, amount, x, y } => {
-                Event::FrogHealed { side, slot: slot as usize, amount, x: d(x), y: d(y) }
+            WireEvent::BongHealed { side, slot, amount, x, y } => {
+                Event::BongHealed { side, slot: slot as usize, amount, x: d(x), y: d(y) }
             }
             WireEvent::WaveStarted { wave, size, tier } => {
                 Event::WaveStarted { wave: wave as u32, size: size as u32, tier }
@@ -678,13 +678,13 @@ impl WireEvent {
             WireEvent::WellCollapsed { id, x, y, early } => Event::WellCollapsed { id: id as u32, x: d(x), y: d(y), early },
             WireEvent::Swallowed { what, x, y } => Event::Swallowed { what, x: d(x), y: d(y) },
             WireEvent::OrbFizzled { id, x, y } => Event::OrbFizzled { id: id as u32, x: d(x), y: d(y) },
-            WireEvent::DroneLaunched { id, slot, x, y, target, frog } => Event::DroneLaunched {
+            WireEvent::DroneLaunched { id, slot, x, y, target, bong } => Event::DroneLaunched {
                 id: id as u32,
                 slot: slot as usize,
                 x: d(x),
                 y: d(y),
                 target: (target != NO_TARGET).then_some(target as usize),
-                frog,
+                bong,
             },
             WireEvent::DroneBurst { id, slot, x, y, crown } => {
                 Event::DroneBurst { id: id as u32, slot: slot as usize, x: d(x), y: d(y), crown }
@@ -829,14 +829,14 @@ mod tests {
             },
             Event::Wreck { slot: 3, x: 64.0, y: 96.75 },
             Event::Ram { slot: 0, other_slot: 5, damage: 3.25 },
-            Event::PickupCollected { slot: 1, kind: PickupKind::FrogHealth, x: 48.0, y: 80.0, spilled: false },
+            Event::PickupCollected { slot: 1, kind: PickupKind::BongHealth, x: 48.0, y: 80.0, spilled: false },
             Event::CrateBroken { kind: PickupKind::Ammo, x: 112.0, y: 80.0, cooked: true },
             Event::PickupRespawned { kind: PickupKind::Shield, x: 32.0, y: 32.0 },
             Event::Deflected { slot: 2, x: 1.5, y: -2.25 },
             Event::ShieldBroken { slot: 2, x: 8.0, y: 9.0 },
             Event::ShellsCollided { x: 500.0, y: 250.0 },
-            Event::FrogBite { side: Side::Enemy, slot: 4, damage: 30.0, killed: true },
-            Event::FrogHealed { side: Side::Player, slot: 0, amount: 40.0, x: 544.0, y: 272.0 },
+            Event::BongBite { side: Side::Enemy, slot: 4, damage: 30.0, killed: true },
+            Event::BongHealed { side: Side::Player, slot: 0, amount: 40.0, x: 544.0, y: 272.0 },
             Event::WaveStarted { wave: 3, size: 6, tier: Tier::Heavy },
             Event::TankEntered { slot: 9 },
             Event::Rerolled { slot: 9, x: 96.0, y: 64.0 },
@@ -867,7 +867,7 @@ mod tests {
             },
             Event::ChargeStarted { slot: 5, weapon: "gauss_rail" },
             Event::ChargeEnded { slot: 5, weapon: "gauss_rail", end: crate::tank::ChargeEnd::Vented },
-            Event::DroneLaunched { id: 17, slot: 0, x: 140.0, y: 96.0, target: Some(4), frog: false },
+            Event::DroneLaunched { id: 17, slot: 0, x: 140.0, y: 96.0, target: Some(4), bong: false },
             Event::DroneBurst { id: 17, slot: 0, x: 400.0, y: 210.0, crown: true },
             Event::DroneDowned { id: 18, x: 300.0, y: 180.0, height: 36.0, by: "tesla" },
             Event::DroneCrashed { id: 18, x: 310.0, y: 184.0 },
@@ -910,7 +910,7 @@ mod tests {
             Event::BeatDone { beat: 2 },
             Event::DoorOpened { beat: 1, x: 320.0, y: 176.0 },
             Event::FlagTaken { seat: 0, x: 256.0, y: 80.0 },
-            Event::FrogRevived { x: 1088.0, y: 208.0 },
+            Event::BongRevived { x: 1088.0, y: 208.0 },
             Event::AiAction { slot: 5, from: None, to: Some("attack") },
             Event::EngageSlot { slot: 5, from: Some(1), to: None },
             Event::StuckEscape { slot: 5, escapes: 2 },

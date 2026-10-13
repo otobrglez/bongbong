@@ -1044,7 +1044,7 @@ pub struct Tank {
     ///
     /// A flag rather than a return value the callers act on, because the
     /// shield is spent at eight different seams - ram (both tanks), blasts,
-    /// the flame cone, its afterburn, oil fire, the frog and the projectile
+    /// the flame cone, its afterburn, oil fire, the bong and the projectile
     /// deflect - and `take_damage` has no `Frame` to push an event onto.
     /// Latching here means every one of them announces the break, instead of
     /// the two that happened to be written to.
@@ -1065,7 +1065,7 @@ pub struct Tank {
     pub portal_cooldown: f32,
     /// Seconds left in this tank's hit window: reset to
     /// `health_ring_hit_seconds` by `mark_hit` whenever it takes damage
-    /// (shell, ram, explosion splash, frog bite), ticked down every frame
+    /// (shell, ram, explosion splash, bong bite), ticked down every frame
     /// alongside `fire_cooldown`/`ram_cooldown` (`Game::update`). An enemy's
     /// health ring shows while it runs, fading over the last
     /// `health_ring_hit_fade_seconds` (`enemy_health_ring_visibility`); the
@@ -1289,9 +1289,9 @@ impl Tank {
             PickupKind::Shield => self.shield_hp <= 0.0,
             // Player-only: the fuel tank does nothing for an enemy at all.
             PickupKind::Flamethrower => false,
-            // Decided by the frog's own state, not the tank's - see
-            // `Game::pickup_phase` and docs/frog-health-pack-prd.md.
-            PickupKind::FrogHealth => true,
+            // Decided by the bong's own state, not the tank's - see
+            // `Game::pickup_phase` and docs/bong-health-pack-prd.md.
+            PickupKind::BongHealth => true,
             // Decided by the towers' state (`Game::tower_pack_wanted`).
             PickupKind::TowerPack => true,
             // Player-only, like the fuel: a heat shield is the players'
@@ -1392,13 +1392,13 @@ impl Tank {
 
     /// The one way damage lands on a tank's *hull*: adds `amount` - a
     /// player's scaled by `player_armor_factor` - capped at `cap`
-    /// (MAX_DAMAGE, or one below it for the player's frog bites), and
+    /// (MAX_DAMAGE, or one below it for the player's bong bites), and
     /// returns how much actually landed. Callers keep their hit
     /// flash/knockback/alert side effects either way, so an absorbed hit
     /// still visibly lands.
     ///
     /// A live shield takes the hit instead and returns 0: this is the absorb
-    /// seam for ram, explosions, flame and its afterburn, oil fire, the frog
+    /// seam for ram, explosions, flame and its afterburn, oil fire, the bong
     /// and the laser. It is **not** the only seam - shells, bullets and
     /// plasma bounce off in `Game::resolve_projectiles` and never arrive
     /// here, so they are charged to `shield_hp` there instead. Anything that
@@ -2187,7 +2187,7 @@ impl Tank {
     }
 
     /// Reset `hit_flash_timer` to full - call whenever this tank takes
-    /// damage (shell, ram, explosion splash, frog bite) so an enemy's health
+    /// damage (shell, ram, explosion splash, bong bite) so an enemy's health
     /// ring shows/refreshes for another `health_ring_hit_seconds`.
     pub fn mark_hit(&mut self) {
         self.hit_flash_timer = tuning().health_ring_hit_seconds;
@@ -2623,9 +2623,9 @@ const HEALTH_RING_START_DEG: f32 = -90.0;
 /// a quarter or less. Stepped rather than blended so the ring reads as drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HealthRamp {
-    /// White, gold, bright red, deep red: tanks and the player's frog.
+    /// White, gold, bright red, deep red: tanks and the player's bong.
     White,
-    /// Bright red down to the darkest red: the enemy frog, whose ring is red
+    /// Bright red down to the darkest red: the enemy bong, whose ring is red
     /// at any health so its side still reads.
     Red,
     /// A seat: its own light and base team colours while healthy, then the
@@ -2655,7 +2655,7 @@ impl HealthRamp {
     }
 
     /// The ramp's marker colour - what the missing part of a ring that stays
-    /// a full circle is drawn in, dimmed: white, the enemy frog's red, or a
+    /// a full circle is drawn in, dimmed: white, the enemy bong's red, or a
     /// player's team colour.
     pub fn base(self) -> Color {
         match self {
@@ -2716,8 +2716,8 @@ fn ring_scale(_tank: &Tank) -> f32 {
     tuning().tank_ring_radius_scale
 }
 
-/// `draw_ground_ring` for anything that is not a tank - a frog's side
-/// marker (`frog::draw_frog_ring`): the same ring at `center`, sized from
+/// `draw_ground_ring` for anything that is not a tank - a bong's side
+/// marker (`bong::draw_bong_ring`): the same ring at `center`, sized from
 /// `size` (the sprite's on-screen side length) exactly as a tank's is from
 /// `Tank::size`, with `phase` offsetting the rainbow's breathing.
 pub fn draw_ground_ring_at(
@@ -2979,7 +2979,7 @@ pub fn draw_player_ring(c: &mut impl Canvas, tank: &Tank, time: f32) {
     draw_ground_ring(c, tank, time, style, player_health_ring_visibility(tank));
 }
 
-/// Draw an enemy's health ring: the same gauge in the enemy frog's all-red
+/// Draw an enemy's health ring: the same gauge in the enemy bong's all-red
 /// ramp, its missing part a dark band at `health_ring_gap_opacity`, so a
 /// just-hit enemy at full health reads hostile rather than borrowing a
 /// player's colour. Shown per `enemy_health_ring_visibility` - after a

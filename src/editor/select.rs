@@ -84,10 +84,10 @@ pub fn field_cells(field: (f32, f32)) -> CellRect {
 }
 
 /// Whether `obj` is one the map keeps at most one of - a start, player 2's
-/// start, the frog, the enemy frog - which the brushes move rather than
+/// start, the bong, the enemy bong - which the brushes move rather than
 /// copy, and a paste places only where the map holds none.
 pub fn is_singleton(obj: &CellObject) -> bool {
-    matches!(obj, CellObject::Start | CellObject::Start2 | CellObject::Frog | CellObject::EnemyFrog)
+    matches!(obj, CellObject::Start | CellObject::Start2 | CellObject::Bong | CellObject::EnemyBong)
 }
 
 /// Which way a flip mirrors.

@@ -253,7 +253,7 @@ flag is the fallback if that measures worse.
 ## 6. Ordered rams
 
 `combat::ram` fires on any narrow-phase touch. Guaranteeing contact never happens
-is not achievable - knockback, blasts, a hopping frog, wall funnels and the
+is not achievable - knockback, blasts, a hopping bong, wall funnels and the
 player driving in all produce contact C2 has no lever over - so the mechanism is
 an authorisation flag `ram` consults, checked **after** the wreck and cooldown
 guards and **before** the RNG draw. That placement is load-bearing: an
@@ -367,8 +367,8 @@ as *"ready for future ram/pile-up metrics"*. This is that future.
 **Two caveats decide how the headline claim may be worded.**
 
 *Clustering has largely been spent.* Default-map clustering went 78 -> 7 from a
-nav-grid change and 14 -> 5 from a frog hop fix, neither for reasons involving
-tanks avoiding each other - an immobile frog was not registering as terrain
+nav-grid change and 14 -> 5 from a bong hop fix, neither for reasons involving
+tanks avoiding each other - an immobile bong was not registering as terrain
 grinding, it was registering as a pile-up. C2 must not claim that ground.
 
 *Ram counts saturate.* `combat::ram`'s cooldown is set on **both** participants
@@ -477,7 +477,7 @@ from off.
 Recorded 2026-09-14 against **the working tree at commit `f0cab22` plus
 uncommitted changes** (`git diff | shasum -a 256` = `71895001f7f39407`). That
 tree contains two other sessions' in-flight work - a nav-grid change
-(`PATHFIND_CELL_SIZE` 48 -> 32) and a frog change (side-gated bites, fixed
+(`PATHFIND_CELL_SIZE` 48 -> 32) and a bong change (side-gated bites, fixed
 evasive hop) - neither of which is on master. **If either is reverted or
 reworked, every number below is void and Phase 0 must be re-run.**
 
@@ -486,7 +486,7 @@ reworked, every number below is void and Phase 0 must be re-run.**
 | fixture | border-stuck | jitter | spin | churn | clustering |
 |---|---|---|---|---|---|
 | choke | 0 | 0 | 0 | 3 | 0 |
-| frog-block | 1 | 5 | 0 | 0 | 0 |
+| bong-block | 1 | 5 | 0 | 0 | 0 |
 | maze | 0 | 3 | 1 | 8 | 4 |
 | pockets | 0 | 1 | 0 | 1 | 0 |
 | props | 0 | 4 | 0 | 4 | 0 |

@@ -566,7 +566,7 @@ fn the_emp_holds_for_an_ally_and_for_its_own_tower() {
 fn a_training_dummy_never_pulses() {
     let mut game = round("");
     let enemy = emp_enemy(&mut game, Position::new(SEAT.x + 110.0, SEAT.y));
-    game.world.get::<&mut Ai>(enemy).unwrap().frog_only = true;
+    game.world.get::<&mut Ai>(enemy).unwrap().bong_only = true;
     let mut told = false;
     for _ in 0..240 {
         told |= step(&mut game, false).iter().any(|e| matches!(e, Event::TellStarted { .. }));

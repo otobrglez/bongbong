@@ -290,18 +290,18 @@ fn a_drum_with_no_tank_behind_it_is_thrown_along_the_wave() {
 }
 
 #[test]
-fn a_frog_the_wave_reaches_is_stunned_and_neither_hops_nor_bites() {
-    let mut game = round_with("cells.\"6,6\" = { kind = \"frog\" }\n", 1, Mission::Protect);
-    let frog = game.frog.expect("a frog");
+fn a_bong_the_wave_reaches_is_stunned_and_neither_hops_nor_bites() {
+    let mut game = round_with("cells.\"6,6\" = { kind = \"bong\" }\n", 1, Mission::Protect);
+    let bong = game.bong.expect("a bong");
     blast(&mut game, 20);
     let (stunned, hop, bite, health) =
-        with_frog(&game.world, frog, |f| (f.is_stunned(), f.can_hop(), f.can_attack(), f.health));
+        with_bong(&game.world, bong, |f| (f.is_stunned(), f.can_hop(), f.can_attack(), f.health));
     assert!(stunned && !hop && !bite);
-    assert_eq!(health, with_frog(&game.world, frog, |f| f.max_health), "no harm done");
-    for _ in 0..((tuning().sonic_frog_stun_seconds / DT) as usize + 2) {
+    assert_eq!(health, with_bong(&game.world, bong, |f| f.max_health), "no harm done");
+    for _ in 0..((tuning().sonic_bong_stun_seconds / DT) as usize + 2) {
         step(&mut game, false);
     }
-    assert!(!with_frog(&game.world, frog, |f| f.is_stunned()));
+    assert!(!with_bong(&game.world, bong, |f| f.is_stunned()));
 }
 
 #[test]
@@ -773,13 +773,13 @@ fn a_tank_shoved_into_a_portal_goes_through_and_stops_skidding() {
 /// end screen and moves nobody.
 #[test]
 fn the_wave_finishes_on_the_end_screen_and_moves_nothing() {
-    let mut game = round_with("cells.\"30,14\" = { kind = \"frog\" }\n", 2, Mission::Protect);
+    let mut game = round_with("cells.\"30,14\" = { kind = \"bong\" }\n", 2, Mission::Protect);
     let mate = game.seat(1).unwrap();
     let mate_at = Position::new(240.0, 192.0);
     game.place_tank(mate, mate_at, Some(0.0)).unwrap();
     step(&mut game, true);
-    let frog = game.frog.expect("a frog");
-    with_frog_mut(&game.world, frog, |f| f.damage(1.0e6));
+    let bong = game.bong.expect("a bong");
+    with_bong_mut(&game.world, bong, |f| f.damage(1.0e6));
     step(&mut game, false);
     assert_ne!(game.outcome(), crate::simulation::Outcome::Playing, "the round is lost");
     let mate_at = pos(&game, mate);

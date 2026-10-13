@@ -1,6 +1,6 @@
 //! A training round's rules (docs/training-stage.md): the map's
 //! `[[training.beat]]` script run one beat at a time. A beat starts what it
-//! names - a shell at the frog, crates dropped from the air, enemy tanks
+//! names - a shell at the bong, crates dropped from the air, enemy tanks
 //! rolled in through the map's gates - and is done once every condition it
 //! sets holds; its doors (`map::CellObject::Door`) then open and the next
 //! beat begins. The last beat done wins the round.
@@ -13,8 +13,8 @@
 //! the crates it put down.
 //!
 //! Training is never lost. A wrecked seat comes back as a fresh tank in the
-//! last door opened after `training_respawn_seconds`, and a frog that goes
-//! down is back on its feet after `training_frog_revive_seconds`, with the
+//! last door opened after `training_respawn_seconds`, and a bong that goes
+//! down is back on its feet after `training_bong_revive_seconds`, with the
 //! beat it fell in started again.
 //!
 //! Every check is a pure test of the round's state and the frame's events,
@@ -38,7 +38,7 @@ use crate::{MAX_SEATS, OBSTACLE_GRID_SIZE, Position};
 
 use crate::level::SpawnPlan;
 
-use super::{Event, Frame, Game, with_frog, with_frog_mut, with_tank, with_tank_mut};
+use super::{Event, Frame, Game, with_bong, with_bong_mut, with_tank, with_tank_mut};
 
 /// A flag on the field and whether a seat has it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -69,8 +69,8 @@ pub(crate) struct Run {
     /// The round clock since which a roll-in due has found no free lane,
     /// `None` while none waits.
     lane_busy_since: Option<f32>,
-    /// The edge the running beat's shot at the frog comes from, until it
-    /// has hurt the frog, and the round clock it was last fired at.
+    /// The edge the running beat's shot at the bong comes from, until it
+    /// has hurt the bong, and the round clock it was last fired at.
     shot: Option<(Edge, Option<f32>)>,
     /// The crates the running beat dropped, taken away if it starts
     /// again (one taken is already gone).
@@ -84,7 +84,7 @@ pub(crate) struct Run {
     homes: [Position; MAX_SEATS],
     /// The round clock at which each wrecked seat comes back.
     respawn: [Option<f32>; MAX_SEATS],
-    /// The round clock at which the fallen frog gets up again.
+    /// The round clock at which the fallen bong gets up again.
     revive: Option<f32>,
     /// The seats' shells do not refill on their own: the script starts
     /// them with a set number, and no seat has opened an ammo crate yet.
@@ -191,7 +191,7 @@ impl Game {
         self.take_flags(&mut run, f);
         self.fade_training_wrecks(f.dt);
         self.bring_back_seats(&mut run, f);
-        if self.bring_back_frog(&mut run, f) {
+        if self.bring_back_bong(&mut run, f) {
             self.restart_beat(&mut run);
         }
         if !run.finished() {
@@ -200,8 +200,8 @@ impl Game {
                 self.begin_beat(&mut run, beat);
             }
             self.roll_in_due(&mut run, f);
-            self.walk_frog(beat);
-            self.aim_at_frog(&mut run, beat, f);
+            self.walk_bong(beat);
+            self.aim_at_bong(&mut run, beat, f);
             if self.beat_done(&run, beat) {
                 self.open_doors(run.beat + 1, f);
                 f.events.push(Event::BeatDone { beat: run.beat + 1 });
@@ -305,30 +305,30 @@ impl Game {
         self.engage[seat].clear();
     }
 
-    /// Start the frog's clock once it is down and stand it up again when
+    /// Start the bong's clock once it is down and stand it up again when
     /// it runs out, at full health where it fell. True on the frame it
     /// gets up: the beat starts again.
-    fn bring_back_frog(&mut self, run: &mut Run, f: &mut Frame) -> bool {
-        let Some(frog) = self.frog else { return false };
-        if !with_frog(&self.world, frog, crate::frog::Frog::is_dead) {
+    fn bring_back_bong(&mut self, run: &mut Run, f: &mut Frame) -> bool {
+        let Some(bong) = self.bong else { return false };
+        if !with_bong(&self.world, bong, crate::bong::Bong::is_dead) {
             run.revive = None;
             return false;
         }
         let Some(at) = run.revive else {
-            run.revive = Some(self.time + tuning().training_frog_revive_seconds);
+            run.revive = Some(self.time + tuning().training_bong_revive_seconds);
             return false;
         };
         if self.time < at {
             return false;
         }
         run.revive = None;
-        let pos = with_frog_mut(&self.world, frog, |fr| {
+        let pos = with_bong_mut(&self.world, bong, |fr| {
             fr.health = fr.max_health;
             fr.death_elapsed = None;
             fr.hurt_timer = 0.0;
             fr.position
         });
-        f.events.push(Event::FrogRevived { x: pos.x, y: pos.y });
+        f.events.push(Event::BongRevived { x: pos.x, y: pos.y });
         true
     }
 
@@ -385,40 +385,40 @@ impl Game {
         run.collected.clear();
         run.rolls = beat.start.roll_in.clone();
         run.lane_busy_since = None;
-        run.shot = beat.start.shoot_frog.map(|edge| (edge, None));
+        run.shot = beat.start.shoot_bong.map(|edge| (edge, None));
         for drop in &beat.start.drop {
             let (c, r) = drop.at;
             run.crates.push(self.world.spawn((Pickup::dropped(drop.kind, cell_to_world(c, r), Some(self.time)),)));
         }
     }
 
-    /// The running beat's shot at the frog, once the frog stands on the
+    /// The running beat's shot at the bong, once the bong stands on the
     /// beat's cell - so it flies along the row the beat was laid out for,
-    /// not into a wall the frog is still hopping past - and again every
-    /// `training_frog_shot_retry_seconds` until one has hurt it: a beat
-    /// that waits on the frog's kit can only end once the frog needs it.
-    fn aim_at_frog(&mut self, run: &mut Run, beat: &Beat, f: &mut Frame) {
-        let (Some((edge, fired)), Some(frog)) = (run.shot, self.frog) else { return };
-        if with_frog(&self.world, frog, |fr| fr.is_dead() || fr.health < fr.max_health) {
+    /// not into a wall the bong is still hopping past - and again every
+    /// `training_bong_shot_retry_seconds` until one has hurt it: a beat
+    /// that waits on the bong's kit can only end once the bong needs it.
+    fn aim_at_bong(&mut self, run: &mut Run, beat: &Beat, f: &mut Frame) {
+        let (Some((edge, fired)), Some(bong)) = (run.shot, self.bong) else { return };
+        if with_bong(&self.world, bong, |fr| fr.is_dead() || fr.health < fr.max_health) {
             run.shot = None;
             return;
         }
-        let arrived = beat.frog.is_none_or(|(c, r)| {
-            with_frog(&self.world, frog, |fr| fr.position.distance_to(cell_to_world(c, r)) <= OBSTACLE_GRID_SIZE * 1.5)
+        let arrived = beat.bong.is_none_or(|(c, r)| {
+            with_bong(&self.world, bong, |fr| fr.position.distance_to(cell_to_world(c, r)) <= OBSTACLE_GRID_SIZE * 1.5)
         });
-        if !arrived || fired.is_some_and(|at| self.time - at < tuning().training_frog_shot_retry_seconds) {
+        if !arrived || fired.is_some_and(|at| self.time - at < tuning().training_bong_shot_retry_seconds) {
             return;
         }
-        self.shoot_frog(edge, f);
+        self.shoot_bong(edge, f);
         run.shot = Some((edge, Some(self.time)));
     }
 
-    /// One heavy shell fired at the players' frog from `edge`, a cell in
-    /// from it, along the frog's row or column. It flies and lands like
+    /// One heavy shell fired at the players' bong from `edge`, a cell in
+    /// from it, along the bong's row or column. It flies and lands like
     /// any enemy shell.
-    fn shoot_frog(&mut self, edge: Edge, f: &mut Frame) {
-        let Some(frog) = self.frog else { return };
-        let target = with_frog(&self.world, frog, |fr| fr.position);
+    fn shoot_bong(&mut self, edge: Edge, f: &mut Frame) {
+        let Some(bong) = self.bong else { return };
+        let target = with_bong(&self.world, bong, |fr| fr.position);
         let inset = OBSTACLE_GRID_SIZE * 1.5;
         let (from, rotation) = match edge {
             Edge::North => (Position::new(target.x, inset), 180.0_f32),
@@ -436,26 +436,26 @@ impl Game {
         self.spawn_shot(shell, 0);
     }
 
-    /// Whether the players' frog is on its way to the running beat's cell,
+    /// Whether the players' bong is on its way to the running beat's cell,
     /// more than a cell and a half from it.
-    pub(super) fn frog_walking(&self) -> bool {
-        let (Some(run), Some(script), Some(frog)) = (&self.training, &self.map.training, self.frog) else { return false };
-        let Some((c, r)) = script.beat(run.beat).and_then(|b| b.frog) else { return false };
-        with_frog(&self.world, frog, |fr| fr.position.distance_to(cell_to_world(c, r)) > OBSTACLE_GRID_SIZE * 1.5)
+    pub(super) fn bong_walking(&self) -> bool {
+        let (Some(run), Some(script), Some(bong)) = (&self.training, &self.map.training, self.bong) else { return false };
+        let Some((c, r)) = script.beat(run.beat).and_then(|b| b.bong) else { return false };
+        with_bong(&self.world, bong, |fr| fr.position.distance_to(cell_to_world(c, r)) > OBSTACLE_GRID_SIZE * 1.5)
     }
 
-    /// The frog hops on toward the running beat's cell, a hop at a time
+    /// The bong hops on toward the running beat's cell, a hop at a time
     /// along the nav grid, so it goes through the doors its beats opened
     /// and waits for the player in the next pen. Between hops it keeps its
     /// own reflexes: it still bites and still shies from a tank.
-    fn walk_frog(&mut self, beat: &Beat) {
-        let (Some(frog), Some((c, r))) = (self.frog, beat.frog) else { return };
+    fn walk_bong(&mut self, beat: &Beat) {
+        let (Some(bong), Some((c, r))) = (self.bong, beat.bong) else { return };
         let target = cell_to_world(c, r);
-        let (pos, ready, reach) = with_frog(&self.world, frog, |fr| (fr.position, fr.can_hop() && fr.hop_timer <= 0.0, fr.hop_distance()));
+        let (pos, ready, reach) = with_bong(&self.world, bong, |fr| (fr.position, fr.can_hop() && fr.hop_timer <= 0.0, fr.hop_distance()));
         if !ready || pos.distance_to(target) < 2.0 {
             return;
         }
-        // No route while a door still stands in the way: the frog waits
+        // No route while a door still stands in the way: the bong waits
         // rather than hop through it. Within a cell and a half of where it
         // is going - the grid has no step left to give inside the goal's
         // cell - the last hop is straight there.
@@ -468,9 +468,9 @@ impl Game {
         if dist < 0.5 {
             return;
         }
-        let step = dist.min(reach * tuning().training_frog_stride);
+        let step = dist.min(reach * tuning().training_bong_stride);
         let to = Position::new(pos.x + (next.x - pos.x) * step / dist, pos.y + (next.y - pos.y) * step / dist);
-        with_frog_mut(&self.world, frog, |fr| {
+        with_bong_mut(&self.world, bong, |fr| {
             fr.start_hop(to);
             fr.hop_cooldown = 0.0;
         });
@@ -490,12 +490,12 @@ impl Game {
                 waiting.push(spec);
                 continue;
             }
-            // A dummy hunts the frog and never fires at a seat.
-            let (role, frog_only) = match spec.ai {
+            // A dummy hunts the bong and never fires at a seat.
+            let (role, bong_only) = match spec.ai {
                 Some(TrainingAi::Dummy) => (Role::Hunter, true),
                 None => (Role::Player, false),
             };
-            if let Some(entity) = self.training_roll_in(f, spec.tank.row(), role, frog_only) {
+            if let Some(entity) = self.training_roll_in(f, spec.tank.row(), role, bong_only) {
                 run.tanks.push(entity);
                 run.lane_busy_since = None;
                 continue;
@@ -507,7 +507,7 @@ impl Game {
             }
             let entity = self.spawn_in_band(f, spec.tank.row());
             let mut ai = Ai::with_role(role);
-            ai.frog_only = frog_only;
+            ai.bong_only = bong_only;
             ai.field.called = self.field_map;
             ai.field.wave = self.field_map;
             self.world.insert_one(entity, ai).expect("the tank spawn_in_band just placed");
@@ -553,8 +553,8 @@ impl Game {
                 return false;
             }
         }
-        if done.frog_full {
-            let full = self.frog.is_some_and(|e| with_frog(&self.world, e, |fr| !fr.is_dead() && fr.health >= fr.max_health));
+        if done.bong_full {
+            let full = self.bong.is_some_and(|e| with_bong(&self.world, e, |fr| !fr.is_dead() && fr.health >= fr.max_health));
             if !full {
                 return false;
             }
@@ -588,13 +588,13 @@ mod tests {
 
     /// A 16 x 9 course: the seat starts at (2, 4), a flag at (6, 4), a
     /// door of beat 1 across column 9 (rows 3-5, iron above and below),
-    /// the frog at (12, 4) and gates on the east edge. `script` is
+    /// the bong at (12, 4) and gates on the east edge. `script` is
     /// appended as the map's `[[training.beat]]` tables.
     fn course(script: &str) -> Game {
         let mut map = String::from(
             "version = 1\ntanks = 0\nsize = [16.0, 9.0]\nmission.kind = \"protect\"\n\
              cells.\"2,4\" = { kind = \"start\" }\ncells.\"6,4\" = { kind = \"flag\" }\n\
-             cells.\"12,4\" = { kind = \"frog\" }\n",
+             cells.\"12,4\" = { kind = \"bong\" }\n",
         );
         for r in 0..9 {
             let cell = if (3..=5).contains(&r) { "{ kind = \"door\", beat = 1 }" } else { "{ kind = \"wall\", material = \"iron\" }" };
@@ -671,30 +671,30 @@ mod tests {
     }
 
     #[test]
-    fn a_fallen_frog_gets_up_and_the_round_goes_on() {
+    fn a_fallen_bong_gets_up_and_the_round_goes_on() {
         let mut game = course(FLAG_THEN_PAST);
-        let frog = game.frog.expect("a protect round has a frog");
-        with_frog_mut(&game.world, frog, |fr| fr.damage(10_000.0));
+        let bong = game.bong.expect("a protect round has a bong");
+        with_bong_mut(&game.world, bong, |fr| fr.damage(10_000.0));
         step(&mut game, 2);
         assert_eq!(game.outcome(), Outcome::Playing, "training is never lost");
-        let frames = (tuning().training_frog_revive_seconds * 60.0) as usize + 2;
+        let frames = (tuning().training_bong_revive_seconds * 60.0) as usize + 2;
         step(&mut game, frames);
-        assert!(with_frog(&game.world, frog, |fr| !fr.is_dead() && fr.health >= fr.max_health));
+        assert!(with_bong(&game.world, bong, |fr| !fr.is_dead() && fr.health >= fr.max_health));
     }
 
     #[test]
-    fn a_shot_from_the_east_hurts_the_frog_and_its_kit_drops() {
-        let script = "\n[[training.beat]]\nstart = { shoot_frog = \"east\", drop = [{ kind = \"frog_health\", at = [11, 7] }] }\ndone = { collect = \"frog_health\" }\n";
+    fn a_shot_from_the_east_hurts_the_bong_and_its_kit_drops() {
+        let script = "\n[[training.beat]]\nstart = { shoot_bong = \"east\", drop = [{ kind = \"bong_health\", at = [11, 7] }] }\ndone = { collect = \"bong_health\" }\n";
         let mut game = course(script);
-        let frog = game.frog.expect("a frog");
+        let bong = game.bong.expect("a bong");
         let mut hurt = false;
         for _ in 0..180 {
             step(&mut game, 1);
-            hurt |= with_frog(&game.world, frog, |fr| fr.health < fr.max_health);
+            hurt |= with_bong(&game.world, bong, |fr| fr.health < fr.max_health);
         }
-        assert!(hurt, "the shell reached the frog");
-        let kit = game.world.query::<&crate::pickup::Pickup>().iter().any(|p| p.kind == PickupKind::FrogHealth);
-        assert!(kit, "the frog kit dropped");
+        assert!(hurt, "the shell reached the bong");
+        let kit = game.world.query::<&crate::pickup::Pickup>().iter().any(|p| p.kind == PickupKind::BongHealth);
+        assert!(kit, "the bong kit dropped");
         put_seat(&mut game, 11, 7);
         step(&mut game, 2);
         assert_eq!(game.outcome(), Outcome::Won, "taking the kit finished the only beat");
@@ -723,20 +723,20 @@ mod tests {
     }
 
     #[test]
-    fn the_frog_walks_to_its_next_beats_cell_through_the_door_that_opened() {
-        let script = "\n[[training.beat]]\nfrog = [12, 4]\ndone = { flags = 1 }\n\n[[training.beat]]\nfrog = [5, 4]\ndone = { flags = 2 }\n";
+    fn the_bong_walks_to_its_next_beats_cell_through_the_door_that_opened() {
+        let script = "\n[[training.beat]]\nbong = [12, 4]\ndone = { flags = 1 }\n\n[[training.beat]]\nbong = [5, 4]\ndone = { flags = 2 }\n";
         let mut game = course(script);
-        let frog = game.frog.expect("a frog");
+        let bong = game.bong.expect("a bong");
         step(&mut game, 60);
-        let still = with_frog(&game.world, frog, |fr| fr.position);
+        let still = with_bong(&game.world, bong, |fr| fr.position);
         assert!(still.distance_to(cell_to_world(12, 4)) < 1.0, "it stays on its cell while the door is shut, at {still:?}");
         put_seat(&mut game, 6, 4);
         step(&mut game, 2);
         // Out of its way, so it does not shy from the tank.
         put_seat(&mut game, 14, 7);
         step(&mut game, 600);
-        let at = with_frog(&game.world, frog, |fr| fr.position);
-        assert!(at.distance_to(cell_to_world(5, 4)) < 4.0, "the frog hopped to beat 2's cell, at {at:?}");
+        let at = with_bong(&game.world, bong, |fr| fr.position);
+        assert!(at.distance_to(cell_to_world(5, 4)) < 4.0, "the bong hopped to beat 2's cell, at {at:?}");
     }
 
     #[test]
@@ -760,26 +760,26 @@ mod tests {
     }
 
     #[test]
-    fn a_dummy_goes_for_the_frog_and_never_fires_at_the_seat() {
+    fn a_dummy_goes_for_the_bong_and_never_fires_at_the_seat() {
         let script = "\n[[training.beat]]\nstart = { roll_in = [{ tank = \"scout\", ai = \"dummy\" }] }\ndone = { wrecks = 1 }\n";
         let mut game = course(script);
         // The seat stands clear of the gate's lane - a tank in a lane keeps
         // it busy, and nothing rolls in through it.
         put_seat(&mut game, 7, 7);
-        let mut at_frog = false;
+        let mut at_bong = false;
         for _ in 0..1800 {
             step(&mut game, 1);
             for event in game.events() {
                 match event {
                     Event::Hit { target: crate::simulation::HitTarget::Player { .. }, .. } => panic!("a dummy hit the seat"),
-                    Event::Hit { target: crate::simulation::HitTarget::Frog { .. }, .. } => at_frog = true,
+                    Event::Hit { target: crate::simulation::HitTarget::Bong { .. }, .. } => at_bong = true,
                     _ => {}
                 }
             }
-            let dummy = game.world.query::<&crate::ai::Ai>().iter().next().map(|ai| ai.frog_only);
+            let dummy = game.world.query::<&crate::ai::Ai>().iter().next().map(|ai| ai.bong_only);
             assert!(dummy != Some(false), "the beat's tank is a dummy");
         }
-        assert!(at_frog, "and it fired at the frog");
+        assert!(at_bong, "and it fired at the bong");
     }
 
     /// Run `game` until an enemy rolls in, and answer its slot.
@@ -824,13 +824,13 @@ mod tests {
         let wait = tuning().training_lane_wait_seconds;
         let slot = next_arrival(&mut game, ((wait + 2.0) * 60.0) as usize).expect("the scout came in all the same");
         let entity = game.world.query::<(hecs::Entity, &Tank)>().iter().find(|(_, t)| t.owner_slot() == slot).map(|(e, _)| e).unwrap();
-        assert_eq!(game.world.get::<&Ai>(entity).map(|ai| ai.frog_only).ok(), Some(true), "still the beat's dummy");
+        assert_eq!(game.world.get::<&Ai>(entity).map(|ai| ai.bong_only).ok(), Some(true), "still the beat's dummy");
         game.debug_kill(slot).expect("the scout can be killed");
         step(&mut game, 2);
         assert_eq!(game.outcome(), Outcome::Won);
     }
 
-    /// A beat started again - its frog fell - puts down its crates once,
+    /// A beat started again - its bong fell - puts down its crates once,
     /// not once more for every start.
     #[test]
     fn a_beat_started_again_takes_back_the_crates_it_dropped() {
@@ -839,10 +839,10 @@ mod tests {
         step(&mut game, 2);
         let crates = |game: &Game| game.world.query::<&Pickup>().iter().filter(|p| p.kind == PickupKind::Shield).count();
         assert_eq!(crates(&game), 1);
-        let frog = game.frog.expect("a frog");
+        let bong = game.bong.expect("a bong");
         for _ in 0..3 {
-            with_frog_mut(&game.world, frog, |fr| fr.damage(fr.max_health));
-            step(&mut game, ((tuning().training_frog_revive_seconds + 0.5) * 60.0) as usize);
+            with_bong_mut(&game.world, bong, |fr| fr.damage(fr.max_health));
+            step(&mut game, ((tuning().training_bong_revive_seconds + 0.5) * 60.0) as usize);
         }
         assert_eq!(crates(&game), 1, "one shield crate after three starts");
     }
@@ -886,11 +886,11 @@ mod tests {
     /// lone oil drum - a shell can fly over a drum, glance off it or leave
     /// it standing on a low roll - and the fire and the blasts take every
     /// drum on the range, the shed by them goes too, a fuel drum is thrown,
-    /// and the frog behind its sandbags and the seat on the road come
+    /// and the bong behind its sandbags and the seat on the road come
     /// through it - over a handful of seeds, since the rolls are the
     /// round's.
     #[test]
-    fn boot_camps_drum_range_goes_up_from_the_lone_drum_and_spares_the_frog_and_the_seat() {
+    fn boot_camps_drum_range_goes_up_from_the_lone_drum_and_spares_the_bong_and_the_seat() {
         let range = [(31, 7), (35, 6), (36, 6), (35, 7), (36, 7)];
         for seed in 1..=6 {
             let mut game = boot_camp(seed);
@@ -900,18 +900,18 @@ mod tests {
             run.begun = false;
             run.shells_held = false;
             assert_eq!(game.training_status().map(|s| s.id), Some("barrels".to_string()));
-            let frog = game.frog.expect("a frog");
+            let bong = game.bong.expect("a bong");
             let seat = game.player().expect("seat 0");
-            // Out of the frog's way while it walks to its cell.
+            // Out of the bong's way while it walks to its cell.
             put_seat(&mut game, 38, 16);
             let home = cell_to_world(33, 15);
             for _ in 0..60 * 90 {
-                if with_frog(&game.world, frog, |fr| fr.position.distance_to(home) < 4.0) {
+                if with_bong(&game.world, bong, |fr| fr.position.distance_to(home) < 4.0) {
                     break;
                 }
                 step(&mut game, 1);
             }
-            assert!(with_frog(&game.world, frog, |fr| fr.position.distance_to(home) < 4.0), "seed {seed}: the frog took cover");
+            assert!(with_bong(&game.world, bong, |fr| fr.position.distance_to(home) < 4.0), "seed {seed}: the bong took cover");
             game.debug_teleport(0, cell_to_world(31, 11), Some(0.0)).expect("seat 0 is on the field");
             with_tank_mut(&game.world, seat, |t| {
                 t.shells_ammo = 10;
@@ -920,7 +920,7 @@ mod tests {
             let (w, h) = game.map.field_size();
             let fire = crate::ai::Intent { face: Some(crate::tank::Dir::Up), fire: true, ..Default::default() };
             let mut launched = 0;
-            let mut frog_hurt = false;
+            let mut bong_hurt = false;
             let mut shots = 0;
             for frame in 0..60 * 30 {
                 // Fire again every two seconds while the lone drum stands.
@@ -933,7 +933,7 @@ mod tests {
                 };
                 game.update(input, 1.0 / 60.0, w, h);
                 launched += game.events().iter().filter(|e| matches!(e, Event::DrumLaunched { .. })).count();
-                frog_hurt |= with_frog(&game.world, frog, |fr| fr.health < fr.max_health);
+                bong_hurt |= with_bong(&game.world, bong, |fr| fr.health < fr.max_health);
                 assert!(!with_tank(&game.world, seat, Tank::is_wreck), "seed {seed}: the seat on the road was wrecked");
             }
             let standing: Vec<(i32, i32)> = game.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).map(|o| o.cell()).collect();
@@ -942,7 +942,7 @@ mod tests {
             assert!(game.training_status().is_some_and(|s| s.id == "onward"), "seed {seed}: the range is done");
             assert!(launched >= 1, "seed {seed}: a fuel drum was thrown");
             assert!((33..=36).any(|c| !standing.contains(&(c, 4))), "seed {seed}: a blast took the shed");
-            assert!(!frog_hurt, "seed {seed}: the frog was hurt");
+            assert!(!bong_hurt, "seed {seed}: the bong was hurt");
             let lost = with_tank(&game.world, seat, |t| t.damage);
             assert!(lost < crate::MAX_DAMAGE * 0.25, "seed {seed}: the seat on the road lost {lost}");
         }
@@ -950,7 +950,7 @@ mod tests {
 
     /// Boot Camp from the first beat to the last, the player's way: the
     /// flags, the ammo crate, the brick wall, the drum range, the pen, the
-    /// frog's kit, the dummy shot the moment it rolls in - its wreck in the
+    /// bong's kit, the dummy shot the moment it rolls in - its wreck in the
     /// gate's lane - and the last beat's scout.
     #[test]
     fn boot_camp_plays_through_to_the_end() {
@@ -985,19 +985,19 @@ mod tests {
         until(&mut game, 6, "the drums");
         put_seat(&mut game, 42, 11);
         until(&mut game, 7, "into the pen");
-        // The shot at the frog lands, then the seat takes its kit.
-        let frog = game.frog.expect("a frog");
+        // The shot at the bong lands, then the seat takes its kit.
+        let bong = game.bong.expect("a bong");
         let mut hurt = false;
         for _ in 0..60 * 40 {
             step(&mut game, 1);
-            hurt = with_frog(&game.world, frog, |fr| fr.health < fr.max_health);
+            hurt = with_bong(&game.world, bong, |fr| fr.health < fr.max_health);
             if hurt {
                 break;
             }
         }
-        assert!(hurt, "the shot found the frog once it reached its pen");
+        assert!(hurt, "the shot found the bong once it reached its pen");
         put_seat(&mut game, 43, 15);
-        until(&mut game, 8, "the frog's kit");
+        until(&mut game, 8, "the bong's kit");
         put_seat(&mut game, 42, 14);
         let dummy = next_arrival(&mut game, 60 * 20).expect("the dummy rolled in");
         game.debug_kill(dummy).expect("the dummy can be killed");

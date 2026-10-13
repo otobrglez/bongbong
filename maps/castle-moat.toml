@@ -4,7 +4,7 @@
 # swallow every `cells.` line after it.
 #
 # Protect on the waves plan: six waves of 2 to 7 tanks, medium to super,
-# rolling in through six gates round the edge. The frog lives in the castle
+# rolling in through six gates round the edge. The bong lives in the castle
 # courtyard. A curtain wall with an iron tower at each corner rings it, broken
 # by a gate on every side, and a moat two cells wide - shallow, so a hull can
 # wade it slowly anywhere - rings the wall, with dry road bridges north and
@@ -12,10 +12,11 @@
 #
 # A timber-and-brick village west of the moat, a forest east, fields and
 # fences south. Super-heavies to hold it: a titan and a leviathan. Shield and
-# frog health in the keep's shadow, laser and missiles in the far corners
+# bong health in the keep's shadow, laser and missiles in the far corners
 # outside the moat, health and ammo out in the village and the woods.
 
 version = 1
+bong = "oggle"
 size = [56, 31.5]
 tank = "titan"
 tank2 = "leviathan"
@@ -368,7 +369,7 @@ cells."6,17" = { kind = "wall", material = "wood" }
 cells."7,17" = { kind = "wall", material = "glass" }
 cells."12,17" = { kind = "water" }
 cells."13,17" = { kind = "water" }
-cells."22,17" = { kind = "pickup", pickup = "frog_health" }
+cells."22,17" = { kind = "pickup", pickup = "bong_health" }
 cells."44,17" = { kind = "water" }
 cells."45,17" = { kind = "water" }
 cells."4,18" = { kind = "wall", material = "wood" }
@@ -409,7 +410,7 @@ cells."13,20" = { kind = "water" }
 cells."15,20" = { kind = "wall", material = "brick" }
 cells."20,20" = { kind = "water" }
 cells."21,20" = { kind = "water" }
-cells."28,20" = { kind = "frog" }
+cells."28,20" = { kind = "bong" }
 cells."34,20" = { kind = "wall", material = "wood" }
 cells."37,20" = { kind = "wall", material = "wood" }
 cells."41,20" = { kind = "wall", material = "brick" }

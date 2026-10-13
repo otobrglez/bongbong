@@ -34,7 +34,7 @@ use crate::tank::Tank;
 use crate::tuning::tuning;
 use crate::Position;
 
-use super::{field, roll_enemy_tank, roll_role, with_frog, with_tank, with_tank_mut, Event, Frame, Game, TANK_SPRITE_ORDER};
+use super::{field, roll_enemy_tank, roll_role, with_bong, with_tank, with_tank_mut, Event, Frame, Game, TANK_SPRITE_ORDER};
 
 /// What lane `Game::pick_gate` found for the next roll-in.
 #[derive(Clone, Copy, Debug)]
@@ -68,7 +68,7 @@ pub struct RollIn {
 /// asked for (`Game::training_roll_in`).
 pub(crate) struct Rejoin {
     role: Role,
-    frog_only: bool,
+    bong_only: bool,
 }
 
 /// How often the round looks for stragglers, in ticks: once a second. A
@@ -228,12 +228,12 @@ impl Game {
                 // Roles roll on arrival, the moment the tank joins the
                 // fight - but for a straggler coming back, which keeps the
                 // role it had.
-                let (role, frog_only) = match self.world.remove_one::<Rejoin>(entity) {
-                    Ok(rejoin) => (rejoin.role, rejoin.frog_only),
+                let (role, bong_only) = match self.world.remove_one::<Rejoin>(entity) {
+                    Ok(rejoin) => (rejoin.role, rejoin.bong_only),
                     Err(_) => (roll_role(self.mission, &mut f.rng), false),
                 };
                 let mut ai = Ai::with_role(role);
-                ai.frog_only = frog_only;
+                ai.bong_only = bong_only;
                 // On a field map the wave is called to the fight: the walk
                 // its gate was picked for (`field`).
                 ai.field.called = self.field_map;
@@ -308,14 +308,14 @@ impl Game {
 
     /// Stragglers (docs/large-maps-follow-camera.md section 12): a wave
     /// tank that has gone `field_reroll_after_seconds` without a live seat
-    /// or the players' frog within its sight (`FieldMind::lost`), and
+    /// or the players' bong within its sight (`FieldMind::lost`), and
     /// stands farther from them by walk than any wave's gate is paced for
     /// (`field::far_by_walk`) - typically one that went through a portal
     /// for a pickup, lost its call and kept to its gate's leash - is taken
     /// off the field and rolled in again through a gate nearer the fight.
     /// Only where no screen could see it go (`field::beyond_every_screen`
     /// of every seat, a wreck or a seat in a gate lane included), never a
-    /// guard keeping its frog, never a burning hull, and only through a
+    /// guard keeping its bong, never a burning hull, and only through a
     /// lane `pick_gate` would give a wave, outside every seat's sight box
     /// and shorter by walk than where the tank stands
     /// (`field::reroll_gates`); with none free it waits for the next look.
@@ -327,7 +327,7 @@ impl Game {
         // Every seat's camera, wherever its tank is.
         let screens: Vec<Position> =
             self.players().into_iter().flatten().map(|e| with_tank(&self.world, e, |tank| tank.position)).collect();
-        let guarding = self.enemy_frog.is_some_and(|e| with_frog(&self.world, e, |fr| !fr.is_dead()));
+        let guarding = self.enemy_bong.is_some_and(|e| with_bong(&self.world, e, |fr| !fr.is_dead()));
         let mut lost: Vec<(usize, Entity, Position)> = self
             .world
             .query::<(Entity, &Tank, &Ai)>()
@@ -350,13 +350,13 @@ impl Game {
         lost.sort_by_key(|&(slot, ..)| slot);
         let seats = self.live_seat_positions();
         let mut fight = seats.clone();
-        fight.extend(self.frog_position());
+        fight.extend(self.bong_position());
         if fight.is_empty() {
             return;
         }
         let grid = self.nav_grid(f.width, f.height);
         let walk = grid.walk_costs(&fight);
-        // The lanes depend on the grid, the seats and the frog, none of
+        // The lanes depend on the grid, the seats and the bong, none of
         // which a re-roll moves.
         let lanes = self.wave_lanes(&grid, f);
         for (slot, entity, at) in lost {
@@ -380,7 +380,7 @@ impl Game {
     /// any wave tank, with a fresh memory and its new gate for home.
     fn reroll(&mut self, entity: Entity, slot: usize, from: Position, gate: Gate, f: &mut Frame) {
         let ai = self.world.remove_one::<Ai>(entity).expect("a straggler is an enemy on the field");
-        let (role, frog_only) = (ai.role, ai.frog_only);
+        let (role, bong_only) = (ai.role, ai.bong_only);
         if let Some(body) = with_tank(&self.world, entity, |t| t.body) {
             self.physics.remove_body(body);
         }
@@ -398,12 +398,12 @@ impl Game {
             t.minigun_burst = None;
             t.missile_volley = None;
         });
-        self.world.insert(entity, (RollIn { to: gate.inside }, Rejoin { role, frog_only })).expect("a straggler is never despawned");
+        self.world.insert(entity, (RollIn { to: gate.inside }, Rejoin { role, bong_only })).expect("a straggler is never despawned");
         // The slots it held were round the fight it never reached.
         for ring in &mut self.engage {
             ring.release(entity);
         }
-        self.engage_frog.release(entity);
+        self.engage_bong.release(entity);
         f.events.push(Event::Rerolled { slot, x: from.x, y: from.y });
     }
 
@@ -546,7 +546,7 @@ impl Game {
     /// the map's own `gate` cells when it has any, else the lanes the grid
     /// offers (`battlefield::gate_candidates`, so walls shot away since
     /// open new lanes), either way none within `wave_gate_min_player_dist`
-    /// of a seat or the players' frog where any lane is farther - with
+    /// of a seat or the players' bong where any lane is farther - with
     /// where player 1 stands, the fight `toward_the_fight` routes to.
     fn open_lanes(&self, grid: &Grid, f: &Frame) -> (Vec<Gate>, Position) {
         let (inward, min_dist) = {
@@ -561,8 +561,8 @@ impl Game {
             .flatten()
             .map(|p| with_tank(&self.world, p, |t| t.position))
             .collect();
-        if let Some(frog) = self.frog {
-            avoid.push(with_frog(&self.world, frog, |fr| fr.position));
+        if let Some(bong) = self.bong {
+            avoid.push(with_bong(&self.world, bong, |fr| fr.position));
         }
         let explicit = self.map.gate_cells();
         let mut gates = if explicit.is_empty() {
@@ -691,10 +691,10 @@ impl Game {
 
     /// A training beat's tank (docs/training-stage.md): one of chassis
     /// `row` rolling in through a free lane, as a wave's does, to fight as
-    /// `role` once it arrives - a dummy (`frog_only`) never at a seat.
+    /// `role` once it arrives - a dummy (`bong_only`) never at a seat.
     /// `None` while no lane is free - or the map has no gate - so the beat
     /// asks again next frame.
-    pub(super) fn training_roll_in(&mut self, f: &mut Frame, row: i32, role: Role, frog_only: bool) -> Option<Entity> {
+    pub(super) fn training_roll_in(&mut self, f: &mut Frame, row: i32, role: Role, bong_only: bool) -> Option<Entity> {
         let GatePick::Free(gate) = self.pick_gate(f) else { return None };
         let slot = self.take_slot();
         let mut tank = roll_enemy_tank(&mut f.rng, row, gate.outside, slot);
@@ -702,7 +702,7 @@ impl Game {
         tank.rotation = rotation;
         tank.visual_rotation = rotation;
         tank.turret_visual_rotation = rotation;
-        Some(self.world.spawn((tank, RollIn { to: gate.inside }, Rejoin { role, frog_only })))
+        Some(self.world.spawn((tank, RollIn { to: gate.inside }, Rejoin { role, bong_only })))
     }
 
     /// The gate-less fallback: place the tank in the spawn band exactly as

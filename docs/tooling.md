@@ -44,7 +44,7 @@ things when forgotten; this is the detail. Update it with the tool.
   [--spawn ..] [--frames N] [--log-every N] [--seed S] [-m map] [--rounds N] [--json-out F]
   [--budget kind=N ...] [--heatmap] [--tuning F] [--crate KIND] [--print-rust]`; `--crate` puts that
   pickup in every weapon crate's place (the fixtures carry none). Built on
-  `Game::outcome()`/`tank_snapshots()`/`events()`/`frog_position()` - extend those public accessors,
+  `Game::outcome()`/`tank_snapshots()`/`events()`/`bong_position()` - extend those public accessors,
   not raw world access (a bin sees only `pub`). Per-frame **anomaly checks** on enemies print
   greppable `ANOMALY round= seed= frame= kind= tank= pos=` lines, each seed a replay recipe; kinds
   (`ANOMALY_KINDS`, the single list wiring `--budget`/`--json-out`/`--heatmap`/summaries):
@@ -65,7 +65,7 @@ things when forgotten; this is the detail. Update it with the tool.
   (enemy-pair / into-player) are counters, never budgeted, and saturate through the ram cooldown;
   `tank_contact_seconds` does not. `--rounds N` sweeps seeds base+i and prints only anomalies and
   summaries. A sweep also prints `outcomes:` (won/lost/unfinished, lost-after and won-after mean and
-  median), `lulls:` (stretches of at least 3 s with no enemy within reach of a live seat or the frog
+  median), `lulls:` (stretches of at least 3 s with no enemy within reach of a live seat or the bong
   between two frames with one; `lulls` in `--json-out`), `rerolls:` with a trace line per straggler
   re-rolled, `first contact:` (the first engagement, shot at a seat and hit on a seat, mean and
   median) and `timing:` (ms per `Game::update`, flagged in a debug build), carried in `--json-out`
@@ -85,12 +85,12 @@ things when forgotten; this is the detail. Update it with the tool.
   hedge-maze, pile-up=8 archipelago, tank-grind=1); not in CI - about four minutes in a debug
   build), `just probe-defend` (release: the perfect defence on longwater and the study map, ten
   seven-minute rounds each at seed 1000, never-arrived 0). `defend` is a perfect defence: every
-  enemy within `--defend-reach` px (400) of a live seat or the players' frog is destroyed through
+  enemy within `--defend-reach` px (400) of a live seat or the players' bong is destroyed through
   `Game::debug_kill`, so a round lasts as long as its last straggler and never-arrived counts one
   still out. The `maps/test/*.toml` fixtures are 40 x 22.5 but carry `view = "whole"`, so they stay
   arenas and their ceilings measure the arena's AI; `maps/missions/waves-basic.toml` and
   `hunt-basic.toml` are field maps by size. `maps/test/` is the adversarial fixture corpus (u-trap,
-  choke, tight-corridors, frog-block, maze, pockets, the `props` playground, plus `portals` (two
+  choke, tight-corridors, bong-block, maze, pockets, the `props` playground, plus `portals` (two
   rooms joined only by a portal each)), each with header comments describing intent;
   `maps/test/corridors/` and `maps/test/online/` (`hunt-duel.toml`, the round the co-op tests end in
   under a second) sit in subdirectories on purpose (the glob is `maps/test/*.toml`).
@@ -101,7 +101,7 @@ things when forgotten; this is the detail. Update it with the tool.
   spawn-band capacity (Band plans, `enemy_spawn_legal`), planner-vs-physics agreement, single-cell
   corridors, gates (`gate-not-on-edge`/`gate-blocked`/`waves-no-gates`), portals
   (`portal-alone`/`portal-blocked`; the linter's floods step along `Grid::portal_links` like the
-  planner), `enemy-frog-unreachable`, `hunt-missing-enemy-frog`, the seat checks
+  planner), `enemy-bong-unreachable`, `hunt-missing-enemy-bong`, the seat checks
   (`player2-unreachable` names the seat by number, over every seat past player 1). Findings carry
   `cells` (`LintCell::Map`/`Nav`) and, where one edit answers them, a `fix`
   (`LintFix::Move`/`Place`/`Remove`: no start, a penned start, player 2 cut off, starts too close, a
@@ -247,6 +247,11 @@ things when forgotten; this is the detail. Update it with the tool.
   is drawn by nothing; the game's tread marks are baked at run time
   (`wear.rs`, docs/ground-memory.md). A tank's wear is the sheet's damage tiers; its smoke and fire are drawn
   (`damage_stage.rs`).
+- **The bongs** are `tools/spritegen/bongs/export.js` → `static/bongs/<kind>/{idle,hurt,hop,attack,
+  explosion}.png`, the seven characters drawn by code in `sprites.js` with continuous, keyframed
+  animation (docs/BONG_SPEC.md): `node tools/spritegen/bongs/export.js`, Node from the dev shell, no
+  packages. Deterministic; off the Puny Palette on purpose, so `check_sheets.py` does not list them.
+  Its `CLIPS` frame counts and `lib.rs`'s `BONG_*_FRAMES`/`BONG_*_FPS` must agree.
 - **The ground layer is the one third-party, hand-drawn exception**:
   `static/punyworld/punyworld-overworld-tileset.png` and `-desert.png` (see its `SOURCE.md`) are
   retinted copies, one per `map::Theme` - `tools/retint_ground.py` reads the pristine

@@ -3,11 +3,11 @@
 # subdirectory on purpose: `just probe-fixtures` globs maps/test/*.toml, and
 # this map is not an AI fixture - it has no enemies and nothing to steer.
 #
-# A Hunt with nobody on the field but the seats and the enemy frog at the head
+# A Hunt with nobody on the field but the seats and the enemy bong at the head
 # of a one-cell iron shaft four cells up player one's barrel. An evasive hop
 # clears a wall as long as it lands somewhere it fits, so the shaft is walled
 # three rows deep and the only landing left is further down the lane, toward
-# the tank the frog is hopping away from: it stays in the line of fire and a
+# the tank the bong is hopping away from: it stays in the line of fire and a
 # pulled trigger wins the round in well under a second, whatever seed it runs
 # on. That is what makes the end screen and what follows it testable in a few
 # seconds of wall clock.
@@ -22,7 +22,7 @@ spawn.kind = "band"
 
 cells."7,5" = { kind = "start" }
 cells."5,5" = { kind = "start2" }
-cells."7,1" = { kind = "enemy_frog" }
+cells."7,1" = { kind = "enemy_bong" }
 cells."1,1" = { kind = "wall", material = "iron" }
 cells."2,1" = { kind = "wall", material = "iron" }
 cells."3,1" = { kind = "wall", material = "iron" }

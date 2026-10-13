@@ -1,4 +1,4 @@
-# serpent-river - a broad river snakes across the valley between two frog camps
+# serpent-river - a broad river snakes across the valley between two bong camps
 # Hand-authored: re-saving from the map editor would drop these comments.
 # Level tables as dotted keys on purpose - a `[spawn]` header would
 # swallow every `cells.` line after it.
@@ -7,7 +7,7 @@
 # wide snakes down the valley from the north edge to the south, shallow along
 # its whole length - every bank is a ford, and every ford slows a hull to a
 # wade - with a road bridge below the bend for the fast way over. The player's
-# frog keeps a meadow camp on the west bank, the enemy's a walled farm on the
+# bong keeps a meadow camp on the west bank, the enemy's a walled farm on the
 # east.
 #
 # Pine forests crowd both banks, a timber watermill sits on the bend, fields
@@ -15,6 +15,8 @@
 # for the longbow; laser and missiles on the far bank's hills.
 
 version = 1
+bong = "oggle"
+enemy_bong = "fuzz"
 size = [62, 31]
 tanks = 7
 tank = "longbow"
@@ -145,7 +147,7 @@ cells."21,7" = { kind = "water" }
 cells."39,7" = { kind = "road" }
 cells."49,7" = { kind = "wall", material = "glass" }
 cells."52,7" = { kind = "wall", material = "brick" }
-cells."54,7" = { kind = "enemy_frog" }
+cells."54,7" = { kind = "enemy_bong" }
 cells."56,7" = { kind = "wall", material = "brick" }
 cells."1,8" = { kind = "pine" }
 cells."6,8" = { kind = "pine" }
@@ -351,7 +353,7 @@ cells."58,17" = { kind = "road" }
 cells."59,17" = { kind = "road" }
 cells."60,17" = { kind = "road" }
 cells."61,17" = { kind = "road" }
-cells."13,18" = { kind = "pickup", pickup = "frog_health" }
+cells."13,18" = { kind = "pickup", pickup = "bong_health" }
 cells."27,18" = { kind = "pickup", pickup = "ammo" }
 cells."37,18" = { kind = "road" }
 cells."38,18" = { kind = "road" }
@@ -380,7 +382,7 @@ cells."4,21" = { kind = "tall_grass" }
 cells."5,21" = { kind = "tall_grass" }
 cells."6,21" = { kind = "tall_grass" }
 cells."7,21" = { kind = "tall_grass" }
-cells."10,21" = { kind = "frog" }
+cells."10,21" = { kind = "bong" }
 cells."11,21" = { kind = "tall_grass" }
 cells."12,21" = { kind = "tall_grass" }
 cells."13,21" = { kind = "tall_grass" }

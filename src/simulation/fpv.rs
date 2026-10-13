@@ -16,7 +16,7 @@ use crate::ai::{Ai, in_sight_box};
 use crate::air::{AirKey, AirStrike, AirTarget};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
 use crate::fpv::{self, AirWant, Drone, DroneLock, DroneStage, LockCandidate};
-use crate::frog::{Frog, Side};
+use crate::bong::{Bong, Side};
 use crate::math::Vec2;
 use crate::obstacle::Obstacle;
 use crate::shell::Owner;
@@ -118,9 +118,9 @@ impl Game {
         (c, Vec2::new(h.x, h.y))
     }
 
-    /// A frog's box as the crown is measured against it: its centre alone.
-    fn frog_box(frog: &Frog) -> (Position, Vec2) {
-        (frog.position, Vec2::zero())
+    /// A bong's box as the crown is measured against it: its centre alone.
+    fn bong_box(bong: &Bong) -> (Position, Vec2) {
+        (bong.position, Vec2::zero())
     }
 
     /// Put this frame's launches in the world, each locked on what it is
@@ -137,12 +137,12 @@ impl Game {
             let (lock, aim) = self.pick_lock(&p, &trees, field);
             let mut drone = Drone::launch(p.origin, p.out, p.slot, p.owner, lock, aim);
             drone.id = self.take_shot_id();
-            let (target, frog) = match lock {
+            let (target, bong) = match lock {
                 DroneLock::Tank { slot, .. } => (Some(slot), false),
-                DroneLock::Frog { .. } => (None, true),
+                DroneLock::Bong { .. } => (None, true),
                 DroneLock::None => (None, false),
             };
-            f.events.push(Event::DroneLaunched { id: drone.id, slot: p.owner.slot(), x: p.origin.x, y: p.origin.y, target, frog });
+            f.events.push(Event::DroneLaunched { id: drone.id, slot: p.owner.slot(), x: p.origin.x, y: p.origin.y, target, bong });
             self.world.spawn((drone,));
         }
         self.count_drones_out();
@@ -188,14 +188,14 @@ impl Game {
                 Some((entity, pos)) => (DroneLock::Tank { entity, slot: seat as usize }, pos),
                 None => (DroneLock::None, ahead),
             },
-            (_, AirWant::Frog) => {
-                let frog = self.frog.and_then(|e| {
-                    let fr = self.world.get::<&Frog>(e).ok()?;
-                    (!fr.is_dead() && Self::crown_at(trees, fr.position).is_none() && Self::canopy_over(trees, Self::frog_box(&fr)).is_none())
+            (_, AirWant::Bong) => {
+                let bong = self.bong.and_then(|e| {
+                    let fr = self.world.get::<&Bong>(e).ok()?;
+                    (!fr.is_dead() && Self::crown_at(trees, fr.position).is_none() && Self::canopy_over(trees, Self::bong_box(&fr)).is_none())
                         .then_some((e, fr.position))
                 });
-                match frog {
-                    Some((entity, pos)) => (DroneLock::Frog { entity, side: Side::Player }, pos),
+                match bong {
+                    Some((entity, pos)) => (DroneLock::Bong { entity, side: Side::Player }, pos),
                     None => (DroneLock::None, ahead),
                 }
             }
@@ -245,10 +245,10 @@ impl Game {
                     Ok(tank) if Self::canopy_over(&trees, Self::hull_of(&tank)).is_some() => Err("canopy"),
                     Ok(tank) => Ok(tank.position),
                 },
-                DroneLock::Frog { entity: target, .. } => match self.world.get::<&Frog>(target) {
+                DroneLock::Bong { entity: target, .. } => match self.world.get::<&Bong>(target) {
                     Err(_) => Err("gone"),
                     Ok(fr) if fr.is_dead() => Err("wreck"),
-                    Ok(fr) if Self::canopy_over(&trees, Self::frog_box(&fr)).is_some() || Self::crown_at(&trees, fr.position).is_some() => Err("canopy"),
+                    Ok(fr) if Self::canopy_over(&trees, Self::bong_box(&fr)).is_some() || Self::crown_at(&trees, fr.position).is_some() => Err("canopy"),
                     Ok(fr) => Ok(fr.position),
                 },
                 DroneLock::None => continue,
@@ -325,7 +325,7 @@ impl Game {
         self.count_drones_out();
     }
 
-    /// The tanks and frogs under a tree's crown, which a drone's burst
+    /// The tanks and bongs under a tree's crown, which a drone's burst
     /// leaves out whole.
     fn spared_by_canopy(&self, trees: &[(Entity, Position)]) -> Vec<Entity> {
         if trees.is_empty() {
@@ -340,9 +340,9 @@ impl Game {
             .collect();
         out.extend(
             self.world
-                .query::<(Entity, &Frog)>()
+                .query::<(Entity, &Bong)>()
                 .iter()
-                .filter(|(_, fr)| Self::canopy_over(trees, Self::frog_box(fr)).is_some() || Self::crown_at(trees, fr.position).is_some())
+                .filter(|(_, fr)| Self::canopy_over(trees, Self::bong_box(fr)).is_some() || Self::crown_at(trees, fr.position).is_some())
                 .map(|(e, _)| e),
         );
         out
@@ -491,9 +491,9 @@ impl Game {
         let field = (f.width, f.height);
         let hulls: Vec<(Entity, (Position, Vec2))> =
             seats.iter().map(|s| (s.entity, self.world.get::<&Tank>(s.entity).map(|tk| Self::hull_of(&tk)).unwrap_or((s.pos, Vec2::zero())))).collect();
-        let quarry = self.frog.and_then(|e| {
-            let fr = self.world.get::<&Frog>(e).ok()?;
-            let hidden = Self::canopy_over(&trees, Self::frog_box(&fr)).is_some() || Self::crown_at(&trees, fr.position).is_some();
+        let quarry = self.bong.and_then(|e| {
+            let fr = self.world.get::<&Bong>(e).ok()?;
+            let hidden = Self::canopy_over(&trees, Self::bong_box(&fr)).is_some() || Self::crown_at(&trees, fr.position).is_some();
             (!fr.is_dead() && !hidden).then_some(fr.position)
         });
         let view = self.enemy_sight();

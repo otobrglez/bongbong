@@ -784,8 +784,8 @@ pub struct Args {
     enemies: Option<usize>,
 
     /// Override the map's mission (what ends the round): protect (keep the
-    /// frog alive, wreck every enemy), hunt (kill the enemy frog first) or
-    /// destroy (no frog, wreck every enemy). See docs/maps-to-levels.md.
+    /// bong alive, wreck every enemy), hunt (kill the enemy bong first) or
+    /// destroy (no bong, wreck every enemy). See docs/maps-to-levels.md.
     #[arg(long = "mission", value_enum)]
     mission: Option<crate::level::Mission>,
 
@@ -1506,29 +1506,13 @@ pub fn run(args: Args) {
     let barrel_explosion_texture = rl
         .load_texture(&thread, "static/barrel_explosion.png")
         .expect("failed loading barrel explosion texture");
-    // One full clip set per colour variant (see `frog::FROG_VARIANT_DIRS`) -
-    // `Frog::variant` (rolled per round in `Game::init`) picks which one
+    // One full clip set per bong character, in `BongKind::ALL` order -
+    // `Bong::kind` (the map's choice for its side) picks which one
     // `game.rs::render` draws from. Loaded up front like every other
     // texture, kept alive for the whole game loop.
-    let frog_textures: Vec<crate::render::frog::FrogVariantTextures> = crate::frog::FROG_VARIANT_DIRS
-        .iter()
-        .map(|dir| crate::render::frog::FrogVariantTextures {
-            idle: rl
-                .load_texture(&thread, &format!("static/toxic_frog/{dir}/idle.png"))
-                .expect("failed loading frog idle texture"),
-            hurt: rl
-                .load_texture(&thread, &format!("static/toxic_frog/{dir}/hurt.png"))
-                .expect("failed loading frog hurt texture"),
-            hop: rl
-                .load_texture(&thread, &format!("static/toxic_frog/{dir}/hop.png"))
-                .expect("failed loading frog hop texture"),
-            attack: rl
-                .load_texture(&thread, &format!("static/toxic_frog/{dir}/attack.png"))
-                .expect("failed loading frog attack texture"),
-            explosion: rl
-                .load_texture(&thread, &format!("static/toxic_frog/{dir}/explosion.png"))
-                .expect("failed loading frog explosion texture"),
-        })
+    let bong_textures: Vec<crate::render::bong::BongTextures> = crate::bong::BongKind::ALL
+        .into_iter()
+        .map(|kind| crate::render::bong::BongTextures::load(&mut rl, &thread, kind))
         .collect();
     let eraser_texture = rl
         .load_texture(&thread, "static/ui/eraser.png")
@@ -1563,10 +1547,10 @@ pub fn run(args: Args) {
     // every step's events like the particle layer - presentation only, and
     // a new round, seat or replica starts it over by itself.
     let mut awareness = crate::indicators::ScreenAwareness::default();
-    // The frog's voice in a training round (bubble.rs,
+    // The bong's voice in a training round (bubble.rs,
     // docs/training-stage.md): fed every step's events like the
     // indicators, aged on the time the round ran.
-    let mut voice = crate::bubble::FrogVoice::default();
+    let mut voice = crate::bubble::BongVoice::default();
     // The GPU copies of what the round and the builder bake: the floor
     // shade (`ground::GroundGrid::shade`), the ground's worn cells, the
     // forest floor, the lava's banks and the pictures it keeps between
@@ -2259,10 +2243,10 @@ pub fn run(args: Args) {
                     towers: &towers_texture,
                     crates: &crates_texture,
                     pickup_glyphs: &pickup_glyphs_texture,
-                    // Palette icon: the first colour variant's idle frame -
-                    // a fixed representative sprite, since the builder
-                    // places a frog *cell*, not a rolled colour.
-                    frog_idle: &frog_textures[0].idle,
+                    // The bongs the canvas map picks, for their cells and
+                    // their tools' icons.
+                    bong_idle: &bong_textures[session.builder.map().bong_kind(crate::bong::Side::Player).index()].idle,
+                    enemy_bong_idle: &bong_textures[session.builder.map().bong_kind(crate::bong::Side::Enemy).index()].idle,
                     eraser: &eraser_texture,
                     portal: &portal_texture,
                     tanks: &tanks_texture,
@@ -2649,24 +2633,29 @@ pub fn run(args: Args) {
                 None => awareness.picture(game, &seats, &frame, points),
             }
         });
-        // The frog's line, if it has one up: aged on the time the round
+        // The bong's line, if it has one up: aged on the time the round
         // ran (none while a dialog or the level select freezes it), its
-        // keys or taps the input last used, laid out over the frog.
+        // keys or taps the input last used, laid out over the bong.
         let voice_dt = if session.playing() && session.mode() == Driver::Play { fx_dt } else { 0.0 };
         let catalogue = crate::text::text();
-        let words = |key: &str| catalogue.message(key, &[]).unwrap_or_else(|| key.to_string());
+        let name = catalogue.get(game.map.bong_kind(crate::bong::Side::Player).title());
+        let words = |key: &str| {
+            catalogue
+                .message(key, &[("name", fluent_bundle::FluentValue::from(name.as_str()))])
+                .unwrap_or_else(|| key.to_string())
+        };
         voice.update(game, voice_dt, &tuning(), |key| words(key).chars().count());
         let bubble = (session.mode() == Driver::Play)
             .then(|| voice.showing())
             .flatten()
-            .zip(game.frog_position())
-            .map(|(line, frog)| {
+            .zip(game.bong_position())
+            .map(|(line, bong)| {
                 let touch = ui.hints == hud::Hints::Touch;
                 let key = crate::bubble::key_for(&line.key, touch, |k| catalogue.message(k, &[]).is_some());
                 let text = words(&key);
                 let shown = crate::bubble::revealed(&text, line.age, &tuning());
                 let field = crate::math::Rectangle::new(layout.field.x, layout.field.y, layout.field.w, layout.field.h);
-                let at = camera.to_view(frog) + crate::math::Vec2::new(field.x, field.y);
+                let at = camera.to_view(bong) + crate::math::Vec2::new(field.x, field.y);
                 let points = ui.scale / view.scale;
                 let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).map(|r| ui_rect_on_bitmap(&ui, &view, r)).collect();
                 crate::bubble::layout(&text, shown, at, field, &keep_out, points, |w, size| crate::text::width(w, size.round() as i32) as f32)
@@ -2760,7 +2749,7 @@ pub fn run(args: Args) {
                 props: &props_texture,
                 barrel_explosion: &barrel_explosion_texture,
                 ground: &ground_textures[theme_index(game.map.theme)],
-                frog_variants: &frog_textures,
+                bongs: &bong_textures,
                 grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
                 bushes: &bushes_texture,

@@ -1,6 +1,6 @@
 //! Pickups: inert collectibles at the map's own slots, respawning after a
 //! delay once taken (`simulation::pickup_phase`, `respawn_from_slots`).
-//! Unlike `Obstacle`/`Frog` there's no physics body - nothing should ever
+//! Unlike `Obstacle`/`Bong` there's no physics body - nothing should ever
 //! collide with a pickup, it's picked up by touch alone (`Pickup::in_reach`),
 //! so it's a position and a kind, checked against every living tank each
 //! frame.
@@ -64,7 +64,7 @@ pub enum PickupKind {
     /// live shield after `shield_recharge_delay_seconds`; a shattered one
     /// never returns on its own). It is spent at two seams, because a
     /// projectile never reaches `Tank::take_damage`: that function is the
-    /// absorb path for ram, blasts, flame, the frog and the laser, while
+    /// absorb path for ram, blasts, flame, the bong and the laser, while
     /// shells, bullets and plasma bounce off in
     /// `Game::resolve_projectiles` and are charged
     /// `shield_deflect_cost_factor` times their own damage there.
@@ -81,26 +81,26 @@ pub enum PickupKind {
     /// the map's own props alight. Player-only: an enemy driving over one
     /// leaves it where it is.
     Flamethrower,
-    /// The frog health pack (docs/frog-health-pack-prd.md): heals the
-    /// collector's *own* frog - `Game::frog` for a player,
-    /// `Game::enemy_frog` for an enemy in a Hunt round - by
-    /// `frog_pack_heal_fraction` of its max health, which is a full heal by
-    /// default. The frog is otherwise the one thing in the game that only
+    /// The bong health pack (docs/bong-health-pack-prd.md): heals the
+    /// collector's *own* bong - `Game::bong` for a player,
+    /// `Game::enemy_bong` for an enemy in a Hunt round - by
+    /// `bong_pack_heal_fraction` of its max health, which is a full heal by
+    /// default. The bong is otherwise the one thing in the game that only
     /// ever gets worse.
     ///
-    /// One rule decides who collects it: **a tank collects a frog pack
-    /// unless its own side's frog is alive and already at full health.** So
-    /// a pack is left alone rather than wasted on a pristine frog, and a
-    /// side with no frog at all (an enemy in Protect) consumes it for
+    /// One rule decides who collects it: **a tank collects a bong pack
+    /// unless its own side's bong is alive and already at full health.** So
+    /// a pack is left alone rather than wasted on a pristine bong, and a
+    /// side with no bong at all (an enemy in Protect) consumes it for
     /// nothing, which is the denial pressure that makes it worth racing
     /// for.
-    #[serde(rename = "frog_health")]
-    FrogHealth,
+    #[serde(rename = "bong_health", alias = "frog_health")]
+    BongHealth,
     /// The tower pack (docs/defence-towers-prd.md section 9): restores
     /// every standing defence tower on the collector's side to full health
     /// and puts it out. Nothing on the tank itself.
     ///
-    /// The frog pack's rule, for towers: **a tank collects a tower pack
+    /// The bong pack's rule, for towers: **a tank collects a tower pack
     /// unless every standing tower on its side is already at full health
     /// and not burning.** A side with no standing tower takes it and wastes
     /// it. A map slot of its own, plus a bonus drop beside a Health slot
@@ -127,7 +127,7 @@ pub enum PickupKind {
     /// `sonic_ammo_per_pickup` blasts (one weapon at a time, as above).
     /// While stocked, each press sends a cone of sound off the turret that
     /// shoves and skids every hull it reaches, shatters glass, flattens
-    /// tall grass, throws drums, scares the fish and stuns frogs
+    /// tall grass, throws drums, scares the fish and stuns bongs
     /// (`sonic.rs`). Players and enemies both use it.
     #[serde(rename = "sonic_hammer")]
     SonicHammer,
@@ -199,7 +199,7 @@ impl PickupKind {
         PickupKind::SpeedUp,
         PickupKind::Shield,
         PickupKind::Flamethrower,
-        PickupKind::FrogHealth,
+        PickupKind::BongHealth,
         PickupKind::TowerPack,
         PickupKind::HeatShield,
         PickupKind::Grenades,
@@ -226,7 +226,7 @@ impl PickupKind {
             PickupKind::SpeedUp => 6,
             PickupKind::Shield => 7,
             PickupKind::Flamethrower => 8,
-            PickupKind::FrogHealth => 9,
+            PickupKind::BongHealth => 9,
             PickupKind::TowerPack => 10,
             PickupKind::HeatShield => 11,
             PickupKind::Grenades => 12,
@@ -254,7 +254,7 @@ impl PickupKind {
             PickupKind::SpeedUp => "speedup",
             PickupKind::Shield => "shield",
             PickupKind::Flamethrower => "flamethrower",
-            PickupKind::FrogHealth => "frog_health",
+            PickupKind::BongHealth => "bong_health",
             PickupKind::TowerPack => "tower_pack",
             PickupKind::HeatShield => "heat_shield",
             PickupKind::Grenades => "grenades",
@@ -295,7 +295,7 @@ impl PickupKind {
             | PickupKind::Ammo
             | PickupKind::SpeedUp
             | PickupKind::Shield
-            | PickupKind::FrogHealth
+            | PickupKind::BongHealth
             | PickupKind::TowerPack
             | PickupKind::HeatShield
             | PickupKind::AirHeli
@@ -319,7 +319,7 @@ impl PickupKind {
             PickupKind::SpeedUp => [0xC79A1A, 0xFFD93D, 0xFFF2A8],
             PickupKind::Shield => [0x6B49C9, 0xA77BFF, 0xD3BCFF],
             PickupKind::Flamethrower => [0xC2501A, 0xFF8A2B, 0xFFC27A],
-            PickupKind::FrogHealth => [0x3F9A35, 0x7EDB5A, 0xC2F7A0],
+            PickupKind::BongHealth => [0x3F9A35, 0x7EDB5A, 0xC2F7A0],
             PickupKind::TowerPack => [0x4F6FC7, 0x8FB0FF, 0xCFDCFF],
             // Two-tone: the shade is the basalt its lower half is painted in.
             PickupKind::HeatShield => [0x3A3030, 0xF0461E, 0xFFA84A],
@@ -359,7 +359,7 @@ impl PickupKind {
             PickupKind::Health
             | PickupKind::SpeedUp
             | PickupKind::Shield
-            | PickupKind::FrogHealth
+            | PickupKind::BongHealth
             | PickupKind::TowerPack
             | PickupKind::HeatShield
             // A speaker, not ordnance: it spills.

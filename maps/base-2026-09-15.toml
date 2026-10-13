@@ -413,7 +413,7 @@ kind = "wall"
 material = "glass"
 
 [cells."19,16"]
-kind = "frog"
+kind = "bong"
 
 [cells."33,16"]
 kind = "wall"
@@ -477,7 +477,7 @@ material = "brick"
 
 [cells."8,15"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."20,6"]
 kind = "wall"
@@ -505,7 +505,7 @@ drum = "fuel"
 
 [cells."1,16"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."20,5"]
 kind = "wall"
@@ -584,7 +584,7 @@ material = "brick"
 
 [cells."21,16"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."14,8"]
 kind = "barrel"
@@ -817,7 +817,7 @@ kind = "road"
 
 [cells."32,14"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."33,1"]
 kind = "tree"

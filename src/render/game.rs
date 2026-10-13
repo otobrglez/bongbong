@@ -40,7 +40,7 @@ use crate::render::pyro::Rl;
 use crate::render::bullet::{draw_bullet, draw_bullet_light, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
-use crate::render::frog::FrogVariantTextures;
+use crate::render::bong::BongTextures;
 use crate::render::hud::{draw_banner, draw_corners, draw_leave_dialog, draw_players_dialog, draw_result, Line};
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
 use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
@@ -89,9 +89,9 @@ pub struct Textures<'a> {
     /// The barrel blast animation and scorch decals - see `blast.rs`.
     pub barrel_explosion: &'a Texture2D,
     pub ground: &'a Texture2D,
-    /// One `FrogVariantTextures` per `frog::FROG_VARIANT_DIRS` entry, in the
-    /// same order - `render` indexes into this by `Frog::variant`.
-    pub frog_variants: &'a [FrogVariantTextures],
+    /// One `BongTextures` per `BongKind`, in `BongKind::ALL` order -
+    /// `render` indexes into this by `BongKind::index`.
+    pub bongs: &'a [BongTextures],
     /// static/crates_sheet.png - the pickups' supply crates (docs/CRATES_SPEC.md).
     pub crates: &'a Texture2D,
     /// static/pickup_glyphs.png - the pickups' symbols on their own.
@@ -151,7 +151,7 @@ impl Sheets for Textures<'_> {
             Sheet::Crates => self.crates,
             Sheet::PickupGlyphs => self.pickup_glyphs,
             Sheet::Aircraft => self.aircraft,
-            Sheet::Frog { variant, clip } => self.frog_variants[variant as usize % self.frog_variants.len()].clip(clip),
+            Sheet::Bong { kind, clip } => self.bongs[kind.index()].clip(clip),
         }
     }
 }
@@ -181,7 +181,7 @@ pub struct Effects<'a> {
     /// field's edge and the marks in the world, composed by `app.rs` while
     /// the camera shows less than the whole field; `None` draws nothing.
     pub indicators: Option<&'a crate::indicators::Picture>,
-    /// The frog's speech bubble in a training round (`bubble.rs`), laid
+    /// The bong's speech bubble in a training round (`bubble.rs`), laid
     /// out by `app.rs` in the bitmap's pixels; `None` draws none.
     pub bubble: Option<&'a crate::bubble::Bubble>,
     /// The minimap under the right corner cluster (`minimap.rs`), drawn
@@ -1099,7 +1099,7 @@ impl Game {
             };
             crate::render::indicators::draw_indicators(d, picture, world, Some(base));
         }
-        // The frog's bubble (bubble.rs), over the world and the arrows,
+        // The bong's bubble (bubble.rs), over the world and the arrows,
         // under the HUD.
         if let Some(bubble) = bubble {
             crate::render::bubble::draw_bubble(d, bubble, base);
@@ -1656,7 +1656,7 @@ impl Game {
         }
 
         // A sonic hammer's arcs, an enemy's wind-up and the stars over a
-        // stunned frog (docs/sonic-hammer.md): bright and brief, drawn
+        // stunned bong (docs/sonic-hammer.md): bright and brief, drawn
         // unlit so they read at night - a tell is a warning.
         {
             let t = tuning();
@@ -1671,8 +1671,8 @@ impl Game {
                     shapes.extend(crate::sonic::tell_arcs(dish, w.facing, w.progress, self.time, &t));
                 }
             }
-            for frog in self.world.query::<&crate::frog::Frog>().iter().filter(|f| !culled(cull, f.position)) {
-                shapes.extend(crate::frog::stun_marks(frog, self.time));
+            for bong in self.world.query::<&crate::bong::Bong>().iter().filter(|f| !culled(cull, f.position)) {
+                shapes.extend(crate::bong::stun_marks(bong, self.time));
             }
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);

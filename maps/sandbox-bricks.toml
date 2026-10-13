@@ -1,8 +1,8 @@
 # Sandbox: the player's tank alone on open ground with a few brick
-# structures to drive around and shoot - no enemies, no frog, no pickups.
+# structures to drive around and shoot - no enemies, no bong, no pickups.
 # `tanks = 0` keeps the round from ending by wreck count (there is nobody
 # to wreck), so it runs until the player dies or restarts; the Destroy
-# mission spawns no frog. Hand-authored: an editor re-save would drop
+# mission spawns no bong. Hand-authored: an editor re-save would drop
 # these comments.
 
 version = 1

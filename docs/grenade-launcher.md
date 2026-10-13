@@ -44,7 +44,7 @@ weapons along the way").
   `grenade_blink_hz_end` across `grenade_fuse_seconds` (6), so how fast it
   flashes says how soon it goes. Then a blast: `grenade_blast_radius`,
   falloff damage to the side opposing whoever launched it, a shove for
-  everyone in range, the opposing frog hurt, tiles cracked, drums set off,
+  everyone in range, the opposing bong hurt, tiles cracked, drums set off,
   crates broken - and a shockwave (`grenade_shock`, with the screen flash).
   Kicking a grenade back at its launcher only shoves them.
 

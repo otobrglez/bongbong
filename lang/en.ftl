@@ -90,10 +90,10 @@ mission-destroy = DESTROY
 mission-training = TRAINING
 
 # The 72 px banner the round opens with, centred over the field.
-mission-protect-banner = PROTECT THE FROG!
-mission-hunt-banner = HUNT THE FROG!
+mission-protect-banner = PROTECT THE BONG!
+mission-hunt-banner = HUNT THE BONG!
 mission-destroy-banner = DESTROY!
-mission-training-banner = FOLLOW THE FROG!
+mission-training-banner = FOLLOW THE BONG!
 
 # The 48 px banner during the breather before a wave rolls in.
 wave-banner = WAVE { $n }
@@ -302,7 +302,7 @@ check-not-cleared-hint = Win it from PLAY, alone, with no edits since, to host i
 # What the map linter found, one line per finding in the CHECK panel, 16 px
 # beside its mark and before its FIX button (about 28 letters). The key is
 # `lint-` and the finding's kind as the dev server's `lint` tool spells it.
-lint-unreachable-frog = FROG OUT OF REACH
+lint-unreachable-bong = BONG OUT OF REACH
 lint-unreachable-pickup = PICKUP OUT OF REACH
 lint-gated-pickup = PICKUP BEHIND WALLS
 lint-disconnected-region = CUT-OFF GROUND
@@ -313,8 +313,8 @@ lint-narrow-corridor = ONE-CELL PASSAGE
 lint-gate-not-on-edge = GATE OFF THE EDGE
 lint-gate-blocked = GATE LANE BLOCKED
 lint-waves-no-gates = WAVES WITH NO WAY IN
-lint-hunt-missing-enemy-frog = HUNT WITH NO ENEMY FROG
-lint-enemy-frog-unreachable = ENEMY FROG OUT OF REACH
+lint-hunt-missing-enemy-bong = HUNT WITH NO ENEMY BONG
+lint-enemy-bong-unreachable = ENEMY BONG OUT OF REACH
 lint-no-start = NO PLAYER START
 lint-start-penned = START PENNED IN
 lint-player2-unreachable = PLAYER 2 CUT OFF
@@ -358,6 +358,8 @@ settings-sky-hint = EACH ROUND PICKS ONE · NONE IS CLEAR
 settings-tanks = TANKS
 settings-tank = TANK
 settings-tank2 = TANK 2
+settings-bong = YOUR BONG
+settings-enemy-bong = FOE BONG
 settings-mission = MISSION
 settings-spawn = SPAWN
 settings-waves = WAVES
@@ -486,8 +488,8 @@ tool-volcano = volcano
 tool-lamp = lamp post
 tool-start = p1 start
 tool-start2 = p2 start
-tool-frog = frog
-tool-enemy_frog = enemy frog
+tool-bong = bong
+tool-enemy_bong = enemy bong
 tool-health = health
 tool-ammo = ammo
 tool-laser = laser
@@ -497,7 +499,7 @@ tool-missiles = missiles
 tool-speedup = speed-up
 tool-shield = shield
 tool-flamethrower = flamethrower
-tool-frog_health = frog pack
+tool-bong_health = bong pack
 tool-tower_pack = tower pack
 tool-heat_shield = heat shield
 tool-grenades = grenades
@@ -534,9 +536,9 @@ tool-short-autumn_bush = autumn
 tool-short-oil_drum = oil
 tool-short-fuel_drum = fuel
 tool-short-oil_trail = oil
-tool-short-enemy_frog = e.frog
+tool-short-enemy_bong = e.bong
 tool-short-flamethrower = flame
-tool-short-frog_health = frog+
+tool-short-bong_health = bong+
 tool-short-tower_pack = tower+
 tool-short-heat_shield = heat
 tool-short-grenades = nades
@@ -594,43 +596,53 @@ tank-obelisk = obelisk
 tank-titan = titan
 tank-leviathan = leviathan
 
-## The frog's lines in a training round (docs/training-stage.md). A
+## The bongs' names (docs/BONG_SPEC.md): Spike, Oggle and Gloop stand
+## for the player, Puff, Capi, Blip and Fuzz for the enemy.
+bong-name-spike = Bong Spike
+bong-name-oggle = Bong Oggle
+bong-name-gloop = Bong Gloop
+bong-name-puff = Bong Puff
+bong-name-capi = Bong Capi
+bong-name-blip = Bong Blip
+bong-name-fuzz = Bong Fuzz
+
+## The bong's lines in a training round (docs/training-stage.md). A
 ## control is a token the bubble draws as a key: <ARROWS>, <SPACE>,
 ## <STICK>, <TAP>; a line with a `-touch` twin is that line on a touch
-## screen.
-frog-hello = Hi! I'm your frog.
-frog-drive = <ARROWS> to drive. Ease off before turns.
-frog-drive-touch = <STICK> Drag your left thumb to drive.
-frog-flags = Roll over the three flags.
-frog-flags-nudge = Three flags. Then the gate opens.
-frog-crates = No shells yet. Bump the crates.
-frog-health = The red cross fixes your hull.
-frog-crates-nudge = The ammo crate is up north.
-frog-fire = <SPACE> fires where your gun points.
-frog-fire-touch = <TAP> the right half to fire.
-frog-materials = Wood breaks fast. Brick takes a few.
-frog-iron = Iron never breaks. Shoot the brick wall!
-frog-fire-nudge = Face the brick wall, press <SPACE>.
-frog-fire-nudge-touch = Face the brick wall and <TAP>.
-frog-minigun = Hold fire. It eats ammo fast.
-frog-wall = Nice shot! Follow me.
-frog-drums = Drums blow up. Shoot from afar.
-frog-drum-kinds = Red ones burn. Grey ones fly.
-frog-oil = Fire runs along spilled oil.
-frog-drums-nudge = Shoot a drum. Watch the chain!
-frog-boom = Boom! Blasts break walls too. Follow me.
-frog-pad = This is my pad. Come on in.
-frog-ow = Ow! That came from the east!
-frog-kit = Grab my kit, quick!
-frog-kit-nudge = My kit! The green crate!
-frog-healed = Better! If I go down, we lose.
-frog-enemy = Here it comes!
-frog-line-up = Line up and fire!
-frog-enemy-nudge = Get in line with it!
-frog-only-me = It only wants me. Keep firing!
-frog-chomp = Chomp!
-frog-shield = Shield first.
-frog-shoots-back = This one shoots back!
-frog-wave-nudge = Last one. You've got this.
-frog-down = You're down! Back to the gate.
-frog-ready = You're ready.
+## screen. { $name } is the speaking bong's name, `bong-name-*`.
+bong-hello = Hi! I'm { $name }.
+bong-drive = <ARROWS> to drive. Ease off before turns.
+bong-drive-touch = <STICK> Drag your left thumb to drive.
+bong-flags = Roll over the three flags.
+bong-flags-nudge = Three flags. Then the gate opens.
+bong-crates = No shells yet. Bump the crates.
+bong-health = The red cross fixes your hull.
+bong-crates-nudge = The ammo crate is up north.
+bong-fire = <SPACE> fires where your gun points.
+bong-fire-touch = <TAP> the right half to fire.
+bong-materials = Wood breaks fast. Brick takes a few.
+bong-iron = Iron never breaks. Shoot the brick wall!
+bong-fire-nudge = Face the brick wall, press <SPACE>.
+bong-fire-nudge-touch = Face the brick wall and <TAP>.
+bong-minigun = Hold fire. It eats ammo fast.
+bong-wall = Nice shot! Follow me.
+bong-drums = Drums blow up. Shoot from afar.
+bong-drum-kinds = Red ones burn. Grey ones fly.
+bong-oil = Fire runs along spilled oil.
+bong-drums-nudge = Shoot a drum. Watch the chain!
+bong-boom = Boom! Blasts break walls too. Follow me.
+bong-pad = This is my pad. Come on in.
+bong-ow = Ow! That came from the east!
+bong-kit = Grab my kit, quick!
+bong-kit-nudge = My kit! The green crate!
+bong-healed = Better! If I go down, we lose.
+bong-enemy = Here it comes!
+bong-line-up = Line up and fire!
+bong-enemy-nudge = Get in line with it!
+bong-only-me = It only wants me. Keep firing!
+bong-chomp = Chomp!
+bong-shield = Shield first.
+bong-shoots-back = This one shoots back!
+bong-wave-nudge = Last one. You've got this.
+bong-down = You're down! Back to the gate.
+bong-ready = You're ready.

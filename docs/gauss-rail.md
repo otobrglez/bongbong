@@ -98,11 +98,11 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
   candidate box it enters, in order along the line, up to and including the
   first **stopper**. Each thing appears once, at the first of its boxes the
   line enters. Order: entry distance, then the sweep's rank (seats > enemies
-  > frogs > tiles > the edge), then owner slot or cell. The candidates are
+  > bongs > tiles > the edge), then owner slot or cell. The candidates are
   the sweep's own, with its own boxes: every seat's and every live enemy's
   hull and turret, grown by `gauss_half_width` (4) - and a seat's slug grows
   an enemy's by `player_shot_hit_pad_px` besides, as `sweep_rewound` does -,
-  the frogs, every tile, the field's four walls. The shooter is never in it,
+  the bongs, every tile, the field's four walls. The shooter is never in it,
   even on a leg a portal brings back. A wreck is see-through, as to every
   shot; a tank rolling in through a gate is off the field.
 - **What stops it**: iron, a volcano's cone and a training door
@@ -129,10 +129,10 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
     through three tiles of cover (120 x 0.95^3 = 103), takes 96 off the
     tank behind it and 77 off the third; an enemy's slug takes 46 off a seat
     (60 through the 0.77 armour).
-  - *A frog* (either side's): `gauss_frog_damage` (20) times the slug's
-    keep so far, no roll, `Frog::damage`, `Event::Hit`; no evasive hop
+  - *A bong* (either side's): `gauss_bong_damage` (20) times the slug's
+    keep so far, no roll, `Bong::damage`, `Event::Hit`; no evasive hop
     (an instant shot is not dodged - the laser's rule, and the hop would draw
-    RNG). Then `d *= gauss_pierce_keep`. Two slugs kill a frog.
+    RNG). Then `d *= gauss_pierce_keep`. Two slugs kill a bong.
   - *A tower* (any side's): `d` through `damage_obstacle` with
     `DamageCause::Pierce { dir }` - no deflect roll, the slug is not turned.
     A tesla (120) dies to a seat's first slug; a bio slush (130) and a gun
@@ -229,7 +229,7 @@ their picture (`tick_effects`), and the bursts they started play out.
 |---|---|
 | `src/gauss.rs` (new) | The weapon's headless half: `RailSlug` (a leg as drawn: start, end, portal, overcharged, pierces, age, seed), `Pierce`/`Pierced`, `ChargeEndFx`, `muzzle` (the module's bore, `tank_art::RAIL_MUZZLE`), `damage(owner, t)`, `recoil_speed(t, mass_factor, overcharged, friction)`, `module_cell`, and the composers `compose_charge`, `compose_slug` (glowing), `compose_slug_lit` (the chips), `compose_end` (pure, `pyro::Shape`s) |
 | `src/simulation/gauss.rs` (new) | The world half: `charge_trigger` (the pattern's room side, seats and enemies, §3.3), `fire_charge`, `PendingRail`, `recoil_hull`, `Game::resolve_rails` (the legs, the pierce walk, the events, the recoil), `stops_slug`, `pierce_hit`, `rail_recoil`, `rail_show` and `charge_end_show` (the cosmetic halves, which a replica's events and a client's own release call too), `any_rail_charging`, `rail_lanes` (`RailLane`, every charging rail's lane this frame), `rail_dangers`, `gauss_senses` (`GaussSeat`; what the AI is handed, §4), `set_seat_hold`/`seat_hold_report`, `SeatCharge` |
-| `src/simulation/hits.rs` | `Terrain::pierce_rewound` (every box entered, in order, to the first stopper), `SlugBand` and `slug_boxes` (the box test it holds every candidate to first, which the senses gate their lanes on), `Terrain::frog_box`, `Terrain::rail_tiles` (the tiles a slug enters and its stop, for the drawn world) |
+| `src/simulation/hits.rs` | `Terrain::pierce_rewound` (every box entered, in order, to the first stopper), `SlugBand` and `slug_boxes` (the box test it holds every candidate to first, which the senses gate their lanes on), `Terrain::bong_box`, `Terrain::rail_tiles` (the tiles a slug enters and its stop, for the drawn world) |
 | `src/simulation/field.rs` | `field::thinks`: `field::mind`'s rule with none of its bookkeeping, so the senses are measured only for the tanks that think this tick |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::GaussRail` dispatch arm (empty: a charge weapon fires through `fire_charge`) |
 | `src/simulation/props.rs` | `DamageCause::Pierce { dir }` |
@@ -661,9 +661,9 @@ BB-46 (docs/levels.md, "The weapons along the way"): Harbor Lights (level 9)
 has the rail's crate at 4,20 in the warehouse yard, inside the start's sight
 box (its laser moved up to the town at 6,7): brick and glass warehouses and
 iron only at the lighthouse, so a slug crosses the town. Row 20 also runs
-through the players' own frog on the beach (34,20), and a slug hurts either
-side's frog. It is never on a Hunt map, where two slugs kill the hunted
-frog.
+through the players' own bong on the beach (34,20), and a slug hurts either
+side's bong. It is never on a Hunt map, where two slugs kill the hunted
+bong.
 
 ## 4. AI
 
@@ -702,11 +702,11 @@ pub struct GaussLane {
     pub seats: u8,
     /// Standing player towers it would go through.
     pub towers: u8,
-    /// The players' frog it would go through, and how far along - read
+    /// The players' bong it would go through, and how far along - read
     /// only for a hunter, whose quarry it is.
     pub quarry: Option<f32>,
     /// A live fellow enemy, a standing enemy tower or the enemies' own
-    /// frog it would go through.
+    /// bong it would go through.
     pub friend: bool,
 }
 ```
@@ -739,7 +739,7 @@ is the slug's to go on through (decision 24).
 does not hang on the lane, so it is worked out once per tank; a lane with
 no counting seat and no quarry is worth nothing whatever towers or friends
 it would go through, so it is left `GaussLane::default` unless one of
-those seats' boxes - or, for a hunter, the players' frog's - reaches the
+those seats' boxes - or, for a hunter, the players' bong's - reaches the
 lane's band (`hits::SlugBand`, the row or column a slug runs along from
 its muzzle: the very test `pierce_rewound` holds every box to before it
 traces it, so a box it rejects could never be on the list). A tank with
@@ -764,7 +764,7 @@ traced (§11, "The senses' cost").
       releases overcharged, so it never cuts iron and iron stays the cover
       that holds against enemies. A seat that stepped out of the lane and
       stays out has wasted the charge.
-2. **A training dummy** (`Ai::frog_only`): `None`.
+2. **A training dummy** (`Ai::bong_only`): `None`.
 3. **The rail is cooling** (`fire_cooldown > 0`: its reload or a vent):
    `None` - the tree goes on, the trigger released.
 4. **Charge the best lane**: of the four lanes that count whose seat is
@@ -835,8 +835,8 @@ decision 22).
 
 A charging seat hidden in tall grass still makes its lane: the glow is
 drawn over the tufts and lights its lane (§12, decision 7); the seat itself
-stays hidden from every enemy's targeting. A seat's frog and its towers
-read no dangers - the frog's evasive hop is its own, towers stand - and an
+stays hidden from every enemy's targeting. A seat's bong and its towers
+read no dangers - the bong's evasive hop is its own, towers stand - and an
 enemy's rail rule counts them as reasons to fire, not dangers.
 
 The special tier sits above `dodge`: an enemy charging its own rail (or in
@@ -913,7 +913,7 @@ positions, never rolled.
     spray of sparks out of each pierce's far side along the slug's line
     (glowing pass) - six `WHITE`-and-`BLUE_PALE` off a hull with a white
     ring of blocks opening round the entry, six in `SHIELD`'s steps with the
-    ring off a shield, four `BLUE_PALE` off a frog, six white-and-grey off
+    ring off a shield, four `BLUE_PALE` off a bong, six white-and-grey off
     iron an overcharge cuts, three off any other tile; and in the lit pass
     (`compose_slug_lit`) a tile's chips - its material's dust
     (`pyro::dust_of`), glass's pale shards - thrown 8-24 px out of its far
@@ -1046,9 +1046,9 @@ enemies' group:
 | `gauss_crawl_pace` | 0.2 | 0..=1 | The share of its top speed a charging hull keeps. |
 | `gauss_damage` | 120 | 0..=500 | A seat's slug's damage to the first tank or tower it goes through; no roll. |
 | `gauss_enemy_damage` | 60 | 0..=500 | An enemy's slug's, the same way. |
-| `gauss_pierce_keep` | 0.8 | 0..=1 | The share of its damage a slug keeps past each tank, frog or tower it goes through. |
+| `gauss_pierce_keep` | 0.8 | 0..=1 | The share of its damage a slug keeps past each tank, bong or tower it goes through. |
 | `gauss_tile_keep` | 0.95 | 0..=1 | The share it keeps past each wall, prop or tree. |
-| `gauss_frog_damage` | 20 | 0..=200 | A frog's hit from a slug, times what the slug has kept. |
+| `gauss_bong_damage` | 20 | 0..=200 | A bong's hit from a slug, times what the slug has kept. |
 | `gauss_half_width` | 4 | 0.5..=16 | The slug's half width (px): what it grows every box it is traced against by. |
 | `gauss_recoil_cells` | 1.0 | 0..=6 | How far the recoil slides a chassis of mass factor 1 on dry ground, in cells. |
 | `gauss_recoil_mass_exponent` | 0.5 | 0..=4 | How much a heavy chassis resists the recoil: its speed over the mass factor to this power. |
@@ -1096,7 +1096,7 @@ Protocol 18 (from the EMP's 17), once in the PR.
 - `WireEvent::RailSlug { slot: u16, seat: u8, leg: u8, x0: i16, y0: i16,
   x1: i16, y1: i16, portal: bool, overcharged: bool, pierced:
   Vec<RailPierce> }` and `RailPierce { x: i16, y: i16, what: Pierced }`
-  (`Pierced`: `Tank`, `Shield`, `Frog`, `Tile(Material)`) - every leg and
+  (`Pierced`: `Tank`, `Shield`, `Bong`, `Tile(Material)`) - every leg and
   every thing it went through, quarter pixels; `seat` is `NO_SEAT` for an
   enemy's. Mirrors `Event::RailSlug`. A slug through a whole wall run is a
   few dozen bytes, and slugs are rare.
@@ -1233,7 +1233,7 @@ number read off the defaults):
   `sandbags_fences_trees_and_lamp_posts_in_the_lane_go_down`,
   `a_range_board_in_the_lane_splinters_and_the_slug_flies_on`,
   `a_rainbow_shield_soaks_one_slug_and_the_slug_flies_on`,
-  `a_frog_in_the_lane_takes_frog_damage_and_does_not_hop`,
+  `a_bong_in_the_lane_takes_bong_damage_and_does_not_hop`,
   `crates_and_wrecks_are_left_alone`.
 - Mid-charge: `a_wreck_mid_charge_fires_nothing`, `an_emp_mid_charge_lapses_it`,
   `another_weapons_crate_lapses_a_charge_and_a_rail_crate_keeps_it`,
@@ -1373,7 +1373,7 @@ window at its seed, the AI tiers its tank ran over the 180 frames before):
   a seat in a charging ally's lane swung north and south the whole round as
   the ally crept and recoiled (never-arrived, frontier 0x3e9); two rail
   tanks either side of a seat each held fire for the other with a third
-  pushing into them from behind (tank-grind and low-progress, frog-block
+  pushing into them from behind (tank-grind and low-progress, bong-block
   0x3eb); a tank at the sight box's edge charged and vented for 60 s
   (never-arrived, frontier 0x3eb); a tank charging from 350 px, past the
   attack range the probe measures arrival by (never-arrived, maze 0x3f1).
@@ -1440,7 +1440,7 @@ as with every lane traced, and so are the defaults'.
 | Rain, snow | Longer recoil skids (grip) |
 | Sandstorm gusts | The crawl drives in the gust's frame, as every drive does |
 | Towers | Take the slug's damage, no deflection, the slug flies on; an enemy prefers a lane with a player tower, never fires one through its own |
-| Frogs | `gauss_frog_damage` times the keep, either side's, no hop; a hunter rails its quarry; an enemy never fires through its own side's frog |
+| Bongs | `gauss_bong_damage` times the keep, either side's, no hop; a hunter rails its quarry; an enemy never fires through its own side's bong |
 | Crates | Flown over, never broken |
 | Drums, oil, fires | A drum goes off where the slug finds it; a fused one is passed; oil and fires untouched, lit by a drum's blast as ever |
 | Trees, grass | Trees go down or catch fire; grass along the line lies flat for a moment, hiding whoever it hid |
@@ -1494,10 +1494,10 @@ as with every lane traced, and so are the defaults'.
    rest is collateral, warned by the arrow and the lane ring. Rejected:
    holding the release while any seat down the lane is off-box, which would
    let a seat at the far end of a long lane shield the near one. *For Oto.*
-3. **Frogs take `gauss_frog_damage` (20), not the slug's damage**: a slug
-   would otherwise kill a frog outright, and a hunter with a rail would end
+3. **Bongs take `gauss_bong_damage` (20), not the slug's damage**: a slug
+   would otherwise kill a bong outright, and a hunter with a rail would end
    a Protect round from across the field in one charge. Two slugs kill a
-   frog. *For Oto.*
+   bong. *For Oto.*
 4. **An enemy's slug is lighter than a seat's** (60 against 120): the
    shells' split, so a seat survives one slug at full health and an enemy
    does not - even through three tiles of cover (120 x 0.95^3 = 103), the
@@ -1573,12 +1573,12 @@ as with every lane traced, and so are the defaults'.
     the study map a tank chasing a seat behind it swung north and south
     the whole round and never arrived (`never-arrived` on frontier 0x3e9;
     gone without the creep, as the low-progress and tank-grind on
-    frog-block 0x3eb were). The seat's crawl is unchanged.
+    bong-block 0x3eb were). The seat's crawl is unchanged.
 24. **A friend beyond the target does not hold the rail**: only one between
     the shooter and its seat (or quarry) does, as a friend in the line holds
     a shell. Holding fire for any friend down the lane left two rail tanks
     either side of a seat on its row each waiting on the other, the rest
-    queued behind them (frog-block 0x3eb: tank-grind and low-progress); the
+    queued behind them (bong-block 0x3eb: tank-grind and low-progress); the
     slug flies on into the far one, as a shell that misses would. A lane
     that scores on player towers alone is no target either: the rule waits
     for a seat or the quarry to release at.

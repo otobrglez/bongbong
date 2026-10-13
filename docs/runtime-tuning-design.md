@@ -413,7 +413,7 @@ Three `Applies` classes, chosen per row:
 | --- | --- | --- |
 | `Live` (default) | Read fresh every frame or on every new entity/shot. Change is felt immediately. | fire intervals, damage ranges, AI ranges, cosmetics, ripple FX |
 | `Spawn` | Baked into an entity at spawn (`Tank::speed` is set from `TANK_SPEED`/`ENEMY_SPEED` in `Tank::new`/`Game::init`). Affects new spawns and the next restart. | tank speeds, `max_shells` |
-| `Restart` | Consumed by `Game::init` only. | enemy count bounds, spawn margins, frog spawn distances |
+| `Restart` | Consumed by `Game::init` only. | enemy count bounds, spawn margins, bong spawn distances |
 
 For the knobs you most want to *feel* (player/enemy speed), phase 2 turns
 `Spawn` into `Live` by storing a per-tank **factor** (the `ENEMY_SPEED_VARIANCE`

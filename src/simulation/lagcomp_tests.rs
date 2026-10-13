@@ -1,6 +1,6 @@
 //! Lag compensation and shoves on owned hulls (docs/online-coop-prd.md
 //! §4.16): a seat's shots and beams are judged against the enemies and
-//! frogs its client was drawing (`Game::set_seat_view`, the hit-box
+//! bongs its client was drawing (`Game::set_seat_view`, the hit-box
 //! history), and the velocity changes the room puts on a client-owned
 //! hull travel as `Event::Shoved`.
 //!
@@ -15,13 +15,13 @@ use crate::map::cell_to_world;
 const W: f32 = 1280.0;
 const H: f32 = 720.0;
 
-/// Seat 0 at (5,10) facing east down an open row, one enemy, the frog far
+/// Seat 0 at (5,10) facing east down an open row, one enemy, the bong far
 /// out of every line of fire, a barrel south-west of the start and inside
 /// its blast radius for the blast case.
 const MAP: &str = r#"
 version = 1
 tanks = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."5,10" = { kind = "start" }
 cells."4,12" = { kind = "barrel", drum = "oil" }
 "#;
@@ -358,7 +358,7 @@ fn the_history_keeps_the_last_ticks_and_forgets_older_ones() {
     assert!(game.hit_history.at(now - REWIND_MAX_TICKS as u64).is_none(), "the ring holds fifteen ticks");
     let entry = game.hit_history.at(now).expect("the newest tick");
     assert_eq!(entry.tanks.len(), 1, "one enemy, and no seat");
-    assert_eq!(entry.frogs.len(), 1, "the player's frog");
+    assert_eq!(entry.bongs.len(), 1, "the player's bong");
     game.init(W, H);
     assert!(game.hit_history.at(now).is_none(), "a new round starts with no past");
 }
@@ -576,7 +576,7 @@ fn a_local_round_emits_no_shoves() {
     let map = r#"
 version = 1
 tanks = 3
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."5,10" = { kind = "start" }
 "#;
     let mut game = Game::default();

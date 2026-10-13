@@ -763,10 +763,10 @@ impl Fx {
                     Event::FireStarted { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(5), 40.0, &[FIRE_T, EMBER_T]);
                     }
-                    // A frog health pack collected: a lift of green
-                    // sparks off the frog itself, which is wherever it
+                    // A bong health pack collected: a lift of green
+                    // sparks off the bong itself, which is wherever it
                     // happens to be standing and not where the pack was.
-                    Event::FrogHealed { x, y, .. } => {
+                    Event::BongHealed { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(10), 60.0, &[HEAL_T, WHITE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(4), 26.0, &[HEAL_T]);
                     }
@@ -864,10 +864,10 @@ impl Fx {
                         self.burst(at, ParticleKind::Dust, self.count(4), 40.0, &[DUST_T]);
                         self.burst(at, ParticleKind::Chip, self.count(2), 60.0, &[STONE_DK, STONE_MD]);
                     }
-                    // A shot landing on a hull, a frog or the border: a
+                    // A shot landing on a hull, a bong or the border: a
                     // shower of hot sparks, a couple of dark flecks of
                     // armour and a wisp of smoke. Tiles are `tile_chip`'s.
-                    Event::Hit { target: target @ (HitTarget::Player { .. } | HitTarget::Enemy { .. } | HitTarget::Frog { .. }), x, y, .. } => {
+                    Event::Hit { target: target @ (HitTarget::Player { .. } | HitTarget::Enemy { .. } | HitTarget::Bong { .. }), x, y, .. } => {
                         let at = Position::new(x, y);
                         match target {
                             HitTarget::Player { player } => self.flash(Flashed::Tank(player as usize)),
@@ -1829,8 +1829,8 @@ const SILTY_T: [Color; 3] = [Color::new(0xA3, 0xA7, 0x80, 255), Color::new(0x7D,
 const STRAW_L: Color = Color::new(0xD2, 0xBA, 0x6B, 255);
 const STRAW_M: Color = Color::new(0xB7, 0xA2, 0x48, 255);
 const STRAW_D: Color = Color::new(0x67, 0x51, 0x2A, 255);
-// The frog health pack's burst. Green under the same exemption - the frog
-// is the one living thing on the field, and `hud::FROG_COLOR` is what the
+// The bong health pack's burst. Green under the same exemption - the bong
+// is the one living thing on the field, and `hud::BONG_COLOR` is what the
 // bar already reads it in.
 const HEAL_T: Color = Color::new(0x78, 0xDC, 0x5A, 255);
 /// Rainbow-shield violet, matching `hud::SHIELD_COLOR` so a deflection and

@@ -10,12 +10,13 @@
 # any hull that stops in it toward the sea.
 #
 # Brick warehouses with glass skylights line the quay, a fish market of stalls
-# and drums sits by the river and the frog suns itself on the beach. Shield
-# and frog health on the quay, missiles by the lighthouse, a gauss rail in
+# and drums sits by the river and the bong suns itself on the beach. Shield
+# and bong health on the quay, missiles by the lighthouse, a gauss rail in
 # the warehouse yard to fire through the warehouses, a laser, health and ammo
 # up in the town.
 
 version = 1
+bong = "spike"
 size = [56, 31.5]
 tanks = 6
 tank = "ravager"
@@ -422,7 +423,7 @@ cells."28,18" = { kind = "water" }
 cells."29,18" = { kind = "water" }
 cells."30,18" = { kind = "water" }
 cells."31,18" = { kind = "pickup", pickup = "shield" }
-cells."36,18" = { kind = "pickup", pickup = "frog_health" }
+cells."36,18" = { kind = "pickup", pickup = "bong_health" }
 cells."18,19" = { kind = "water" }
 cells."25,19" = { kind = "wall", material = "wood" }
 cells."26,19" = { kind = "water" }
@@ -444,7 +445,7 @@ cells."30,20" = { kind = "water" }
 cells."31,20" = { kind = "water" }
 cells."32,20" = { kind = "water" }
 cells."33,20" = { kind = "water" }
-cells."34,20" = { kind = "frog" }
+cells."34,20" = { kind = "bong" }
 cells."35,20" = { kind = "wall", material = "wood" }
 cells."41,20" = { kind = "start2" }
 cells."50,20" = { kind = "pickup", pickup = "missiles" }

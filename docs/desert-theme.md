@@ -70,11 +70,11 @@ Every theme's two sheets ship in every build and are loaded up front;
 `maps/default-desert.toml` (its header comments describe every feature):
 a Protect round on the band plan with five tanks and the scout. Two
 caravan tracks off the north edge; an oasis of reeds between tree clumps
-with the frog health pack in the middle; a ruined fort in the west with
+with the bong health pack in the middle; a ruined fort in the west with
 iron towers, three-cell breaches and the minigun in its yard; a fuel depot
 in the east — four pinned fuel drums round the plasma pickup, an oil trail
 out of the gate to a sandbag berm hiding a fifth drum, so one shot into the
-yard blows the berm; the frog's shrine at the bottom between two brick
+yard blows the berm; the bong's shrine at the bottom between two brick
 piers. Every lane is two nav cells wide: the nav grid pads a solid cell one
 cell to its left and above, so obstacles stand three free cells apart and
 each breach is three cells wide.

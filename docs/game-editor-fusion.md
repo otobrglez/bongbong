@@ -82,8 +82,8 @@ round as usual and then opens the builder on it.
   of the 1280x752 canvas; the builder gets finger-sized targets by opening
   them over the field instead. The mobile doc's `Layout::fit` is the fix
   for the bar itself and is not part of this work.
-- **Validation before PLAY.** A map with no start cell, no frog, or an
-  unreachable frog plays through `Game::init`'s existing fallbacks, as it
+- **Validation before PLAY.** A map with no start cell, no bong, or an
+  unreachable bong plays through `Game::init`'s existing fallbacks, as it
   does today from `-m`. The linter stays a dev tool.
 - Multi-select, copy/paste, rectangle fill, map size changes, a second
   field size, panning or zooming. *Status: map size changes, field sizes,
@@ -181,8 +181,8 @@ Categories and their tools, in list order:
 | WALL | brick, iron, wood, glass, concrete |
 | PROP | sandbag, barrel, oil drum, fuel drum, fence, tree, pine |
 | GROUND | road, water, tall grass, oil trail, gate |
-| ACTOR | p1 start, p2 start, frog, enemy frog |
-| PICKUP | health, ammo, laser, minigun, plasma, speed-up, shield, flamethrower, frog pack |
+| ACTOR | p1 start, p2 start, bong, enemy bong |
+| PICKUP | health, ammo, laser, minigun, plasma, speed-up, shield, flamethrower, bong pack |
 
 Each category remembers its current tool for the session; the initial tool
 is the first in each list, and the active brush at entry is `WALL / brick`.
@@ -235,8 +235,8 @@ bar (`editor::chrome::Strip`; docs/large-maps-follow-camera.md section 9).
 - Closes on pick, `Esc`, or a press anywhere else. **That press is
   consumed**: it neither places a cell nor selects another tool, so a tap
   to dismiss a menu on a phone cannot paint through it.
-- The singleton badge (a dot on the icon when a frog/start/start2/enemy
-  frog is already placed) moves from the old palette to the dropdown row and to the
+- The singleton badge (a dot on the icon when a bong/start/start2/enemy
+  bong is already placed) moves from the old palette to the dropdown row and to the
   category button when that tool is current.
 
 ### Files
@@ -269,7 +269,7 @@ bar (`editor::chrome::Strip`; docs/large-maps-follow-camera.md section 9).
 
 - A press on the field places the active tool at the cell under it; a drag
   paints every new cell it crosses, once per cell (today's `drag_cell`
-  rule). Singletons (start, start2, frog, enemy frog) move rather than
+  rule). Singletons (start, start2, bong, enemy bong) move rather than
   duplicate, each independently.
 - **Toggle erase.** With a brush selected, a press on a cell that already
   holds *exactly that object* (same kind, same material or pickup) clears
@@ -330,6 +330,7 @@ puts in or takes out.
 | ROUND | `spawn.waves` / `size` / `growth` (waves) | three steppers | 1..=20 / 1..=31 / 0..=10, each `auto` = the `waves` tuning group |
 | ROUND | `spawn.tier_start` / `tier_end` (waves) | two steppers | auto, light, medium, heavy, super |
 | TANKS | `tank` / `tank2` | stepper | `auto` (`None`) then the 12 `TankKind` names in row order, the picked chassis drawn in that seat's team colours |
+| TANKS | `bong` / `enemy_bong` | two steppers, one row | YOUR BONG: Spike, Oggle, Gloop; FOE BONG: Blip, Puff, Capi, Fuzz. Shows the bong the map plays (its side's default where it names none, docs/BONG_SPEC.md); the canvas draws the bong cells as the picks |
 | FIELD | `theme` | choice | the `map::Theme` names |
 | FIELD | `size`, and the anchor | three steppers | WIDTH and HEIGHT in cells, a press each, 16 x 9 up to `map::MAX_SIDE_CELLS`; ANCHOR, where the old map sits when the size changes (a 3 x 3 glyph, the middle at first; the panel's, not the map's) |
 | SKY | `weather` | nine tiles | each of `map::Weather::SKIES`; none in is clear, and CLEAR shows in then |
@@ -421,7 +422,7 @@ mode transitions can be unit-tested headlessly through
 | `mode` | none | Reports `mode` (`play`/`build`), whether the leave dialog is open, the builder's `dirty` flag, map name, active tool and category, which popup is open. Cheap; `status` carries the same `mode` field. |
 | `build` | `answer?: "leave" \| "stay"` | Presses BUILD: opens the leave dialog when a round is in progress, switches at once on the end screen. With `answer`, answers an open dialog instead. Replies like `mode`. |
 | `play` | `intro?: bool` | Presses PLAY from Build: the edited map becomes the round's map and a fresh round starts, frozen in lockstep like `restart` (so `step` counts play frames; `resume` for real time). Replies with `status`. Fails in Play mode. |
-| `builder_tool` | `tool?: name`, `shape?: "pen" \| "rect" \| "fill" \| "scatter"` | Selects a brush by name - every `editor::TOOLS` name (`brick`, `iron`, `wood`, `glass`, `sandbag`, `barrel`, `oil_drum`, `fuel_drum`, `fence`, `tesla`, `tesla_enemy`, `gun_tower`, `gun_tower_enemy`, `bio_slush`, `bio_slush_enemy`, `road`, `water`, `tall_grass`, `bush`, `berry_bush`, `juniper`, `fern`, `autumn_bush`, `reeds`, `tree`, `pine`, `spruce`, `scots`, `fir`, `birch`, `willow`, `palm`, `snag`, `forest`, `oil_trail`, `gate`, `portal`, `start`, `start2`, `frog`, `enemy_frog`, `health`, `ammo`, `laser`, `minigun`, `plasma`, `missiles`, `speedup`, `shield`, `flamethrower`, `frog_health`, `tower_pack`), `eraser` or `select` (the select tool) - through the category's own selection path, so the category button updates; `shape` is how it paints (BRUSH's list, docs/large-maps-follow-camera.md section 9). Without either, lists the categories with their current tool and the active one, and the shape. |
+| `builder_tool` | `tool?: name`, `shape?: "pen" \| "rect" \| "fill" \| "scatter"` | Selects a brush by name - every `editor::TOOLS` name (`brick`, `iron`, `wood`, `glass`, `sandbag`, `barrel`, `oil_drum`, `fuel_drum`, `fence`, `tesla`, `tesla_enemy`, `gun_tower`, `gun_tower_enemy`, `bio_slush`, `bio_slush_enemy`, `road`, `water`, `tall_grass`, `bush`, `berry_bush`, `juniper`, `fern`, `autumn_bush`, `reeds`, `tree`, `pine`, `spruce`, `scots`, `fir`, `birch`, `willow`, `palm`, `snag`, `forest`, `oil_trail`, `gate`, `portal`, `start`, `start2`, `bong`, `enemy_bong`, `health`, `ammo`, `laser`, `minigun`, `plasma`, `missiles`, `speedup`, `shield`, `flamethrower`, `bong_health`, `tower_pack`), `eraser` or `select` (the select tool) - through the category's own selection path, so the category button updates; `shape` is how it paints (BRUSH's list, docs/large-maps-follow-camera.md section 9). Without either, lists the categories with their current tool and the active one, and the shape. |
 | `builder_paint` | `cells: [[col,row], ...]`, `tool?: name`, `shape?`, `button?: "left" \| "right"` | One **stroke**: presses on the first cell and drags through the rest, so the toggle-erase rule, singleton moves and the one-undo-step-per-stroke rule all apply exactly as for a mouse - with `rect` the first and last cells are the rectangle's corners, with `fill` only the first counts, with `scatter` every cell's footprint is laid. `button: right` erases. Replies with each cell's object before and after, the undo depth and the status line's `message` (a fill refused for its size). |
 | `builder_undo` / `builder_redo` | `steps?: n` (default 1) | Undo or redo that many steps. Replies with the depth left on each side and the cells the last step changed. |
 | `builder_settings` | `tanks?`, `tank?`, `tank2?`, `mission?`, `spawn?`, `waves?`, `wave_size?`, `wave_growth?`, `tier_start?`, `tier_end?`, `theme?`, `weather?` (each `null` = auto), `anchor?`, `size?: [cols, rows]`, `reset?: bool` | Sets the MAP ▾ values (each changed field is one undo step, in field order) or, with `reset`, reverts cells and settings to the baseline. `size` resizes the map about the `anchor` (section 9). Without parameters, reports the current values, `size` and `anchor`, and which ones a CLI flag is overriding. |
@@ -480,7 +481,7 @@ carries over unchanged once `play` has run; a seed given to an earlier
   no change to this design; the dropdowns and dialogs simply get sized in
   points too.
 - **Validation**: a `maplint`-light pass at PLAY that warns in the bar
-  (`no start cell`, `frog unreachable`) is a natural next step once the
+  (`no start cell`, `bong unreachable`) is a natural next step once the
   linter's checks are callable on a `MapFile` without a full `Game::init`.
 - **New/Load for players**, a map picker, sharing a map as text.
 

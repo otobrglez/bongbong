@@ -568,18 +568,18 @@ fn crates_slide_in_and_out_and_keep_their_slot() {
 }
 
 #[test]
-fn the_frog_slides_in_cannot_hop_and_is_flung_out() {
-    let mut game = round_with("cells.\"20,8\" = { kind = \"frog\" }\n", Mission::Protect, Some(ActiveWeapon::GravityWell));
-    let frog0 = game.world.query::<&Frog>().iter().next().expect("a frog").position;
-    let centre = frog0 - Vec2::new(60.0, 0.0);
+fn the_bong_slides_in_cannot_hop_and_is_flung_out() {
+    let mut game = round_with("cells.\"20,8\" = { kind = \"bong\" }\n", Mission::Protect, Some(ActiveWeapon::GravityWell));
+    let bong0 = game.world.query::<&Bong>().iter().next().expect("a bong").position;
+    let centre = bong0 - Vec2::new(60.0, 0.0);
     pulling_well(&mut game, centre);
     idle(&mut game, 20);
-    let frog = game.world.query::<&Frog>().iter().next().map(|f| (f.position, f.pulled, f.can_hop())).unwrap();
-    assert!(frog.1, "pinned");
-    assert!(!frog.2, "cannot hop");
-    assert!(frog.0.x < frog0.x - 2.0, "slid in: {:?}", frog.0);
+    let bong = game.world.query::<&Bong>().iter().next().map(|f| (f.position, f.pulled, f.can_hop())).unwrap();
+    assert!(bong.1, "pinned");
+    assert!(!bong.2, "cannot hop");
+    assert!(bong.0.x < bong0.x - 2.0, "slid in: {:?}", bong.0);
     idle(&mut game, ticks(tuning().well_pull_seconds) + 2);
-    let (pulled, hop_end, position) = game.world.query::<&Frog>().iter().next().map(|f| (f.pulled, f.hop_end, f.position)).unwrap();
+    let (pulled, hop_end, position) = game.world.query::<&Bong>().iter().next().map(|f| (f.pulled, f.hop_end, f.position)).unwrap();
     assert!(!pulled);
     assert!(hop_end.distance_to(centre) > position.distance_to(centre) - 1.0, "hopped out");
 }
@@ -684,7 +684,7 @@ fn tread_marks_are_scrubbed_away() {
 // --- determinism ----------------------------------------------------------
 
 /// A round's RNG after a well pulls a hull and a shot, and collapses - no
-/// drum, frog or grenade to roll for: the same as with no well at all.
+/// drum, bong or grenade to roll for: the same as with no well at all.
 #[test]
 fn the_well_draws_no_rng() {
     let run = |well: bool| {
@@ -849,7 +849,7 @@ fn an_enemy_that_spent_its_last_well_fires_its_shells_at_once() {
 fn a_training_dummy_never_fires_a_well() {
     let mut game = two_seats(MID + Vec2::new(0.0, -40.0), MID + Vec2::new(0.0, 40.0));
     let enemy = well_enemy(&mut game, MID - Vec2::new(300.0, 0.0), 1, 90.0);
-    game.world.get::<&mut Ai>(enemy).unwrap().frog_only = true;
+    game.world.get::<&mut Ai>(enemy).unwrap().bong_only = true;
     let slot = slot_of(&game, enemy);
     let seen = idle(&mut game, ticks(4.0));
     assert!(!seen.iter().any(|e| matches!(e, Event::Fired { slot: s, .. } if *s == slot)));
@@ -1071,14 +1071,14 @@ fn an_enemy_anchors_to_pull_a_seat_into_drums() {
     assert_eq!(why, Some("trouble"));
 }
 
-/// A seat pulled off the frog it guards: the frog west of the seat, the
-/// enemy east of it - it anchors past the seat, away from the frog, the
-/// frog itself out of the pull.
+/// A seat pulled off the bong it guards: the bong west of the seat, the
+/// enemy east of it - it anchors past the seat, away from the bong, the
+/// bong itself out of the pull.
 #[test]
-fn an_enemy_anchors_to_pull_a_guard_off_its_frog() {
-    let mut game = round_with("cells.\"8,8\" = { kind = \"frog\" }\n", Mission::Protect, None);
-    let frog = crate::map::cell_to_world(8, 8);
-    let guard = frog + Vec2::new(96.0, 0.0);
+fn an_enemy_anchors_to_pull_a_guard_off_its_bong() {
+    let mut game = round_with("cells.\"8,8\" = { kind = \"bong\" }\n", Mission::Protect, None);
+    let bong = crate::map::cell_to_world(8, 8);
+    let guard = bong + Vec2::new(96.0, 0.0);
     game.place_tank(seat(&game), guard, Some(0.0)).expect("placed");
     let enemy = well_enemy(&mut game, guard + Vec2::new(300.0, 0.0), 1, 270.0);
     let slot = slot_of(&game, enemy);
@@ -1087,8 +1087,8 @@ fn an_enemy_anchors_to_pull_a_guard_off_its_frog() {
     seen.extend(idle(&mut game, ticks(2.5)));
     let mine = anchors_of(&seen, slot);
     assert_eq!(mine.len(), 1, "{seen:?}");
-    assert!(mine[0].0.distance_to(frog) > tuning().well_radius_px + tuning().well_ai_friend_margin_px, "the frog out of the pull");
-    assert!(mine[0].0.distance_to(frog) > guard.distance_to(frog), "past the guard");
+    assert!(mine[0].0.distance_to(bong) > tuning().well_radius_px + tuning().well_ai_friend_margin_px, "the bong out of the pull");
+    assert!(mine[0].0.distance_to(bong) > guard.distance_to(bong), "past the guard");
 }
 
 /// An enemy's nearest anchor - where its shield stands - is past its own

@@ -37,7 +37,7 @@ cells."18,10" = { kind = "wall", material = "iron" }
 cells."14,11" = { kind = "wall", material = "iron" }
 cells."18,11" = { kind = "wall", material = "iron" }
 cells."27,11" = { kind = "start" }
-cells."7,12" = { kind = "frog" }
+cells."7,12" = { kind = "bong" }
 cells."14,12" = { kind = "wall", material = "iron" }
 cells."15,12" = { kind = "wall", material = "iron" }
 cells."16,12" = { kind = "wall", material = "iron" }

@@ -13,7 +13,7 @@ use crate::math::Vec2;
 
 use crate::ai::{Ai, AiSnapshot, Role};
 use crate::bullet::{Bullet, BulletState};
-use crate::frog::{Facing, Frog, Side};
+use crate::bong::{Facing, Bong, Side};
 use crate::missile::Missile;
 use crate::obstacle::Obstacle;
 use crate::pickup::{Pickup, PickupKind};
@@ -28,7 +28,7 @@ use super::command::CommandReport;
 use super::engage::{EngageStatus, Rejections};
 use super::{
     Frame, Game, Outcome, PLAYER_OWNER_SLOT, TANK_SPRITE_ORDER, TANK_VARIANTS,
-    with_frog, with_tank,
+    with_bong, with_tank,
 };
 
 /// Two live enemies closer than this are "clustered" for `DebugSnapshot::clusters`
@@ -41,7 +41,7 @@ pub const CLUSTER_RADIUS_PX: f32 = 90.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Detail {
-    /// Tanks without AI memory or contact stats; projectiles, pickups, frog.
+    /// Tanks without AI memory or contact stats; projectiles, pickups, bong.
     #[default]
     Compact,
     /// Everything, including each enemy's `AiSnapshot`.
@@ -67,9 +67,9 @@ pub struct DebugSnapshot {
     pub projectiles: Vec<ProjectileDebug>,
     pub projectiles_total: usize,
     pub pickups: Vec<PickupDebug>,
-    /// Every frog on the field: the player's first, then the enemy's
+    /// Every bong on the field: the player's first, then the enemy's
     /// (Hunt); empty in a Destroy round.
-    pub frogs: Vec<FrogDebug>,
+    pub bongs: Vec<BongDebug>,
     /// The map's portal anchors in `Game::portals` order, with whether the
     /// network is active (two or more) - docs/teleporting.md.
     pub portals: Vec<PortalDebug>,
@@ -103,7 +103,7 @@ pub struct DebugSnapshot {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub held_drums: Vec<(u32, u32, (i32, i32), f32, f32)>,
     /// What the last enemy phase's engagement-slot assignment decided.
-    /// Per-tank entries cover both rings (player and hunted frog); the slot
+    /// Per-tank entries cover both rings (player and hunted bong); the slot
     /// table is the player ring's.
     pub engage: EngageSnapshot,
     /// Groups of two or more live enemies transitively within
@@ -148,7 +148,7 @@ pub struct DroneDebug {
     pub x: f32,
     pub y: f32,
     pub height: f32,
-    /// The owner slot of the tank it is locked on, `frog` for a frog,
+    /// The owner slot of the tank it is locked on, `bong` for a bong,
     /// `None` for nothing.
     pub lock: Option<String>,
     /// Where it is going.
@@ -328,7 +328,7 @@ pub struct PickupDebug {
 }
 
 #[derive(Serialize, Debug)]
-pub struct FrogDebug {
+pub struct BongDebug {
     pub side: Side,
     pub x: f32,
     pub y: f32,
@@ -336,13 +336,13 @@ pub struct FrogDebug {
     pub max_health: f32,
     pub dead: bool,
     pub hopping: bool,
-    /// Which way the sprite is drawn (`frog::Facing`) - the art is authored
+    /// Which way the sprite is drawn (`bong::Facing`) - the art is authored
     /// facing right and mirrored for the other way, so this is the one
     /// readout that says whether a hop or a bite reads correctly.
     pub facing: Facing,
-    /// Seconds left stunned by a sonic wave (`Frog::stun_timer`).
+    /// Seconds left stunned by a sonic wave (`Bong::stun_timer`).
     pub stun: f32,
-    /// Held in a gravity well's pull (`Frog::pulled`).
+    /// Held in a gravity well's pull (`Bong::pulled`).
     pub pulled: bool,
 }
 
@@ -397,8 +397,8 @@ pub struct EngageSlotDebug {
 pub enum FieldTarget {
     /// A player by index: 0 is player 1.
     Player(u8),
-    /// The player's frog.
-    Frog,
+    /// The player's bong.
+    Bong,
 }
 
 /// One flow field as the dev server's `field` tool returns it: `arrows`
@@ -832,11 +832,11 @@ impl Game {
             .collect();
         pickups.sort_by(|a, b| (a.x, a.y).partial_cmp(&(b.x, b.y)).unwrap_or(std::cmp::Ordering::Equal));
 
-        let frogs = [self.frog, self.enemy_frog]
+        let bongs = [self.bong, self.enemy_bong]
             .into_iter()
             .flatten()
             .map(|entity| {
-                with_frog(&self.world, entity, |fr| FrogDebug {
+                with_bong(&self.world, entity, |fr| BongDebug {
                     side: fr.side,
                     x: r1(fr.position.x),
                     y: r1(fr.position.y),
@@ -903,7 +903,7 @@ impl Game {
             projectiles,
             projectiles_total,
             pickups,
-            frogs,
+            bongs,
             portals: self
                 .portals
                 .iter()
@@ -917,7 +917,7 @@ impl Game {
             towers: self
                 .tower_views()
                 .into_iter()
-                .map(|v| TowerDebug { kind: v.kind.name(), enemy: v.side == crate::frog::Side::Enemy, x: r1(v.position.x), y: r1(v.position.y), disabled: r1(v.disabled) })
+                .map(|v| TowerDebug { kind: v.kind.name(), enemy: v.side == crate::bong::Side::Enemy, x: r1(v.position.x), y: r1(v.position.y), disabled: r1(v.disabled) })
                 .collect(),
             lamps_out: r1(self.lamps_out),
             drones: self
@@ -933,7 +933,7 @@ impl Game {
                     lock: match d.lock {
                         crate::fpv::DroneLock::None => None,
                         crate::fpv::DroneLock::Tank { slot, .. } => Some(slot.to_string()),
-                        crate::fpv::DroneLock::Frog { .. } => Some("frog".into()),
+                        crate::fpv::DroneLock::Bong { .. } => Some("bong".into()),
                     },
                     aim_x: r1(d.aim.x),
                     aim_y: r1(d.aim.y),
@@ -1255,7 +1255,7 @@ impl Game {
 
     /// The frame's flow field toward `target` as a `FieldDump`: `None`
     /// when that target is not in the round (no second player, a dead
-    /// frog). The same `route_grid` the enemies steer by, read through
+    /// bong). The same `route_grid` the enemies steer by, read through
     /// the grid's accessors, so what the dump shows is what they follow.
     pub fn field_dump(&self, width: f32, height: f32, target: FieldTarget) -> Option<FieldDump> {
         let goal = match target {
@@ -1263,9 +1263,9 @@ impl Game {
                 let entity = self.players().into_iter().flatten().nth(i as usize)?;
                 with_tank(&self.world, entity, |t| (!t.is_wreck()).then_some(t.position))?
             }
-            FieldTarget::Frog => {
-                let entity = self.frog?;
-                with_frog(&self.world, entity, |fr| (!fr.is_dead()).then_some(fr.position))?
+            FieldTarget::Bong => {
+                let entity = self.bong?;
+                with_bong(&self.world, entity, |fr| (!fr.is_dead()).then_some(fr.position))?
             }
         };
         let grid = self.route_grid(width, height);
@@ -1300,7 +1300,7 @@ impl Game {
 
     /// The nav grid as text, top row first: `#` blocked, `.` open, then
     /// what stands on each cell - `P` player, a digit or `E` for an enemy's
-    /// slot, `x` a wreck, `F` the player's frog, `G` the enemy frog, `*` a
+    /// slot, `x` a wreck, `F` the player's bong, `G` the enemy bong, `*` a
     /// pickup. Later markers win.
     pub fn nav_grid_ascii(&self, width: f32, height: f32) -> String {
         let grid = self.nav_grid(width, height);
@@ -1320,7 +1320,7 @@ impl Game {
         for p in self.world.query::<&Pickup>().iter() {
             mark(p.position, '*');
         }
-        for fr in self.world.query::<&Frog>().iter() {
+        for fr in self.world.query::<&Bong>().iter() {
             mark(fr.position, if fr.side == Side::Player { 'F' } else { 'G' });
         }
         let mut tanks: Vec<(Owner, Position, bool)> =
@@ -1342,7 +1342,7 @@ impl Game {
             out.extend(row);
             out.push('\n');
         }
-        out.push_str(&format!("{cols}x{rows} cells of {cell}px; # blocked . open P player 1 Q player 2 1-9/E enemy x wreck F frog G enemy frog * pickup\n"));
+        out.push_str(&format!("{cols}x{rows} cells of {cell}px; # blocked . open P player 1 Q player 2 1-9/E enemy x wreck F bong G enemy bong * pickup\n"));
         out
     }
 }

@@ -1,22 +1,23 @@
-# lotus-lagoon - a frog pavilion on an island in a turquoise lagoon
+# lotus-lagoon - a bong pavilion on an island in a turquoise lagoon
 # Saved from the builder; re-saving drops these comments, so put them back.
 #
 # Protect on the band plan, five tanks, the sky random each round
-# (docs/weather.md). The lagoon fills the north of the field; the frog sits
+# (docs/weather.md). The lagoon fills the north of the field; the bong sits
 # on an island in its middle, reed-ringed, between two tesla towers. The
 # island's only way in is from the south: a fence and sandbag line closes
 # that front with one gate four cells wide (23..26 on row 17) - the route
-# every tank takes to the frog, since the linter's routes and the AI's never
+# every tank takes to the bong, since the linter's routes and the AI's never
 # break a line of props. The outflow leaves the lagoon's east arm down
 # column 34 with open ground beside it, so the stream mouth is never a
 # pocket a shoved tank is trapped in.
 #
 # Huts of wood and glass on both flanks, a pine wood in the south-west,
 # tall grass to hide in, a road along the south edge, pickups on both flanks
-# and the frog health inside the pavilion's gate.
+# and the bong health inside the pavilion's gate.
 
 
 version = 1
+bong = "gloop"
 tanks = 5
 tank = "glacier"
 tank2 = "scout"
@@ -295,7 +296,7 @@ kind = "water"
 kind = "water"
 
 [cells."24,8"]
-kind = "frog"
+kind = "bong"
 
 [cells."27,6"]
 kind = "water"
@@ -677,7 +678,7 @@ kind = "water"
 
 [cells."24,13"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."38,20"]
 kind = "water"

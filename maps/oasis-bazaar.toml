@@ -1,4 +1,6 @@
 version = 1
+bong = "spike"
+enemy_bong = "puff"
 tanks = 6
 tank = "wraith"
 tank2 = "flak"
@@ -362,14 +364,14 @@ kind = "tall_grass"
 kind = "tall_grass"
 
 [cells."8,16"]
-kind = "frog"
+kind = "bong"
 
 [cells."24,6"]
 kind = "water"
 
 [cells."14,11"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."22,11"]
 kind = "water"
@@ -963,7 +965,7 @@ kind = "road"
 kind = "road"
 
 [cells."41,11"]
-kind = "enemy_frog"
+kind = "enemy_bong"
 
 [cells."42,16"]
 kind = "wall"
@@ -1132,7 +1134,7 @@ kind = "tree"
 
 [cells."35,17"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."45,20"]
 kind = "road"

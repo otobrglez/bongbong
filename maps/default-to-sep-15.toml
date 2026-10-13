@@ -84,7 +84,7 @@ kind = "road"
 kind = "road"
 
 [cells."17,13"]
-kind = "frog"
+kind = "bong"
 
 [cells."20,1"]
 kind = "barrel"
@@ -1114,8 +1114,8 @@ tier_end = "super"
 
 [cells."6,8"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"
 
 [cells."27,10"]
 kind = "pickup"
-pickup = "frog_health"
+pickup = "bong_health"

@@ -6,15 +6,16 @@
 # Protect on the band plan, seven tanks, in a scout. A mirrored garden
 # labyrinth of pine hedges with gravel walks four or five cells wide -
 # room for a tank to turn - winds from the four corners to a fountain
-# court where the frog lives. The walks loop, so there is always a second
+# court where the bong lives. The walks loop, so there is always a second
 # way round, and the hedges burn and flatten: a shortcut is a shell or a
 # ram away.
 #
-# Laser and missiles in the two blind pockets, shield and frog health in the
+# Laser and missiles in the two blind pockets, shield and bong health in the
 # court, health and ammo in the corner walks, flower beds of tall grass to
 # hide in along the galleries.
 
 version = 1
+bong = "oggle"
 size = [56, 28]
 tanks = 7
 tank = "scout"
@@ -385,8 +386,8 @@ cells."11,18" = { kind = "pine" }
 cells."20,18" = { kind = "road" }
 cells."22,18" = { kind = "pine" }
 cells."25,18" = { kind = "tall_grass" }
-cells."27,18" = { kind = "pickup", pickup = "frog_health" }
-cells."28,18" = { kind = "frog" }
+cells."27,18" = { kind = "pickup", pickup = "bong_health" }
+cells."28,18" = { kind = "bong" }
 cells."31,18" = { kind = "tall_grass" }
 cells."34,18" = { kind = "pine" }
 cells."36,18" = { kind = "road" }

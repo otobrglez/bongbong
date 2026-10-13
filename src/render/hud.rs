@@ -21,12 +21,12 @@ use crate::{Rect, MAX_DAMAGE, MAX_SEATS, PICKUP_GLYPH_CELL};
 
 const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
 const SHIELD_COLOR: Color = Color::new(170, 120, 255, 255);
-const FROG_COLOR: Color = Color::new(120, 220, 90, 255);
-/// What a slot draws in when there is nothing in it: the FROG gauge of a
-/// round without a frog, and a wrecked seat's chip.
+const BONG_COLOR: Color = Color::new(120, 220, 90, 255);
+/// What a slot draws in when there is nothing in it: the BONG gauge of a
+/// round without a bong, and a wrecked seat's chip.
 const SPENT: Color = Color::new(60, 60, 66, 255);
 /// A symbol whose readout is empty - no shells, no boost, no shield, no
-/// frog - drawn at this alpha.
+/// bong - drawn at this alpha.
 const SYMBOL_UNLIT: u8 = 70;
 /// A cluster's plate: the builder bar's dark, mostly opaque, so the
 /// readouts read over any ground under any sky. The minimap's plate too.
@@ -74,7 +74,7 @@ const I_ENEMIES: i32 = 166;
 const I_ENEMY_COUNT: i32 = 184;
 /// Two digits of enemies, then the dim `+N` still to come.
 const I_PENDING: i32 = 208;
-const I_FROG: i32 = 238;
+const I_BONG: i32 = 238;
 
 /// The tank glyph's footprint: 7 x 7 blocks of 2 px (`draw_tank_glyph`).
 #[cfg_attr(not(test), allow(dead_code))]
@@ -367,7 +367,7 @@ const HEAT_SHIELD_COLOR: Color = crate::pyro::FIRE[3];
 /// The right cluster's first row in `info`: the level button and the wave
 /// count beside it on a level (`level` is its number and whether the level
 /// select it opens is up), else the mission word with its count; the enemy
-/// count with the ones still to come; the frog's gauge under the frog pack's
+/// count with the ones still to come; the bong's gauge under the bong pack's
 /// symbol.
 fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: Option<(usize, bool)>, textures: &Textures, a: f32) {
     let (x, y, h) = (info.x.round() as i32, info.y.round() as i32, info.height.round() as i32);
@@ -388,7 +388,7 @@ fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: 
     if model.enemies_pending > 0 {
         d.draw_text(&format!("+{}", model.enemies_pending), x + I_PENDING, text_y, HUD_TEXT_SIZE, faded(DIM, a));
     }
-    draw_symbol_gauge(d, textures, PickupKind::FrogHealth, x + I_FROG, y, h, model.frog.unwrap_or(0.0), FROG_COLOR, model.frog.is_some(), a);
+    draw_symbol_gauge(d, textures, PickupKind::BongHealth, x + I_BONG, y, h, model.bong.unwrap_or(0.0), BONG_COLOR, model.bong.is_some(), a);
 }
 
 /// A crate's symbol in a row from `y`, `h` tall, at `x`: lit while its
@@ -402,7 +402,7 @@ fn draw_symbol(d: &mut impl RaylibDraw, textures: &Textures, kind: PickupKind, x
 
 /// A gauge in its slot at `x` of a row from `y`, `h` tall: the symbol of
 /// the crate that fills it, then its bar, both dim when `present` is false
-/// (the FROG gauge of a round without one) and the symbol dim while the
+/// (the BONG gauge of a round without one) and the symbol dim while the
 /// bar is empty.
 #[allow(clippy::too_many_arguments)]
 fn draw_symbol_gauge(
@@ -760,7 +760,7 @@ mod corner_tests {
 
     /// The right cluster's first row: the widest mission word with its
     /// wave count, or the level button with the widest count beside it,
-    /// ends before the enemy count, which ends before the frog's gauge.
+    /// ends before the enemy count, which ends before the bong's gauge.
     #[test]
     fn the_info_slots_fit_the_row_without_overlapping() {
         assert_eq!(I_TITLE_W, INFO_TITLE_W as i32, "the title's budget is the slot `text_tests` measures");
@@ -768,8 +768,8 @@ mod corner_tests {
         assert!(LEVEL_BUTTON_W as i32 + LEVEL_WAVE_GAP + width("12/12", HUD_TEXT_SIZE) <= I_ENEMIES, "the wave count runs into the enemies");
         assert!(I_ENEMIES + TANK_GLYPH_W <= I_ENEMY_COUNT);
         assert!(I_ENEMY_COUNT + width("88", HUD_TEXT_SIZE) + 4 <= I_PENDING, "two digits of enemies run into the +N");
-        assert!(I_PENDING + width("+88", HUD_TEXT_SIZE) <= I_FROG, "the +N runs into the frog's gauge");
-        assert_eq!(I_FROG + GAUGE_SLOT_W, INFO_W as i32, "the row is the cluster's width");
+        assert!(I_PENDING + width("+88", HUD_TEXT_SIZE) <= I_BONG, "the +N runs into the bong's gauge");
+        assert_eq!(I_BONG + GAUGE_SLOT_W, INFO_W as i32, "the row is the cluster's width");
     }
 
     /// A chip: its number over its gauge, both inside it.

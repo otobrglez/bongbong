@@ -24,7 +24,7 @@ use std::fmt;
 
 use hecs::Entity;
 
-use crate::frog::{Frog, Side};
+use crate::bong::{Bong, Side};
 use crate::level::{Mission, SpawnKind};
 use crate::map::{self, CellObject};
 use crate::math::Rectangle;
@@ -34,7 +34,7 @@ use crate::simulation::Game;
 use crate::tank::Tank;
 use crate::tower::TowerKind;
 use crate::{
-    FROG_COLLIDER_HALF_EXTENT,
+    BONG_COLLIDER_HALF_EXTENT,
     OBSTACLE_HULL_FRACTION,
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
@@ -46,7 +46,7 @@ use crate::{
 /// How far past a target point's own footprint a tank must be able to
 /// stand for that point to count as reachable (see `point_reachable`):
 /// 96px of slack on top of the worst-case tank half-extent (and, for the
-/// frog, its own collider half-extent). Generous on purpose - a target
+/// bong, its own collider half-extent). Generous on purpose - a target
 /// squeezed against a wall still has its nearest open cell within roughly
 /// one cell of its footprint, so only genuine sealing (a closed ring, a
 /// walled-off pocket) can fail it.
@@ -91,8 +91,8 @@ impl fmt::Display for LintSeverity {
 /// of the message) so fixture-profile tests can assert on it robustly.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LintKind {
-    /// The frog can't be approached from the playfield (§3.2.1).
-    UnreachableFrog,
+    /// The bong can't be approached from the playfield (§3.2.1).
+    UnreachableBong,
     /// A pickup slot can't be approached from the playfield even with
     /// every destructible wall shot away (§3.2.1).
     UnreachablePickup,
@@ -125,12 +125,12 @@ pub enum LintKind {
     /// either: every wave would fall back to the spawn band, so nothing
     /// ever rolls in.
     WavesNoGates,
-    /// A Hunt map with no `enemy_frog` cell: the round falls back to a
+    /// A Hunt map with no `enemy_bong` cell: the round falls back to a
     /// procedural spot in the enemy spawn band.
-    HuntMissingEnemyFrog,
-    /// The `enemy_frog` cell can't be approached from the playfield under
-    /// the same reach rule as the player's frog.
-    EnemyFrogUnreachable,
+    HuntMissingEnemyBong,
+    /// The `enemy_bong` cell can't be approached from the playfield under
+    /// the same reach rule as the player's bong.
+    EnemyBongUnreachable,
     /// No `start` cell: player 1 spawns at the nearest free cell to the
     /// centre, wherever that is on this map.
     NoStart,
@@ -177,7 +177,7 @@ pub enum LintKind {
 impl LintKind {
     /// Every kind, in check order.
     pub const ALL: [LintKind; 24] = [
-        LintKind::UnreachableFrog,
+        LintKind::UnreachableBong,
         LintKind::UnreachablePickup,
         LintKind::GatedPickup,
         LintKind::DisconnectedRegion,
@@ -188,8 +188,8 @@ impl LintKind {
         LintKind::GateNotOnEdge,
         LintKind::GateBlocked,
         LintKind::WavesNoGates,
-        LintKind::HuntMissingEnemyFrog,
-        LintKind::EnemyFrogUnreachable,
+        LintKind::HuntMissingEnemyBong,
+        LintKind::EnemyBongUnreachable,
         LintKind::NoStart,
         LintKind::StartPenned,
         LintKind::Player2Unreachable,
@@ -208,7 +208,7 @@ impl LintKind {
     /// (`lint-<tag>` in the catalogue).
     pub(crate) fn tag(self) -> &'static str {
         match self {
-            LintKind::UnreachableFrog => "unreachable-frog",
+            LintKind::UnreachableBong => "unreachable-bong",
             LintKind::UnreachablePickup => "unreachable-pickup",
             LintKind::GatedPickup => "gated-pickup",
             LintKind::DisconnectedRegion => "disconnected-region",
@@ -219,8 +219,8 @@ impl LintKind {
             LintKind::GateNotOnEdge => "gate-not-on-edge",
             LintKind::GateBlocked => "gate-blocked",
             LintKind::WavesNoGates => "waves-no-gates",
-            LintKind::HuntMissingEnemyFrog => "hunt-missing-enemy-frog",
-            LintKind::EnemyFrogUnreachable => "enemy-frog-unreachable",
+            LintKind::HuntMissingEnemyBong => "hunt-missing-enemy-bong",
+            LintKind::EnemyBongUnreachable => "enemy-bong-unreachable",
             LintKind::NoStart => "no-start",
             LintKind::StartPenned => "start-penned",
             LintKind::Player2Unreachable => "player2-unreachable",
@@ -570,7 +570,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     }
 
     // The same playfield once every destructible wall is gone: only Iron
-    // (never destroyed - see `obstacle::Material`) and the frog still
+    // (never destroyed - see `obstacle::Material`) and the bong still
     // block. Built exactly like `Game::nav_grid`, minus the breakable
     // tiles, so "reachable by breaching" is the AI's own occupancy rule
     // applied to the terrain a player can shoot their way to.
@@ -584,8 +584,8 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             .iter()
             .filter(|o| o.material.is_permanent())
             .map(|o| (o.position, o.hull_size() * 0.5))
-            .chain(game.world.query::<&Frog>().iter().map(|fr| {
-                (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
+            .chain(game.world.query::<&Bong>().iter().map(|fr| {
+                (fr.position, BONG_COLLIDER_HALF_EXTENT.0.max(BONG_COLLIDER_HALF_EXTENT.1))
             }))
             // Deep water never goes away either (docs/water.md).
             .chain(game.water().deep_cells().map(|p| (p, crate::OBSTACLE_GRID_SIZE * 0.5))),
@@ -609,13 +609,13 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
 
     let obstacle_positions: Vec<Position> =
         game.world.query::<&Obstacle>().iter().map(|o| o.position).collect();
-    let frog_pos = game.world.query::<&Frog>().iter().next().map(|f| f.position);
+    let bong_pos = game.world.query::<&Bong>().iter().next().map(|f| f.position);
 
     let mut findings = Vec::new();
     let places = Places { game, grid: &grid, cells: &cells };
     check_players(&places, start, player_pos, player_size, &others, &mut findings);
-    check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
-    check_enemy_frog(game, &cells, &mut findings);
+    check_reachability(game, &cells, &breach_cells, bong_pos, &mut findings);
+    check_enemy_bong(game, &cells, &mut findings);
     check_gates(game, &grid, width, height, &mut findings);
     check_wave_gates(game, &grid, width, height, &player_positions, &mut findings);
     check_portals(game, &cells, &mut findings);
@@ -639,7 +639,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             &mut findings,
         );
     }
-    check_planner_physics(&cells, &physics_boxes(&obstacle_positions, frog_pos), &mut findings);
+    check_planner_physics(&cells, &physics_boxes(&obstacle_positions, bong_pos), &mut findings);
     check_narrow_corridors(&cells, &mut findings);
     findings
 }
@@ -767,36 +767,36 @@ fn check_players(
     }
 }
 
-/// The Hunt mission's target: a Hunt map without an `enemy_frog` cell
+/// The Hunt mission's target: a Hunt map without an `enemy_bong` cell
 /// plays on a procedural spot in the enemy spawn band (a warning - the
 /// author most likely meant to place one), and a placed cell must be
-/// approachable from the playfield under the player frog's own reach rule
+/// approachable from the playfield under the player bong's own reach rule
 /// (`check_reachability`), whatever the map's mission - an error, since
 /// hunters could never get to it. Read from the map cell rather than the
 /// world so the check holds for every mission the map might be run under.
-fn check_enemy_frog(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
+fn check_enemy_bong(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
     let map = &game.map;
-    let Some((col, row)) = map.enemy_frog_cell() else {
+    let Some((col, row)) = map.enemy_bong_cell() else {
         if map.mission.kind == Mission::Hunt {
             findings.push(LintFinding::new(
                 LintSeverity::Warning,
-                LintKind::HuntMissingEnemyFrog,
-                "hunt mission with no enemy_frog cell - the round falls back to a procedural spot in the enemy spawn band".to_string(),
+                LintKind::HuntMissingEnemyBong,
+                "hunt mission with no enemy_bong cell - the round falls back to a procedural spot in the enemy spawn band".to_string(),
                 Vec::new(),
             ));
         }
         return;
     };
     let pos = map::cell_to_world(col, row);
-    let reach = FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1)
+    let reach = BONG_COLLIDER_HALF_EXTENT.0.max(BONG_COLLIDER_HALF_EXTENT.1)
         + battlefield::max_tank_clearance_half_extent()
         + APPROACH_SLACK;
     if !point_reachable(cells, pos, reach) {
         let message = format!(
-            "enemy_frog at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {reach:.0}px - hunters can never reach it",
+            "enemy_bong at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {reach:.0}px - hunters can never reach it",
             pos.x, pos.y
         );
-        findings.push(LintFinding::new(LintSeverity::Error, LintKind::EnemyFrogUnreachable, message, vec![LintCell::Map(col, row)]));
+        findings.push(LintFinding::new(LintSeverity::Error, LintKind::EnemyBongUnreachable, message, vec![LintCell::Map(col, row)]));
     }
 }
 
@@ -870,7 +870,7 @@ fn check_gates(game: &Game, grid: &Grid, width: f32, height: f32, findings: &mut
 /// `gate` cells that is `check_gates`' business; without any, the round
 /// scans the intact nav grid's edges (`battlefield::gate_candidates`,
 /// the same call, same `waves` knobs, avoiding the player start and the
-/// player's frog by `wave_gate_min_player_dist`) and, finding no lane,
+/// player's bong by `wave_gate_min_player_dist`) and, finding no lane,
 /// silently drops every wave into the spawn band instead - an error,
 /// since the map then never plays as authored. Other plans are not
 /// judged: a band map needs no gate.
@@ -890,10 +890,10 @@ fn check_wave_gates(
         (t.wave_gate_inward_cells, t.wave_gate_min_player_dist)
     };
     let mut avoid = player_positions.to_vec();
-    avoid.extend(game.world.query::<&Frog>().iter().filter(|fr| fr.side == Side::Player).map(|fr| fr.position));
+    avoid.extend(game.world.query::<&Bong>().iter().filter(|fr| fr.side == Side::Player).map(|fr| fr.position));
     if battlefield::gate_candidates(grid, width, height, &avoid, min_dist, inward).is_empty() {
         let message = format!(
-            "waves plan with no gate cells, and no edge lane ({inward} usable nav cells straight in, at least {min_dist:.0}px from the player start and frog) for the automatic scan to use: every wave would fall back to the spawn band"
+            "waves plan with no gate cells, and no edge lane ({inward} usable nav cells straight in, at least {min_dist:.0}px from the player start and bong) for the automatic scan to use: every wave would fall back to the spawn band"
         );
         findings.push(LintFinding::new(LintSeverity::Error, LintKind::WavesNoGates, message, Vec::new()));
     }
@@ -947,13 +947,13 @@ fn flood(cells: &mut Cells, seed: (usize, usize)) {
     }
 }
 
-/// §3.2.1 (targets): the frog and every map pickup slot must be
+/// §3.2.1 (targets): the bong and every map pickup slot must be
 /// approachable from the playfield - a pickup approachable only after
 /// destructible walls are shot away is a `GatedPickup` warning rather
 /// than an error (see `LintKind`). "Approachable" is a radius test
 /// against playfield cell centers rather than "its own cell is
 /// playfield", because both targets legitimately sit on blocked cells:
-/// the frog *is* an obstacle in the nav grid (its own cell is always
+/// the bong *is* an obstacle in the nav grid (its own cell is always
 /// blocked by its own margin), and a pickup tucked beside a wall sits
 /// inside that wall's conservative margin while remaining perfectly
 /// collectable. See `APPROACH_SLACK` for the radius rationale.
@@ -961,18 +961,18 @@ fn check_reachability(
     game: &Game,
     cells: &Cells,
     breach_cells: &Cells,
-    frog_pos: Option<Position>,
+    bong_pos: Option<Position>,
     findings: &mut Vec<LintFinding>,
 ) {
     let tank_radius = battlefield::max_tank_clearance_half_extent();
-    if let Some(frog) = frog_pos {
-        let frog_reach =
-            FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + tank_radius + APPROACH_SLACK;
-        if !point_reachable(cells, frog, frog_reach) {
+    if let Some(bong) = bong_pos {
+        let bong_reach =
+            BONG_COLLIDER_HALF_EXTENT.0.max(BONG_COLLIDER_HALF_EXTENT.1) + tank_radius + APPROACH_SLACK;
+        if !point_reachable(cells, bong, bong_reach) {
             let message =
-                format!("frog at ({:.0},{:.0}) has no playfield cell within {frog_reach:.0}px - tanks can never reach it", frog.x, frog.y);
-            let (col, row) = map::world_to_cell(frog);
-            findings.push(LintFinding::new(LintSeverity::Error, LintKind::UnreachableFrog, message, vec![LintCell::Map(col, row)]));
+                format!("bong at ({:.0},{:.0}) has no playfield cell within {bong_reach:.0}px - tanks can never reach it", bong.x, bong.y);
+            let (col, row) = map::world_to_cell(bong);
+            findings.push(LintFinding::new(LintSeverity::Error, LintKind::UnreachableBong, message, vec![LintCell::Map(col, row)]));
         }
     }
     let pickup_reach = tank_radius + APPROACH_SLACK;
@@ -1278,10 +1278,10 @@ fn check_spawn_band(
 /// every obstacle at its *seam-widened* per-axis half-extents (the same
 /// `tile_hull_half_extent` call `spawn_from_map` sized the real colliders
 /// with - the nav grid, by contrast, only ever saw a scalar
-/// `hull_size()/2`), plus the frog's collider.
+/// `hull_size()/2`), plus the bong's collider.
 fn physics_boxes(
     obstacle_positions: &[Position],
-    frog_pos: Option<Position>,
+    bong_pos: Option<Position>,
 ) -> Vec<(Position, Position)> {
     let base = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE * OBSTACLE_HULL_FRACTION * 0.5;
     let wall_cells: HashSet<(i32, i32)> = obstacle_positions
@@ -1295,10 +1295,10 @@ fn physics_boxes(
             (p, battlefield::tile_hull_half_extent(&wall_cells, gx, gy, base))
         })
         .collect();
-    if let Some(frog) = frog_pos {
+    if let Some(bong) = bong_pos {
         boxes.push((
-            frog,
-            Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1),
+            bong,
+            Position::new(BONG_COLLIDER_HALF_EXTENT.0, BONG_COLLIDER_HALF_EXTENT.1),
         ));
     }
     boxes
@@ -1307,7 +1307,7 @@ fn physics_boxes(
 /// §3.2.4: for every open cell, a worst-case tank square centered on the
 /// cell must not overlap any physics collider - if it does, the grid is
 /// telling the AI "drive here" while the solver says no, the exact
-/// mismatch class behind the historical frog-stuck bug. Under today's
+/// mismatch class behind the historical bong-stuck bug. Under today's
 /// constants this check *cannot* fire (the grid's scalar margin is
 /// strictly more conservative than any collider extent - the worked
 /// numbers are in the design doc), which is the point: it's a tripwire
@@ -1448,7 +1448,7 @@ mod map_lint_tests {
     /// gate accepts errors of these recorded kinds and fails on any kind
     /// outside the list - so known debt doesn't block the build, while a
     /// brand-new error class (a boxed-in cell, a planner/physics
-    /// mismatch, an unreachable frog) still fails instantly. Deliberately
+    /// mismatch, an unreachable bong) still fails instantly. Deliberately
     /// kinds, not counts: default.toml is under active hand-editing (its
     /// unreachable-pickup count grew from 5 to 12 *while this gate was
     /// being written*), and count-ratcheting a live canvas just flaps.
@@ -1484,7 +1484,7 @@ mod map_lint_tests {
     }
 
     /// Headless seeded round on `map`, linted - the §3.1 setup. The fixed
-    /// seed matters for maps that leave frog/start placement to `init`'s
+    /// seed matters for maps that leave bong/start placement to `init`'s
     /// (seeded) fallback rolls: same seed, same layout, same findings.
     /// Two passes: the single-player round for every check, then a
     /// two-player round for the player-2 checks only (the terrain is the
@@ -1553,9 +1553,9 @@ mod map_lint_tests {
         }
     }
 
-    /// A much wider closed ring, for burying a frog/pickup deep enough that
+    /// A much wider closed ring, for burying a bong/pickup deep enough that
     /// no playfield cell center lies within their approach reach
-    /// (`APPROACH_SLACK` plus the tank half-extent and, for the frog, its
+    /// (`APPROACH_SLACK` plus the tank half-extent and, for the bong, its
     /// own collider - ~143px). Nothing in this interior is boxed-in, which
     /// is `sealed_ring`'s job instead.
     ///
@@ -1579,7 +1579,7 @@ mod map_lint_tests {
     fn base_map() -> MapFile {
         let mut map = wide();
         map.set_cell(27, 11, CellObject::Start);
-        map.set_cell(7, 12, CellObject::Frog);
+        map.set_cell(7, 12, CellObject::Bong);
         map
     }
 
@@ -1636,7 +1636,7 @@ mod map_lint_tests {
         assert!(errors(&f).is_empty(), "too close is advisory");
 
         let mut map = wide();
-        map.set_cell(7, 12, CellObject::Frog);
+        map.set_cell(7, 12, CellObject::Bong);
         let f = lint_map(map);
         dump("no start", &f);
         assert!(has(&f, LintKind::NoStart));
@@ -1754,7 +1754,7 @@ mod map_lint_tests {
         dump("portal rooms", &f);
         assert!(!has(&f, LintKind::DisconnectedRegion), "the portals join the rooms");
         assert!(!has(&f, LintKind::PortalBlocked) && !has(&f, LintKind::PortalAlone));
-        assert!(!has(&f, LintKind::UnreachableFrog), "the frog in the other room is reachable through the network");
+        assert!(!has(&f, LintKind::UnreachableBong), "the bong in the other room is reachable through the network");
     }
 
     #[test]
@@ -1806,7 +1806,7 @@ mod map_lint_tests {
         }
         let findings = lint_map(map.clone());
         dump("fenced start", &findings);
-        assert!(!has(&findings, LintKind::UnreachableFrog), "the frog is on the open field");
+        assert!(!has(&findings, LintKind::UnreachableBong), "the bong is on the open field");
         let penned: Vec<_> = findings.iter().filter(|f| f.kind == LintKind::StartPenned).collect();
         assert_eq!(penned.len(), 1);
         assert_eq!(penned[0].severity, LintSeverity::Warning);
@@ -1822,33 +1822,33 @@ mod map_lint_tests {
         }
         let findings = lint_map(map);
         dump("iron-sealed start", &findings);
-        assert!(!has(&findings, LintKind::UnreachableFrog));
+        assert!(!has(&findings, LintKind::UnreachableBong));
         let penned: Vec<_> = findings.iter().filter(|f| f.kind == LintKind::StartPenned).collect();
         assert_eq!(penned.len(), 1);
         assert_eq!(penned[0].severity, LintSeverity::Error);
     }
 
     #[test]
-    fn sealed_frog_is_unreachable() {
+    fn sealed_bong_is_unreachable() {
         let mut map = wide();
         map.set_cell(27, 11, CellObject::Start);
         sealed_vault(&mut map);
-        // One cell further in than the pickup test's slot: the frog's
+        // One cell further in than the pickup test's slot: the bong's
         // approach reach is ~150px (its own collider on top of the
         // tank radius), and (17,11)'s ~152px to the nearest playfield
         // center would pass by only ~2px - too fragile against constant
         // tweaks to be what this test hinges on.
-        map.set_cell(16, 11, CellObject::Frog);
+        map.set_cell(16, 11, CellObject::Bong);
         let findings = lint_map(map);
-        dump("sealed frog", &findings);
-        assert!(has(&findings, LintKind::UnreachableFrog));
+        dump("sealed bong", &findings);
+        assert!(has(&findings, LintKind::UnreachableBong));
     }
 
     #[test]
     fn split_field_flags_disconnected_region() {
         let mut map = wide();
         map.set_cell(28, 11, CellObject::Start);
-        map.set_cell(30, 5, CellObject::Frog);
+        map.set_cell(30, 5, CellObject::Bong);
         // Every row, edge to edge. It used to stop at 1..=21 and lean on
         // the clearance margin to seal the last cell at each end, which is
         // not what this test is about and made it sensitive to the margin's
@@ -1893,7 +1893,7 @@ mod map_lint_tests {
     fn single_cell_lane_flags_narrow_corridor() {
         let mut map = wide();
         map.set_cell(20, 9, CellObject::Start); // inside the lane
-        map.set_cell(20, 19, CellObject::Frog);
+        map.set_cell(20, 19, CellObject::Bong);
         // Three map rows apart, which is what leaves exactly one open nav
         // row between them - see `sealed_ring` for the arithmetic.
         for col in 10..=30 {
@@ -1941,7 +1941,7 @@ mod map_lint_tests {
         );
     }
 
-    // --- level cells: gates and the enemy frog ---
+    // --- level cells: gates and the enemy bong ---
 
     fn gate(map: &mut MapFile, col: i32, row: i32) {
         map.set_cell(col, row, CellObject::Gate);
@@ -2077,49 +2077,49 @@ mod map_lint_tests {
     }
 
     #[test]
-    fn hunt_map_without_an_enemy_frog_warns() {
+    fn hunt_map_without_an_enemy_bong_warns() {
         let mut map = base_map();
         map.mission.kind = Mission::Hunt;
         let findings = lint_map(map);
-        dump("hunt, no enemy frog", &findings);
+        dump("hunt, no enemy bong", &findings);
         assert!(
-            findings.iter().any(|f| f.kind == LintKind::HuntMissingEnemyFrog && f.severity == LintSeverity::Warning),
-            "a hunt map with no enemy_frog cell is a Warning"
+            findings.iter().any(|f| f.kind == LintKind::HuntMissingEnemyBong && f.severity == LintSeverity::Warning),
+            "a hunt map with no enemy_bong cell is a Warning"
         );
 
         let mut map = base_map();
         map.mission.kind = Mission::Hunt;
-        map.set_cell(7, 4, CellObject::EnemyFrog);
+        map.set_cell(7, 4, CellObject::EnemyBong);
         let findings = lint_map(map);
-        dump("hunt, enemy frog placed", &findings);
-        assert!(!has(&findings, LintKind::HuntMissingEnemyFrog));
-        assert!(!has(&findings, LintKind::EnemyFrogUnreachable));
+        dump("hunt, enemy bong placed", &findings);
+        assert!(!has(&findings, LintKind::HuntMissingEnemyBong));
+        assert!(!has(&findings, LintKind::EnemyBongUnreachable));
         assert!(errors(&findings).is_empty());
     }
 
     #[test]
-    fn protect_map_without_an_enemy_frog_is_fine() {
+    fn protect_map_without_an_enemy_bong_is_fine() {
         let findings = lint_map(base_map());
-        assert!(!has(&findings, LintKind::HuntMissingEnemyFrog), "only Hunt needs an enemy frog");
+        assert!(!has(&findings, LintKind::HuntMissingEnemyBong), "only Hunt needs an enemy bong");
     }
 
-    /// The enemy frog in the same iron vault `sealed_frog_is_unreachable`
-    /// buries the player's frog in - same reach rule, same verdict.
+    /// The enemy bong in the same iron vault `sealed_bong_is_unreachable`
+    /// buries the player's bong in - same reach rule, same verdict.
     #[test]
-    fn sealed_enemy_frog_is_unreachable() {
+    fn sealed_enemy_bong_is_unreachable() {
         let mut map = wide();
         map.set_cell(27, 11, CellObject::Start);
-        map.set_cell(30, 5, CellObject::Frog);
+        map.set_cell(30, 5, CellObject::Bong);
         map.mission.kind = Mission::Hunt;
         sealed_vault(&mut map);
-        map.set_cell(16, 11, CellObject::EnemyFrog);
+        map.set_cell(16, 11, CellObject::EnemyBong);
         let findings = lint_map(map);
-        dump("sealed enemy frog", &findings);
+        dump("sealed enemy bong", &findings);
         assert!(
-            findings.iter().any(|f| f.kind == LintKind::EnemyFrogUnreachable && f.severity == LintSeverity::Error),
-            "a vaulted enemy frog is an Error"
+            findings.iter().any(|f| f.kind == LintKind::EnemyBongUnreachable && f.severity == LintSeverity::Error),
+            "a vaulted enemy bong is an Error"
         );
-        assert!(!has(&findings, LintKind::HuntMissingEnemyFrog));
+        assert!(!has(&findings, LintKind::HuntMissingEnemyBong));
     }
 
     /// The same carpeted band as `walled_band_has_no_spawn_capacity`, on a
@@ -2147,7 +2147,7 @@ mod map_lint_tests {
     /// A full-height iron divider down `col` with one horizontal slot
     /// `free` map cells tall whose topmost open row is `slot_top` - the
     /// `maps/test/choke.toml` shape reduced to two variables. `base_map`'s
-    /// start (27,11) sits right of the divider and its frog (7,12) left, so
+    /// start (27,11) sits right of the divider and its bong (7,12) left, so
     /// neither ever plugs the slot.
     fn divider_map(col: i32, slot_top: i32, free: i32) -> MapFile {
         let mut map = base_map();
@@ -2300,7 +2300,7 @@ mod map_lint_tests {
             "pockets' ring interior is a sealed pocket"
         );
 
-        // choke/tight-corridors/frog-block lanes are two grid cells wide
+        // choke/tight-corridors/bong-block lanes are two grid cells wide
         // under `Grid::build`'s center-blocking rule (they were single-cell
         // under the older overlap rule they were first cut against), so
         // `NarrowCorridor` rightly does NOT fire - their provocations are
@@ -2318,12 +2318,12 @@ mod map_lint_tests {
         // provocation is the corridor drive itself, not spawn pressure.
         assert!(errors(&f).is_empty(), "tight-corridors is tight but fully legal");
 
-        let f = lint_path("maps/test/frog-block.toml").expect("fixture loads");
-        dump("frog-block", &f);
+        let f = lint_path("maps/test/bong-block.toml").expect("fixture loads");
+        dump("bong-block", &f);
         assert!(errors(&f).is_empty(), "the corridor structure itself is legal");
         assert!(
-            !has(&f, LintKind::UnreachableFrog),
-            "the plugging frog is reachable from the corridor mouths by design"
+            !has(&f, LintKind::UnreachableBong),
+            "the plugging bong is reachable from the corridor mouths by design"
         );
 
         let f = lint_path("maps/test/maze.toml").expect("fixture loads");
@@ -2347,7 +2347,7 @@ mod map_lint_tests {
         assert!(errors(&f).is_empty(), "the portal rooms are one playfield");
         assert!(!has(&f, LintKind::PortalAlone) && !has(&f, LintKind::PortalBlocked));
         assert!(!has(&f, LintKind::DisconnectedRegion), "the far room is joined through the portals");
-        assert!(!has(&f, LintKind::UnreachableFrog));
+        assert!(!has(&f, LintKind::UnreachableBong));
 
         // Every tower kind on both sides, each able to reach the field, and
         // nothing firing on the start.
@@ -2362,7 +2362,7 @@ mod map_lint_tests {
     /// side is noted - and a map with none of that says nothing.
     #[test]
     fn tower_lints_fire_on_what_they_describe() {
-        use crate::frog::Side;
+        use crate::bong::Side;
         use crate::tower::TowerKind;
         let tower = |map: &mut MapFile, col: i32, row: i32, side: Side| {
             map.set_cell(col, row, CellObject::for_tower(TowerKind::Tesla, side));
@@ -2398,7 +2398,7 @@ mod map_lint_tests {
         let f = lint_path("maps/missions/hunt-basic.toml").expect("fixture loads");
         dump("hunt-basic", &f);
         assert!(errors(&f).is_empty(), "hunt-basic must be fully legal");
-        assert!(!has(&f, LintKind::HuntMissingEnemyFrog), "hunt-basic places its enemy frog");
+        assert!(!has(&f, LintKind::HuntMissingEnemyBong), "hunt-basic places its enemy bong");
 
         let f = lint_path("maps/missions/waves-basic.toml").expect("fixture loads");
         dump("waves-basic", &f);
@@ -2459,7 +2459,7 @@ mod map_lint_tests {
         assert!(inside.x >= ring.x && inside.y >= ring.y && inside.x + inside.width <= ring.x + ring.width + 1.0, "{inside:?} in {ring:?}");
         let region = finding(&f, LintKind::DisconnectedRegion);
         assert!(!region.cells.is_empty() && region.cells.iter().all(|c| matches!(c, LintCell::Nav(..))), "{region:?}");
-        assert!(finding(&f, LintKind::HuntMissingEnemyFrog).cells.is_empty(), "about the whole map");
+        assert!(finding(&f, LintKind::HuntMissingEnemyBong).cells.is_empty(), "about the whole map");
         // The bounds of a finding's cells hold every one of them.
         let b = cells_bounds(&region.cells).unwrap();
         for c in &region.cells {
@@ -2512,7 +2512,7 @@ mod map_lint_tests {
 
         // No start at all: put where the game would have put player 1.
         let mut map = wide();
-        map.set_cell(7, 12, CellObject::Frog);
+        map.set_cell(7, 12, CellObject::Bong);
         let f = lint_map(map.clone());
         let none = finding(&f, LintKind::NoStart);
         let Some(LintFix::Place { object: CellObject::Start, at }) = none.fix else { panic!("{none:?}") };

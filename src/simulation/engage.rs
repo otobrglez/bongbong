@@ -1,7 +1,7 @@
 //! Engagement slots: every enemy actually attacking claims a distinct point
 //! near its target instead of converging on the same spot. The target is
-//! the player (`Game::engage`) or, for hunters, the player's frog
-//! (`Game::engage_frog`) - one ring each, same geometry. Four cardinal
+//! the player (`Game::engage`) or, for hunters, the player's bong
+//! (`Game::engage_bong`) - one ring each, same geometry. Four cardinal
 //! axes through the target, each with two lateral firing slots at
 //! ENGAGE_RING_RADIUS (rank 0, both within ENEMY_FIRE_ALIGN_PX of the axis
 //! so either can fire) and two reserve slots at ENGAGE_RESERVE_RADIUS (rank
@@ -140,7 +140,7 @@ impl EngageReport {
 
 /// Everything `EngageRing::assign` needs about this frame.
 pub(super) struct EngageCtx<'a> {
-    /// What the ring is built around: the player, or a hunted frog.
+    /// What the ring is built around: the player, or a hunted bong.
     pub target_pos: Position,
     pub width: f32,
     pub height: f32,
@@ -151,7 +151,7 @@ pub(super) struct EngageCtx<'a> {
     /// stands no further out along its axis than the box reaches less half
     /// a cell, so its holder fires from inside the box (an enemy fires at a
     /// seat from nowhere else, `ai::in_sight_box`). `None` for a hunted
-    /// frog's ring, which no such rule bounds.
+    /// bong's ring, which no such rule bounds.
     pub sight_box: Option<(f32, f32)>,
     /// A rod's call holds the seat (docs/rod-from-god.md "Herding"): the
     /// ring is built round the call's middle (`target_pos`) and its firing
@@ -418,7 +418,7 @@ mod tests {
     /// where the rule lets it: the north and south slots move in from the
     /// ring radius to the box (224 px at the defaults), east and west keep
     /// the ring radius, which the box's width already holds. A hunted
-    /// frog's ring has no box and keeps the ring radius all round.
+    /// bong's ring has no box and keeps the ring radius all round.
     #[test]
     fn a_seats_firing_slots_stand_inside_its_sight_box() {
         // A field with room for every slot, the reserves included.
@@ -428,7 +428,7 @@ mod tests {
         let ring = tuning().engage_ring_radius();
         assert!(ring > half_h - OBSTACLE_GRID_SIZE * 0.5, "the defaults this test is about: the ring reaches past the box's half height");
         let seat = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
-        let frog = EngageCtx { sight_box: None, ..seat };
+        let bong = EngageCtx { sight_box: None, ..seat };
         for i in 0..SLOT_COUNT {
             let slot = EngageSlot::from_index(i);
             let at = engage_point(&seat, slot).expect("an open field fits every slot");
@@ -444,9 +444,9 @@ mod tests {
             } else {
                 assert_eq!(forward, ring.min(half_w - OBSTACLE_GRID_SIZE * 0.5), "{} slot", slot.axis_name());
             }
-            let around_frog = engage_point(&frog, slot).expect("an open field fits every slot");
-            let frog_forward = if slot.axis % 2 == 0 { (around_frog.y - player.y).abs() } else { (around_frog.x - player.x).abs() };
-            assert_eq!(frog_forward, ring, "{} slot of a frog's ring", slot.axis_name());
+            let around_bong = engage_point(&bong, slot).expect("an open field fits every slot");
+            let bong_forward = if slot.axis % 2 == 0 { (around_bong.y - player.y).abs() } else { (around_bong.x - player.x).abs() };
+            assert_eq!(bong_forward, ring, "{} slot of a bong's ring", slot.axis_name());
         }
     }
 

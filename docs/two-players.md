@@ -5,7 +5,7 @@ Purpose of this PRD is to introduce second player to the gameplay. Meaning that 
 ## Switching between players
 
 - In the HUD bar of gameplay there should be some kind of tank/share icon.
-- Visually Between "FROG" indicator and BUILD.
+- Visually Between "BONG" indicator and BUILD.
 - There should be some kind "pop-up" screen (visually similar then "Leave this round?")
 that will ask if you want to play in different modes.
 
@@ -20,7 +20,7 @@ that will ask if you want to play in different modes.
 - Call it "player 1 start" and "player 2 start"
 - Map should have at least one player start
 - If initial location for second player is not given; place second player near first player 1 start. Obviously don't overlap tanks.
-- Game is lost if frog is killed (as with single player missions) or if both player tanks are killed.
+- Game is lost if bong is killed (as with single player missions) or if both player tanks are killed.
 - Friendly fire is possibility.
 
 ## Two player HUD
@@ -56,17 +56,17 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   tile), else the nearest open nav cell to player 1 that keeps two tank
   widths from it - a `start2` inside that clearance is ignored the same way.
   Its chassis: `--tank2`, else the map's `tank2` key (the MAP panel's `TANK 2`
-  row), else a seeded roll. Enemies and the frog keep their distance from
+  row), else a seeded roll. Enemies and the bong keep their distance from
   both players.
-- **Rules.** Lost when every player tank is a wreck or the frog dies; one
+- **Rules.** Lost when every player tank is a wreck or the bong dies; one
   wreck of two stays on the field, its keys inert. Friendly fire is full
   damage scaled by the `friendly_fire_damage_factor` knob (1.0), rams
-  included. A frog bite never finishes either player off.
+  included. A bong bite never finishes either player off.
 - **AI.** Each enemy fights the nearer live, unconcealed player, switching
   only past `enemy_target_switch_margin_px` (96 px) so a pair at equal range
   does not flip the pack; a hit-alerted enemy still hunts a concealed
   player, as before. One engagement ring per player; the shared alert is
-  the nearest sighting. Hunters and guards keep their frog logic.
+  the nearest sighting. Hunters and guards keep their bong logic.
 - **HUD.** A second slot table: HP, shells and the weapon counts read
   `60|70` (player 1 left), SPEED and SHIELD stack into two thin bars, the
   live weapon is an underline under that player's side instead of a slot

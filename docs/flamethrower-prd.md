@@ -88,8 +88,8 @@ against them. It is also the first weapon that can hurt its user.
   `flame_afterburn_dps` (4) per second and draws burning. Re-entering the
   cone resets the timer rather than stacking it. A tank killed by
   afterburn goes on `Frame::kills` and explodes like any other kill.
-- **Frogs.** Either frog inside the cone takes
-  `flame_frog_damage_per_second` (10). It does not hop: a hop's landing
+- **Bongs.** Either bong inside the cone takes
+  `flame_bong_damage_per_second` (10). It does not hop: a hop's landing
   spot is an RNG draw, and the weapon draws none (section 14).
 - **The shooter.** Never damaged by its own stream. It *is* damaged by the
   ground fire the stream leaves, like everyone else (section 7).
@@ -203,7 +203,7 @@ One new `tunables!` group, `flamethrower`:
 | `flame_damage_per_second` | 20 | to a tank inside the cone |
 | `flame_afterburn_seconds` | 2.75 | how long a touched tank keeps burning |
 | `flame_afterburn_dps` | 4 | damage per second while it burns |
-| `flame_frog_damage_per_second` | 10 | to a frog inside the cone |
+| `flame_bong_damage_per_second` | 10 | to a bong inside the cone |
 | `flame_ignite_seconds` | 0.35 | exposure before a cell or tile catches |
 | `flame_heat_decay` | 1.0 /s | how fast unheated exposure fades |
 | `flame_ground_seconds` | 2.0 | how long a lit ground cell burns |
@@ -244,7 +244,7 @@ Out of scope, on purpose:
   meadow would clear every hiding place in a map at once; it is a knob
   worth adding later (`grass_fire_spread_cells_per_second`, default 0),
   not a default.
-- Fire on the frog's or the player's *hull* spreading to tiles they drive
+- Fire on the bong's or the player's *hull* spreading to tiles they drive
   past. A burning tank is a timer, not a source.
 - Sound. There is no audio in the game.
 
@@ -265,7 +265,7 @@ Where the implementation departs from the sections above, and why:
   cone charges `flame_damage_per_second`; the afterburn's lower rate
   applies only on frames the stream is elsewhere, so the two never stack
   and a held stream deals exactly its rate.
-- **Frogs are damaged, not hopped** (section 4). The shell's hop draws the
+- **Bongs are damaged, not hopped** (section 4). The shell's hop draws the
   landing spot from the round RNG; keeping the flamethrower RNG-free was
   worth more than the hop.
 - **The shooter's own cells never heat.** "A quarter cell past the

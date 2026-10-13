@@ -317,7 +317,7 @@ kind = "pickup"
 pickup = "plasma"
 
 [cells."20,21"]
-kind = "frog"
+kind = "bong"
 
 [cells."30,17"]
 kind = "wall"

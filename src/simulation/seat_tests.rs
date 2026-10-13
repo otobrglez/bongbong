@@ -15,7 +15,7 @@ use crate::tank::Dir;
 const W: f32 = 1280.0;
 const H: f32 = 720.0;
 
-/// Player 1 at (20,11), player 2 six cells to the right, the frog in the
+/// Player 1 at (20,11), player 2 six cells to the right, the bong in the
 /// far corner, one enemy boxed in iron where it can neither see nor reach
 /// anything (`tap_tests`'s trick).
 fn map_with(extra: &str) -> String {
@@ -23,7 +23,7 @@ fn map_with(extra: &str) -> String {
         r#"
 version = 1
 tanks = 1
-cells."2,2" = { kind = "frog" }
+cells."2,2" = { kind = "bong" }
 cells."20,11" = { kind = "start" }
 cells."26,11" = { kind = "start2" }
 "#,
@@ -241,15 +241,15 @@ fn a_missing_start2_places_player_two_beside_player_one_without_overlap() {
     }
 }
 
-/// A frog only ever bites the other side, so it takes a Hunt round's
-/// *enemy* frog to bite a player at all - and the bite still never lands
+/// A bong only ever bites the other side, so it takes a Hunt round's
+/// *enemy* bong to bite a player at all - and the bite still never lands
 /// the killing blow, on either player.
 #[test]
-fn a_frog_bite_never_kills_either_player() {
-    let map = map_with("mission.kind = \"hunt\"\ncells.\"30,4\" = { kind = \"enemy_frog\" }\n");
+fn a_bong_bite_never_kills_either_player() {
+    let map = map_with("mission.kind = \"hunt\"\ncells.\"30,4\" = { kind = \"enemy_bong\" }\n");
     let mut game = game_on(&map, 1, PlayerCount::TWO, 17);
     game.debug_teleport(2, cell_to_world(37, 20), Some(0.0)).expect("enemy in slot 2");
-    let enemy_frog = game.enemy_frog.expect("the hunt map places an enemy frog");
+    let enemy_bong = game.enemy_bong.expect("the hunt map places an enemy bong");
     let player2 = game.seat(1).expect("player 2");
     {
         let mut q = game.world.query_one::<&mut Tank>(player2);
@@ -257,14 +257,14 @@ fn a_frog_bite_never_kills_either_player() {
     }
     let mut bites = 0;
     for _ in 0..300 {
-        // Follow the frog: it hops away from whatever crowds it.
-        let (pos, range) = with_frog(&game.world, enemy_frog, |fr| (fr.position, fr.attack_range()));
+        // Follow the bong: it hops away from whatever crowds it.
+        let (pos, range) = with_bong(&game.world, enemy_bong, |fr| (fr.position, fr.attack_range()));
         game.debug_teleport(1, Position::new(pos.x + range * 0.5, pos.y), Some(0.0)).expect("player 2 slot");
         step(&mut game, Input::default());
-        bites += game.events().iter().filter(|e| matches!(e, Event::FrogBite { slot: 1, .. })).count();
+        bites += game.events().iter().filter(|e| matches!(e, Event::BongBite { slot: 1, .. })).count();
         assert!(!snapshot_of(&game, 1).is_wreck, "a bite finished player 2 off");
     }
-    assert!(bites > 0, "the enemy frog never bit player 2 parked beside it");
+    assert!(bites > 0, "the enemy bong never bit player 2 parked beside it");
     assert_eq!(game.outcome(), Outcome::Playing);
 }
 
@@ -372,7 +372,7 @@ fn enemies_retarget_across_four_seats() {
 /// A ring per seat: put a pack around each of two seats and every enemy
 /// in each pack is handed a distinct engagement slot on its own seat's
 /// ring. A Destroy round, so no enemy rolls a hunter and competes on the
-/// frog's ring instead.
+/// bong's ring instead.
 #[test]
 fn every_seat_gets_its_own_engagement_ring() {
     let map = map_with("mission.kind = \"destroy\"\n");
@@ -411,7 +411,7 @@ fn every_seat_gets_its_own_engagement_ring() {
 }
 
 /// The co-op end rule over four seats: the round runs until every seat is
-/// a wreck, and the frog's death ends it whatever the seats are doing.
+/// a wreck, and the bong's death ends it whatever the seats are doing.
 #[test]
 fn four_seats_lose_only_once_every_one_is_wrecked() {
     let mut game = game_on(&map_with(""), 1, PlayerCount::from_count(4).expect("four seats"), 37);
@@ -425,11 +425,11 @@ fn four_seats_lose_only_once_every_one_is_wrecked() {
     step(&mut game, Input::default());
     assert_eq!(game.outcome(), Outcome::Lost, "every seat wrecked loses the round");
 
-    // The frog still ends it on its own, with every seat alive.
+    // The bong still ends it on its own, with every seat alive.
     let mut game = game_on(&map_with(""), 1, PlayerCount::from_count(4).expect("four seats"), 41);
-    with_frog_mut(&game.world, game.frog.expect("the map places a frog"), |fr| fr.damage(fr.max_health));
+    with_bong_mut(&game.world, game.bong.expect("the map places a bong"), |fr| fr.damage(fr.max_health));
     step(&mut game, Input::default());
-    assert_eq!(game.outcome(), Outcome::Lost, "the frog's death loses it whoever is alive");
+    assert_eq!(game.outcome(), Outcome::Lost, "the bong's death loses it whoever is alive");
 }
 
 /// The seats past the authored starts come off the default map's own

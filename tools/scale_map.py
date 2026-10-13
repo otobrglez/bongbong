@@ -21,7 +21,7 @@ the two cells either side of it have to keep:
 * anything thicker - a lake, a wood, a patch of tall grass, a building -
   grows both ways, a building's shell staying thin while its inside grows
   and a mixed wall's thin posts staying thin while its panes grow;
-* a single thing - a start, a frog, a pickup, a portal, a gate, a tower -
+* a single thing - a start, a bong, a pickup, a portal, a gate, a tower -
   is never repeated, and a line it sits on (a road under a pickup, a wall
   round a tower) goes on round it;
 * two things that touched still touch where that matters: an oil trail
@@ -33,7 +33,7 @@ the two cells either side of it have to keep:
 
 Then check the result with the map linter (`cargo test --lib maplint`, or
 the builder's CHECK): what is measured in pixels does not grow with it - a
-frog or a pickup can end up past the linter's reach from the open ground,
+bong or a pickup can end up past the linter's reach from the open ground,
 and a sealed room big enough to show as a pocket.
 """
 import argparse
@@ -42,7 +42,7 @@ import re
 import sys
 import tomllib
 
-POINT_KINDS = {"start", "start2", "frog", "enemy_frog", "pickup", "portal", "gate", "tesla", "gun_tower", "bio_slush"}
+POINT_KINDS = {"start", "start2", "bong", "enemy_bong", "pickup", "portal", "gate", "tesla", "gun_tower", "bio_slush"}
 TOWERS = {"tesla", "gun_tower", "bio_slush"}
 SOLID = {"wall", "sandbag", "fence", "barrel"}
 TREES = {"tree", "pine"}
@@ -64,7 +64,7 @@ def family(obj):
 
 def sits_on(point, material):
     """Whether a single thing between two cells of a material sits on that
-    material's run - a pickup on a road, the frog in its reeds, a tower set
+    material's run - a pickup on a road, the bong in its reeds, a tower set
     into a wall - rather than in a gap between two of its pieces (a pickup
     between two pillars)."""
     if material["kind"] in FLOORS:

@@ -1425,12 +1425,12 @@ mod session_tests {
     }
 
     /// `session` on a map shown whole: a 34 x 17 arena with a start and a
-    /// frog, which no shipped map is.
+    /// bong, which no shipped map is.
     fn arena_session() -> Session {
         let mut game = Game::default();
         game.enemy_count_override = Some(1);
         game.seed_override = Some(7);
-        game.map = MapFile::from_toml_str("version = 1\ncells.\"5,5\" = { kind = \"start\" }\ncells.\"30,15\" = { kind = \"frog\" }\n")
+        game.map = MapFile::from_toml_str("version = 1\ncells.\"5,5\" = { kind = \"start\" }\ncells.\"30,15\" = { kind = \"bong\" }\n")
             .expect("arena map parses");
         game.init(W, H);
         Session::new(game)
