@@ -175,13 +175,18 @@ things when forgotten; this is the detail. Update it with the tool.
   set the round up; `Rig::authority()` is the truth the picture is checked against. Its tests
   (`cargo test --lib net::rig`) play the lane end to end headlessly: every drawn hull is between two
   authoritative snapshots, the replica only ever stands on a snapshot tick, and the picture moves on
-  frames no snapshot arrived on. **`rig::Lockstep`** is the same lane with no thread and no clock,
+  frames no snapshot arrived on. They run the rig's room and an `OnlineRound` over it on one
+  hand-wound clock (`net::now`, the tests' `Wound`): each frame advances the clock a frame and the
+  room takes exactly the ticks that fell due in it, so the link's delay and jitter and the
+  interpolator replay on every run however loaded the machine; one test
+  (`the_rigs_thread_runs_a_round_over_a_lossy_link`) keeps the thread on the wall and asks only what
+  no load can change. **`rig::Lockstep`** is the same lane with no thread and no clock,
   for a test or a tool: `start` seats a client and `step {ticks}` runs the authority that many ticks
   and lets the replica catch up to the last snapshot they earned, so a networked round replays the
   way `restart` + `step` replays a local one - the room's `now` advances by exactly
   `PHYSICS_FIXED_DT` a tick, so even `Snapshot::server_ms` comes out the same. Its link is perfect
-  and nothing is interpolated: delay, jitter and `net::interp` are all dials on *real* time, so they
-  stay the threaded rig's.
+  and nothing is interpolated: its link and `net::interp` read the wall, so delay, jitter and the
+  interpolator are the windowed tests' and the threaded rig's.
 - **Native runtime tuning**: `cargo run -- --tuning knobs.json` loads a JSON patch and re-applies it
   whenever the file changes (bad file: fails at startup; bad edit: stderr, ignored). The probe takes
   the same flag (echoed in its header and `--json-out`); `--print-rust` renders it as `tunables!`
