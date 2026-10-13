@@ -2092,7 +2092,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     the frame drains - a hidden tab's backlog is caught up, never trimmed, or the delta chain
     breaks; `loopback.rs`, the rig's in-process pair with dialled delay, jitter and loss off a
     seeded `SmallRng` per direction, head-of-line like the socket it stands in for, drivable at a
-    given `Instant` so its tests need no sleeping. `rooms.rs` is the one URL rule: host from
+    given `Instant` so its tests need no sleeping. `now.rs` is `Now`, where the client's half reads
+    the time: the wall in every build that plays, or `Now::manual()`, a clock that moves only on
+    `advance`. A test hands one manual clock to both loopback ends (`Loopback::set_clock`) and the
+    round (`OnlineRound::set_clock`, which passes it to its `RoomClient`), so render time, every
+    arrival stamp and every timeout read the same instants on every run however loaded the machine
+    - a test driven on the wall measures the machine, since a slow run spreads its arrivals and the
+    interpolator sizes its delay from that spread. `net::round`'s tests run on one. `rooms.rs` is the one URL rule: host from
     `--rooms`, else `BONGBONG_ROOMS`, else `wss://rooms.bongbong.io`; **one server holds every
     room**, so hosting and joining both dial that host's own `/ws` and a code picks no path
     (`socket_url` takes no code; spreading rooms over several servers is deferred work,

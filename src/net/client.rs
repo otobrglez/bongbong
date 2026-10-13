@@ -292,6 +292,9 @@ pub struct RoomClient<T: Transport> {
     /// to open (`ROOM_REACH_WITHIN`).
     dialled_at: std::time::Instant,
     reach_within: std::time::Duration,
+    /// What every one of those instants is read on: the wall unless a
+    /// test winds it (`set_clock`).
+    clock: crate::net::now::Now,
 }
 
 impl<T: Transport> RoomClient<T> {
@@ -329,6 +332,7 @@ impl<T: Transport> RoomClient<T> {
             last_poll: None,
             dialled_at: std::time::Instant::now(),
             reach_within: ROOM_REACH_WITHIN,
+            clock: crate::net::now::Now::wall(),
         }
     }
 
@@ -339,7 +343,7 @@ impl<T: Transport> RoomClient<T> {
         if matches!(self.phase, Phase::Closed(_)) {
             return;
         }
-        let now = std::time::Instant::now();
+        let now = self.clock.now();
         if self.last_poll.is_some_and(|last| now.saturating_duration_since(last) > CLIENT_AWAY_AFTER) {
             self.unanswered_since = None;
         }
@@ -367,9 +371,9 @@ impl<T: Transport> RoomClient<T> {
             return;
         }
         // Asked, and nothing since: the connection died without closing.
-        if self.unanswered_since.is_some_and(|since| since.elapsed() >= self.silent_after) {
+        if self.unanswered_since.is_some_and(|since| self.clock.since(since) >= self.silent_after) {
             self.give_up("the room stopped answering", out);
-        } else if self.phase == Phase::Connecting && self.dialled_at.elapsed() >= self.reach_within {
+        } else if self.phase == Phase::Connecting && self.clock.since(self.dialled_at) >= self.reach_within {
             self.give_up("the room could not be reached", out);
         }
     }
@@ -381,6 +385,16 @@ impl<T: Transport> RoomClient<T> {
         let closed = Closed::fault(reason);
         self.phase = Phase::Closed(closed.clone());
         out.push(ClientEvent::Closed(closed));
+    }
+
+    /// The clock the dial, the pings and the polls are timed on, from now
+    /// on: the round over this client hands it its own (`OnlineRound::set_clock`).
+    /// The dial starts again on it.
+    pub fn set_clock(&mut self, clock: crate::net::now::Now) {
+        self.dialled_at = clock.now();
+        self.last_poll = None;
+        self.unanswered_since = None;
+        self.clock = clock;
     }
 
     /// How long the socket may take to open (`ROOM_REACH_WITHIN` unless
@@ -457,7 +471,7 @@ impl<T: Transport> RoomClient<T> {
     pub fn ping(&mut self, client_ms: u32) {
         if self.transport.is_open() {
             self.transport.send_msg(&Msg::Ping(crate::net::wire::Ping { client_ms }));
-            self.unanswered_since.get_or_insert_with(std::time::Instant::now);
+            self.unanswered_since.get_or_insert_with(|| self.clock.now());
         }
     }
 
