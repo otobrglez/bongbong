@@ -35,7 +35,9 @@ other" and leave a hole between them:
   **explicitly ignores any pair already closer than
   `radius_a + radius_b + avoid_margin`**: *"Already overlapping is the ram
   system's job, not ours."* That ignored regime is exactly where collisions
-  happen.
+  happen. (Until BB-95 the prediction also ran backwards in time - it
+  sidestepped tanks behind and never the one ahead - so every measurement in
+  this document was taken without a working sidestep.)
 - `crowded_ahead` + `Ai::yield_timer` brakes a tank with something directly in
   front - but it is per-tank and blind. Both tanks in a head-on brake, neither
   knows the other is braking, and only the `enemy_yield_seconds` ceiling breaks

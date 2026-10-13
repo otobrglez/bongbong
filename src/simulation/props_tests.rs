@@ -1155,6 +1155,11 @@ fn trampled_grass_hides_nobody_from_the_ai() {
             game.debug_teleport(0, cell, Some(0.0)).expect("player holds its ground");
             step(&mut game, Input::default());
             hits += game.events().iter().filter(|e| matches!(e, Event::Hit { target: HitTarget::Player { .. }, .. })).count();
+            // A lost round restarts, and the restart clears the trampled
+            // cells: stop where it ends.
+            if game.outcome() != Outcome::Playing {
+                break;
+            }
         }
         assert_eq!(game.grass_trampled.contains(&(20, 11)), passes == 1);
         hits

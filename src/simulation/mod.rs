@@ -7104,19 +7104,20 @@ mod determinism_tests {
         // (`math::sin` and friends), so a Mac and a Linux runner agree to
         // the bit. Never bump these to go green - work out which change
         // moved them first.
-        // Both rounds' shells chip walls chunk by chunk (`chunks.rs`); with
-        // `wall_chunks` off the pair is (3_570_665_087_679_403_295,
-        // 5_538_636_586_623_323_216). The map's crates are many, and the
-        // enemies go round the ones they would leave (`route_crate_cost`);
-        // with that at 0 the pair is (15_662_619_869_435_857_390,
-        // 625_655_024_471_431_682). An enemy holds the seat it chases past
-        // the edge of its sight (`enemy_sight_hold_px`), which moves the
-        // one-seat round; with that at 0 the pair is
-        // (337_451_688_727_401_783, 14_495_588_630_665_482_518), and with
-        // `enemy_lost_seconds` at 0 as well it is
-        // (12_317_413_125_897_926_193, 14_495_588_630_665_482_518).
+        // The pairs below run the same rounds with one knob changed, to tell
+        // which change moved a pin. Shells chip walls chunk by chunk
+        // (`chunks.rs`); with `wall_chunks` off the pair is
+        // (1_311_122_185_973_974_513, 6_901_121_954_650_956_187). The map's
+        // crates are many, and the enemies go round the ones they would
+        // leave (`route_crate_cost`); with that at 0 the pair is
+        // (9_286_575_373_190_821_116, 14_483_779_157_577_496_359). An enemy
+        // holds the seat it chases past the edge of its sight
+        // (`enemy_sight_hold_px`), which moves the one-seat round; with that
+        // at 0 the pair is (3_558_694_837_288_099_379,
+        // 3_120_823_617_306_764_509), and with `enemy_lost_seconds` at 0 as
+        // well it is (1_330_122_091_120_726_416, 3_120_823_617_306_764_509).
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (1_311_122_185_973_974_513, 14_495_588_630_665_482_518), "(one seat, two seats)");
+        assert_eq!((one, two), (1_311_122_185_973_974_513, 3_120_823_617_306_764_509), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round

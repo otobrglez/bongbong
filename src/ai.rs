@@ -809,6 +809,13 @@ pub struct Ai {
     /// commits for a short window instead of being re-decided every frame.
     dodge_dir: Option<Dir>,
     dodge_timer: f32,
+    /// The last sidestep while its heading is still the one held: the
+    /// heading it took and the heading it sidestepped from. A route that
+    /// turns straight back once the sidestep is over resumes the heading
+    /// it left instead (`steer_toward`) - the commitment's margin is blind
+    /// to a reversal, and a hull would drive on along the sidestep's
+    /// heading to the next wall.
+    sidestepped: Option<(Dir, Dir)>,
     /// The stuck escape in progress (see `stuck_timer`): the heading it
     /// backs out along and the seconds left on it (`stuck_escape_hold_seconds`).
     /// Held over every sidestep - a tank wedged between a wall and another
@@ -1175,6 +1182,7 @@ impl Default for Ai {
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
+            sidestepped: None,
             escape_dir: None,
             escape_timer: 0.0,
             near_fight: false,
@@ -1687,6 +1695,7 @@ impl Ai {
         self.dir_hold = 0.0;
         self.dodge_dir = None;
         self.dodge_timer = 0.0;
+        self.sidestepped = None;
         self.yield_timer = 0.0;
         self.last_move_dir = None;
         self.last_position = None;
@@ -1760,6 +1769,7 @@ impl Ai {
         self.dir_hold = 0.0;
         self.dodge_dir = None;
         self.dodge_timer = 0.0;
+        self.sidestepped = None;
         self.yield_timer = 0.0;
         self.last_move_dir = None;
         self.last_position = None;
@@ -2137,6 +2147,20 @@ impl Ai {
     ) -> Dir {
         let routed = route.map_or(target, |r| r.first());
         let fresh = Dir::toward(from, routed);
+        // A sidestep over, its heading still held, and the route turning
+        // straight back: resume the heading it sidestepped from, held
+        // afresh, and leave the turn to the margin as for any other.
+        if let Some((sidestep, before)) = self.sidestepped
+            && self.dodge_dir.is_none()
+        {
+            if self.committed_dir != Some(sidestep) {
+                self.sidestepped = None;
+            } else if fresh == opposite(sidestep) {
+                self.committed_dir = Some(before);
+                self.dir_hold = 0.0;
+                self.sidestepped = None;
+            }
+        }
         // The route as lanes, against the heading held: `Some` while it
         // walks whole cells from the hull's own (see `lane_turn`).
         let lane = match (self.committed_dir, route) {
@@ -2198,6 +2222,7 @@ impl Ai {
             self.escape_timer = tuning().stuck_escape_hold_seconds;
             self.dodge_dir = None;
             self.dodge_timer = 0.0;
+            self.sidestepped = None;
             escape
         } else if let Some(escape) = self.escape_dir.filter(|&d| self.escape_timer > 0.0 && !blocked(d)) {
             escape
@@ -2268,7 +2293,7 @@ impl Ai {
         // then commit the final heading so it holds. Driving into a wall is
         // no longer steering's problem - the physics engine's wall colliders
         // stop/slide the tank for real.
-        let dir = if self.escape_dir.is_some() { dir } else { self.avoid_collisions(dir, from, bounds, half, ctx, grid) };
+        let dir = if self.escape_dir.is_some() { dir } else { self.avoid_collisions(dir, from, target, bounds, half, ctx, grid) };
         self.commit(dir);
         dir
     }
@@ -2390,10 +2415,13 @@ impl Ai {
     }
 
     /// Predictively sidestep a likely collision. Given the `desired` heading, look
-    /// ahead along it and estimate the closest approach to every other tank; if a
-    /// hit looks likely within AVOID_LOOKAHEAD, latch a perpendicular dodge for
-    /// AVOID_DODGE_SECONDS and return it. When the dodge expires, normal steering
-    /// resumes and pulls the tank back on course — the "away then back" motion.
+    /// ahead along it and estimate the closest approach to every tank in front
+    /// (`first_contact`); if a hit looks likely within `avoid_lookahead`, latch a
+    /// perpendicular dodge for `avoid_dodge_seconds` and return it - toward the
+    /// side `target` lies on where it has one. When the dodge expires, normal
+    /// steering resumes and pulls the tank back on course - the "away then back"
+    /// motion - or, where the route turns straight back across the sidestep,
+    /// resumes the heading it left (`sidestepped`).
     ///
     /// `grid` supplements the plain geometric `heads_into_wall` check with a
     /// grid-cell-accurate one (`Grid::blocked_ahead`) for both the battlefield
@@ -2411,6 +2439,7 @@ impl Ai {
         &mut self,
         desired: Dir,
         from: Position,
+        target: Position,
         bounds: (f32, f32),
         half: f32,
         ctx: AvoidCtx,
@@ -2431,53 +2460,28 @@ impl Ai {
             return desired;
         }
 
-        let step = desired.vec();
-        let my_vel = Vec2::new(step.x * ctx.speed, step.y * ctx.speed);
-
-        // Find the soonest predicted collision among the other movers.
-        let mut soonest: Option<(f32, Vec2)> = None; // (time, relative position)
-        for (i, other) in ctx.movers.iter().enumerate() {
-            if i == ctx.my_index {
-                continue;
-            }
-            let p = Vec2::new(other.position.x - from.x, other.position.y - from.y);
-            let v = Vec2::new(my_vel.x - other.velocity.x, my_vel.y - other.velocity.y);
-            let vv = v.x * v.x + v.y * v.y;
-            if vv <= f32::EPSILON {
-                continue; // no relative motion
-            }
-            // Already overlapping is the ram system's job, not ours.
-            let sep_now = (p.x * p.x + p.y * p.y).sqrt();
-            let reach = ctx.radius + other.radius + tuning().avoid_margin;
-            if sep_now < reach {
-                continue;
-            }
-            // Moving apart? (relative velocity points away) then no approach.
-            let pv = p.x * v.x + p.y * v.y;
-            if pv >= 0.0 {
-                continue;
-            }
-            let t = (-pv / vv).clamp(0.0, tuning().avoid_lookahead);
-            let cx = p.x + v.x * t;
-            let cy = p.y + v.y * t;
-            let closest = (cx * cx + cy * cy).sqrt();
-            if closest < reach && soonest.is_none_or(|(bt, _)| t < bt) {
-                soonest = Some((t, p));
-            }
-        }
-
-        let Some((_, rel)) = soonest else {
+        let Some(contact) = first_contact(desired, from, target, ctx) else {
             return desired;
         };
 
-        // Pick the dodge side: turn away from where the obstacle sits relative to
-        // our heading, using the 2D cross product's sign. On a near-tie, break it
-        // deterministically by our index so two tanks don't mirror into each other.
-        let cross = step.x * rel.y - step.y * rel.x;
-        let turn_left = if cross.abs() < 1.0 {
-            ctx.my_index.is_multiple_of(2)
+        // Pick the dodge side: toward the side of the heading the target
+        // lies on, so the route carries on from the sidestep rather than
+        // turning straight back across it. With the target dead ahead, away
+        // from where the other tank will be at the closest approach (the 2D
+        // cross product's sign with the heading) - from where it stands now
+        // when the two would meet dead centre - and on a near-tie by our
+        // index, so two tanks don't mirror into each other.
+        let step = desired.vec();
+        let side = |rel: Vec2| step.x * rel.y - step.y * rel.x;
+        let left = perpendicular(desired, true).vec();
+        let toward = left.x * (target.x - from.x) + left.y * (target.y - from.y);
+        let away = if side(contact.at).abs() >= 1.0 { side(contact.at) } else { side(contact.now) };
+        let turn_left = if toward.abs() >= 1.0 {
+            toward > 0.0
+        } else if away.abs() >= 1.0 {
+            away > 0.0
         } else {
-            cross > 0.0
+            ctx.my_index.is_multiple_of(2)
         };
         let primary = perpendicular(desired, turn_left);
         let secondary = perpendicular(desired, !turn_left);
@@ -2486,49 +2490,19 @@ impl Ai {
         // about to collide.
         let choice = [primary, secondary]
             .into_iter()
-            .find(|&d| !blocked(d) && !self.dir_collides(d, from, ctx));
+            .find(|&d| !blocked(d) && first_contact(d, from, target, ctx).is_none());
         // Fall back to any non-walled/obstructed side; if both fail, abandon the dodge.
         let choice = choice.or_else(|| [primary, secondary].into_iter().find(|&d| !blocked(d)));
 
         match choice {
             Some(dir) => {
                 self.dodge_dir = Some(dir);
+                self.sidestepped = Some((dir, desired));
                 self.dodge_timer = tuning().avoid_dodge_seconds;
                 dir
             }
             None => desired,
         }
-    }
-
-    /// True if heading `dir` from `from` at full speed would come dangerously close
-    /// to another mover within the lookahead — used to reject a dodge side that
-    /// merely trades one collision for another.
-    fn dir_collides(&self, dir: Dir, from: Position, ctx: AvoidCtx) -> bool {
-        let step = dir.vec();
-        let my_vel = Vec2::new(step.x * ctx.speed, step.y * ctx.speed);
-        for (i, other) in ctx.movers.iter().enumerate() {
-            if i == ctx.my_index {
-                continue;
-            }
-            let p = Vec2::new(other.position.x - from.x, other.position.y - from.y);
-            let v = Vec2::new(my_vel.x - other.velocity.x, my_vel.y - other.velocity.y);
-            let vv = v.x * v.x + v.y * v.y;
-            if vv <= f32::EPSILON {
-                continue;
-            }
-            let pv = p.x * v.x + p.y * v.y;
-            if pv >= 0.0 {
-                continue;
-            }
-            let t = (-pv / vv).clamp(0.0, tuning().avoid_lookahead);
-            let cx = p.x + v.x * t;
-            let cy = p.y + v.y * t;
-            let closest = (cx * cx + cy * cy).sqrt();
-            if closest < ctx.radius + other.radius + tuning().avoid_margin {
-                return true;
-            }
-        }
-        false
     }
 
     /// Whether this tank should be backing off to recharge instead of
@@ -2659,6 +2633,82 @@ fn cell_step(from: (usize, usize), to: (usize, usize)) -> Option<Dir> {
         (0, -1) => Some(Dir::Up),
         _ => None,
     }
+}
+
+/// The soonest predicted contact with another tank (`first_contact`), as
+/// offsets from this tank to the other one.
+#[derive(Clone, Copy, Debug)]
+struct Contact {
+    /// Seconds until the two are closest.
+    t: f32,
+    /// Where the other tank stands now.
+    now: Vec2,
+    /// Where it stands at the closest approach.
+    at: Vec2,
+}
+
+/// The soonest contact with another mover if this tank drives `dir` from
+/// `from` at full speed toward `target`, within `avoid_lookahead`
+/// (`avoid_still_lookahead` for a tank standing still, and never one
+/// standing by `target` - see below): the other tank's offset
+/// from this one runs `p + v t` with `v` its velocity *relative to this
+/// tank* - its own velocity less this tank's - and the two touch when that
+/// comes inside both hulls' radii plus `avoid_margin`. Only a tank that
+/// stands ahead counts, by the sign of its offset along `dir`: one beside
+/// or behind is driving into this one, not this one into it, and it is
+/// that tank's own avoidance that sidesteps (a tank sidestepping whatever
+/// comes up behind it turns round a hull that is overtaking it). Already
+/// inside that reach is the yield brake's (`crowded_ahead`) and the ram
+/// system's, not this.
+fn first_contact(dir: Dir, from: Position, target: Position, ctx: AvoidCtx) -> Option<Contact> {
+    let step = dir.vec();
+    let my_vel = Vec2::new(step.x * ctx.speed, step.y * ctx.speed);
+    let mut soonest: Option<Contact> = None;
+    for (i, other) in ctx.movers.iter().enumerate() {
+        if i == ctx.my_index {
+            continue;
+        }
+        let p = Vec2::new(other.position.x - from.x, other.position.y - from.y);
+        if p.x * step.x + p.y * step.y <= 0.0 {
+            continue;
+        }
+        // A tank standing still is looked for only as far as the hull is
+        // about to hit it: further out the route's crowd price
+        // (`route_crowd_cost`) bends round it, and sidestepping one early
+        // only to have the route bring the hull back is a dance. A
+        // teammate standing by the spot this tank is heading for - the
+        // engagement slot beside its own, most of all - is the yield
+        // brake's (`crowded_ahead`), which pulls up short of it.
+        let ov = other.velocity;
+        let mut lookahead = tuning().avoid_lookahead;
+        if ov.x * ov.x + ov.y * ov.y < tuning().avoid_min_speed * tuning().avoid_min_speed {
+            if !other.is_player && other.position.distance_to(target) < tuning().avoid_near_target_px {
+                continue;
+            }
+            lookahead = lookahead.min(tuning().avoid_still_lookahead);
+        }
+        let v = Vec2::new(other.velocity.x - my_vel.x, other.velocity.y - my_vel.y);
+        let vv = v.x * v.x + v.y * v.y;
+        if vv <= f32::EPSILON {
+            continue; // no relative motion
+        }
+        let reach = ctx.radius + other.radius + tuning().avoid_margin;
+        if p.x * p.x + p.y * p.y < reach * reach {
+            continue;
+        }
+        // Closing? The gap shrinks while the relative velocity points back
+        // along the offset.
+        let pv = p.x * v.x + p.y * v.y;
+        if pv >= 0.0 {
+            continue;
+        }
+        let t = (-pv / vv).min(lookahead);
+        let at = Vec2::new(p.x + v.x * t, p.y + v.y * t);
+        if at.x * at.x + at.y * at.y < reach * reach && soonest.is_none_or(|s| t < s.t) {
+            soonest = Some(Contact { t, now: p, at });
+        }
+    }
+    soonest
 }
 
 /// True if heading `dir` from `from` would drive further into a battlefield edge
@@ -5637,6 +5687,116 @@ mod intent_tests {
         assert_eq!(faster.speed_scale(), 1.0, "a negative slow must not overdrive");
         assert_eq!(stopped.speed_scale(), 0.0);
         assert_eq!(absurd.speed_scale(), 0.0, "an out-of-range slow must not reverse the tank");
+    }
+}
+
+/// The predictive sidestep's geometry (`Ai::avoid_collisions`,
+/// `first_contact`) on an open field: a tank driving east at an enemy's
+/// pace from (600, 300), against one other tank.
+#[cfg(test)]
+mod avoid_tests {
+    use super::*;
+    use crate::PATHFIND_CELL_SIZE as CELL;
+
+    const PACE: f32 = 160.0;
+    const FROM: Position = Position::new(600.0, 300.0);
+    /// Dead ahead, far beyond everything here: no side of its own.
+    const TARGET: Position = Position::new(1200.0, 300.0);
+
+    /// Where the tank driving east at `FROM` heads when `other` stands at
+    /// `at` moving at `velocity` (px/s).
+    fn heading(at: Position, velocity: Vec2) -> Dir {
+        heading_to(TARGET, at, velocity)
+    }
+
+    /// `heading`, on the way to `target`.
+    fn heading_to(target: Position, at: Position, velocity: Vec2) -> Dir {
+        let grid = Grid::build(40.0 * CELL, 30.0 * CELL, CELL, 0.0, std::iter::empty());
+        let movers = [
+            Mover { position: FROM, velocity: Vec2::new(PACE, 0.0), radius: 20.0, is_player: false },
+            Mover { position: at, velocity, radius: 20.0, is_player: false },
+        ];
+        let ctx = AvoidCtx { movers: &movers, my_index: 0, radius: 20.0, speed: PACE, grip: 500.0, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[] };
+        let mut ai = Ai::default();
+        ai.avoid_collisions(Dir::Right, FROM, target, (40.0 * CELL, 30.0 * CELL), 20.0, ctx, &grid)
+    }
+
+    const STILL: Vec2 = Vec2::new(0.0, 0.0);
+
+    /// A still tank 80 px straight ahead is met in half a second: the
+    /// tank sidesteps it, away from the side it stands on.
+    #[test]
+    fn a_still_tank_ahead_is_sidestepped() {
+        assert!(matches!(heading(Position::new(680.0, 300.0), STILL), Dir::Up | Dir::Down));
+        assert_eq!(heading(Position::new(680.0, 306.0), STILL), Dir::Up, "it stands a little south: go north");
+        assert_eq!(heading(Position::new(680.0, 294.0), STILL), Dir::Down, "it stands a little north: go south");
+    }
+
+    /// A still tank straight behind is never met, and one off to the side
+    /// of the lane is passed.
+    #[test]
+    fn a_tank_behind_or_clear_of_the_lane_is_not() {
+        assert_eq!(heading(Position::new(520.0, 300.0), STILL), Dir::Right);
+        assert_eq!(heading(Position::new(680.0, 380.0), STILL), Dir::Right);
+    }
+
+    /// One coming head-on is met sooner than a still one, and one crossing
+    /// the lane from the south reaches the meeting point when the tank
+    /// does: both are sidestepped. The two would meet dead centre, so the
+    /// crosser is dodged away from where it stands now, to the north.
+    #[test]
+    fn head_on_and_crossing_paths_are_sidestepped() {
+        assert!(matches!(heading(Position::new(780.0, 304.0), Vec2::new(-PACE, 0.0)), Dir::Up | Dir::Down));
+        assert_eq!(heading(Position::new(680.0, 380.0), Vec2::new(0.0, -PACE)), Dir::Up);
+    }
+
+    /// A still tank is looked for only as far as the hull is about to hit
+    /// it (`avoid_still_lookahead`): 180 px ahead the route's crowd price
+    /// still has it, and one standing by the spot the tank is heading for
+    /// is the yield brake's (`avoid_near_target_px`). A tank coming the
+    /// other way at that distance is sidestepped already.
+    #[test]
+    fn a_still_tank_far_ahead_or_by_the_target_is_left_to_the_route_and_the_brake() {
+        assert_eq!(heading(Position::new(780.0, 300.0), STILL), Dir::Right);
+        assert_ne!(heading(Position::new(780.0, 300.0), Vec2::new(-PACE, 0.0)), Dir::Right);
+        assert_eq!(heading_to(Position::new(720.0, 300.0), Position::new(680.0, 306.0), STILL), Dir::Right);
+    }
+
+    /// With the target off to one side of the heading, the sidestep goes
+    /// that way whichever side the tank met stands on, so the route carries
+    /// on from it rather than turning straight back across it.
+    #[test]
+    fn the_sidestep_goes_toward_the_target_side() {
+        let north = Position::new(1200.0, 100.0);
+        let south = Position::new(1200.0, 500.0);
+        assert_eq!(heading_to(north, Position::new(680.0, 294.0), STILL), Dir::Up);
+        assert_eq!(heading_to(south, Position::new(680.0, 306.0), STILL), Dir::Down);
+    }
+
+    /// A sidestep over, its heading still held, and the route turning
+    /// straight back across it: the tank resumes the heading it sidestepped
+    /// from. Without the sidestep behind it the same commitment drives on,
+    /// blind to the reversal, as steering always has.
+    #[test]
+    fn a_route_turning_straight_back_after_a_sidestep_resumes_the_heading_left() {
+        let grid = Grid::build(40.0 * CELL, 30.0 * CELL, CELL, 0.0, std::iter::empty());
+        let movers = [Mover { position: FROM, velocity: Vec2::new(0.0, -PACE), radius: 20.0, is_player: false }];
+        let ctx = AvoidCtx { movers: &movers, my_index: 0, radius: 20.0, speed: PACE, grip: 500.0, dt: 1.0 / 60.0, on_portal_cooldown: false, keep_off: &[] };
+        let below = Position::new(FROM.x, FROM.y + 200.0);
+        let held = || Ai { committed_dir: Some(Dir::Up), dir_hold: 1.0, ..Ai::default() };
+        let mut after = Ai { sidestepped: Some((Dir::Up, Dir::Right)), ..held() };
+        let mut plain = held();
+        let bounds = (40.0 * CELL, 30.0 * CELL);
+        assert_eq!(after.steer_toward(FROM, None, below, bounds, 20.0, ctx, &grid), Dir::Right);
+        assert_eq!(plain.steer_toward(FROM, None, below, bounds, 20.0, ctx, &grid), Dir::Up);
+    }
+
+    /// One pulling away ahead faster than the tank closes nothing, and one
+    /// overtaking from behind is its own driver's to avoid.
+    #[test]
+    fn a_tank_pulling_away_or_overtaking_is_left_alone() {
+        assert_eq!(heading(Position::new(680.0, 300.0), Vec2::new(2.0 * PACE, 0.0)), Dir::Right);
+        assert_eq!(heading(Position::new(520.0, 300.0), Vec2::new(2.0 * PACE, 0.0)), Dir::Right);
     }
 }
 

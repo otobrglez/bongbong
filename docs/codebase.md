@@ -866,6 +866,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   aimed by `sapper_aim` at a chunk still in the way; a tank cut off from its target heads for the
   wall its `Sap` plan names - `Game::plan_saps`, docs/WALLS_SPEC.md §13), and the personal-space brake (`crowded_ahead`/`yield_timer`: a brake, not a sidestep;
   `enemy_yield_seconds` is load-bearing because the stuck escape only counts commanded movement).
+  **The sidestep** (`Ai::avoid_collisions`, `first_contact`): the other tank's offset runs `p + v t`
+  with `v` its velocity less this one's, and only a tank *ahead* counts - one beside or behind is
+  driving into this one and sidesteps itself. A tank standing still (under `avoid_min_speed`) is
+  looked for only `avoid_still_lookahead` ahead (further out `route_crowd_cost` bends the route
+  round it, and an early sidestep the route undoes is a dance), and a teammate standing within
+  `avoid_near_target_px` of the spot the tank heads for (the ring slot beside its own) is left to the
+  brake. The sidestep goes toward the target's side of the heading (away from the other tank with
+  the target dead ahead), and a route that turns straight back across it once it is over resumes the
+  heading it left (`Ai::sidestepped`) - the margin is blind to a reversal, and a held sidestep would
+  drive on to the next wall. Until BB-95 the relative velocity had the wrong sign: tanks sidestepped
+  what was behind them and never what they were about to hit.
   **The sight box** (docs/large-maps-follow-camera.md §5): an enemy fires at a seat only while its
   centre stands inside that seat's box, `sight_box_half_cols` x `sight_box_half_rows` cells (11.5 x
   7.5, +-368 x +-240 px, `Tuning::sight_box_half_px`), with `ai::in_sight_box` the one test

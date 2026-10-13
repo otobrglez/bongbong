@@ -2054,8 +2054,21 @@ tunables! {
         avoid_margin: f32 = 12.0 in 0.0 ..= 100.0;
         /// How long a sidestep is held once triggered.
         avoid_dodge_seconds: f32 = 0.4 in 0.0 ..= 5.0;
-        /// Skip prediction when moving slower than this (px/s).
+        /// Skip prediction when moving slower than this (px/s); another tank
+        /// slower than this counts as standing still
+        /// (`avoid_still_lookahead`).
         avoid_min_speed: f32 = 10.0 in 0.0 ..= 200.0;
+        /// How far ahead (seconds, under `avoid_lookahead`) a tank standing
+        /// still - slower than `avoid_min_speed` - is looked for: only the
+        /// one a hull is about to hit is sidestepped. Further out the
+        /// route's crowd price (`route_crowd_cost`) bends round it, and an
+        /// early sidestep the route then undoes is a dance.
+        avoid_still_lookahead: f32 = 0.3 in 0.0 ..= 5.0;
+        /// A teammate standing still within this many px of the spot a
+        /// tank is heading for is never sidestepped - the engagement slot
+        /// beside its own, most of all, which no sidestep can reach past.
+        /// The yield brake (`crowded_ahead`) pulls up short of it instead.
+        avoid_near_target_px: f32 = 128.0 in 0.0 ..= 500.0;
         /// Direction commitment: once an AI picks a cardinal heading it
         /// holds it for at least this long ...
         ai_dir_hold_seconds: f32 = 0.35 in 0.0 ..= 5.0;
