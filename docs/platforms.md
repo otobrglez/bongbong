@@ -338,6 +338,14 @@ build, so every switch would recompile them and their dependents). `.cargo/confi
   `tools/ios/Assets.xcassets` (`just ios-icon` regenerates it from the tank sheet),
   `PrivacyInfo.xcprivacy` (the required-reason APIs the binary imports - recheck with `nm -u` after
   a new dependency) and `ITSAppUsesNonExemptEncryption` false.
+- **Export compliance** (`ITSAppUsesNonExemptEncryption` false in both `tools/ios/Info.plist` and
+  `tools/macos/Info.plist`, so no build asks and App Store Connect's App Encryption Documentation
+  needs nothing): the only cryptography is the `online` feature's TLS to the room server, done by
+  rustls with `ring` rather than Apple's stack, and a game is outside EAR Category 5 Part 2 by its
+  Note 4 (items whose primary function is not information security), so whose TLS it is does not
+  matter. Revisit it if the app ever offers encryption to the player as a feature (private
+  messaging, an encrypted vault) - that, not a TLS connection, is what makes security a function of
+  the item.
 - **Linking**: `Cargo.toml` gives `sola-raylib` `nobuild` + `sdl` for `cfg(target_os = "ios")`
   (resolver 3 scopes it); `build.rs`'s `ios_link` emits `libraylib.a`, `libSDL3.a`, every framework
   from SDL's `sdl3.pc`, `OpenGLES` and `-ObjC`. Never enable `opengl_es_20` (links `-lGLESv2
