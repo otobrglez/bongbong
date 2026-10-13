@@ -227,7 +227,7 @@ use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use crate::math::Vec2;
 
-use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, SpecialSense};
+use crate::ai::{Ai, AiSnapshot, CrateSeeker, Intent, Mover, Role, SpecialSense};
 use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::{Facing, Frog, Side};
@@ -3345,6 +3345,25 @@ impl Game {
         cells
     }
 
+    /// Who holds each of `pickups` (index for index), an enemy's owner
+    /// slot or `None` (`ai::claim_crates`): every enemy heading for a crate
+    /// at its last think (`Ai::sought`), contended crates going to the
+    /// nearest by route on `grid`. The enemies are handed only the crates
+    /// no other tank holds, so one tank goes for a crate and the others
+    /// carry on. Draws no RNG; with nobody heading for a crate it costs a
+    /// query and no route.
+    fn crate_claims(&self, pickups: &[(PickupKind, Position)], grid: &Grid) -> Vec<Option<usize>> {
+        let mut seekers: Vec<CrateSeeker> = self
+            .world
+            .query::<(&Tank, &Ai)>()
+            .iter()
+            .filter(|(t, _)| !t.is_wreck())
+            .filter_map(|(t, ai)| ai.sought().map(|sought| CrateSeeker { slot: t.owner_slot(), at: t.position, sought }))
+            .collect();
+        seekers.sort_by_key(|s| s.slot);
+        crate::ai::claim_crates(pickups, &seekers, |from, to| grid.path_cost(from, to))
+    }
+
     fn pickup_phase(&mut self, f: &mut Frame) {
         let pad = tuning().pickup_collect_pad_px;
         let living_tanks: Vec<(Entity, Position, Position)> = self
@@ -4040,6 +4059,9 @@ impl Game {
             .map(|p| (p.kind, p.at()))
             .filter(|&(_, at)| !pulling || !self.in_a_pull(at))
             .collect();
+        // Who holds each of them: each tank is handed the crates no other
+        // tank holds (`crate_claims`).
+        let claims = self.crate_claims(&pickups, grid);
         // Every crate where it lies, a pull's included, and who would take
         // one: what each enemy's routes go round (`keep_off_cells`).
         let take_rules = self.take_rules();
@@ -4310,6 +4332,12 @@ impl Game {
             // shared read never aliases the exclusive borrow above. `think`
             // is handed the player this tank is fighting as "the player".
             let keep_off = Self::keep_off_cells(&take_rules, tank, &crates, &grid);
+            let slot = tank.owner_slot();
+            let pickups: std::borrow::Cow<[(PickupKind, Position)]> = if claims.iter().all(|c| c.is_none_or(|holder| holder == slot)) {
+                std::borrow::Cow::Borrowed(&pickups)
+            } else {
+                std::borrow::Cow::Owned(pickups.iter().zip(&claims).filter(|(_, c)| c.is_none_or(|holder| holder == slot)).map(|(p, _)| *p).collect())
+            };
             let intent = with_tank(&self.world, fighting.entity, |player_tank| {
                 ai.think(
                     tank,
@@ -9488,6 +9516,102 @@ cells."30,2" = { kind = "frog" }
             assert!((at.y - row.y).abs() <= OBSTACLE_GRID_SIZE * 0.5, "frame {frame}: it left its row for {at:?}");
         }
         panic!("the enemy never took the laser crate");
+    }
+
+    /// Each enemy's last action this frame, by owner slot, lowest first.
+    fn enemy_actions(game: &Game) -> Vec<(usize, Option<&'static str>)> {
+        let mut actions: Vec<(usize, Option<&'static str>)> =
+            game.world.query::<(&Tank, &Ai)>().iter().map(|(t, ai)| (t.owner_slot(), ai.snapshot().last_action)).collect();
+        actions.sort_by_key(|&(slot, _)| slot);
+        actions
+    }
+
+    /// Two enemies on shells, nothing to fight, both wanting the one
+    /// laser crate (BB-98): only one heads for it - the nearer, four cells
+    /// off against six - and the other carries on with its patrol rather
+    /// than shuttling after it; the nearer takes it.
+    #[test]
+    fn of_two_enemies_wanting_one_crate_only_the_nearer_heads_for_it() {
+        const MAP: &str = r#"
+version = 1
+tanks = 2
+cells."38,20" = { kind = "start" }
+cells."8,4" = { kind = "pickup", pickup = "laser" }
+cells."30,2" = { kind = "frog" }
+"#;
+        let mut game = game_on(MAP, 2, None);
+        let slots: Vec<usize> = enemy_actions(&game).iter().map(|&(slot, _)| slot).collect();
+        assert_eq!(slots.len(), 2);
+        // The farther one gets the lower slot, so the tie-break is no help to the nearer.
+        let (far, near) = (slots[0], slots[1]);
+        for (slot, col) in [(near, 4), (far, 14)] {
+            let entity = game.tank_entity_by_slot(slot).expect("the enemy exists");
+            with_tank_mut(&game.world, entity, |t| t.disarm());
+            game.debug_teleport(slot, map::cell_to_world(col, 4), None).expect("the enemy exists");
+        }
+        let seat = player_pos(&game);
+        assert!(map::cell_to_world(14, 4).distance_to(seat) > tuning().enemy_view_range, "nothing to fight in sight");
+        let near_entity = game.tank_entity_by_slot(near).expect("the near enemy");
+        let far_entity = game.tank_entity_by_slot(far).expect("the far enemy");
+        let mut far_sought = 0;
+        for frame in 0..600 {
+            step(&mut game, Input::default());
+            let actions = enemy_actions(&game);
+            let seeking = |slot: usize| actions.iter().any(|&(s, a)| s == slot && a == Some("seek_laser"));
+            // Before anyone has headed for the crate nobody holds it, so
+            // both may turn for it on the first think.
+            if frame > 0 {
+                assert!(!(seeking(near) && seeking(far)), "frame {frame}: both enemies head for the one crate");
+            }
+            far_sought += usize::from(seeking(far));
+            if with_tank(&game.world, near_entity, |t| t.active_weapon()) == ActiveWeapon::Laser {
+                assert!(far_sought <= 1, "the far enemy headed for the crate on {far_sought} frames");
+                assert_eq!(with_tank(&game.world, far_entity, |t| t.active_weapon()), ActiveWeapon::Shell);
+                return;
+            }
+        }
+        panic!("the near enemy never took the laser crate");
+    }
+
+    /// An enemy that wants a crate it cannot get to - ringed by iron, so no
+    /// route reaches it - heads for it, gives it up after
+    /// `enemy_crate_give_up_seconds` without a route step of headway and
+    /// carries on, passing it over until `enemy_crate_forget_seconds` are
+    /// out (BB-98).
+    #[test]
+    fn an_enemy_gives_up_a_crate_it_cannot_get_to() {
+        let mut map = String::from(
+            "version = 1\ntanks = 1\ncells.\"38,20\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"pickup\", pickup = \"laser\" }\ncells.\"30,2\" = { kind = \"frog\" }\n",
+        );
+        for c in 8..=12 {
+            for r in 8..=12 {
+                if c == 8 || c == 12 || r == 8 || r == 12 {
+                    map.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+                }
+            }
+        }
+        let mut game = game_on(&map, 1, None);
+        let (slot, _) = enemy_actions(&game)[0];
+        let entity = game.tank_entity_by_slot(slot).expect("the enemy exists");
+        with_tank_mut(&game.world, entity, |t| t.disarm());
+        game.debug_teleport(slot, map::cell_to_world(4, 4), None).expect("the enemy exists");
+        assert!(map::cell_to_world(4, 4).distance_to(player_pos(&game)) > tuning().enemy_view_range, "nothing to fight in sight");
+        let patience = (tuning().enemy_crate_give_up_seconds * 60.0) as usize;
+        let forget = (tuning().enemy_crate_forget_seconds * 60.0) as usize;
+        let mut sought = Vec::new();
+        for frame in 0..patience + forget + 120 {
+            step(&mut game, Input::default());
+            if enemy_actions(&game)[0].1 == Some("seek_laser") {
+                sought.push(frame);
+            }
+        }
+        assert_eq!(sought.first(), Some(&0), "it heads for the crate at once");
+        let gave_up = sought.iter().position(|&f| f > patience + 10).map_or(sought.len(), |i| i);
+        assert!(sought[..gave_up].windows(2).all(|w| w[1] == w[0] + 1), "it heads for the crate without a break until it gives up: {sought:?}");
+        assert!(sought[gave_up - 1] >= patience - 2, "and does not give up before its patience is out: {sought:?}");
+        let back = sought.get(gave_up).copied().expect("forgotten, it heads for the crate again");
+        assert!(back >= patience + forget - 2, "it passes the crate over while it remembers giving up: back on frame {back}");
+        assert_eq!(with_tank(&game.world, entity, |t| t.active_weapon()), ActiveWeapon::Shell, "and never got it");
     }
 
     // --- The frog health pack (docs/frog-health-pack-prd.md) ---

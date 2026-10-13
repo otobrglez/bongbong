@@ -1413,9 +1413,10 @@ the AI tiers its tank ran over the frames before):
   and taking each other's ram damage until they flee (tank-grind 2, stall
   2, low-progress 1 - the seek tiers' contention for one crate; a tank with
   no seat in its box has nothing to fight with, so it takes the seek tiers
-  where a shells tank would be attacking - a follow-up for the seek tiers,
-  §12); and tanks on shells (a hunter's chase on harbor-lights 0x3ef with
-  the crate and at night, a plasma hunter's attack on archipelago 0x3ee in
+  where a shells tank would be attacking; one tank now goes for a crate and
+  a tank that gains no route step on its crate gives it up, BB-98,
+  docs/codebase.md "AI"); and tanks on shells (a hunter's chase on
+  harbor-lights 0x3ef with the crate and at night, a plasma hunter's attack on archipelago 0x3ee in
   the mix, a shells tank's flee on towers 0x3ed with the commander) - none
   of them the swarm's.
 - **Clustering and pile-up** rise on the fields with the crate (30 and 18
@@ -1650,11 +1651,6 @@ the AI tiers its tank ran over the frames before):
 - A probe scenario in which the seat fires its special.
 - A rail drawn on the press piercing the drawn drones: the room's
   `DroneDowned` brings them down a round trip later.
-- The seek tiers contending for one crate: two tanks wanting the same
-  shield press into each other and ram each other down (harbor-lights
-  0x3f0, armed, commander on, §11) - the seek tiers' rule, not the
-  swarm's, which a swarm tank out of the seat's box reaches more often
-  than one with a gun to fight with. A follow-up.
 - **Swarm tanks knotting at the edge of the seat's box** (§11): launch
   places handed out like the engage ring's slots, inside the box and the
   sight the tank knows the seat by, ties by slot - with the special

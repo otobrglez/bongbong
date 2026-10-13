@@ -633,6 +633,70 @@ enum SpecialUse {
 pub const SEEK_SPECIALS: [PickupKind; 6] =
     [PickupKind::SonicHammer, PickupKind::Emp, PickupKind::GaussRail, PickupKind::FpvSwarm, PickupKind::RodFromGod, PickupKind::GravityWell];
 
+/// How near a crate lies to where a tank remembers one (the crate it
+/// headed for, one it gave up on) to be that crate: half a cell. Crates
+/// stand on fixed map slots, and a spilled one drifts far less than this
+/// between two thinks.
+const SAME_CRATE_PX: f32 = OBSTACLE_GRID_SIZE * 0.5;
+
+/// How many crates a tank remembers giving up on at once (`Ai::forsaken`);
+/// a fifth takes the place of the one nearest being forgotten.
+const FORSAKEN_KEPT: usize = 4;
+
+/// A tank heading for a crate, as `claim_crates` reads it: its owner slot,
+/// where it stands, and the crate it headed for at its last think
+/// (`Ai::sought`: kind, where it lies).
+#[derive(Clone, Copy, Debug)]
+pub struct CrateSeeker {
+    pub slot: usize,
+    pub at: Position,
+    pub sought: (PickupKind, Position),
+}
+
+/// Who holds each of `pickups` (index for index), the owner slot or
+/// `None`: one tank goes for a crate and every other one leaves it alone
+/// (`Game::crate_claims` hands each tank the crates no other tank holds).
+/// A crate is held by the tank that headed for it at its last think
+/// (`seekers`); of two or more that did, the nearest by route
+/// (`route_steps`, `Grid::path_cost` in play; `None` is no route, after
+/// every route) and, at the same cost, the lower slot. A crate held is
+/// seen by its holder alone, so no other tank heads for it until the
+/// holder stops - takes it, gives it up (`Ai::track_crate_run`) or is
+/// called away - and only tanks that turned for it on the same think ever
+/// contend: the claim cannot flip between two tanks. No RNG, and nothing
+/// is routed unless a crate is contended.
+pub fn claim_crates(
+    pickups: &[(PickupKind, Position)],
+    seekers: &[CrateSeeker],
+    mut route_steps: impl FnMut(Position, Position) -> Option<u32>,
+) -> Vec<Option<usize>> {
+    let mut claims: Vec<Option<usize>> = vec![None; pickups.len()];
+    // (crate, seeker) for every seeker whose crate still lies there.
+    let mut heading: Vec<(usize, &CrateSeeker)> = seekers
+        .iter()
+        .filter_map(|s| {
+            let (kind, at) = s.sought;
+            pickups.iter().position(|&(k, p)| k == kind && p.distance_to(at) <= SAME_CRATE_PX).map(|i| (i, s))
+        })
+        .collect();
+    heading.sort_by_key(|&(i, s)| (i, s.slot));
+    for group in heading.chunk_by(|a, b| a.0 == b.0) {
+        let crate_at = pickups[group[0].0].1;
+        let holder = if group.len() == 1 {
+            group[0].1.slot
+        } else {
+            group
+                .iter()
+                .map(|&(_, s)| (route_steps(s.at, crate_at).unwrap_or(u32::MAX), s.slot))
+                .min()
+                .map(|(_, slot)| slot)
+                .expect("a group is never empty")
+        };
+        claims[group[0].0] = Some(holder);
+    }
+    claims
+}
+
 /// Whether the tree's generic tiers - attack, snipe, grudge, breach - may
 /// pull the trigger on `weapon`: false for a special whose own rule owns
 /// it (`special_rule`).
@@ -957,6 +1021,26 @@ pub struct Ai {
     /// The plan its well's senses handed it this tick (`WellSense::plan`).
     /// Inspection only.
     well_plan: Option<WellPlan>,
+    /// The crate it headed for at its last think - kind and where it lies -
+    /// `None` when it headed for none: what its claim on that crate is
+    /// read from (`claim_crates`).
+    sought: Option<(PickupKind, Position)>,
+    /// Its run at the crate it heads for (`Ai::track_crate_run`).
+    crate_run: Option<CrateRun>,
+    /// The crates it gave up on (`Ai::track_crate_run`): where each lies
+    /// and the seconds before it is worth heading for again. Its seeks
+    /// pass them over (`Brain::seek`, `Brain::nearest_pickup`).
+    forsaken: [Option<(Position, f32)>; FORSAKEN_KEPT],
+}
+
+/// A tank's run at a crate (`Ai::track_crate_run`): where the crate lies,
+/// the fewest route steps it has had left to it (`Grid::path_cost`), and the
+/// seconds since that last fell.
+#[derive(Clone, Copy, Debug)]
+struct CrateRun {
+    at: Position,
+    best: u32,
+    since: f32,
 }
 
 /// The memory a tank carries only on a field map
@@ -1117,6 +1201,9 @@ impl Default for Ai {
             pull_why: None,
             well_anchor_px: 0.0,
             well_plan: None,
+            sought: None,
+            crate_run: None,
+            forsaken: [None; FORSAKEN_KEPT],
         }
     }
 }
@@ -1163,8 +1250,9 @@ impl Ai {
     /// at the same spot and pile them up. `None` when this tank is the only
     /// one engaged (or the player is dead) - nothing to spread out from, so
     /// those fall back to the raw player position.
-    /// `pickups` is every currently-live health/ammo pickup on the
-    /// battlefield this frame (kind + position) - see `Brain::nearest_pickup`,
+    /// `pickups` is every currently-live pickup on the battlefield this
+    /// frame (kind + position) but those another tank holds
+    /// (`claim_crates`) - see `Brain::seek` and `Brain::nearest_pickup`,
     /// used by `act_flee`/`act_retreat` so a hurting or ammo-starved tank
     /// heads for a pickup instead of just running blind.
     /// `keep_off` is the nav cells under the crates this tank would leave
@@ -1242,6 +1330,15 @@ impl Ai {
         }
         self.snipe_cooldown = (self.snipe_cooldown - dt).max(0.0);
         self.shot_at_seat = None;
+        self.sought = None;
+        for kept in &mut self.forsaken {
+            if let Some((_, left)) = kept {
+                *left -= dt;
+                if *left <= 0.0 {
+                    *kept = None;
+                }
+            }
+        }
         if let Some(grudge) = &mut self.grudge {
             grudge.timer -= dt;
             if grudge.timer <= 0.0 {
@@ -1353,6 +1450,7 @@ impl Ai {
         let mut last_action = None;
         build().tick_traced(&mut bb, &mut last_action);
         let mut intent = bb.intent;
+        self.track_crate_run(me.position, grid, dt);
         // A refuge is the backing-away tiers' own; any other tier lets it go.
         if !matches!(last_action, Some("flee" | "retreat")) {
             self.refuge = None;
@@ -1549,6 +1647,56 @@ impl Ai {
     /// breach evidence and a latched breach, the aim - and what is about
     /// the fight (role, alerts, target, fire timer, retreat, escapes) is
     /// kept. Its clocks were frozen meanwhile, not paid back.
+    /// The crate it headed for at its last think, kind and where it lies
+    /// (`claim_crates`).
+    pub(crate) fn sought(&self) -> Option<(PickupKind, Position)> {
+        self.sought
+    }
+
+    /// Gives up on a crate it makes no headway to: two tanks that both
+    /// want the one crate no longer shuttle round it for half a minute,
+    /// whoever holds it (`claim_crates`), and a tank whose way to a crate is
+    /// jammed leaves it. While it heads for a crate (`sought`) it keeps the
+    /// fewest route steps it has had left to it (`Grid::path_cost` on this
+    /// frame's grid) and the seconds since that last fell; no route at all
+    /// is no headway. Past `enemy_crate_give_up_seconds` without, the crate
+    /// is forsaken for `enemy_crate_forget_seconds` - its seeks pass it
+    /// over and its claim lapses - and it carries on with whatever the
+    /// tree finds next. Heading for no crate ends the run; 0 seconds never
+    /// gives up. No RNG.
+    fn track_crate_run(&mut self, me: Position, grid: &Grid, dt: f32) {
+        let patience = tuning().enemy_crate_give_up_seconds;
+        let Some((_, at)) = self.sought.filter(|_| patience > 0.0) else {
+            self.crate_run = None;
+            return;
+        };
+        let left = grid.path_cost(me, at).unwrap_or(u32::MAX);
+        let mut run = match self.crate_run {
+            Some(run) if run.at.distance_to(at) <= SAME_CRATE_PX => run,
+            _ => CrateRun { at, best: u32::MAX, since: 0.0 },
+        };
+        if left < run.best {
+            run.best = left;
+            run.since = 0.0;
+        } else {
+            run.since += dt;
+        }
+        if run.since >= patience {
+            let kept = self.forsaken.iter_mut().min_by(|a, b| a.map_or(0.0, |(_, t)| t).total_cmp(&b.map_or(0.0, |(_, t)| t)));
+            *kept.expect("FORSAKEN_KEPT is not 0") = Some((at, tuning().enemy_crate_forget_seconds));
+            self.sought = None;
+            self.crate_run = None;
+        } else {
+            self.crate_run = Some(run);
+        }
+    }
+
+    /// Whether the crate lying at `at` is one it gave up on and has not
+    /// forgotten (`track_crate_run`).
+    fn forsakes(&self, at: Position) -> bool {
+        self.forsaken.iter().flatten().any(|&(p, _)| p.distance_to(at) <= SAME_CRATE_PX)
+    }
+
     pub(crate) fn reboot(&mut self) {
         self.down = false;
         self.committed_dir = None;
@@ -2519,8 +2667,8 @@ struct Brain<'a> {
     /// tank is the only one currently engaged (or the player's dead), in
     /// which case `engage_point` falls back to the raw player position.
     engage_target: Option<Position>,
-    /// Every currently-live pickup on the battlefield - see `think`'s
-    /// `pickups` parameter and `nearest_pickup`.
+    /// Every currently-live pickup on the battlefield no other tank
+    /// holds - see `think`'s `pickups` parameter and `nearest_pickup`.
     pickups: &'a [(PickupKind, Position)],
     /// The cells under the crates this tank would leave lying - see
     /// `think`'s `keep_off` parameter.
@@ -2756,21 +2904,33 @@ impl Brain<'_> {
     /// only those inside the home leash on a field map
     /// (`home_leash`), so a tank with nothing to fight never crosses the
     /// map for one.
-    /// A pickup inside a danger (`Danger`) is not worth it.
+    /// A pickup inside a danger (`Danger`) is not worth it, nor one it
+    /// gave up on (`Ai::forsakes`); one another tank holds is not in
+    /// `pickups` at all (`claim_crates`).
     fn seek(&self, kind: PickupKind) -> Option<Position> {
         let leash = self.home_leash();
         self.pickups
             .iter()
-            .filter(|&&(k, at)| k == kind && leash.is_none_or(|l| at.distance_to(l.anchor) <= l.radius) && !self.in_danger(at))
+            .filter(|&&(k, at)| {
+                k == kind && leash.is_none_or(|l| at.distance_to(l.anchor) <= l.radius) && !self.in_danger(at) && !self.ai.forsakes(at)
+            })
             .map(|&(_, at)| at)
             .min_by(|&a, &b| self.me.position.distance_to(a).total_cmp(&self.me.position.distance_to(b)))
     }
 
-    /// The nearest BB-36 weapon crate worth the detour: the first kind of
-    /// `SEEK_SPECIALS` this tank would take (`Tank::wants_pickup`) with one
-    /// in reach (`seek`).
-    fn seek_special(&self) -> Option<Position> {
-        SEEK_SPECIALS.into_iter().filter(|&k| self.me.wants_pickup(k)).find_map(|k| self.seek(k))
+    /// The nearest BB-36 weapon crate worth the detour, kind and where it
+    /// lies: the first kind of `SEEK_SPECIALS` this tank would take
+    /// (`Tank::wants_pickup`) with one in reach (`seek`).
+    fn seek_special(&self) -> Option<(PickupKind, Position)> {
+        SEEK_SPECIALS.into_iter().filter(|&k| self.me.wants_pickup(k)).find_map(|k| self.seek(k).map(|at| (k, at)))
+    }
+
+    /// Drive for the crate of `kind` lying at `at`, and remember it as the
+    /// one headed for (`Ai::sought`): what the claim on it is read from
+    /// and what `Ai::track_crate_run` measures.
+    fn head_for_crate(&mut self, kind: PickupKind, at: Position) {
+        self.intent.move_dir = Some(self.steer(at));
+        self.ai.sought = Some((kind, at));
     }
 
     /// Whether a guard should hold its beat rather than fight: the player
@@ -2919,11 +3079,13 @@ impl Brain<'_> {
     /// PICKUP_RESPAWN_SECONDS), in which case those callers fall back to
     /// their old player-relative behavior. A pickup inside a danger
     /// (`Danger`) is none: the dodge tier would only drive the tank back
-    /// out of it, its heading committed away, to come round again.
+    /// out of it, its heading committed away, to come round again. Nor is
+    /// one it gave up on (`Ai::forsakes`), or one another tank holds
+    /// (`claim_crates`: not in `pickups`).
     fn nearest_pickup(&self, kind: PickupKind) -> Option<Position> {
         self.pickups
             .iter()
-            .filter(|(k, at)| *k == kind && !self.in_danger(*at))
+            .filter(|(k, at)| *k == kind && !self.in_danger(*at) && !self.ai.forsakes(*at))
             .map(|&(_, pos)| pos)
             .min_by(|&a, &b| {
                 self.me
@@ -3508,7 +3670,7 @@ fn build<'a>() -> Node<Brain<'a>> {
 fn act_flee(b: &mut Brain) -> Status {
     b.reset_aim();
     if let Some(target) = b.nearest_pickup(PickupKind::Health) {
-        b.intent.move_dir = Some(b.steer(target));
+        b.head_for_crate(PickupKind::Health, target);
         return Status::Success;
     }
     b.back_away();
@@ -3528,7 +3690,7 @@ fn act_flee(b: &mut Brain) -> Status {
 fn act_retreat(b: &mut Brain) -> Status {
     b.reset_aim();
     if let Some(target) = b.nearest_pickup(PickupKind::Ammo) {
-        b.intent.move_dir = Some(b.steer(target));
+        b.head_for_crate(PickupKind::Ammo, target);
         return Status::Success;
     }
     if b.dist_to_player() >= tuning().enemy_retreat_range() {
@@ -3551,7 +3713,7 @@ fn act_seek_laser(b: &mut Brain) -> Status {
     let Some(target) = b.seek(PickupKind::Laser) else {
         return Status::Failure;
     };
-    b.intent.move_dir = Some(b.steer(target));
+    b.head_for_crate(PickupKind::Laser, target);
     Status::Success
 }
 
@@ -3562,7 +3724,7 @@ fn act_seek_plasma(b: &mut Brain) -> Status {
     let Some(target) = b.seek(PickupKind::Plasma) else {
         return Status::Failure;
     };
-    b.intent.move_dir = Some(b.steer(target));
+    b.head_for_crate(PickupKind::Plasma, target);
     Status::Success
 }
 
@@ -3573,7 +3735,7 @@ fn act_seek_missiles(b: &mut Brain) -> Status {
     let Some(target) = b.seek(PickupKind::Missiles) else {
         return Status::Failure;
     };
-    b.intent.move_dir = Some(b.steer(target));
+    b.head_for_crate(PickupKind::Missiles, target);
     Status::Success
 }
 
@@ -3584,7 +3746,7 @@ fn act_seek_minigun(b: &mut Brain) -> Status {
     let Some(target) = b.seek(PickupKind::Minigun) else {
         return Status::Failure;
     };
-    b.intent.move_dir = Some(b.steer(target));
+    b.head_for_crate(PickupKind::Minigun, target);
     Status::Success
 }
 
@@ -3592,10 +3754,10 @@ fn act_seek_minigun(b: &mut Brain) -> Status {
 /// 5.75 (`build`).
 fn act_seek_special(b: &mut Brain) -> Status {
     b.reset_aim();
-    let Some(target) = b.seek_special() else {
+    let Some((kind, target)) = b.seek_special() else {
         return Status::Failure;
     };
-    b.intent.move_dir = Some(b.steer(target));
+    b.head_for_crate(kind, target);
     Status::Success
 }
 
@@ -4377,7 +4539,7 @@ fn act_seek_speedup(b: &mut Brain) -> Status {
     let Some(target) = b.seek(PickupKind::SpeedUp) else {
         return Status::Failure;
     };
-    b.intent.move_dir = Some(b.steer(target));
+    b.head_for_crate(PickupKind::SpeedUp, target);
     Status::Success
 }
 
@@ -4388,7 +4550,7 @@ fn act_seek_shield(b: &mut Brain) -> Status {
     let Some(target) = b.seek(PickupKind::Shield) else {
         return Status::Failure;
     };
-    b.intent.move_dir = Some(b.steer(target));
+    b.head_for_crate(PickupKind::Shield, target);
     Status::Success
 }
 
@@ -5727,5 +5889,164 @@ mod emp_rule_tests {
         let from_middle = d.exits(Position::new(0.0, 0.0), 10.0, Position::new(0.0, 40.0), Dir::Up);
         assert!(from_middle[0].distance_to(Position::new(0.0, 110.0)) < 1e-3, "out on the tank's side");
         assert_eq!(d.posts(10.0), Dir::ALL.map(|dir| Position::new(dir.vec().x * 110.0, dir.vec().y * 110.0)));
+    }
+}
+
+#[cfg(test)]
+mod crate_claim_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    const W: f32 = 1280.0;
+    const H: f32 = 720.0;
+
+    /// An open field but for a wall down column 19 (x 608), open only in
+    /// its top three rows.
+    fn walled() -> Grid {
+        Grid::build(W, H, 32.0, 0.0, (3..23).map(|row| (Position::new(608.0, row as f32 * 32.0 + 16.0), 16.0)))
+    }
+
+    fn seeker(slot: usize, at: Position, sought: (PickupKind, Position)) -> CrateSeeker {
+        CrateSeeker { slot, at, sought }
+    }
+
+    /// The one tank heading for a crate holds it, and nothing is routed
+    /// for it; a crate nobody heads for is held by none; a tank whose crate
+    /// is gone, or that remembers a crate of another kind there, holds
+    /// nothing.
+    #[test]
+    fn a_lone_seeker_holds_its_crate_without_a_route() {
+        let laser = Position::new(400.0, 200.0);
+        let shield = Position::new(800.0, 200.0);
+        let pickups = [(PickupKind::Laser, laser), (PickupKind::Shield, shield)];
+        let no_route = |_: Position, _: Position| -> Option<u32> { panic!("an uncontended crate is never routed") };
+        let claims = claim_crates(&pickups, &[seeker(3, Position::new(100.0, 100.0), (PickupKind::Laser, laser))], no_route);
+        assert_eq!(claims, vec![Some(3), None]);
+        let gone = (PickupKind::Laser, Position::new(1000.0, 600.0));
+        let other_kind = (PickupKind::Plasma, shield);
+        assert_eq!(claim_crates(&pickups, &[seeker(2, laser, gone), seeker(4, laser, other_kind)], no_route), vec![None, None]);
+        assert_eq!(claim_crates(&pickups, &[], no_route), vec![None, None]);
+    }
+
+    /// Two tanks that turned for the same crate on the same think: the
+    /// nearer by route takes it, though the other stands nearer as the
+    /// crow flies behind a wall; at the same route cost the lower slot
+    /// does, whichever order they come in.
+    #[test]
+    fn of_two_seekers_the_nearer_by_route_holds_the_crate() {
+        let grid = walled();
+        let crate_at = Position::new(704.0, 400.0);
+        let behind_wall = Position::new(560.0, 400.0);
+        let open_side = Position::new(912.0, 400.0);
+        assert!(crate_at.distance_to(behind_wall) < crate_at.distance_to(open_side), "the case this is about");
+        let pickups = [(PickupKind::Shield, Position::new(100.0, 100.0)), (PickupKind::Shield, crate_at)];
+        let sought = (PickupKind::Shield, crate_at);
+        let route = |from: Position, to: Position| grid.path_cost(from, to);
+        let claims = claim_crates(&pickups, &[seeker(1, behind_wall, sought), seeker(2, open_side, sought)], route);
+        assert_eq!(claims, vec![None, Some(2)], "the one with the open way holds it");
+
+        let open = Grid::build(W, H, 32.0, 0.0, std::iter::empty());
+        let route = |from: Position, to: Position| open.path_cost(from, to);
+        let left = Position::new(crate_at.x - 128.0, 640.0);
+        let right = Position::new(crate_at.x + 128.0, 640.0);
+        assert_eq!(open.path_cost(left, crate_at), open.path_cost(right, crate_at), "the same route cost");
+        for seekers in [[seeker(5, left, sought), seeker(2, right, sought)], [seeker(2, right, sought), seeker(5, left, sought)]] {
+            assert_eq!(claim_crates(&pickups, &seekers, route), vec![None, Some(2)], "ties go to the lower slot");
+        }
+    }
+
+    /// One think of a tank with nothing to fight standing at `me`, the
+    /// seat far off, a laser crate at `laser`, on `grid`.
+    fn think(ai: &mut Ai, grid: &Grid, me: Position, laser: Position, dt: f32) -> Option<&'static str> {
+        let mut tank = Tank::default();
+        tank.position = me;
+        let seat_at = Position::new(40.0, 40.0);
+        let mut seat = Tank::default();
+        seat.position = seat_at;
+        let movers = [
+            Mover { position: seat_at, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(
+            &tank,
+            &seat,
+            seat_at,
+            None,
+            W,
+            H,
+            dt,
+            &movers,
+            1,
+            grid,
+            &mut rng,
+            None,
+            None,
+            &[(PickupKind::Laser, laser)],
+            &[],
+            false,
+            false,
+            true,
+            [None; 4],
+            0.0,
+            &SpecialSense::None,
+            &[],
+        );
+        ai.snapshot().last_action
+    }
+
+    /// A tank heading for a crate it makes no headway to - here walled in,
+    /// so no route reaches it - gives it up after
+    /// `enemy_crate_give_up_seconds`, passes it over for
+    /// `enemy_crate_forget_seconds` and then heads for it again. One that
+    /// gains route steps keeps going.
+    #[test]
+    fn a_tank_that_gets_no_nearer_its_crate_gives_it_up_for_a_while() {
+        let laser = Position::new(704.0, 368.0);
+        // Eight blocks round the crate, touching: a closed ring.
+        let ring = (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (dx, dy))).filter(|&d| d != (0, 0));
+        let boxed = Grid::build(
+            W,
+            H,
+            32.0,
+            0.0,
+            ring.map(|(dx, dy)| (Position::new(laser.x + 16.0 + dx as f32 * 64.0, laser.y + 16.0 + dy as f32 * 64.0), 40.0)),
+        );
+        assert_eq!(boxed.path_cost(Position::new(200.0, 600.0), laser), None, "the case this is about");
+        let me = Position::new(200.0, 600.0);
+        let dt = 0.1;
+        let patience = tuning().enemy_crate_give_up_seconds;
+        let forget = tuning().enemy_crate_forget_seconds;
+        assert!(patience > 0.0, "giving up is on by default");
+        let mut ai = Ai::with_role(Role::Player);
+        let mut t = 0.0;
+        while t + dt < patience - 1e-3 {
+            assert_eq!(think(&mut ai, &boxed, me, laser, dt), Some("seek_laser"), "{t:.1} s in it still heads for the crate");
+            assert_eq!(ai.sought(), Some((PickupKind::Laser, laser)));
+            t += dt;
+        }
+        for _ in 0..2 {
+            think(&mut ai, &boxed, me, laser, dt);
+        }
+        assert_eq!(ai.sought(), None, "given up, it holds no claim");
+        assert_ne!(think(&mut ai, &boxed, me, laser, dt), Some("seek_laser"), "and passes the crate over");
+        let mut waited = 2.0 * dt;
+        while waited < forget - dt {
+            assert_ne!(think(&mut ai, &boxed, me, laser, dt), Some("seek_laser"), "{waited:.1} s after giving up");
+            waited += dt;
+        }
+        for _ in 0..3 {
+            think(&mut ai, &boxed, me, laser, dt);
+        }
+        assert_eq!(think(&mut ai, &boxed, me, laser, dt), Some("seek_laser"), "forgotten, it heads for it again");
+
+        // In the open, a step nearer each think: it never gives up.
+        let open = Grid::build(W, H, 32.0, 0.0, std::iter::empty());
+        let mut ai = Ai::with_role(Role::Player);
+        let mut at = Position::new(64.0, 368.0);
+        for _ in 0..((2.0 * patience / dt) as usize).min(19) {
+            assert_eq!(think(&mut ai, &open, at, laser, dt), Some("seek_laser"));
+            at.x += 32.0;
+        }
     }
 }

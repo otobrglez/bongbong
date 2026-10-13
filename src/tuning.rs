@@ -1952,6 +1952,15 @@ tunables! {
         /// wall - a crate in the only gap is still driven over. 0 switches
         /// it off.
         route_crate_cost: usize = 2 in 0 ..= 64;
+        /// Seconds an enemy heads for a crate without getting a route step
+        /// nearer it before it gives the crate up (`Ai::track_crate_run`) -
+        /// jammed in a lane, or circling a crate it cannot reach - and
+        /// carries on. Long enough for a detour round a wall, which loses no
+        /// route steps; 0 never gives up.
+        enemy_crate_give_up_seconds: f32 = 4.0 in 0.0 ..= 60.0;
+        /// Seconds an enemy passes over a crate it gave up on before it is
+        /// worth heading for again.
+        enemy_crate_forget_seconds: f32 = 12.0 in 0.0 ..= 120.0;
         /// Stop and fight within this distance (px). The engagement ring and
         /// retreat range are factors of this - see the `engage` group.
         enemy_attack_range: f32 = 340.0 in 50.0 ..= 2000.0;
