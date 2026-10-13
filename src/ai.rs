@@ -801,6 +801,12 @@ pub struct Ai {
     /// straight back leaves open to it (`steer_toward`). Cleared with
     /// every new heading.
     passed_turning: bool,
+    /// The heading held is the one the hull turned to fire along
+    /// (`Brain::hold_and_fire`), not one steering chose to drive: the next
+    /// steer, out of the tier that fired, takes a route turning straight
+    /// back over it (`steer_toward`). Cleared by that steer, by the attack
+    /// tier's own repositioning (`act_attack`) and with every new heading.
+    aimed: bool,
     /// How long the tank has been lined up on the player's firing axis. It must
     /// stay aligned for ENEMY_AIM_SETTLE before it actually shoots.
     aim_settle: f32,
@@ -1179,6 +1185,7 @@ impl Default for Ai {
             committed_dir: None,
             dir_hold: 0.0,
             passed_turning: false,
+            aimed: false,
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
@@ -2161,6 +2168,14 @@ impl Ai {
                 self.sidestepped = None;
             }
         }
+        // A heading held to fire along, and the route turning straight
+        // back: take the route's, held afresh. The margin below is blind
+        // to a reversal, and the heading faces what the tank fought - a
+        // tank leaving the fight would drive on at it, into whoever stands
+        // in its lane, until a wall or the stuck escape turned it.
+        if std::mem::take(&mut self.aimed) && self.committed_dir == Some(opposite(fresh)) {
+            self.commit(fresh);
+        }
         // The route as lanes, against the heading held: `Some` while it
         // walks whole cells from the hull's own (see `lane_turn`).
         let lane = match (self.committed_dir, route) {
@@ -2553,6 +2568,7 @@ impl Ai {
             self.committed_dir = Some(dir);
             self.dir_hold = 0.0;
             self.passed_turning = false;
+            self.aimed = false;
         }
     }
 }
@@ -3368,8 +3384,11 @@ impl Brain<'_> {
     fn hold_and_fire(&mut self, fire_dir: Dir, range: f32, at_seat: Option<u8>) {
         self.ai.aim_settle += self.dt;
         self.intent.face = Some(fire_dir);
-        // Keep the committed heading in sync so leaving Attack doesn't snap.
+        // Keep the committed heading in sync so leaving the tier turns from
+        // the way the hull faces - marked as aimed rather than driven
+        // (`Ai::aimed`), so a route straight back is taken, not held.
         self.ai.commit(fire_dir);
+        self.ai.aimed = true;
         // A special whose rule owns the trigger is never fired here: the
         // tank lines up and holds, no more, and spends neither its fire
         // timer nor a roll on it.
@@ -4734,6 +4753,11 @@ fn act_attack(b: &mut Brain) -> Status {
         // group of attackers spreads out instead of piling onto the same
         // point - see `Brain::engage_point`.
         b.reset_aim();
+        // Moving about the fight it holds the heading it aimed along as
+        // any other (`Ai::aimed` is for a tank leaving the fight): a tank
+        // lined up one tick and not the next would turn its hull end for
+        // end each time.
+        b.ai.aimed = false;
         let raw = b.engage_target.unwrap_or(b.target);
         let to = b.engage_point();
         if to != raw && b.me.position.distance_to(to) <= OBSTACLE_GRID_SIZE * 0.5 {
@@ -5650,6 +5674,83 @@ mod away_tests {
         assert_eq!(ai.last_action, Some("retreat"));
         assert_ne!(ai.committed_dir, Some(Dir::Left), "still heading into the seat");
         assert_ne!(intent.move_dir, Some(Dir::Left));
+    }
+}
+
+#[cfg(test)]
+mod aimed_tests {
+    use super::*;
+    use crate::PATHFIND_CELL_SIZE as CELL;
+    use rand::SeedableRng;
+
+    fn at(col: usize, row: usize) -> Position {
+        Position::new((col as f32 + 0.5) * CELL, (row as f32 + 0.5) * CELL)
+    }
+
+    /// One `think` tick for an enemy at cell (20, 10) on a 40 x 30 field
+    /// walled along row 11 from the west edge to column 30, the seat at
+    /// `seat` in its line of sight: south of the wall, the way to the seat
+    /// starts east, round the wall's end.
+    fn tick(ai: &mut Ai, seat: Position) -> Intent {
+        let me = at(20, 10);
+        let mut me_tank = Tank::default();
+        me_tank.position = me;
+        let mut player = Tank::default();
+        player.position = seat;
+        let walls: Vec<(Position, f32)> = (0..=30).map(|c| (at(c, 11), CELL / 2.0)).collect();
+        let (width, height) = (40.0 * CELL, 30.0 * CELL);
+        let grid = Grid::build(width, height, CELL, 0.0, walls.into_iter());
+        let movers = [
+            Mover { position: seat, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(
+            &me_tank,
+            &player,
+            seat,
+            None,
+            width,
+            height,
+            1.0 / 60.0,
+            &movers,
+            1,
+            &grid,
+            &mut rng,
+            None,
+            None,
+            &[],
+            &[],
+            true,
+            true,
+            false,
+            [None; 4],
+            tuning().enemy_view_range,
+            &SpecialSense::None,
+            &[],
+        )
+    }
+
+    /// A tank lined up on the seat down its row holds facing it to fire;
+    /// once the seat is out of its reach beyond the wall, the chase takes
+    /// the route east at once, though the heading it fired along is held
+    /// long past the hold and points the other way. A heading steering
+    /// chose would drive on west, blind to the reversal, into whatever
+    /// stood in its lane.
+    #[test]
+    fn a_tank_leaving_the_fight_takes_the_route_straight_back_from_the_heading_it_fired_along() {
+        let mut ai = Ai::default();
+        tick(&mut ai, at(10, 10));
+        assert_eq!((ai.last_action, ai.committed_dir, ai.aimed), (Some("attack"), Some(Dir::Left), true), "lined up and holding");
+        ai.dir_hold = 4.0;
+        let beyond = at(10, 14);
+        assert!(at(20, 10).distance_to(beyond) > tuning().enemy_attack_range, "out of its reach");
+        let intent = tick(&mut ai, beyond);
+        assert_eq!((ai.last_action, intent.move_dir), (Some("chase"), Some(Dir::Right)), "off round the wall's end");
+        // The same heading chosen by steering rather than aimed holds.
+        let mut ai = Ai { committed_dir: Some(Dir::Left), dir_hold: 4.0, ..Ai::default() };
+        let intent = tick(&mut ai, beyond);
+        assert_eq!((ai.last_action, intent.move_dir), (Some("chase"), Some(Dir::Left)));
     }
 }
 
