@@ -809,6 +809,17 @@ pub struct Ai {
     /// tank that gets shot from outside its normal awareness range still
     /// fights back instead of obliviously continuing to patrol/wander.
     hit_alert_timer: f32,
+    /// The seat it fights was in sight at the last `think`: within its
+    /// sight by `sees` and not hidden from it. Never set for a hunter's
+    /// frog, which is no seat. The latch `sees` holds past the edge of its
+    /// sight, which `build`'s chase tier and the engagement ring
+    /// (`simulation::engage_status`) read.
+    in_sight: bool,
+    /// Seconds left of the search after `in_sight` last fell
+    /// (`enemy_lost_seconds`); zero while the seat is in sight. While it
+    /// runs and there is an alert to follow, `build`'s search tier runs
+    /// ahead of the crate tiers (`Brain::searching`).
+    lost_timer: f32,
     /// True while `wander`'s last waypoint resample came up completely
     /// empty-handed - every candidate it rolled was unreachable, so the
     /// waypoint it settled on is a known-unreachable fallback. While set,
@@ -1012,6 +1023,10 @@ pub struct AiSnapshot {
     pub retreating: bool,
     pub stuck_timer: f32,
     pub hit_alert_timer: f32,
+    /// `Ai::in_sight`.
+    pub in_sight: bool,
+    /// `Ai::lost_timer`.
+    pub lost_timer: f32,
     pub aim_settle: f32,
     pub fire_timer: f32,
     pub wander_pocketed: bool,
@@ -1082,6 +1097,8 @@ impl Default for Ai {
             progress_avg: None,
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
+            in_sight: false,
+            lost_timer: 0.0,
             wander_pocketed: false,
             refuge: None,
             sheltering: false,
@@ -1127,6 +1144,13 @@ impl Ai {
     #[cfg(test)]
     pub(crate) fn set_fire_timer(&mut self, seconds: f32) {
         self.fire_timer = seconds;
+    }
+
+    /// Sets the latch `think` keeps on the seat it fights, for a test of a
+    /// reader of `sees`.
+    #[cfg(test)]
+    pub(crate) fn set_in_sight(&mut self, in_sight: bool) {
+        self.in_sight = in_sight;
     }
 
     /// A fresh memory for an enemy spawning with `role`.
@@ -1202,7 +1226,8 @@ impl Ai {
     /// decide to shoot it down - see `Brain::wants_breach`.
     /// `sight` is how far this tank sees (px): `enemy_view_range` under the
     /// round's sky (`Game::enemy_sight`, docs/weather.md) - the range it
-    /// chases from, and a cap on the range it attacks and snipes from.
+    /// chases from (held `enemy_sight_hold_px` past once chasing,
+    /// `Ai::sees`), and a cap on the range it attacks and snipes from.
     /// `sense` is what the simulation measured for the special this tank
     /// carries (`SpecialSense`), for that weapon's rule (`special_rule`).
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
@@ -1324,6 +1349,20 @@ impl Ai {
         };
         self.sheltering = false;
         self.near_fight = me.position.distance_to(target) <= tuning().enemy_attack_range;
+        // A seat lost in cover is lost: the hold past its sight is only
+        // for one it can see. Losing it starts the search. The hold is a
+        // seat's alone: a hunter's frog is chased from anywhere, and the
+        // seat a hunter turns to between frogs is seen afresh.
+        let had_in_sight = self.in_sight;
+        let on_frog = self.role == Role::Hunter && frog_target.is_some();
+        self.in_sight = !on_frog && !target_concealed && self.sees(me.position.distance_to(target), sight);
+        self.lost_timer = if self.in_sight {
+            0.0
+        } else if had_in_sight {
+            tuning().enemy_lost_seconds
+        } else {
+            (self.lost_timer - dt).max(0.0)
+        };
         let mut bb = Brain {
             me,
             player,
@@ -1435,6 +1474,8 @@ impl Ai {
             retreating: self.retreating,
             stuck_timer: self.stuck_timer,
             hit_alert_timer: self.hit_alert_timer,
+            in_sight: self.in_sight,
+            lost_timer: self.lost_timer,
             aim_settle: self.aim_settle,
             fire_timer: self.fire_timer,
             wander_pocketed: self.wander_pocketed,
@@ -1482,8 +1523,18 @@ impl Ai {
     }
 
     /// Point this tank at the other player (`enemy_phase`'s retarget pass).
+    /// The seat it had in sight is not the one it turns to.
     pub(crate) fn set_target_player(&mut self, player: u8) {
         self.target_player = player;
+        self.in_sight = false;
+        self.lost_timer = 0.0;
+    }
+
+    /// Whether a seat `dist` px off is within its `sight`: up to `sight`,
+    /// or `enemy_sight_hold_px` past it while the seat it fights is still
+    /// `in_sight` from the last `think`.
+    pub(crate) fn sees(&self, dist: f32, sight: f32) -> bool {
+        dist <= sight || (self.in_sight && dist <= sight + tuning().enemy_sight_hold_px)
     }
 
     /// Called from `simulation.rs`'s shell-hit resolution whenever a shell
@@ -2532,7 +2583,7 @@ struct Brain<'a> {
     /// `player_line_of_sight` parameter.
     player_line_of_sight: bool,
     /// Whether the target is hidden from *this* tank by tall grass
-    /// (`Terrain::conceals` plus `grass_reveal_range`). Separate from
+    /// (`Terrain::conceals`, unless it was just hit). Separate from
     /// `line_of_sight` on purpose: that one also counts walls, and a tank
     /// that stopped chasing whenever a wall came between it and the player
     /// would never path around anything. This one only ever means "lost in
@@ -2724,6 +2775,13 @@ impl Brain<'_> {
     /// `target` is the player's frog rather than the player.
     fn hunting_frog(&self) -> bool {
         self.ai.role == Role::Hunter && self.frog_target.is_some()
+    }
+
+    /// Still looking for the seat it just lost (`Ai::lost_timer`), with an
+    /// alert to look at: with none, patrol only wanders, and a crate is the
+    /// better use of the time.
+    fn searching(&self) -> bool {
+        self.ai.lost_timer > 0.0 && self.alert.is_some() && self.target_alive()
     }
 
     /// The guard's beat around its own frog for a guard whose frog is
@@ -3263,6 +3321,8 @@ pub fn in_sight_box_of((half_w, half_h): (f32, f32), seat: Position, at: Positio
 ///   4. Attack when the target is in range (aim, settle, fire - a seat
 ///      only from inside its sight box; else close in).
 ///   5. Chase when the target is visible.
+///   5.4. Search where it was, for a moment after losing it.
+///   5.5-5.9. Detour for a crate it would use.
 ///   6. Patrol otherwise.
 ///
 /// "Target" is the player for `Role::Player`/`Role::Guard` and the
@@ -3395,27 +3455,40 @@ fn build<'a>() -> Node<Brain<'a>> {
             }),
             action("attack", act_attack),
         ]),
-        // 5. Chase when the target is alive and either within view range or
-        // this tank has recently taken a hit - see `Ai::notify_hit`/
+        // 5. Chase when the target is alive and either in sight or this
+        // tank has recently taken a hit - see `Ai::notify_hit`/
         // `ENEMY_HIT_ALERT_SECONDS`'s own doc comment: a shot landing from
         // outside normal awareness range shouldn't just be shrugged off. A
         // hunter's frog is an objective, not a sighting: it is chased from
-        // anywhere on the map.
+        // anywhere on the map. In sight is `Ai::in_sight`, held
+        // `enemy_sight_hold_px` past the edge of its sight: a chase route
+        // that bends out past the edge (round a wall) would otherwise hand
+        // the tank to the pickup tiers below, whose route brings it back
+        // inside, and it would drive back and forth between the two.
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.target_alive()
                     && (b.hunting_frog()
-                        // Concealment breaks the chase, which is what makes
-                        // hiding mean anything: without it the tier below
-                        // (patrol, which follows the shared alert) is never
-                        // reached and every enemy inside view range walks
-                        // straight to a player it cannot see. A tank that
-                        // took a hit keeps coming regardless - it knows
-                        // something is there.
-                        || (b.dist_to_target() <= b.sight && !b.target_concealed)
+                        // Concealment breaks the chase (`in_sight` is false
+                        // while the target is concealed), which is what
+                        // makes hiding mean anything: without it the tier
+                        // below (patrol, which follows the shared alert) is
+                        // never reached and every enemy inside view range
+                        // walks straight to a player it cannot see. A tank
+                        // that took a hit keeps coming regardless - it
+                        // knows something is there.
+                        || b.ai.in_sight
                         || b.ai.hit_alert_timer > 0.0)
             }),
             action("chase", act_chase),
+        ]),
+        // 5.4. Just lost the seat it fights (`Ai::lost_timer`): look for it
+        // where the alert says it was, as patrol does, before a crate
+        // below may take it - or a seat ducking in and out of tall grass
+        // would flip it between the chase and a crate every second.
+        sequence(vec![
+            condition(|b: &mut Brain| b.searching()),
+            action("search", act_patrol),
         ]),
         // 5.5. Opportunistically go collect a live Laser pickup while firing
         // shells, or to stack the laser carried - reached only once nothing higher-priority (fleeing,
@@ -4846,6 +4919,124 @@ mod role_tests {
         let player = Position::new(frog.x - leash * 0.5, frog.y);
         tick(&mut ai, Position::new(400.0, 300.0), player, player, Some(frog));
         assert_eq!(ai.snapshot().last_action, Some("chase"));
+    }
+}
+
+#[cfg(test)]
+mod sight_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    const W: f32 = 3200.0;
+    const H: f32 = 1280.0;
+    const PLAYER: Position = Position { x: 2400.0, y: 640.0 };
+    /// A plasma crate behind the tank, away from the player.
+    const CRATE: Position = Position { x: 200.0, y: 640.0 };
+
+    /// One open-field `think` for a tank `dist` px west of the player, with
+    /// the plasma crate on the field; `alert` is where the alert puts the
+    /// player, if anywhere. Returns the tier it ran.
+    fn tier(ai: &mut Ai, dist: f32, concealed: bool, alert: Option<Position>) -> Option<&'static str> {
+        let mut me = Tank::default();
+        me.position = Position::new(PLAYER.x - dist, PLAYER.y);
+        assert!(me.wants_pickup(PickupKind::Plasma), "the case this is about: a crate it would detour for");
+        let mut player = Tank::default();
+        player.position = PLAYER;
+        let grid = Grid::build(W, H, 48.0, 0.0, std::iter::empty());
+        let movers = [
+            Mover { position: PLAYER, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(
+            &me,
+            &player,
+            PLAYER,
+            None,
+            W,
+            H,
+            1.0 / 60.0,
+            &movers,
+            1,
+            &grid,
+            &mut rng,
+            alert,
+            None,
+            &[(PickupKind::Plasma, CRATE)],
+            &[],
+            true,
+            true,
+            concealed,
+            [None; 4],
+            tuning().enemy_view_range,
+            &SpecialSense::None,
+            &[],
+        );
+        ai.snapshot().last_action
+    }
+
+    /// A tank chasing the seat it fights keeps chasing it out to
+    /// `enemy_sight_hold_px` past its sight before the crate takes it - a
+    /// chase route that bends out past the edge of its sight (round a
+    /// wall) no longer hands it to the crate, whose route brings it back
+    /// inside, every few frames. Only a chase holds: a tank that never had
+    /// the seat in sight, or has just turned to another seat, sees no
+    /// further than its sight.
+    #[test]
+    fn a_chase_holds_past_the_edge_of_sight() {
+        let (sight, hold) = (tuning().enemy_view_range, tuning().enemy_sight_hold_px);
+        assert!(hold > 0.0 && sight > tuning().enemy_attack_range, "the case this is about");
+        let mut ai = Ai::default();
+        assert_eq!(tier(&mut ai, sight - 20.0, false, None), Some("chase"));
+        assert_eq!(tier(&mut ai, sight + hold / 2.0, false, None), Some("chase"), "held past the edge");
+        assert_eq!(tier(&mut ai, sight + hold + 10.0, false, None), Some("seek_plasma"), "let go past the hold");
+        assert_eq!(tier(&mut ai, sight + hold / 2.0, false, None), Some("seek_plasma"), "and not taken up again inside it");
+        assert_eq!(tier(&mut ai, sight - 20.0, false, None), Some("chase"), "only from inside its sight");
+
+        let mut fresh = Ai::default();
+        assert_eq!(tier(&mut fresh, sight + hold / 2.0, false, None), Some("seek_plasma"), "never in sight, nothing held");
+
+        let mut turned = Ai::default();
+        assert_eq!(tier(&mut turned, sight - 20.0, false, None), Some("chase"));
+        turned.set_target_player(1);
+        assert_eq!(tier(&mut turned, sight + hold / 2.0, false, None), Some("seek_plasma"), "a new seat is not held");
+    }
+
+    /// A seat that ducks into tall grass is lost at once - the hold is
+    /// only for a seat it can see - but the tank looks for it where the
+    /// alert says it was (`search`, the patrol tier's errand) for
+    /// `enemy_lost_seconds` before the crate takes it, so a seat ducking
+    /// in and out of cover does not flip it between the chase and the
+    /// crate every second. With no alert to follow there is nothing to
+    /// look at, and the crate takes it at once.
+    #[test]
+    fn a_seat_lost_in_cover_is_looked_for_before_a_crate() {
+        let (sight, hold) = (tuning().enemy_view_range, tuning().enemy_sight_hold_px);
+        let lost_frames = (tuning().enemy_lost_seconds * 60.0).round() as usize;
+        assert!(lost_frames > 2, "the case this is about");
+        let alert = Some(PLAYER);
+        let near = (tuning().enemy_attack_range + sight) / 2.0;
+
+        let mut ai = Ai::default();
+        assert_eq!(tier(&mut ai, near, false, alert), Some("chase"));
+        assert_eq!(tier(&mut ai, near, true, alert), Some("search"), "lost in cover: looked for");
+        let mut searched = 1;
+        while tier(&mut ai, near, true, alert) == Some("search") {
+            searched += 1;
+            assert!(searched <= lost_frames + 1, "still looking after {searched} frames");
+        }
+        assert!(searched + 1 >= lost_frames, "gave up after {searched} frames of {lost_frames}");
+        assert_eq!(ai.snapshot().last_action, Some("seek_plasma"), "given up for the crate");
+        assert_eq!(tier(&mut ai, near, false, alert), Some("chase"), "seen again");
+
+        let mut no_alert = Ai::default();
+        assert_eq!(tier(&mut no_alert, near, false, None), Some("chase"));
+        assert_eq!(tier(&mut no_alert, near, true, None), Some("seek_plasma"), "nothing to look at");
+
+        let mut held = Ai::default();
+        assert_eq!(tier(&mut held, sight - 20.0, false, None), Some("chase"));
+        assert_eq!(tier(&mut held, sight + hold / 2.0, false, None), Some("chase"));
+        assert_eq!(tier(&mut held, sight + hold / 2.0, true, None), Some("seek_plasma"), "cover breaks the hold");
     }
 }
 

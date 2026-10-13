@@ -3890,7 +3890,7 @@ impl Game {
             let (target, hunting) = target_of(ai, tank);
             // A seat in the light is seen from further; a frog by the sky.
             let sight = if hunting.is_some() { view_range } else { players[(ai.target_player() as usize).min(players.len() - 1)].sight };
-            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, sight) };
+            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, hunting.is_some(), sight) };
             report.tanks.push(EngageTank::new(entity, tank.owner_slot(), status));
             if status == EngageStatus::Engaged {
                 if hunting.is_some() {
@@ -6704,16 +6704,20 @@ fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) -> bool {
 
 /// Whether an enemy competes for an engagement slot this frame, and if
 /// not, why - the exclusions win over the range test. `target` is what
-/// the enemy fights (the player, or a hunter's frog); `sight` is how far
-/// it sees (`Game::enemy_sight`).
-fn engage_status(tank: &Tank, ai: &Ai, target: Position, sight: f32) -> EngageStatus {
+/// the enemy fights (the player, or a hunter's frog: `on_frog`); `sight`
+/// is how far it sees (`Game::enemy_sight`), held past the edge for a seat
+/// still in sight (`Ai::sees`), as the chase tier holds it - never for a
+/// frog, which that hold is not about.
+fn engage_status(tank: &Tank, ai: &Ai, target: Position, on_frog: bool, sight: f32) -> EngageStatus {
+    let dist = tank.position.distance_to(target);
+    let in_range = if on_frog { dist <= sight } else { ai.sees(dist, sight) };
     if tank.is_wreck() {
         EngageStatus::Wreck
     } else if tank.damage >= tuning().enemy_flee_damage {
         EngageStatus::Fleeing
     } else if tank.active_weapon() == ActiveWeapon::Shell && ai.is_retreating() {
         EngageStatus::Retreating
-    } else if tank.position.distance_to(target) <= sight || ai.is_hit_alerted() {
+    } else if in_range || ai.is_hit_alerted() {
         EngageStatus::Engaged
     } else {
         EngageStatus::OutOfRange
@@ -7075,9 +7079,14 @@ mod determinism_tests {
         // 5_538_636_586_623_323_216). The map's crates are many, and the
         // enemies go round the ones they would leave (`route_crate_cost`);
         // with that at 0 the pair is (15_662_619_869_435_857_390,
-        // 625_655_024_471_431_682).
+        // 625_655_024_471_431_682). An enemy holds the seat it chases past
+        // the edge of its sight (`enemy_sight_hold_px`), which moves the
+        // one-seat round; with that at 0 the pair is
+        // (337_451_688_727_401_783, 14_495_588_630_665_482_518), and with
+        // `enemy_lost_seconds` at 0 as well it is
+        // (12_317_413_125_897_926_193, 14_495_588_630_665_482_518).
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (12_317_413_125_897_926_193, 14_495_588_630_665_482_518), "(one seat, two seats)");
+        assert_eq!((one, two), (1_311_122_185_973_974_513, 14_495_588_630_665_482_518), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -7241,6 +7250,25 @@ mod mechanics_tests {
         game.tick_presentation(dt);
         let after = with_tank(&game.world, player, |t| t.visual_rotation);
         assert!((after - 2.0 * step_deg).abs() < 1e-4, "the presentation tick eases again: {after}");
+    }
+
+    /// The engagement ring holds a seat in sight past the edge of sight
+    /// as the chase tier does (`Ai::sees`), but never a hunter's frog: a
+    /// hunter still latched on the seat it fought between frogs would
+    /// take a slot on the frog's ring from past its sight, turn to the
+    /// frog, drop the latch, lose the slot and turn back to the seat -
+    /// every tick.
+    #[test]
+    fn the_ring_holds_a_seat_in_sight_but_never_a_frog() {
+        let sight = tuning().enemy_view_range;
+        let mut tank = Tank::default();
+        tank.position = Position::new(0.0, 0.0);
+        let past = Position::new(sight + tuning().enemy_sight_hold_px / 2.0, 0.0);
+        let mut ai = Ai::with_role(Role::Hunter);
+        assert_eq!(engage_status(&tank, &ai, past, false, sight), EngageStatus::OutOfRange, "nothing in sight to hold");
+        ai.set_in_sight(true);
+        assert_eq!(engage_status(&tank, &ai, past, false, sight), EngageStatus::Engaged, "a seat held past the edge");
+        assert_eq!(engage_status(&tank, &ai, past, true, sight), EngageStatus::OutOfRange, "a frog is not");
     }
 
     /// `Input::held_only` is the input for a rendered frame's second and

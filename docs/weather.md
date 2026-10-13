@@ -118,9 +118,10 @@ it was.
   the engagement ring's range and a hunter's snipe all read it, and the
   attack tier never reaches past it (`Ai::think`'s `sight`; under
   `enemy_attack_range / enemy_view_range` it shortens the attack too). A
-  hit still alerts an enemy from anywhere, and grass hides a tank as it
-  always did. Towers aim by their weapons' reach, well inside any sky's
-  sight, so no sky changes them.
+  tank already chasing a seat holds it `enemy_sight_hold_px` past that
+  range under every sky (`Ai::sees`). A hit still alerts an enemy from
+  anywhere, and grass hides a tank as it always did. Towers aim by their
+  weapons' reach, well inside any sky's sight, so no sky changes them.
 - **Grip** (`weather::grip_factor`): wet ground scales `Footing::grip`,
   so a hull drifts further through a turn and a shove carries it further
   sideways (measured: a hard turn at speed carries 73 px instead of 42).
