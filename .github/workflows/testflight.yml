@@ -42,7 +42,7 @@ on:
 
 env:
   # Pinned to devenv.nix's languages.rust.version.
-  RUST_VERSION: 1.98.1
+  RUST_VERSION: 1.99.0
   # The Xcode the local builds use; tools/ios/env.sh reads it.
   BONGBONG_DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
   BONGBONG_IOS_TEAM: PFET672VQB
