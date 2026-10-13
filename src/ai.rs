@@ -796,6 +796,11 @@ pub struct Ai {
     /// frame-to-frame jitter near 45-degree diagonals.
     committed_dir: Option<Dir>,
     dir_hold: f32,
+    /// The route turned across the heading held while the hold kept the
+    /// hull on it: a turning driven past, which a wall turning the hull
+    /// straight back leaves open to it (`steer_toward`). Cleared with
+    /// every new heading.
+    passed_turning: bool,
     /// How long the tank has been lined up on the player's firing axis. It must
     /// stay aligned for ENEMY_AIM_SETTLE before it actually shoots.
     aim_settle: f32,
@@ -1173,6 +1178,7 @@ impl Default for Ai {
             fire_timer: tuning().enemy_fire_interval,
             committed_dir: None,
             dir_hold: 0.0,
+            passed_turning: false,
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
@@ -2227,12 +2233,29 @@ impl Ai {
                     self.commit(fresh);
                     fresh
                 }
-                (Some(_), _) if obstacle_ahead => fresh,
+                // A wall turning the hull straight back over a turning it
+                // drove past while the hold ran keeps the hold it had, so
+                // the turning is open to it on the way back. Restarted,
+                // the hold would carry it past again the other way, and a
+                // turning crossed quicker than the hold, a wall a cell or
+                // two past it either way, would be crossed to and fro for
+                // good.
+                (Some(committed), _) if obstacle_ahead => {
+                    if self.passed_turning && fresh == opposite(committed) {
+                        self.committed_dir = Some(fresh);
+                        self.passed_turning = false;
+                    }
+                    fresh
+                }
                 (Some(_), Some(turn)) => turn,
                 // On its lane, short of its turn or with none in sight: on.
-                (Some(committed), None) if lane.is_some() => committed,
+                (Some(committed), None) if lane.is_some() => {
+                    self.passed_turning |= matches!(lane, Some(Lane::Turn(_)));
+                    committed
+                }
                 (Some(committed), None) if self.dir_hold < tuning().ai_dir_hold_seconds => {
                     // Not held long enough yet: stick with the current heading.
+                    self.passed_turning |= fresh != committed && fresh != opposite(committed);
                     committed
                 }
                 (Some(committed), None) => {
@@ -2529,6 +2552,7 @@ impl Ai {
         if self.committed_dir != Some(dir) {
             self.committed_dir = Some(dir);
             self.dir_hold = 0.0;
+            self.passed_turning = false;
         }
     }
 }
@@ -6398,6 +6422,35 @@ mod crate_claim_tests {
         for _ in 0..((2.0 * patience / dt) as usize).min(19) {
             assert_eq!(think(&mut ai, &open, at, laser, dt), Some("seek_laser"));
             at.x += 32.0;
+        }
+    }
+
+    /// A lone seeker whose way to its crate turns in a cell it crosses
+    /// quicker than `ai_dir_hold_seconds`, a wall a cell past it either
+    /// way - a pocket three cells tall, with the lane to the crate leading
+    /// off its middle cell - drives past the turning once, is turned back
+    /// by the wall and takes the turning on the way back, and reaches the
+    /// crate well before it would give it up. Were each wall to restart
+    /// the hold, it would cross the middle cell up and down for good.
+    #[test]
+    fn a_lone_seeker_takes_a_turning_it_drove_past() {
+        let cell = |col: usize, row: usize| Position::new(col as f32 * 32.0 + 16.0, row as f32 * 32.0 + 16.0);
+        let open = |col: usize, row: usize| (col == 30 && (9..=11).contains(&row)) || (row == 10 && (20..30).contains(&col));
+        let walls = (18..=32).flat_map(|col| (7..=13).map(move |row| (col, row))).filter(|&(col, row)| !open(col, row));
+        let grid = Grid::build(W, H, 32.0, 0.0, walls.map(|(col, row)| (cell(col, row), 16.0)));
+        let laser = cell(21, 10);
+        let mut at = cell(30, 11);
+        let speed = 150.0;
+        let dt = 1.0 / 60.0;
+        assert!(32.0 / speed < tuning().ai_dir_hold_seconds, "the case this is about: the turning is crossed before the hold is up");
+        let mut ai = Ai::with_role(Role::Player);
+        let mut t = 0.0;
+        while at.distance_to(laser) > 16.0 {
+            assert!(t < 3.0, "{t:.2} s in, still at {at:?} - shuttling across the turning, never taking it");
+            assert_eq!(think(&mut ai, &grid, at, laser, dt), Some("seek_laser"));
+            let step = ai.last_intent().move_dir.expect("driving for the crate").vec();
+            at = Position::new(at.x + step.x * speed * dt, at.y + step.y * speed * dt);
+            t += dt;
         }
     }
 }
