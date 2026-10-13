@@ -92,7 +92,6 @@ ON_PALETTE = [
     'shells.png',
     'minigun_bullets.png',
     'missile.png',
-    'tracks.png',
     'portal_sheet.png',
     'towers_sheet.png',
     'crates_sheet.png',

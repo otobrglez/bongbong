@@ -243,10 +243,9 @@ things when forgotten; this is the detail. Update it with the tool.
 - **The pickups' crates** are `tools/spritegen/gen_crates.py` → `crates_sheet.png` (a row per kind:
   the crate, four glint frames, damaged, charred) and `pickup_glyphs.png` (the symbols on their
   own), raw PNG bytes, no Pillow (docs/CRATES_SPEC.md); the wood is on the palette, the symbols'
-  inks (`PICKUP_INK`) deliberately loud and admitted on those two sheets alone. `static/tracks.png`
-  is drawn by nothing; the game's tread marks are baked at run time
-  (`wear.rs`, docs/ground-memory.md). A tank's wear is the sheet's damage tiers; its smoke and fire are drawn
-  (`damage_stage.rs`).
+  inks (`PICKUP_INK`) deliberately loud and admitted on those two sheets alone. The tread marks
+  have no sheet: they are baked at run time (`wear.rs`, docs/ground-memory.md). A tank's wear is
+  the sheet's damage tiers; its smoke and fire are drawn (`damage_stage.rs`).
 - **The bongs** are `tools/spritegen/bongs/export.js` → `static/bongs/<kind>/{idle,hurt,hop,attack,
   explosion}.png`, the seven characters drawn by code in `sprites.js` with continuous, keyframed
   animation (docs/BONG_SPEC.md): `node tools/spritegen/bongs/export.js`, Node from the dev shell, no
