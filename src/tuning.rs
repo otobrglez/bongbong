@@ -3867,6 +3867,11 @@ tunables! {
         /// cluster stays when it put edits away - that UNDO in BUILD
         /// brings them back -, in seconds of play. 0 shows none.
         ui_put_away_seconds: f32 = 4.0 in 0.0 ..= 15.0;
+        /// BUILD, BACK and PLAY change the corners' plates for the
+        /// builder's and back over this many seconds, the world the window
+        /// left fading into the one it opens on where the field stands
+        /// (`mode::Swap`). 0 cuts, as reduced motion does.
+        ui_swap_seconds: f32 = 0.18 in 0.0 ..= 1.0;
         /// In a build with the dev tools, where each frame's time goes -
         /// the frame, the steps, the pictures kept, the lights, the world,
         /// the chrome, the swap (`frame_stages.rs`) - on a line under the

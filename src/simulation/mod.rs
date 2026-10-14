@@ -230,7 +230,7 @@ use crate::math::Vec2;
 use crate::ai::{Ai, AiSnapshot, CrateSeeker, Intent, Mover, Role, SpecialSense};
 use crate::battlefield;
 use crate::bullet::Bullet;
-use crate::bong::{Facing, Bong, BongKind, Side};
+use crate::bong::{Bong, BongKind, Side};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::missile::Missile;
 use crate::grenade::Grenade;
@@ -1203,6 +1203,10 @@ pub struct Game {
     /// trails, the forest floor and the undergrowth. Built once per round
     /// from the map; picture only.
     pub(crate) woods: crate::woods::Woods,
+    /// The cosmetic rolls the round dressed its map in (`obstacle::Looks`):
+    /// what the builder draws its canvas with, so BUILD shows the walls,
+    /// props and ground the round showed. Picture only.
+    pub(crate) looks: crate::obstacle::Looks,
     /// Queued ammo cook-offs from tanks that have died (and barrels that
     /// have blown): where each pops and how long until it does. Purely
     /// cosmetic (see `tick_cookoffs`).
@@ -1915,6 +1919,7 @@ impl Game {
         // of tufts - or, a bush cell, growing its one bush. Hashed from
         // position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
+        self.looks = map_spawn.looks.clone();
         self.oil_cells = map_spawn.oil_cells.iter().copied().collect();
         self.portals = map_spawn.portal_cells.iter().map(|&(c, r)| map::cell_to_world(c, r)).collect();
         // Sorted by where each tuft is *rooted*, once and for all: tufts
@@ -2232,7 +2237,8 @@ impl Game {
         // shading that makes a wall look like it is standing on the floor
         // rather than pasted onto it. A round's field also shades its edge.
         let look = crate::ground::Look { theme: self.map.theme, edge_shade: true };
-        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &map_water_cells, &wall_positions, look);
+        self.looks.ground_seed = rng.random();
+        self.ground = crate::ground::build(width, height, self.looks.ground_seed, &road_cells, &map_water_cells, &wall_positions, look);
 
         // --- Training (docs/training-stage.md): the script's run, on the
         // seats and the map just laid out. No RNG. ---
@@ -2255,25 +2261,7 @@ impl Game {
         let body = self
             .physics
             .spawn_static(pos, Position::new(BONG_COLLIDER_HALF_EXTENT.0, BONG_COLLIDER_HALF_EXTENT.1));
-        self.world.spawn((Bong {
-            side,
-            position: pos,
-            health: tuning().bong_max_health,
-            max_health: tuning().bong_max_health,
-            kind,
-            body,
-            hurt_timer: 0.0,
-            hop_timer: 0.0,
-            hop_start: pos,
-            hop_end: pos,
-            hop_cooldown: 0.0,
-            attack_timer: 0.0,
-            attack_cooldown: 0.0,
-            facing: Facing::Right,
-            death_elapsed: None,
-            stun_timer: 0.0,
-            pulled: false,
-        },))
+        self.world.spawn((Bong::at_rest(side, pos, kind, body),))
     }
 
     /// Step the simulation one frame: `input` is this frame's player input,
@@ -5495,6 +5483,12 @@ impl Game {
         self.round_seed
     }
 
+    /// The cosmetic rolls this round dressed its map in, for the builder
+    /// to draw the same map as this round shows it (`obstacle::Looks`).
+    pub fn looks(&self) -> &crate::obstacle::Looks {
+        &self.looks
+    }
+
     pub fn outcome(&self) -> Outcome {
         self.outcome
     }
@@ -6613,6 +6607,11 @@ impl Game {
         self.seats.get(index).copied().flatten()
     }
 
+    /// Seat `index`'s chassis row, `None` past the seats this round holds.
+    pub fn seat_row(&self, index: usize) -> Option<i32> {
+        self.seat(index).and_then(|e| self.world.get::<&Tank>(e).ok().map(|tank| tank.row))
+    }
+
     /// Which seat `entity` sits in, or `None` for anything else.
     pub(crate) fn player_index(&self, entity: Entity) -> Option<u8> {
         self.seats.iter().position(|&e| e == Some(entity)).map(|i| i as u8)
@@ -7193,6 +7192,7 @@ mod determinism_tests {
 #[cfg(test)]
 mod mechanics_tests {
     use super::*;
+    use crate::bong::Facing;
 
     const W: f32 = 1280.0;
     const H: f32 = 720.0;

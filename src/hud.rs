@@ -1,7 +1,8 @@
 //! The HUD: the player's readouts and the buttons around a round, in two
 //! clusters in the window's top corners (docs/large-maps-follow-camera.md
 //! §8) - the world fills the window, so play and an online round draw no
-//! bar; the builder keeps its bar as its toolbar. Presentation only, same
+//! bar, nor does the builder, whose controls stand on the same plates
+//! (`editor::chrome::Bar`). Presentation only, same
 //! category as `game.rs`: `HudModel` is a handful of plain numbers gathered
 //! from `Game` between the update and the draw, and `render::hud` lays them
 //! out from fixed slots so a number never shifts its neighbours when it

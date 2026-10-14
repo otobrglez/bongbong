@@ -1053,10 +1053,10 @@ Data names by family (`named("tool", ..)`), so no `text::keys` constant.
 
 | Key | en | sl |
 |---|---|---|
-| `tool-fpv_swarm` | fpv swarm | roj dronov |
-| `tool-short-fpv_swarm` | fpv | dron |
+| `tool-fpv_swarm` | FPV SWARM | ROJ DRONOV |
+| `tool-short-fpv_swarm` | FPV | DRON |
 
-Both inside the tool list's 144 pt and the short budget's 48 at the font's
+Both inside the tool list's 144 pt and the short budget's 60 at the font's
 own widths; measured in Phase 2 by `every_language_fits_every_budget`. The
 HUD shows the glyph and a count; the weapon has no other words.
 

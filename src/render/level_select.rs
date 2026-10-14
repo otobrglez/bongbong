@@ -11,11 +11,8 @@ use crate::level_select::{
 use crate::math::{Color, Rectangle};
 use crate::text::width;
 
-/// The panel and the dim behind it: the lobby's and the dialogs', so the
-/// screens read as one family.
-const PANEL_FILL: Color = Color::new(20, 20, 24, 244);
-const PANEL_SHADOW: Color = Color::new(0, 0, 0, 90);
-const PANEL_EDGE: Color = Color::new(0, 0, 0, 150);
+/// The dim behind the panel (`render::hud::draw_panel`): the lobby's and
+/// the dialogs'.
 const WINDOW_DIM: Color = Color::new(0, 0, 0, 150);
 /// A won tile's backing; the furthest reached one's amber wash, the
 /// colour of the way on everywhere else (`NEXT LEVEL`, the banner's
@@ -42,9 +39,7 @@ pub fn draw_level_select<D: RaylibDraw>(d: &mut D, ui: &UiFrame, view: &LevelSel
     let (screen, area) = (ui.screen, ui.area);
     d.draw_rectangle(0, 0, screen.w.ceil() as i32, screen.h.ceil() as i32, WINDOW_DIM);
     let panel = panel_rect(area);
-    d.draw_rectangle_rounded(Rectangle::new(panel.x + 4.0, panel.y + 4.0, panel.width, panel.height), 0.05, 8, PANEL_SHADOW);
-    d.draw_rectangle_rounded(panel, 0.05, 8, PANEL_FILL);
-    d.draw_rectangle_rounded_lines_ex(panel, 0.05, 8, 1.5, PANEL_EDGE);
+    crate::render::hud::draw_panel(d, panel);
 
     let c = content_rect(area);
     d.draw_text(&view.title, c.x as i32, c.y as i32, 22, BUILD_COLOR);

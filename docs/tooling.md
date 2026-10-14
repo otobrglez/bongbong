@@ -26,9 +26,11 @@ things when forgotten; this is the detail. Update it with the tool.
   reproduce a situation (teleport, step, screenshot). Example session in docs/dev-server-design.md
   §4.1. Shell: `just mcp-call step '{"frames":120}'`. For a pixel-for-pixel screenshot comparison
   set `fx_max_particles` to 0 first (`tuning_set`): the particle layer draws from `rand::rng()`, so
-  particles differ run to run. A builder screenshot differs run to run too (`ground_seed` is drawn
-  per session; water and portals animate on the wall clock): pin both in a scratch build to compare
-  the builder pixel for pixel. The `camera` tool pins a zoomed view (`{x, y, zoom}`; a pin outranks
+  particles differ run to run. A builder screenshot differs run to run too: BUILD dresses the
+  canvas in the paused round's looks, so a pinned seed pins its ground and its tiles' variants, but
+  its water, portals, grass, trees, bongs and sky move on the wall clock - pin the clock in a
+  scratch build to compare the builder pixel for pixel. The `camera` tool pins a zoomed view
+  (`{x, y, zoom}`; a pin outranks
   the follow camera) and `{reset: true}` returns to the map's class; `status.camera` is the camera
   the window last drew: `view` (whole|follow|pinned), `rect`, `scale`, `target`, `window_field`, and
   for a followed view `seat`, `focus`, `cut`, `lead`, `offset`, `seating`, `framing` (cells, device

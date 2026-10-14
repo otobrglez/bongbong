@@ -101,13 +101,22 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the map's, the window is anyone's** (docs/fullscreen-resolution-research.md,
   docs/hud-and-builder-layout-design.md): an arena's bitmap (and a pinned view's) is the field alone
   (`Layout::bare`) in every mode, rendered into one `composite` render texture and fitted by
-  `view::View` (uniform scale, centred); in Build the bar stands on the window in UI points and the
-  canvas under it (`editor::BuilderFrame`: an arena fitted at its round's capped scale and
-  letterboxed, a field map's canvas made to the shape of the window under the bar,
-  `editor::chrome::canvas_frame`); where an arena's window has room past its field - in play, online
-  and behind the lobby - the margins show the world past the boundary (`margin.rs`,
-  `render::margin::MarginFx`, owned here and passed as `Effects::margins`), and the builder
-  letterboxes in the bar colour. **A field map is followed** (docs/large-maps-follow-camera.md):
+  `view::View` (uniform scale, centred); in Build the canvas fills the window as play's field does
+  and the builder's plates stand over it in UI points (`editor::BuilderFrame`: an arena through the
+  view a round of it uses, at its capped scale; a field map's canvas made to the window's shape,
+  `editor::chrome::canvas_frame`); where an arena's window has room past its field - in play,
+  online, behind the lobby and in the builder at FIT - the margins show the world past the boundary
+  (`margin.rs`, `render::margin::MarginFx`, owned here with the `WeatherFx` and passed as
+  `Effects::margins`/`Effects::weather`, and to the builder as `editor::render::SkyFx`, which
+  previews its map's sky), and past them the window is `BAR_FILL`. **BUILD, BACK and PLAY swap the
+  chrome** (`mode::Swap`): the frame a swap starts, `take_swap_picture` draws the world the window
+  is leaving into a window-sized target - play's `composite` (through the follow camera on a field
+  map; none after a couch split or an establishing shot, where the world cuts and the plates still
+  swap) or the canvas as the builder last put it on the window (`BuilderScene::present_last`) - and
+  until the swap ends the other mode draws it over its own world at `1 - progress`
+  (`Effects::swap`, `editor::render::SwapLayer`), the builder's plates sliding in from the window's
+  edges and play's corners' `Fade` scaled by the progress. **A field map is followed**
+  (docs/large-maps-follow-camera.md):
   `Presentation::of` picks the bitmap (the whole field for an arena, the builder and a pin; a
   `FollowFrame` for a `MapClass::Field` map, `Seating::Room` online and `Local` otherwise) and the
   targets (the view plus one block), re-made when a press or a countdown changes the mode or the map
@@ -160,11 +169,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `playing()` (play mode, no dialog, no level select) is the one predicate deciding whether `update`
   runs - the builder is not a simulation pause, and neither is the lobby or an online round.
   `press_build` (into the builder at once, the round paused behind it - `enter_build` hands the
-  round's map to `MapEditor::set_round`; `--editor` starts there), `back` (BACK, or Escape in the
-  builder with nothing to take back: `MapEditor::leave`, `put_away` - the canvas back to the
-  paused round's map as one undo step - and the round resumes where it stood, `tick_note` counting
-  down the line that says the edits were put away), `play` (`MapEditor::leave`, then a fresh
-  `init` on the builder's map, seed pinned - the one way the paused round is given up), `toggle`,
+  round's map to `MapEditor::set_round` and dresses the canvas in the round's looks,
+  `MapEditor::dress` with a `RoundLook` of `Game::looks`, each couch seat's `Game::seat_row` and the
+  round's seed; `--editor` starts there), `back` (BACK, or Escape in the builder with nothing to
+  take back: `MapEditor::leave`, `put_away` - the canvas back to the paused round's map as one undo
+  step - and the round resumes where it stood, `tick_note` counting down the line that says the
+  edits were put away), `play` (`MapEditor::leave`, then a fresh `init` on the builder's map, seed
+  pinned - the one way the paused round is given up; the curtain's last frame is set to the new
+  round's, so it comes in by the swap and never by the dissolve from a kept end screen), **`Swap`** (`press_build`, `back` and `play` each `start_swap` from the mode they
+  left, over `ui_swap_seconds` and cut at 0 or under reduced motion; `take_swap` hands `app.rs` the
+  mode to picture once, `tick_swap` counts it down in real time, `Swap::progress` eases out), `toggle`,
   `replace_map`, `update_builder`, `play_chrome`, `press_players`/`answer_players` (a new count
   restarts). **`Driver::Lobby`** is the room screen (`lobby.rs`): `press_online` opens it over the
   parked local round, `open_lobby_with` opens it on a round the command line already dialled,
@@ -348,7 +362,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   224-entry `charsWidth` table and `DrawText`'s spacing), replacing every `len() * CHAR_W` guess;
   `fit` truncates with `~`. **Budgets**: `every_language_fits_every_budget` measures every
   language's message against the points its box has (the corners' slots, the banners through
-  `fit_size`, the dialogs, the lobby's buttons and seat columns, the build bar), so a translation
+  `fit_size`, the dialogs, the lobby's buttons and seat columns, the builder), so a translation
   that does not fit does not merge. The room server's refusals are `net::wire::Refusal` codes the
   client puts into words (`text::refusal`); `net/round.rs` is the one `net/` file that reads the
   catalogue, and nothing under `simulation/` does (a test greps). The wave banner (`WaveBanner`) and
@@ -383,10 +397,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   file there, never a file a round's outcome reads. Rapier runs with `enhanced-determinism` for the
   same reason (docs/gameplay-verification-design.md).
 - `lib.rs` — *layout* constants and types only: `Position` (= `math::Vec2`), atlas columns/sizes,
-  `*_VARIANTS`, collider boxes, grid/physics sizes, `HUD_BAR_HEIGHT` (the builder's bar with a
-  mouse, in UI points)/`Rect`/`Layout` (`bare`: the field alone at `(0, 0)`, play's bitmap and the
-  builder's canvas; `for_field`: the field under a bar, origin `(0, 40)` - the size a desktop window
-  opens at with `--editor`), the builder's popup geometry (`EDITOR_*`),
+  `*_VARIANTS`, collider boxes, grid/physics sizes, `HUD_BAR_HEIGHT` (40 UI points, a top plate's
+  height with a mouse)/`Rect`/`Layout` (`bare`: the field alone at `(0, 0)`, play's bitmap and the
+  builder's canvas; `for_field`: the field with `HUD_BAR_HEIGHT` over it, origin `(0, 40)` - the size
+  a desktop window opens at with `--editor`, and the window `BuilderFrame::headless` lays the
+  builder out in), the builder's popup geometry (`EDITOR_*`),
   `EMBEDDED`/`KEYBOARD_AVAILABLE`/`TWO_PLAYERS_AVAILABLE`/`ONLINE_AVAILABLE`/`TOUCH_STEER_RIGHT`
   (the `touch-steer-right` cargo feature: the stick on the right half, a recompile rather than a
   knob). Heavily commented inline - those comments are the source of truth. Gameplay/feel numbers do
@@ -845,7 +860,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `deconflict`; a `UnitView::busy` unit (`Busy::Disabled`, an EMP's outage) is deaf - never
     ordered, never giving way.
 - `battlefield.rs` — static terrain *placement*: boundary walls, wave gates (`gate_candidates`,
-  `gates_from_cells`), `spawn_from_map`, enemy placement (`sample_clear_position` returns `None` on
+  `gates_from_cells`), `spawn_from_map` (which records the variants it rolls as `MapSpawn::looks`),
+  enemy placement (`sample_clear_position` returns `None` on
   the attempt cap - snap to `Grid::nearest_open`, never use a rejected sample), `enemy_spawn_legal`
   (the one legality predicate, shared with `maplint`, and the clearance every seat keeps from the
   enemies), `relocate_unusable_spawns`, `max_tank_clearance_half_extent` (a *box* half-extent shared
@@ -1022,7 +1038,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the Hunt mission's enemy bong. `BongKind` is the character (Spike, Oggle, Gloop for the player;
   Blip, Puff, Capi, Fuzz for the enemy, `BongKind::of`), the map's pick (`MapFile::bong_kind`),
   cosmetic only: `Game::init` spawns each side's with it and keeps the colour roll's old draw so
-  every seed's stream is unchanged. Art (generated, `tools/spritegen/bongs/`) faces right and is
+  every seed's stream is unchanged. `Bong::at_rest` is one as a round sets it down, the round's and
+  the builder's canvas's alike. Art (generated, `tools/spritegen/bongs/`) faces right and is
   mirrored. **A bong only bites the other side**; the
   evasive hop shies from any tank (`combat::bong_hop_target`, a box test via `Terrain::bong_fits`).
   `damage`/`heal` are the only health paths and no-op once dead; healing comes only from the bong
@@ -1075,7 +1092,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `TREE_DRY_COL`), rolls `dry_tree_flammable_chance` at spawn and leaves dry litter; a snag is dry
   anywhere. The edge-cap
   neighbour mask is cached and refreshed by `Game::refresh_edge_masks` on destruction. A barrel's
-  `variant` is its `Drum`. Specs: docs/WALLS_SPEC.md, PROPS_SPEC.md, TREES_SPEC.md.
+  `variant` is its `Drum`. **`Looks`** is how a round dressed its map - each wall material's one
+  variant, each prop's and tree's by cell, the ground's seed (`battlefield::spawn_from_map` and
+  `Game::init` fill it, `Game::looks` reads it) - which the builder draws its canvas in
+  (`editor::still`); `Looks::tile` gives a tile placed since a variant hashed from its cell. Nothing
+  that plays reads it. Specs: docs/WALLS_SPEC.md, PROPS_SPEC.md, TREES_SPEC.md.
   **Brick and wood break chunk by chunk** (`Obstacle::chunks`, `Material::chunk_health`, BB-81,
   docs/WALLS_SPEC.md §10): `strike` (a shot at a point) and `blast` (from a centre) break chunks,
   `damage` wears them evenly, `health` follows their sum and the tile dies when
@@ -1141,7 +1162,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   rotated to the tower's heading** (the tank hull/turret split), four damage stages, a ruin and a
   glow overlay; `draw_ooze` (every puddle cell a pull in one metaball field, so the cells of a
   splash run together into one puddle) and `draw_glob` in the ooze's acid lime (`OOZE_*`, off the
-  palette on purpose). A tower tile's `variant` is its side (`side_variant`). `render/tower.rs`
+  palette on purpose). A tower tile's `variant` is its side (`side_variant`); `opening_heading` is
+  the way a tower faces when its round starts - one that turns faces the field's middle -, read by
+  the round's towers and the builder's canvas. `render/tower.rs`
   draws the rest the way every shot is drawn (`render/shot_fx.rs`'s smooth additive primitives): the
   tesla's violet bolt, the towers' own light, a glob's trail, and the towers' pools of light on the
   ground (`draw_towers_ground_light`, from `draw_ground_light`); a strike and a splash are bursts
@@ -1232,9 +1255,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   and `GroundGrid::depth`'s); wet vertices are re-run whole only with water within a cell of the
   change, because the saddle smoothing is an order-dependent fixpoint, and the shade re-bakes only
   the blocks a changed wall reaches (`ShadeRecipe`) under a new stamp with a `canvas::BlockPatch`.
+  A repaint that changes a tile within `EDGE_READS` cells of the field's edge gives the grid a new
+  `stamp`, so an arena's margins, which carry that edge on past it (`margin::Margin::fits`), are
+  made again (`a_repaint_at_the_edge_renames_the_floor_the_margins_carry`).
   The floor shade (`bake_shade`, `GroundGrid::shade`, drawn by `draw_shade` at the head of
   `paint_floor_marks`, docs/GROUND_SPEC.md §4): the walls' contact shade leaning along `shadow_dir`
-  and, on a round's field (`Look::edge_shade`; the builder's canvas has none), a rounded edge shade
+  and, on a round's field and the builder's canvas alike (`Look::edge_shade`), a rounded edge shade
   deepening into the corners toward the theme's own dark, both stepped and Bayer-dithered on the 2
   px block grid into one `BlockImage` - baked on first draw, so a room server never pays for it.
   **Past an arena's field** (docs/GROUND_SPEC.md §4, `margin.rs`): `GroundGrid::beyond(cells)` is
@@ -1273,16 +1299,26 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   team-coloured hull glows, fires, fuses, portals, blasts, every shot and flash, the particle
   layer's hits, faint pickup and bong glows - each cast against `Occluders` (the cells whose
   `Material::blocks_light`, walked Amanatides-Woo, the light's own cell never stopping it) into a
-  per-ray reach. `lightning(time, t)` is a pure function of the round clock. Reads `Game`, never
-  writes it, draws no RNG; nothing in `simulation/` reads it. `render/weather.rs` is `WeatherFx`:
-  the light map (the scene target's view a texel per 2 px block, `LIGHT_MAP_SCALE`, cleared to the
+  per-ray reach. Each source's light is one function - `tank_lights`, `bong_light`,
+  `pickup_light`, `portal_light`, `fire_light`, `lava_light`, `crater_light`, `lamp_light`,
+  `tower_lights` - and `cast_lights` drops what cannot reach the view and casts the rest
+  (`Occluders::of` a round's tiles, `Occluders::over` any cells), so the builder's canvas lights
+  its map from the same rules (`MapEditor::canvas_lights`). `lightning(time, t)` is a pure function
+  of the round clock. Reads `Game`, never writes it, draws no RNG; nothing in `simulation/` reads
+  it. `render/weather.rs` is `WeatherFx`, drawn over a `Scene` - the look and the sky, the clock,
+  the field's size, theme and floor, plain or frozen, the seats, closures for its lights, water
+  depth and roads, and its mask's key and frame - never a `Game` (`Scene::of_round` for a round,
+  `editor::render`'s `sky_scene` for the builder's canvas, which previews its map's sky;
+  docs/weather.md "The builder's sky"): the light map
+  (the scene target's view a texel per 2 px block, `LIGHT_MAP_SCALE`, cleared to the
   ambient; `lights_in` drops lights that cannot reach the camera's view before casting; an unblocked
   point light (`Light::unblocked`) is one quad of a soft disc baked to the fan's own ring falloff, a
   still one (`Light::still`: a portal, a lamp post, a lantern) a shadowed pool kept in
   `LightCache`'s atlas until its reach changes and tinted each frame, anything else a fan of
   vertex-coloured triangles out to its reach; stored halved so a pixel lights to twice daylight, a
-  brighter colour drawn in shares), the cell mask (water depth and road per map cell, made once a
-  round - `MaskFor`, `minimap::RoundKey` and the grid's first cell; a `CellMask` names its first
+  brighter colour drawn in shares), the cell mask (water depth and road per map cell, made again
+  only for another key - `MaskFor`: the scene's `minimap::RoundKey`, a round's or the canvas's
+  (`RoundKey::of_canvas`, new each edit), and the grid's first cell; a `CellMask` names its first
   cell - the shader's `cellOrigin` - so the margins' wider grid reads the same: `margin_mask_bytes`,
   `MaskTexture::sync_for`), and three passes around pass 1 - ground (`static/weather_ground.fs`:
   snow, ice, wet earth, puddles, rings, over the bare ground and under the marks), light
@@ -1443,7 +1479,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `paint_tiles` (walls/props with shadows and caps, then the flames on burning timber,
   `tile_flames`), `paint_standing(PaintOptions)` (pickups, the y-sorted tanks/bongs/grass walk - a
   tank's layers (`tank::draw_tank`) and then its flames, `damage_stage.rs` - trees, a burning one
-  with its flames), `paint_field` = all three; reads state, never mutates it.
+  with its flames), `paint_field` = all three; reads state, never mutates it. The tile and tree
+  painters are free functions the builder's canvas (`editor::still`) draws with too: `is_tile`
+  (a wall or a prop, not a tree, tower, lamp, volcano or door), `paint_tile_run` (each tile's
+  shadow, the tile and its cap, in the order given), `sort_trees` (back to front by crown) and
+  `paint_tree` (shadow, crown at a lean and an alpha, flames).
   `PaintOptions::locate_cue` is the one thing a thumbnail leaves out. `Game::plain_canvas` (flat
   white instead of the ground tileset; the builder has the same flag) and `Game::hide_players` (no
   player sprite/ring/label) exist for the demos. `render/game.rs` is `Game::render` with
@@ -1459,7 +1499,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   shockwave, the ripples' quads, the kill flash, the debug overlays) then `draw_chrome` on the
   window in UI points (the indicators, then the end screen, banners and PAUSED under the corner
   clusters - still pressable -, then the dialogs, lobby and level select over them, their dims over
-  the whole window, and the stick; Build's bar through `draw_bar_layer`): an arena runs both into
+  the whole window, and the stick - over the canvas the builder last showed, which a swap out of
+  the builder draws over the presented world at `Effects::swap`'s share): an arena runs both into
   the bitmap, while a followed view draws its world into `composite` at one pixel per texel,
   `render::view::present_world` puts it on the window shifted by `Camera::offset`, and `draw_chrome`
   draws on the window through the bitmap-to-window camera, so the HUD stands still while the world
@@ -1659,7 +1700,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   sizes, and every button and dialog rect the hit tests read. **Play and online draw no bar**: the
   HUD is two corner clusters inside the safe area, laid out in UI points (`UiFrame`: `scale` window
   units per point, `screen`, `area` - the safe area less `UI_EDGE_PT` -, `touch`;
-  `to_ui`/`to_window`), and the builder keeps its bar (`editor::chrome::Bar`, in UI points too);
+  `to_ui`/`to_window`), and the builder stands its controls on three plates in the same style
+  (`editor::chrome::Bar`, in UI points too, drawn by `render::hud::draw_cluster_plate`);
   `UiFrame::hints` (`Hints::Keys`/`Touch`, `Hints::follow`) is the input the chrome's words name.
   **`corners(&UiFrame, &CornerShape) -> Corners` is the one geometry** the painter
   (`render::hud::draw_corners`, fixed slot tables pinned by `corner_tests`), `app.rs`'s hit tests
@@ -1700,8 +1742,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   away, an online round's `status` line, its `countdown_label` (the end
   screen counts down to the lobby rather than to a restart) and the `lobby::LobbyView`. The dialogs
   (`players_dialog_rects`, `question_rects`), the end screen and a level's banner are centred in
-  the chrome's area in points (`centred_in`), their dims over the whole window; banners are
-  `banner_size` (never under `BANNER_MIN_SIZE`, 48). The end screen (docs/levels.md):
+  the chrome's area in points (`centred_in`), their dims over the whole window, and stand on
+  `render::hud::draw_panel` - the one dark panel (a near-opaque fill, corners 8 pt round, a 4 pt
+  shadow, a thin dark edge) every dialog, popup and screen of the chrome stands on, the builder's
+  lists and panels, the lobby and the level select too; banners are `banner_size` (never under
+  `BANNER_MIN_SIZE`, 48). The end screen (docs/levels.md):
   `PlayChrome::level` (`LevelBanner`: number, count, title) and `PlayChrome::result` (`ResultView`:
   `RoundStats`, the seat count, a level's `ResultButtons`/`NextLevel`), laid out by
   **`result_layout(area, view)`, the one geometry** the painter (`render::hud::draw_result`) and the
@@ -1905,11 +1950,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   shade made for a round's floor and reach (`fits`; reach rounded up to 4 cells, at most `MAX_CELLS`
   96, the plateau past it). Nothing stands or plays there; the simulation, the field's rect, `View`
   and every pointer are untouched. `render/margin.rs` is `MarginFx`: into targets of the window's
-  world, the ground once, the shade part by part, then the round's sky - `render::weather`'s passes
-  over the parts (`PassView::parts`) under a 1x1 light map of the ambient with the margin grid's own
-  cell mask (`CellMask::origin`, the shader's `cellOrigin`), or the plain path's blocks and
+  world, the ground once, the shade part by part, then the sky of its `render::weather::Scene` - a
+  round's, or the builder's canvas's - through `render::weather`'s passes over the parts
+  (`PassView::parts`) under a 1x1 light map of the ambient with the margin grid's own cell mask
+  (`CellMask::origin`, the shader's `cellOrigin`), or the plain path's blocks and
   `multiply_ambient` - copied onto black like the field's bitmap; `Game::render` makes it only while
-  `Camera::is_whole()` (never a followed or pinned view, never the builder), and
+  `Camera::is_whole()` (never a followed or pinned view) and the builder only at FIT on an arena, and
   `render::view::present_into` fills the window with the backdrop, then draws its parts round the
   bitmap, so the two meet colour for colour. The margins do not shake with the field's camera shake.
 
@@ -1919,11 +1965,44 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   §9) — Build mode, compiled into every build. Edits the authored `MapFile`, never live entities.
   Input is a plain `BuilderInput` that `app.rs` and the dev server fill the same way, so a tool
   lands on the same hit test a finger does and tests run headless; `editor/render.rs` (feature
-  `render`, a child module because it draws the builder's private state) is the chrome:
-  `MapEditor::render`, the bar and popup painters, the tool and brush icons, `EditorTextures` and
-  `ThumbnailTextures`, the drawing's own slot offsets and labels, and `bar_tests`. `Tool`s in bar
-  order (`TOOLS`, 52 with the eraser and the select tool; `name`/`parse` are the dev-server
-  spelling) in five categories that remember their current tool; singletons (start, start2, bongs)
+  `render`, a child module because it draws the builder's private state) is the drawing:
+  `MapEditor::render` (the canvas through its camera - under its map's sky in the weather's passes
+  where it is drawn a texel a world pixel (`draw_under_sky`; off FIT its targets are held a
+  `SKY_SLACK` step larger than the view, `sky_size`, so a pan never makes them again and a pinch
+  only every 64 texels, and a target that cannot be made draws the canvas clear), at FIT on an arena
+  into the field's own bitmap with play's margins round it -, the editing marks over it, then the
+  chrome), the plate
+  and popup painters, the tool and brush icons, `EditorTextures` (the round's `Textures` and the
+  builder's own), `ThumbnailTextures`, `BuilderScene` (the scene, sky and loupe targets;
+  `present_last` is the canvas as the last frame showed it, for a swap's picture), `SkyFx` (the
+  round's `WeatherFx` and `MarginFx`), `SwapLayer`, the drawing's own offsets and labels, and
+  `bar_tests`. **The canvas as a round stands it** (`editor/still.rs`, docs/game-editor-fusion.md
+  §5): `MapEditor::dress` takes the paused round's `RoundLook` (its `obstacle::Looks`, each couch
+  seat's chassis, its seed; a new ground seed lays the ground again, which carries a round's edge
+  shade) and `MapEditor::still` works the `Still` picture out on the first read after a whole-map
+  edit or a new look (`map_changed` drops it), and an edit of a few cells patches it
+  (`Still::patch` from `cells_changed`, as the `CellIndex` takes them in: each changed cell placed
+  again, the walls round it joined again, the grass within `GRASS_READS` grown again - 0.3 ms a
+  stroke's frame on a 250 x 250 map painted edge to edge, against 38 ms whole). The woods are left
+  as they stand through a stroke and marked stale where it came within their reach
+  (`Woods::reaches`) or touched a tree; the stroke's release (`finish_stroke_changes`) works the
+  picture out whole again, as does such an edit outside a stroke, and more than 64 changes or one on
+  a volcano's footprint. It holds: the walls and props in cell order with their looks' variants
+  and edge masks, the trees sorted (`game::sort_trees`), every tuft - the grass cells', the bushes,
+  the woods' undergrowth - by its root, the starts as their seats' tanks (`seat_row`: the map's
+  chassis, else the round's, else the first), the bongs (`Bong::at_rest`), the towers facing
+  `tower::opening_heading`, the lamps, crates, doors, flags and oil. `paint_floor`/`paint_tiles`/
+  `paint_standing` draw it on any `Canvas` with the round's painters (`game::paint_tile_run`,
+  `game::paint_tree`, `grass::draw_tuft`, `tank::draw_tank`, `bong::draw_bong`) on the wall clock,
+  `Still::lights` throws a round's lights at rest, and it keeps the volcanoes' cells and the
+  canvas's `weather::Occluders` so no frame walks the map for them; a carried or pasted cell is still drawn alone
+  as a tool's icon (`draw_cell`). `map_sky` (the map's skies under the paused round's seed,
+  `weather::in_force`), `sky` (clear while `day`, DAY's toggle, is down) and `canvas_lights` (the
+  still picture's, the portals', the lava's and the craters' lights, cast against the canvas's
+  walls) are what it is previewed under (docs/weather.md "The builder's sky"); `still_tests` holds
+  the picture to a round's. `Tool`s in list order (`TOOLS`, 52 with the eraser and the select tool;
+  `name`/`parse` are the dev-server spelling) in six categories that remember their current tool;
+  singletons (start, start2, bongs)
   move. A **stroke** paints once per cell crossed (a drag that skips cells between frames fills the
   gap edge to edge, `drag_to`; the tools' `stroke` takes its cells as given) under the
   **toggle-erase rule** decided on its first cell: right button, the eraser, or a first cell already
@@ -1943,7 +2022,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the stroke planted again against the finished wood (`replant`), all one undo step; a first cell
   holding any tree toggles it to erase. **The select tool** (`Tool::Select`; the
   data is `editor/select.rs`): a drag draws a `CellRect`, a drag from inside it lifts its cells and
-  carries them, and the strip under the bar (`chrome::Strip`: COPY, CUT, PASTE, the flips, DELETE, +
+  carries them, and its strip (`chrome::Strip`: COPY, CUT, PASTE, the flips, DELETE, +
   STAMP, STAMPS, or PLACE, the flips and CANCEL while a paste ghost stands) and Ctrl+C/X/V and
   Delete act on it; a paste or a stamp is a `Ghost` that follows a hovering mouse until a press puts
   it down (the right button takes it away), or that a finger drags by the cells it moves, taps
@@ -1966,31 +2045,53 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   a clone. One popup at a time; a press outside it - the Save prompt's too - closes it and is
   consumed. **The chrome is on the window in UI points** (`editor/chrome.rs`, the one geometry table
   the painter, every hit test, `status.builder.buttons`/`click` and `bb_ui_json` read):
-  `BuilderFrame` (the canvas's bitmap with no bar in it, the view that puts it under the bar - the
-  canvas between the safe area's sides, down to the window's bottom -, the `UiFrame`); `Bar::of`
-  lays the bar along the safe area's top from its width - a mouse's slots at a point a pixel on a
-  desktop in a 40 pt bar at the HUD's scale (`HUD_BAR_HEIGHT`, a play corner plate's height, its
-  boxes a HUD button's 32), every button 44 pt both ways on a touch screen, hit rects reaching
-  `EDITOR_BAR_HIT_SLACK` above and below - BACK at its left end (the round BUILD paused,
-  `MapEditor::set_round`/`can_go_back`; dim without one, an amber dot while `off_round`), and
-  short of room drops the map's name (the status line names it), then BACK's word (its arrow
-  stays), then folds the clear flag into CHECK (green while cleared), then folds the five categories
-  and BRUSH into one TOOLS button and its palette (BRUSH's rows its last row; a category longer than
-  the room is wide runs on into a second row, the cells shrinking to the room's height but never
-  under 44 pt) - which may give the flag back -, never shrinking a button; `PopupLayout` hangs the popups under the bar, a long list running into a second column and
-  the CHECK panel, the Load list and the STAMPS list (at most `LOAD_VISIBLE_ROWS`) turning pages by
-  a pager row and the wheel where their rows do not fit; the MAP panel (`MapPanel`, its four groups
+  `BuilderFrame` (the canvas's bitmap and the view that puts it over the whole window as play's
+  field is - an arena through `View::fit_capped`, the very view a round of it uses, a field map's
+  bitmap made to the window's shape by `canvas_frame` -, and the `UiFrame`; `room()` is the safe
+  area under the top plates, running down over the tray, `over_tray()` the part of it above the
+  tray); `Bar::of(ui, dark)` lays the controls out on three plates in play's corner style (play's
+  plate fill and `PLATE_PAD`, `hud::button_height` rows: a top plate is 40 pt tall with a mouse,
+  `HUD_BAR_HEIGHT`, its boxes 28): `left` (BACK - the round BUILD paused,
+  `MapEditor::set_round`/`can_go_back`, dim without one, an amber dot while `off_round` -, DAY
+  while `dark`, the map's name), `right` (UNDO, REDO, FILE, MAP, FIT, CHECK and the clear flag,
+  then PLAY HERE and PLAY, PLAY in the box play's corner draws BUILD in at full size) and `tray`
+  (centred along the bottom, a 36 pt row with a mouse so a 32 px icon stands a texel a point: the
+  six category buttons, BRUSH and the eraser); every button 44 pt both ways on a touch screen, hit
+  rects reaching `EDITOR_BAR_HIT_SLACK` above and below; `plates()`/`covers()` are what a press
+  lands on before the canvas and `slid(top, bottom)` where they stand while they slide in. Short of
+  room the top narrows the map's name and then drops it (the status line names it), then BACK's
+  word (its arrow stays), then folds the clear flag into CHECK (green while cleared); the tray folds
+  the six categories and BRUSH into one TOOLS button and its palette where they would take more
+  than `TRAY_MOST` (three quarters) of the area's width (BRUSH's rows its last row; a category
+  longer than the room is wide runs on into a second row, the cells shrinking to the room's height
+  but never under 44 pt, the categories flowing along the rows where even that is too tall) -
+  never shrinking a button. `PopupLayout`: the tray's lists and palette rise from it into
+  `over_tray()` (`tray_list`, `tray_palette`), or hang down the whole room on a window too short
+  for their columns there; FILE's menu and the MAP and CHECK panels hang from their button under
+  the top-right plate, and the Load list, the STAMPS list and the Save prompt are centred in the
+  room - a long list running into a second column and the CHECK panel, the Load list and the
+  STAMPS list (at most `LOAD_VISIBLE_ROWS`) turning pages by a pager row and the wheel where their
+  rows do not fit; the MAP panel (`MapPanel`, its four groups
   `MapTab` - ROUND, TANKS, FIELD, SKY - of `MapField`s as choices, steppers and sky tiles,
   `PanelButton` its presses) shows every group at once as sections where the room holds 884 x 432 pt
   and one at a time behind a rail of tabs elsewhere, RESET MAP the rail's last slot, never paged,
   ROUND keeping its wave rows' room so a spawn change moves no other group; the select tool's strip
-  stands at the top-left of the room under the bar, never beside the selection, so it never moves
-  under a finger or covers the cells being worked on; every button of the bar, the strip and the
-  Save prompt is drawn alike - one box (`chrome::button_box`: its slot less `BOX_GAP`, `box_height`
-  tall, a 2 pt square outline), every word at `chrome::BAR_SMALL_TEXT` (14 pt with a mouse and on
-  touch, held to `label_room` in every language) and one colour rule (`render.rs`'s `Face`: idle,
-  dim, washed while its popup is up, an amber outline for the brush in force, amber outline and word
-  for PLAY, PLAY HERE, PLACE and SAVE). The Load list's rows show each map's thumbnail and its size
+  stands at the top-left of the room under the top plates, never beside the selection, so it never
+  moves under a finger or covers the cells being worked on; the status line is a plate of its own
+  (`status_plate`: beside the tray in the area's bottom-left corner where that leaves it
+  `STATUS_MIN_W`, else at the area's left just above the tray), its words in capitals; every button
+  of the plates, the strip and the Save prompt is framed alike, as play's corner buttons are - one
+  box (`chrome::button_box`: its slot less `BOX_GAP` and a 2 pt block above and below, a 2 pt
+  square outline), every word at `chrome::BAR_SMALL_TEXT` (14 pt with a mouse and on touch, held to
+  `label_room` in every language) and one colour rule (`render.rs`'s `Face`: BACK in the text
+  colour, the edit actions a grey outline, dim where they cannot act, washed while a popup is up,
+  an amber outline for the brush in force, CHECK green once cleared, amber outline and word for
+  PLAY, PLAY HERE, PLACE and SAVE). Every list, panel and prompt stands on
+  `render::hud::draw_panel`, play's dialogs' panel. The canvas's editing marks are whole 2 px
+  blocks in the palette's mark colours (`indicators::GATE_AMBER` rimmed in `indicators::RIM` for
+  the gates' chevrons and frames and a portal off its network, rings of blocks for a tower's reach
+  and a carried start's or enemy bong's ring), drawn after the sky; the singleton badge is a rimmed
+  green dot of blocks. The Load list's rows show each map's thumbnail and its size
   in cells (`load_picture`, `load_text`, `fit_picture`): `editor/thumbs.rs` makes the map's minimap
   (`minimap_of`, a texel a cell) only for the page shown, `MADE_PER_FRAME` a frame, and keeps it by
   name and an FNV-1a hash (`map::fnv1a`) of the text `map::map_source` reads, checked again each
@@ -2005,22 +2106,24 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `Viewport` (the field, the canvas area, a `CanvasScreen`); `view` is the `view::Camera` every draw
   and hit test goes through (`MapEditor::cell_at`/`world_at`). At FIT on an arena it is
   `Camera::whole`: the canvas is drawn into the field's own bitmap and presented through the frame's
-  view at its round's capped scale, letterboxed under the bar, the very picture play shows; anything
-  else draws into `render::BuilderScene` at a texel per world pixel (`scene_plan`, halved to stay
-  within `SCENE_MAX_TEXELS`, 4096 a side), the world past the field in the canvas fill, scaled onto
-  the canvas (`window_mapping`). A field map's canvas is the window's shape under the bar
+  view at its round's capped scale with play's margins round it (`MarginFx`, under the canvas's
+  sky) and the window's backdrop past them, the very picture play shows; anything else draws into
+  `render::BuilderScene` at a texel per world pixel (`scene_plan`, halved to stay within
+  `SCENE_MAX_TEXELS`, 4096 a side; under a sky into its own target of the view's size, and clear
+  where the plan is halved), the world past the field in the backdrop, scaled onto the canvas
+  (`window_mapping`). A field map's canvas is the window's shape
   (`chrome::canvas_frame`). Zoom steps in whole blocks (0.5 device px multiples) on a coarse screen
   and smoothly on a fine one, from FIT up to `builder_zoom_max_cell_pt`; the wheel zooms at the
   cursor, middle drag or Space + drag pans (the right button still erases), `+`/`-`, the arrows and
-  the bar's FIT button work too, and BUILD opens on what play showed (`Session::play_view` ->
+  the FIT button work too, and BUILD opens on what play showed (`Session::play_view` ->
   `look_at`). **Touch is raw** (`BuilderInput::touches`, `editor/gesture.rs`): one finger paints
   once past `builder_touch_slop_pt`, two fingers pan and pinch about their midpoint (a second finger
   takes a stroke back, a pinch settles on whole blocks), a two-finger tap undoes and a three-finger
   tap redoes; where a cell is under `builder_paint_min_cell_mm` (measured at the screen's
   `CanvasScreen::points_per_mm`) a tap zooms to `builder_tap_zoom_cell_mm` and a drag pans, unless
   the whole map is in view. A finger is the canvas's only where it lands on the
-  canvas and no press of the chrome takes it (`lands_on_canvas`: a bar button's hit slack reaches
-  over the canvas's top edge). `MapEditor::leave` (from `Session::play` - PLAY HERE and Tab too -
+  canvas and no press of the chrome takes it (`lands_on_canvas`: a plate button's hit slack reaches
+  over the canvas round it). `MapEditor::leave` (from `Session::play` - PLAY HERE and Tab too -
   and a level's start) closes the popup, takes back a half-drawn RECT and a select drag as Escape
   does, lands a freehand stroke and forgets every finger; the first `update` after it ignores the
   fingers already down (`entering`, `Gestures::ignoring`). A stroke - or a select tool's drag - held
@@ -2031,22 +2134,25 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   edit repaints the ground around its cells (`repaint_ground`, given the edit's `CellChange`s); one
   that moves the floor - road, water or a wall - under more than half the map (`REBUILD_SHARE`)
   makes it whole again, as a load, reset, resize or theme does. **The navigator**
-  (docs/large-maps-follow-camera.md §9): `navigator_rect` (bitmap px, the canvas area's bottom-right
-  corner `NAVIGATOR_MARGIN_PT` in, sized like play's minimap in points and at most half the area,
-  `None` at FIT on an arena and while an open popup's panel reaches its plate - a phone's MAP panel
+  (docs/large-maps-follow-camera.md §9): `navigator_rect` (UI points: where play's minimap stands,
+  under the top-right plate and flush with its right edge - `chrome::navigator` in
+  `BuilderFrame::room` -, sized like play's minimap and at most half the room either way, `None` at
+  FIT on an arena and while an open popup's panel reaches its plate - a phone's MAP panel
   does -, where it steps aside) and `navigate`, one `BuilderInput` hit test before the wheel, the
   pan and the stroke - a press puts the view's middle there (`BuilderCamera::navigate`, from FIT at
   a tap's zoom), a drag carries it to the lift; `point_on_ui`/`on_canvas` leave its plate out, so
   nothing paints under it. `MapEditor::minimap()` is rebuilt with the ground and repainted with it
   (`repaint_ground` passes the cells `GroundGrid::repaint` answers), and `draw_navigator` draws it
-  on the zoomed path only (`EditorTextures::minimap`). **Large-map tools**
-  (docs/large-maps-follow-camera.md §9): after FIT the bar carries `CHECK` (`Popup::Lint`: a
-  clear-check row, then `maplint::lint_map`'s findings errors first, seven a page; a row pans and
+  with the chrome, sliding in with the top plates, wherever `navigator_rect` gives it a place
+  (`EditorTextures::minimap`). **Large-map tools** (docs/large-maps-follow-camera.md §9): after FIT
+  the top-right plate carries `CHECK` (`Popup::Lint`: a clear-check row, then `maplint::lint_map`'s
+  findings errors first, seven a page; a row pans and
   zooms the camera onto its cells and outlines them, at least `builder_lint_jump_cols` x
   `builder_lint_jump_rows` cells, and FIX is one `EditStep` whose hit rect is the row's height
   (`LintLayout::fix`, the outline `fix_box`); re-linted the frame after each edit while open, about
-  29 ms on the study map in a debug build), the clear flag (`SLOT_CLEAR`: green with the par once
-  the canvas's revision is cleared, a tap opens CHECK) and `PLAY HERE` (`EditorAction::PlayHere`).
+  29 ms on the study map in a debug build), the clear flag (green with the par once the canvas's
+  revision is cleared, a tap opens CHECK; folded into CHECK where the top is short) and `PLAY HERE`
+  (`EditorAction::PlayHere`).
   `clears`/`revision()` (cached per edit)/`par()` - which works the revision out only where the
   canvas's `ClearKey` (its size, cell count and the index's digest) is a cleared revision's, so an
   edit away from one costs nothing on any map (a revision is about 0.3 s on a filled 250 x 250 map
@@ -2393,8 +2499,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   set the round's map key - a name or a list - and change the sky mid-round (`Game::change_weather`:
   the look and rules at once, snow icing the water over - deep cells' bodies off, the nav grid
   rebuilt - but no thaw until the next round, since a hull may stand on the ice), or with `restart:
-  true` start the round over under it on its own seed - a game-only tool, since the builder's canvas
-  is drawn clear, and report-only online; `status.weather` carries it), and `restart` with
+  true` start the round over under it on its own seed - a game-only tool, the builder's canvas
+  previewing its map's sky through `builder_settings {weather}` and `status.builder.sky`, and
+  report-only online; `status.weather` carries it), and `restart` with
   `map`/`map_toml` replaces the builder's canvas too. In build mode `builder_camera` (`{x, y, zoom}` |
   `{fit: true}`; `status.builder.camera`: `fit`, `rect`, `scale`, `zoom`, `fit_scale`,
   `device_scale`, `cell_mm`, `area`), `builder_touch` (frames of `{id, x, y}` in window coordinates,
@@ -2404,15 +2511,18 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `ONLINE_REFUSED_TOOLS`), `builder_tool`/`builder_paint` take `shape` (pen|rect|fill|scatter) and
   `builder_paint` replies with the status line's `message`, `builder_settings {size, anchor}`, `key
   {zoom_in|zoom_out|arrows|copy|cut|paste|delete}`, and `click` replies with the world point and the
-  cell. `status.builder` also carries `buttons` (the bar's by name - `play`, `play_here`, `check`,
-  `clear`, `fit`, `map`, `file`, and with CHECK open its `finding_N`, `fix_N`,
+  cell. `status.builder` also carries `buttons` (the plates' by name - `back`, `day` while the
+  canvas's sky is dark, `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, and with CHECK
+  open its `finding_N`, `fix_N`,
   `page_back`/`page_next` - in window coordinates with each one's `ui` rect in points; with a popup
   open its rows too - `tool_<name>`, `load`/`save`/`save_as`/`clear_map`, the Save prompt's
   `save_confirm`, `map_<name>`, the MAP panel's `tab_<group>`, `<field>_<option>`,
-  `<field>_dec`/`_inc`, `weather_<sky>` and `reset`, `page_back`/`page_next` -, the bar's own
+  `<field>_dec`/`_inc`, `weather_<sky>` and `reset`, `page_back`/`page_next` -, and
   `erase`, `undo`, `redo`, `category_<c>`/`list_<c>`, `brush` or the folded `tools`, BRUSH's
   `shape_<name>`/`tool_select`/`brush_stamps`, the select strip's `sel_*` and the STAMPS list's
-  `stamp_<key>`), `check`, `clear` (`revision`, `cleared`, `par`, `attempt`), `loupe`, `shape`,
+  `stamp_<key>`), `sky` (the sky the canvas is drawn under: its map's as the paused round's seed
+  picked it, or `clear` while DAY is down) and `day`, `check`, `clear` (`revision`, `cleared`,
+  `par`, `attempt`), `loupe`, `shape`,
   `rect` (a RECT drag's rectangle), `message`, `selection`, `ghost`, `clipboard`, `stamps` and
   `thumbnails` (the open Load list's: `name`, `cells`, `picture`); `status.play_here` is a play-here
   round's cell; `builder_touch {hold: true}` leaves the last frame's fingers down (`held_touches`)
@@ -2442,7 +2552,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   keyboard) and `bb_ui_json` (the window as laid out last frame: `frame`, the window's size and
   `units_per_point`, the mode, map and level, the dialogs, the chrome through `capi::ui_status` -
   which is also the dev server's `status.ui`, built from `Session::screen_buttons` and
-  `lobby::Button::name` -, the `view` and `field`, the builder bar's buttons and the last `press`,
+  `lobby::Button::name` -, the `view` and `field`, the builder's buttons and the last `press`,
   which a script taps the canvas by), so a browser tab against a deployed room is measured and
   driven by a script; strings in a thread-local scratch buffer valid until the next call. `app.rs`
   calls `capi::keep_alive()` so the symbols survive; `build.rs` emits `-sEXPORTED_FUNCTIONS` and

@@ -276,8 +276,8 @@ A cell kind per species - `tree`, `pine`, `spruce`, `scots`, `fir`,
 builder's Plant group (with the bushes, docs/BUSHES_SPEC.md §4). All are solid, so `CellObject::is_solid` folds them
 in with walls and props everywhere a solid tile matters.
 
-Nine tree tools and the six bushes made the folded TOOLS palette taller
-than a phone's room under the bar, so where the stacked rows do not fit
+Nine tree tools and the six bushes make the folded TOOLS palette taller
+than the room a phone's window has for it, so where the stacked rows do not fit
 even at a finger's `UI_TOUCH_PT` the groups flow one after another along
 the rows (`chrome::Palette`).
 

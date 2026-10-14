@@ -240,7 +240,8 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   screen (`(hover: none) and (pointer: coarse)`) the page's Full screen and Subscribe controls stand
   in a band along the canvas's top, centred - the one strip a thumb does not reach in a landscape
   grip - and the game keeps its chrome below it as below a safe area (the band is the `UiFrame`'s
-  top inset, so the builder's bar and its canvas stand under it too); with a mouse they keep to the
+  top inset, so the builder's plates stand under it too, its canvas running under the band to the
+  window's edge as play's field does); with a mouse they keep to the
   bottom-left and take no band, and the off-screen arrows keep off their rectangle wherever it is.
   `window.bbInvite`, `window.bbToken` and `window.bbLang` (`site/src/scripts/room.ts`; the last is
   `navigator.languages`, comma-joined), `window.bbMotion` (`site/src/scripts/motion.ts`, from

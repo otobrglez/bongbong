@@ -199,6 +199,10 @@ pub struct Effects<'a> {
     /// (`render::dissolve`, `PlayChrome::keep_screen`/`dissolve`); `None`
     /// keeps nothing and cuts.
     pub dissolve: Option<&'a mut crate::render::dissolve::Dissolve>,
+    /// The swap out of the builder (`mode::Swap`): the picture of the
+    /// canvas the window left, the window's size, over the world at this
+    /// share of its strength.
+    pub swap: Option<(&'a RenderTexture2D, f32)>,
 }
 
 /// The second half of a couch's split screen, as a frame draws it
@@ -533,7 +537,8 @@ impl Game {
                 };
                 let at = layout.field_origin();
                 let in_bitmap = |r: Rectangle| Rectangle::new(r.x + at.x, r.y + at.y, r.width, r.height);
-                fx.draw(rl, thread, self, &frame, textures, backdrop, sky).map(|target| crate::render::view::Margins {
+                let scene = crate::render::weather::Scene::of_round(self, effects.fx.impacts());
+                fx.draw(rl, thread, &scene, &frame, textures, backdrop, sky).map(|target| crate::render::view::Margins {
                     target,
                     rect: in_bitmap(frame.rect),
                     parts: frame.parts(0.0).into_iter().map(in_bitmap).collect(),
@@ -568,6 +573,11 @@ impl Game {
         }
         let mut d = rl.begin_drawing(thread);
         present_frame(&mut d, composite, camera, view, layout, backdrop, margins.as_ref(), &split);
+        // The swap out of the builder: the canvas the window left, fading
+        // off the world under the chrome.
+        if let Some((picture, alpha)) = effects.swap {
+            crate::editor::render::draw_swap_picture(&mut d, picture, alpha);
+        }
         let chrome_stage = crate::frame_stages::stage("chrome");
         self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, bubble, minimap.as_ref(), textures, touch, fx_live, base);
         drop(chrome_stage);
@@ -663,7 +673,7 @@ impl Game {
         // the target's own pixels; the world is drawn through `in_target`.
         let lights_stage = crate::frame_stages::stage("lights");
         let weather = match effects.weather.as_deref_mut() {
-            Some(fx) => fx.begin(rl, thread, self, effects.fx, textures, camera),
+            Some(fx) => fx.begin(rl, thread, &crate::render::weather::Scene::of_round(self, effects.fx.impacts()), textures, camera),
             None => None,
         };
         drop(lights_stage);

@@ -272,6 +272,9 @@ editor-file = FILE
 editor-map = MAP
 # The camera back to the whole canvas.
 editor-fit = FIT
+# The canvas drawn by daylight while held down, on a map under a dark
+# sky: 14 in its box (about 4 letters).
+editor-day = DAY
 # A round from the middle of the view rather than the map's start, just
 # before PLAY: 11 pt in 64 with a mouse, 12 in 72 on a touch screen
 # (about 9 letters).
@@ -373,8 +376,8 @@ settings-anchor = ANCHOR
 settings-reset = RESET MAP
 # A settings value the map leaves to the game; the short one fits a
 # stepper in a row of three.
-settings-auto = auto
-settings-auto-short = auto
+settings-auto = AUTO
+settings-auto-short = AUTO
 # Beside a value a command-line flag outranks, 12 pt.
 settings-cli = (cli)
 
@@ -395,20 +398,20 @@ editor-page-touch = { $from }-{ $to } of { $n }  (tap < or >)
 editor-untitled = untitled
 
 # The status line's answers.
-editor-saved = saved { $name }.toml
-editor-loaded = loaded { $name }
-editor-saving-unavailable = saving is not available in this build: edits stay in memory for the session
-editor-no-name = the map has no name yet: use SAVE AS
-editor-bad-name = map name "{ $name }" may only use letters, digits, - and _
-editor-kept = saved { $name }
-editor-kept-modified = kept your changes to { $name }
-editor-kept-original = { $name } is the original again
-editor-reverted = { $name } is back to the original
-editor-copied = copied { $n } cells
-editor-cut = cut { $n } cells
-editor-stamp-kept = kept as { $name } in STAMPS
-editor-stamp-empty = nothing to keep: the selection is empty
-editor-fill-too-large = too large to fill: more than { $n } cells
+editor-saved = SAVED { $name }.toml
+editor-loaded = LOADED { $name }
+editor-saving-unavailable = SAVING IS NOT AVAILABLE IN THIS BUILD: EDITS STAY IN MEMORY FOR THE SESSION
+editor-no-name = THE MAP HAS NO NAME YET: USE SAVE AS
+editor-bad-name = MAP NAME "{ $name }" MAY ONLY USE LETTERS, DIGITS, - AND _
+editor-kept = SAVED { $name }
+editor-kept-modified = KEPT YOUR CHANGES TO { $name }
+editor-kept-original = { $name } IS THE ORIGINAL AGAIN
+editor-reverted = { $name } IS BACK TO THE ORIGINAL
+editor-copied = COPIED { $n } CELLS
+editor-cut = CUT { $n } CELLS
+editor-stamp-kept = KEPT AS { $name } IN STAMPS
+editor-stamp-empty = NOTHING TO KEEP: THE SELECTION IS EMPTY
+editor-fill-too-large = TOO LARGE TO FILL: MORE THAN { $n } CELLS
 
 # BRUSH: how a press on the canvas paints - a pen, a rectangle filled when
 # the drag ends, a flood fill of the region pressed, a scatter of a share
@@ -417,11 +420,11 @@ editor-fill-too-large = too large to fill: more than { $n } cells
 # list's rows at 18 px in a 200 px row after a 32 px icon (about 12
 # letters), like the tools.
 editor-brush = BRUSH
-brush-pen = pen
-brush-rect = rectangle
-brush-fill = fill
-brush-scatter = scatter
-brush-stamps = stamps...
+brush-pen = PEN
+brush-rect = RECTANGLE
+brush-fill = FILL
+brush-scatter = SCATTER
+brush-stamps = STAMPS...
 
 # The select tool's strip under the bar: a word on each button, 11 pt in
 # 60 with a mouse and 12 in 72 on a touch screen (about 8 letters). COPY,
@@ -448,115 +451,115 @@ stamp-saved = my stamp { $n }
 # The tools, as the dropdown rows spell them, 18 px in a 200 px row
 # after a 32 px icon (about 12 letters). The key is `tool-` and the
 # tool's own name, which is also how the dev server spells it.
-tool-brick = brick
-tool-iron = iron
-tool-wood = wood
-tool-glass = glass
-tool-concrete = concrete
-tool-sandbag = sandbag
-tool-barrel = barrel
-tool-fence = fence
-tool-target = range target
-tool-tree = tree
-tool-pine = pine
-tool-spruce = spruce
-tool-scots = Scots pine
-tool-fir = fir sapling
-tool-birch = birch
-tool-willow = willow
-tool-palm = date palm
-tool-snag = dead snag
-tool-bush = bush
-tool-berry_bush = berry bush
-tool-juniper = juniper
-tool-fern = fern
-tool-autumn_bush = autumn bush
-tool-reeds = reeds
-tool-forest = forest brush
-tool-oil_drum = oil drum
-tool-fuel_drum = fuel drum
-tool-oil_trail = oil trail
-tool-road = road
-tool-water = water
-tool-lava = lava
-tool-tall_grass = tall grass
-tool-gate = gate
-tool-portal = portal
-tool-volcano = volcano
-tool-lamp = lamp post
-tool-start = p1 start
-tool-start2 = p2 start
-tool-bong = bong
-tool-enemy_bong = enemy bong
-tool-health = health
-tool-ammo = ammo
-tool-laser = laser
-tool-minigun = minigun
-tool-plasma = plasma
-tool-missiles = missiles
-tool-speedup = speed-up
-tool-shield = shield
-tool-flamethrower = flamethrower
-tool-bong_health = bong pack
-tool-tower_pack = tower pack
-tool-heat_shield = heat shield
-tool-grenades = grenades
-tool-sonic_hammer = sonic hammer
-tool-emp_burst = emp burst
-tool-gauss_rail = gauss rail
-tool-fpv_swarm = fpv swarm
-tool-rod_from_god = rod from god
-tool-gravity_well = gravity well
-tool-air_heli = air: helicopter
-tool-air_jet = air: jet
-tool-tesla = tesla coil
-tool-tesla_enemy = enemy tesla
-tool-gun_tower = gun tower
-tool-gun_tower_enemy = enemy gun
-tool-bio_slush = bio slush
-tool-bio_slush_enemy = enemy slush
-tool-eraser = eraser
-tool-select = select
+tool-brick = BRICK
+tool-iron = IRON
+tool-wood = WOOD
+tool-glass = GLASS
+tool-concrete = CONCRETE
+tool-sandbag = SANDBAG
+tool-barrel = BARREL
+tool-fence = FENCE
+tool-target = RANGE TARGET
+tool-tree = TREE
+tool-pine = PINE
+tool-spruce = SPRUCE
+tool-scots = SCOTS PINE
+tool-fir = FIR SAPLING
+tool-birch = BIRCH
+tool-willow = WILLOW
+tool-palm = DATE PALM
+tool-snag = DEAD SNAG
+tool-bush = BUSH
+tool-berry_bush = BERRY BUSH
+tool-juniper = JUNIPER
+tool-fern = FERN
+tool-autumn_bush = AUTUMN BUSH
+tool-reeds = REEDS
+tool-forest = FOREST BRUSH
+tool-oil_drum = OIL DRUM
+tool-fuel_drum = FUEL DRUM
+tool-oil_trail = OIL TRAIL
+tool-road = ROAD
+tool-water = WATER
+tool-lava = LAVA
+tool-tall_grass = TALL GRASS
+tool-gate = GATE
+tool-portal = PORTAL
+tool-volcano = VOLCANO
+tool-lamp = LAMP POST
+tool-start = P1 START
+tool-start2 = P2 START
+tool-bong = BONG
+tool-enemy_bong = ENEMY BONG
+tool-health = HEALTH
+tool-ammo = AMMO
+tool-laser = LASER
+tool-minigun = MINIGUN
+tool-plasma = PLASMA
+tool-missiles = MISSILES
+tool-speedup = SPEED-UP
+tool-shield = SHIELD
+tool-flamethrower = FLAMETHROWER
+tool-bong_health = BONG PACK
+tool-tower_pack = TOWER PACK
+tool-heat_shield = HEAT SHIELD
+tool-grenades = GRENADES
+tool-sonic_hammer = SONIC HAMMER
+tool-emp_burst = EMP BURST
+tool-gauss_rail = GAUSS RAIL
+tool-fpv_swarm = FPV SWARM
+tool-rod_from_god = ROD FROM GOD
+tool-gravity_well = GRAVITY WELL
+tool-air_heli = AIR: CHOPPER
+tool-air_jet = AIR: JET
+tool-tesla = TESLA COIL
+tool-tesla_enemy = ENEMY TESLA
+tool-gun_tower = GUN TOWER
+tool-gun_tower_enemy = ENEMY GUN
+tool-bio_slush = BIO SLUSH
+tool-bio_slush_enemy = ENEMY SLUSH
+tool-eraser = ERASER
+tool-select = SELECT
 
 # The short spelling for the bar's 10 px line and the cursor readout,
 # where a tool's full name has no room (about 6 letters). A tool without
 # one is spelled by its `tool-` message.
-tool-short-start = start
-tool-short-start2 = start2
-tool-short-tall_grass = grass
-tool-short-scots = scots
-tool-short-fir = fir
-tool-short-palm = palm
-tool-short-snag = snag
-tool-short-forest = forest
-tool-short-berry_bush = berries
-tool-short-autumn_bush = autumn
-tool-short-oil_drum = oil
-tool-short-fuel_drum = fuel
-tool-short-oil_trail = oil
-tool-short-enemy_bong = e.bong
-tool-short-flamethrower = flame
-tool-short-bong_health = bong+
-tool-short-tower_pack = tower+
-tool-short-heat_shield = heat
-tool-short-grenades = nades
-tool-short-sonic_hammer = sonic
-tool-short-emp_burst = emp
-tool-short-gauss_rail = rail
-tool-short-fpv_swarm = fpv
-tool-short-rod_from_god = rod
-tool-short-gravity_well = well
-tool-short-air_heli = heli
-tool-short-air_jet = jet
-tool-short-lamp = lamp
-tool-short-target = target
-tool-short-volcano = volc
-tool-short-tesla = tesla
-tool-short-tesla_enemy = e.tsl
-tool-short-gun_tower = gun
-tool-short-gun_tower_enemy = e.gun
-tool-short-bio_slush = bio
-tool-short-bio_slush_enemy = e.bio
+tool-short-start = START
+tool-short-start2 = START2
+tool-short-tall_grass = GRASS
+tool-short-scots = SCOTS
+tool-short-fir = FIR
+tool-short-palm = PALM
+tool-short-snag = SNAG
+tool-short-forest = FOREST
+tool-short-berry_bush = BERRIES
+tool-short-autumn_bush = AUTUMN
+tool-short-oil_drum = OIL
+tool-short-fuel_drum = FUEL
+tool-short-oil_trail = OIL
+tool-short-enemy_bong = E.BONG
+tool-short-flamethrower = FLAME
+tool-short-bong_health = BONG+
+tool-short-tower_pack = TOWER+
+tool-short-heat_shield = HEAT
+tool-short-grenades = NADES
+tool-short-sonic_hammer = SONIC
+tool-short-emp_burst = EMP
+tool-short-gauss_rail = RAIL
+tool-short-fpv_swarm = FPV
+tool-short-rod_from_god = ROD
+tool-short-gravity_well = WELL
+tool-short-air_heli = HELI
+tool-short-air_jet = JET
+tool-short-lamp = LAMP
+tool-short-target = TARGET
+tool-short-volcano = VOLC
+tool-short-tesla = TESLA
+tool-short-tesla_enemy = E.TSL
+tool-short-gun_tower = GUN
+tool-short-gun_tower_enemy = E.GUN
+tool-short-bio_slush = BIO
+tool-short-bio_slush_enemy = E.BIO
 
 ## Data names shown as words. The key is the data spelling (the map
 ## format's, the CLI's), which never changes.
@@ -575,24 +578,24 @@ weather-heat_haze = haze
 weather-random = random
 spawn-band = band
 spawn-waves = waves
-tier-light = light
-tier-medium = medium
-tier-heavy = heavy
-tier-super = super
+tier-light = LIGHT
+tier-medium = MEDIUM
+tier-heavy = HEAVY
+tier-super = SUPER
 
 # The twelve chassis. Names, not words - a language may keep them.
-tank-scout = scout
-tank-assault = assault
-tank-breaker = breaker
-tank-longbow = longbow
-tank-flak = flak
-tank-wraith = wraith
-tank-warden = warden
-tank-ravager = ravager
-tank-glacier = glacier
-tank-obelisk = obelisk
-tank-titan = titan
-tank-leviathan = leviathan
+tank-scout = SCOUT
+tank-assault = ASSAULT
+tank-breaker = BREAKER
+tank-longbow = LONGBOW
+tank-flak = FLAK
+tank-wraith = WRAITH
+tank-warden = WARDEN
+tank-ravager = RAVAGER
+tank-glacier = GLACIER
+tank-obelisk = OBELISK
+tank-titan = TITAN
+tank-leviathan = LEVIATHAN
 
 ## The bongs' names (docs/BONG_SPEC.md): Spike, Oggle and Gloop stand
 ## for the player, Puff, Capi, Blip and Fuzz for the enemy.

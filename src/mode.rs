@@ -194,6 +194,36 @@ pub struct Session {
     /// The real seconds left on the line BACK leaves under the left
     /// cluster when it put edits away (`back`, `tick_note`): 0 shows none.
     put_away_note: f32,
+    /// The plates changing places while BUILD, BACK or PLAY moves the
+    /// window to the other mode (`Swap`).
+    swap: Option<Swap>,
+}
+
+/// The plates changing places (docs/game-editor-fusion.md §5): BUILD,
+/// BACK and PLAY leave the field where it stands, the world the window
+/// left fading into the one it opens on over `ui_swap_seconds` while the
+/// mode's own plates come in - the builder's sliding in from the window's
+/// edges, play's corners fading up. Picture only, on real time: `app.rs`
+/// takes the world it left the frame the swap starts (`take_swap`) and
+/// draws the rest from `progress`. Reduced motion cuts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Swap {
+    /// The mode the window left.
+    pub from: Driver,
+    /// Seconds left of the swap, and its length.
+    left: f32,
+    of: f32,
+    /// `app.rs` has the picture of the world the window left.
+    taken: bool,
+}
+
+impl Swap {
+    /// How far the swap has got: 0 at its start, 1 done, eased out so the
+    /// plates land softly.
+    pub fn progress(&self) -> f32 {
+        let k = (1.0 - self.left / self.of.max(1e-6)).clamp(0.0, 1.0);
+        1.0 - (1.0 - k) * (1.0 - k)
+    }
 }
 
 /// The passage between local rounds and the end's slowed picture,
@@ -274,6 +304,7 @@ impl Session {
             clear_noted: false,
             curtain: Curtain::default(),
             put_away_note: 0.0,
+            swap: None,
         }
     }
 
@@ -714,9 +745,47 @@ impl Session {
                 self.players_dialog = false;
             } else {
                 self.enter_build();
+                self.start_swap(Driver::Play);
             }
         }
         self.driver
+    }
+
+    /// The window moved from `from`'s mode to the other: the plates change
+    /// places over `ui_swap_seconds` (`Swap`), or at once with reduced
+    /// motion or none to take.
+    fn start_swap(&mut self, from: Driver) {
+        let seconds = crate::tuning::tuning().ui_swap_seconds;
+        self.swap = (seconds > 0.0 && !crate::motion::reduced()).then_some(Swap { from, left: seconds, of: seconds, taken: false });
+    }
+
+    /// The swap under way, if one is (`Swap`).
+    pub fn swap(&self) -> Option<Swap> {
+        self.swap
+    }
+
+    /// The mode a swap that started this frame left, once: `app.rs` takes
+    /// the picture of the world it showed there.
+    pub fn take_swap(&mut self) -> Option<Driver> {
+        let swap = self.swap.as_mut().filter(|s| !s.taken)?;
+        swap.taken = true;
+        Some(swap.from)
+    }
+
+    /// The swap ended at once: the window shows the mode it moved to.
+    pub fn cut_swap(&mut self) {
+        self.swap = None;
+    }
+
+    /// One frame of the swap, `dt` real seconds. `app.rs` calls it once a
+    /// frame.
+    pub fn tick_swap(&mut self, dt: f32) {
+        if let Some(swap) = &mut self.swap {
+            swap.left -= dt;
+            if swap.left <= 0.0 {
+                self.swap = None;
+            }
+        }
     }
 
     /// Into the builder, the local round paused behind it - nothing calls
@@ -729,12 +798,21 @@ impl Session {
         self.players_dialog = false;
         self.put_away_note = 0.0;
         self.builder.set_round(Some(self.game.map.clone()));
+        self.builder.dress(self.round_look());
         self.driver = Driver::Build;
         if let Some(view) = self.play_view
             && self.builder.map().field_size() == self.game.map.field_size()
         {
             self.builder.look_at(view);
         }
+    }
+
+    /// How the local round dressed its map, for the builder to draw its
+    /// canvas the same (`MapEditor::dress`): its tiles' looks, its couch
+    /// seats' chassis and its seed, which picked its sky.
+    fn round_look(&self) -> crate::editor::RoundLook {
+        let chassis = [0, 1].map(|seat| self.game.seat_row(seat));
+        crate::editor::RoundLook { tiles: self.game.looks().clone(), chassis, seed: self.game.round_seed() }
     }
 
     /// The players button in the HUD: open the players dialog, or close it
@@ -796,8 +874,12 @@ impl Session {
             self.clear_attempt = Some(self.builder.revision());
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
+            // A round PLAY starts is not one starting over by itself: it
+            // comes in by the swap, never a dissolve.
+            self.curtain.last_frame = self.game.frame();
             self.driver = Driver::Play;
             self.players_dialog = false;
+            self.start_swap(Driver::Build);
         }
         self.driver
     }
@@ -830,6 +912,7 @@ impl Session {
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
             self.game.seed_override = pinned;
+            self.curtain.last_frame = self.game.frame();
         }
         self.driver
     }
@@ -850,6 +933,7 @@ impl Session {
             self.put_away_note = crate::tuning::tuning().ui_put_away_seconds;
         }
         self.driver = Driver::Play;
+        self.start_swap(Driver::Build);
         self.driver
     }
 
@@ -1493,6 +1577,65 @@ mod session_tests {
         assert_eq!(s.press_build(), Driver::Build);
         assert_eq!(s.back(), Driver::Play);
         assert_eq!(s.game.outcome(), outcome);
+    }
+
+    /// BUILD dresses the canvas in the looks of the round it paused - its
+    /// tiles' variants and ground seed, its seats' chassis and its seed -,
+    /// and keeps them after BACK and PLAY until the next BUILD brings the
+    /// new round's.
+    #[test]
+    fn build_dresses_the_canvas_in_the_rounds_looks() {
+        let mut s = session();
+        assert_eq!(s.press_build(), Driver::Build);
+        let look = s.builder.look().clone();
+        assert_eq!(look.tiles, *s.game.looks());
+        assert_eq!(look.seed, s.game.round_seed());
+        assert_eq!(look.chassis[0], s.game.seat_row(0));
+        assert_eq!(s.play(), Driver::Play);
+        assert_eq!(s.builder.look(), &look, "kept after PLAY");
+        assert_eq!(s.press_build(), Driver::Build);
+        assert_eq!(s.builder.look().tiles, *s.game.looks(), "the new round's");
+    }
+
+    /// PLAY starts its round with no dissolve (the swap is its motion),
+    /// even from a round paused on its end screen, whose screen play mode
+    /// keeps.
+    #[test]
+    fn play_from_the_builder_after_an_end_screen_starts_with_no_dissolve() {
+        let mut s = session();
+        step(&mut s);
+        finish(&mut s, false);
+        assert!(s.keeps_picture(), "play mode keeps the end screen");
+        assert_eq!(s.press_build(), Driver::Build);
+        step(&mut s);
+        assert_eq!(s.play(), Driver::Play);
+        step(&mut s);
+        assert_eq!(s.dissolve(), None, "PLAY comes in by the swap, with no dissolve");
+    }
+
+    /// BUILD, BACK and PLAY each start the plates' swap from the mode they
+    /// left, its picture taken once, done after `ui_swap_seconds`.
+    #[test]
+    fn the_plates_swap_on_build_back_and_play() {
+        let t = crate::tuning::tuning();
+        let mut s = session();
+        assert_eq!(s.swap(), None);
+        s.press_build();
+        assert_eq!(s.swap().map(|swap| swap.from), Some(Driver::Play));
+        assert_eq!(s.take_swap(), Some(Driver::Play));
+        assert_eq!(s.take_swap(), None, "taken once");
+        assert_eq!(s.swap().map(|swap| swap.progress()), Some(0.0));
+        s.tick_swap(t.ui_swap_seconds / 2.0);
+        let half = s.swap().map(|swap| swap.progress()).expect("under way");
+        assert!(half > 0.5 && half < 1.0, "eased out: {half}");
+        s.tick_swap(t.ui_swap_seconds);
+        assert_eq!(s.swap(), None, "done");
+        s.back();
+        assert_eq!(s.swap().map(|swap| swap.from), Some(Driver::Build));
+        s.tick_swap(t.ui_swap_seconds);
+        s.press_build();
+        s.play();
+        assert_eq!(s.swap().map(|swap| swap.from), Some(Driver::Build));
     }
 
     /// Edits made in the builder after BUILD are put away by BACK, not

@@ -25,7 +25,7 @@ use crate::math::{Color, Rectangle};
 use crate::render::canvas::{BlockTexture, GpuCanvas};
 use crate::render::game::Textures;
 use crate::render::weather::{self, CellMask, MaskTexture, PassView, WeatherFrame, WeatherFx};
-use crate::simulation::Game;
+
 use crate::tuning::tuning;
 
 /// How far into the field, in world px, the margins are drawn under the
@@ -65,18 +65,25 @@ pub struct MarginFx {
 }
 
 impl MarginFx {
-    /// Draw the world `frame` shows round `game`'s field into the target
-    /// this keeps and hand the target back: the ground, its shade, and the
-    /// sky `sky` is - the frame's weather and its passes - when the round
-    /// has one, over the margins (`MarginFrame::parts`). `backdrop` is what
-    /// lies past the ground's reach. `None` where a target could not be
-    /// made, which leaves the bars.
+    /// The margins as the last `draw` left them, for a swap to take its
+    /// picture of the window from (`app.rs`).
+    pub fn picture(&self) -> Option<&RenderTexture2D> {
+        self.targets.as_ref().map(|t| &t.out)
+    }
+
+    /// Draw the world `frame` shows round `scene`'s field - a round's, or
+    /// the builder's canvas - into the target this keeps and hand the
+    /// target back: the ground, its shade, and the sky `sky` is - the
+    /// frame's weather and its passes - when the field has one, over the
+    /// margins (`MarginFrame::parts`). `backdrop` is what lies past the
+    /// ground's reach. `None` where a target could not be made, which
+    /// leaves the bars.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
-        game: &Game,
+        scene: &weather::Scene,
         frame: &MarginFrame,
         textures: &Textures,
         backdrop: Color,
@@ -90,8 +97,8 @@ impl MarginFx {
             }
             return None;
         }
-        if !self.margin.as_ref().is_some_and(|m| m.fits(&game.ground, frame.cells)) {
-            self.margin = Some(Margin::new(&game.ground, game.map.field_size(), game.map.theme, frame.cells, &tuning()));
+        if !self.margin.as_ref().is_some_and(|m| m.fits(scene.ground, frame.cells)) {
+            self.margin = Some(Margin::new(scene.ground, scene.field, scene.theme, frame.cells, &tuning()));
         }
         let MarginFx { margin, shade, targets, light, mask, .. } = self;
         let margin = margin.as_ref().expect("made above");
@@ -104,7 +111,7 @@ impl MarginFx {
         let parts = frame.parts(UNDER_FIELD_PX);
         let local: Vec<Rectangle> = parts.iter().map(|p| Rectangle::new(p.x - rect.x, p.y - rect.y, p.width, p.height)).collect();
         let reach = parts.iter().copied().reduce(bounds).unwrap_or(rect);
-        let floor = Floor { margin, shade: shade_texture, textures, parts: &parts, reach, time: game.time };
+        let floor = Floor { margin, shade: shade_texture, textures, parts: &parts, reach, time: scene.time };
         let ground_and_shade = |rl: &mut RaylibHandle, a: &mut RenderTexture2D| {
             rl.draw_texture_mode(thread, a, |mut d| {
                 d.clear_background(backdrop);
@@ -164,9 +171,9 @@ impl MarginFx {
                         rl.draw_texture_mode(thread, light, |mut d| d.clear_background(sky.ambient_texel()));
                         let at = PassView { origin: crate::math::Vec2::new(rect.x, rect.y), size, light: *light.as_ref(), parts: &local };
                         if plan.ground {
-                            let made = weather::MaskFor { round: crate::minimap::RoundKey::of(game), origin: margin.ground.origin() };
+                            let made = weather::MaskFor { round: scene.made.clone(), origin: margin.ground.origin() };
                             let Ok((texture, (cols, rows))) =
-                                mask.sync_for(rl, thread, made, game.frame(), || weather::margin_mask_bytes(game, &margin.ground))
+                                mask.sync_for(rl, thread, made, scene.frame, || weather::margin_mask_bytes(scene, &margin.ground))
                             else {
                                 return None;
                             };

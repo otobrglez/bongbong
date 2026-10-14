@@ -6,8 +6,8 @@
 //!   field (`chrome::BuilderFrame`, as the round draws it), so FIT is the
 //!   field at its own size - `Camera::whole`, the very picture a round
 //!   draws of it. A field map's bitmap is made to the shape of the window
-//!   under the bar instead (`chrome::canvas_frame`), and FIT shrinks the
-//!   map into it, centred.
+//!   instead (`chrome::canvas_frame`), and FIT shrinks the map into it,
+//!   centred.
 //! - **Zoom and pan** go from FIT to a cell of `builder_zoom_max_cell_pt`
 //!   points. The view never leaves the field on an axis the map fills,
 //!   and centres it on an axis it does not. Where the screen is coarse

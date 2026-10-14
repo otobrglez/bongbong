@@ -190,6 +190,7 @@ editor-back = NAZAJ
 editor-file = MENI
 editor-map = IGRA
 editor-fit = VSE
+editor-day = DAN
 editor-play-here = IGRAJ TU
 editor-check = PREGLED
 
@@ -264,8 +265,8 @@ settings-width = ŠIRINA
 settings-height = VIŠINA
 settings-anchor = SIDRO
 settings-reset = PONASTAVI
-settings-auto = samodejno
-settings-auto-short = sam.
+settings-auto = SAMODEJNO
+settings-auto-short = SAM.
 settings-cli = (cli)
 
 editor-save-as = Shrani kot:
@@ -278,37 +279,37 @@ editor-page = { $from }-{ $to } od { $n }  (kolešček)
 editor-page-touch = { $from }-{ $to } od { $n }  (tapni < ali >)
 editor-untitled = neimenovan
 
-editor-saved = shranjeno v { $name }.toml
-editor-loaded = naloženo: { $name }
-editor-saving-unavailable = shranjevanje v tej izdaji ni na voljo: spremembe ostanejo v pomnilniku do konca seje
-editor-no-name = zemljevid še nima imena: uporabi SHRANI KOT
-editor-bad-name = ime "{ $name }" sme imeti le črke, števke, - in _
-editor-kept = shranjeno: { $name }
-editor-kept-modified = spremembe shranjene: { $name }
-editor-kept-original = { $name } je spet izvirnik
-editor-reverted = { $name } je spet izvirnik
+editor-saved = SHRANJENO V { $name }.toml
+editor-loaded = NALOŽENO: { $name }
+editor-saving-unavailable = SHRANJEVANJE V TEJ IZDAJI NI NA VOLJO: SPREMEMBE OSTANEJO V POMNILNIKU DO KONCA SEJE
+editor-no-name = ZEMLJEVID ŠE NIMA IMENA: UPORABI SHRANI KOT
+editor-bad-name = IME "{ $name }" SME IMETI LE ČRKE, ŠTEVKE, - IN _
+editor-kept = SHRANJENO: { $name }
+editor-kept-modified = SPREMEMBE SHRANJENE: { $name }
+editor-kept-original = { $name } JE SPET IZVIRNIK
+editor-reverted = { $name } JE SPET IZVIRNIK
 editor-copied = { $n ->
-    [one] kopirana { $n } celica
-    [two] kopirani { $n } celici
-    [few] kopirane { $n } celice
-   *[other] kopiranih { $n } celic
+    [one] KOPIRANA { $n } CELICA
+    [two] KOPIRANI { $n } CELICI
+    [few] KOPIRANE { $n } CELICE
+   *[other] KOPIRANIH { $n } CELIC
 }
 editor-cut = { $n ->
-    [one] izrezana { $n } celica
-    [two] izrezani { $n } celici
-    [few] izrezane { $n } celice
-   *[other] izrezanih { $n } celic
+    [one] IZREZANA { $n } CELICA
+    [two] IZREZANI { $n } CELICI
+    [few] IZREZANE { $n } CELICE
+   *[other] IZREZANIH { $n } CELIC
 }
-editor-stamp-kept = shranjeno kot { $name } med VZORCI
-editor-stamp-empty = ničesar za shraniti: izbor je prazen
-editor-fill-too-large = preveliko za polnjenje: več kot { $n } celic
+editor-stamp-kept = SHRANJENO KOT { $name } MED VZORCI
+editor-stamp-empty = NIČESAR ZA SHRANITI: IZBOR JE PRAZEN
+editor-fill-too-large = PREVELIKO ZA POLNJENJE: VEČ KOT { $n } CELIC
 
 editor-brush = ČOPIČ
-brush-pen = svinčnik
-brush-rect = pravokotnik
-brush-fill = polnjenje
-brush-scatter = raztros
-brush-stamps = vzorci...
+brush-pen = SVINČNIK
+brush-rect = PRAVOKOTNIK
+brush-fill = POLNJENJE
+brush-scatter = RAZTROS
+brush-stamps = VZORCI...
 
 select-copy = KOPIRAJ
 select-cut = IZREŽI
@@ -324,105 +325,105 @@ stamp-bunker = bunker
 stamp-river-bend = rečni zavoj
 stamp-saved = moj vzorec { $n }
 
-tool-brick = opeka
-tool-iron = železo
-tool-wood = les
-tool-glass = steklo
-tool-concrete = beton
-tool-sandbag = vreča peska
-tool-barrel = sod
-tool-fence = ograja
-tool-target = tarča
-tool-tree = drevo
-tool-pine = iglavec
-tool-spruce = smreka
-tool-scots = rdeči bor
-tool-fir = mlada jelka
-tool-birch = breza
-tool-willow = vrba
-tool-palm = datljevec
-tool-snag = suho drevo
-tool-bush = grm
-tool-berry_bush = jagodičje
-tool-juniper = brin
-tool-fern = praprot
-tool-autumn_bush = jesenski grm
-tool-reeds = trstičje
-tool-forest = gozdni čopič
-tool-oil_drum = sod olja
-tool-fuel_drum = sod goriva
-tool-oil_trail = sled olja
-tool-road = cesta
-tool-water = voda
-tool-lava = lava
-tool-tall_grass = visoka trava
-tool-gate = vrata
-tool-portal = portal
-tool-volcano = vulkan
-tool-lamp = lučka
-tool-start = začetek p1
-tool-start2 = začetek p2
-tool-bong = bong
-tool-enemy_bong = sovražni bong
-tool-health = zdravje
-tool-ammo = strelivo
-tool-laser = laser
-tool-minigun = mitraljez
-tool-plasma = plazma
-tool-missiles = rakete
-tool-speedup = pospešek
-tool-shield = ščit
-tool-flamethrower = metalec ognja
-tool-bong_health = paket za bonga
-tool-tower_pack = popravilo
-tool-heat_shield = toplotni ščit
-tool-grenades = granate
-tool-sonic_hammer = zvočno kladivo
-tool-emp_burst = emp sunek
-tool-gauss_rail = gaussov top
-tool-fpv_swarm = roj dronov
-tool-rod_from_god = božja palica
-tool-gravity_well = težnostna jama
-tool-air_heli = zrak: helikopter
-tool-air_jet = zrak: lovec
-tool-tesla = tesla stolp
-tool-tesla_enemy = sovr. tesla
-tool-gun_tower = strojnica
-tool-gun_tower_enemy = s. strojnica
-tool-bio_slush = bio brozga
-tool-bio_slush_enemy = s. brozga
-tool-eraser = radirka
-tool-select = izbor
+tool-brick = OPEKA
+tool-iron = ŽELEZO
+tool-wood = LES
+tool-glass = STEKLO
+tool-concrete = BETON
+tool-sandbag = VREČA PESKA
+tool-barrel = SOD
+tool-fence = OGRAJA
+tool-target = TARČA
+tool-tree = DREVO
+tool-pine = IGLAVEC
+tool-spruce = SMREKA
+tool-scots = RDEČI BOR
+tool-fir = MLADA JELKA
+tool-birch = BREZA
+tool-willow = VRBA
+tool-palm = DATLJEVEC
+tool-snag = SUHO DREVO
+tool-bush = GRM
+tool-berry_bush = JAGODIČJE
+tool-juniper = BRIN
+tool-fern = PRAPROT
+tool-autumn_bush = JESENSKI GRM
+tool-reeds = TRSTIČJE
+tool-forest = GOZDNI ČOPIČ
+tool-oil_drum = SOD OLJA
+tool-fuel_drum = SOD GORIVA
+tool-oil_trail = SLED OLJA
+tool-road = CESTA
+tool-water = VODA
+tool-lava = LAVA
+tool-tall_grass = VISOKA TRAVA
+tool-gate = VRATA
+tool-portal = PORTAL
+tool-volcano = VULKAN
+tool-lamp = LUČKA
+tool-start = ZAČETEK P1
+tool-start2 = ZAČETEK P2
+tool-bong = BONG
+tool-enemy_bong = SOVRAŽNI BONG
+tool-health = ZDRAVJE
+tool-ammo = STRELIVO
+tool-laser = LASER
+tool-minigun = MITRALJEZ
+tool-plasma = PLAZMA
+tool-missiles = RAKETE
+tool-speedup = POSPEŠEK
+tool-shield = ŠČIT
+tool-flamethrower = PLAMENOMET
+tool-bong_health = PAKET BONGA
+tool-tower_pack = POPRAVILO
+tool-heat_shield = TOPLOTNI ŠČIT
+tool-grenades = GRANATE
+tool-sonic_hammer = ZV. KLADIVO
+tool-emp_burst = EMP SUNEK
+tool-gauss_rail = GAUSSOV TOP
+tool-fpv_swarm = ROJ DRONOV
+tool-rod_from_god = BOŽJA PALICA
+tool-gravity_well = TEŽN. JAMA
+tool-air_heli = ZRAK: HELI
+tool-air_jet = ZRAK: LOVEC
+tool-tesla = TESLA STOLP
+tool-tesla_enemy = SOVR. TESLA
+tool-gun_tower = STROJNICA
+tool-gun_tower_enemy = S. STROJNICA
+tool-bio_slush = BIO BROZGA
+tool-bio_slush_enemy = S. BROZGA
+tool-eraser = RADIRKA
+tool-select = IZBOR
 
-tool-short-tall_grass = trava
-tool-short-forest = gozd
-tool-short-oil_drum = olje
-tool-short-fuel_drum = gorivo
-tool-short-oil_trail = olje
-tool-short-enemy_bong = s.bong
-tool-short-flamethrower = ogenj
-tool-short-bong_health = bong+
-tool-short-tower_pack = stolp+
-tool-short-heat_shield = ščit+
-tool-short-grenades = granat
-tool-short-sonic_hammer = zvok
-tool-short-emp_burst = emp
-tool-short-gauss_rail = tir
-tool-short-fpv_swarm = dron
-tool-short-rod_from_god = palica
-tool-short-gravity_well = jama
-tool-short-air_heli = heli
-tool-short-air_jet = lovec
-tool-short-volcano = vulkan
-tool-short-tesla = tesla
-tool-short-tesla_enemy = s.tsl
-tool-short-gun_tower = strel
-tool-short-gun_tower_enemy = s.str
-tool-short-bio_slush = bio
-tool-short-bio_slush_enemy = s.bio
-tool-short-sandbag = vreča
-tool-short-start = start p1
-tool-short-start2 = start p2
+tool-short-tall_grass = TRAVA
+tool-short-forest = GOZD
+tool-short-oil_drum = OLJE
+tool-short-fuel_drum = GORIVO
+tool-short-oil_trail = OLJE
+tool-short-enemy_bong = S.BONG
+tool-short-flamethrower = OGENJ
+tool-short-bong_health = BONG+
+tool-short-tower_pack = STOLP+
+tool-short-heat_shield = ŠČIT+
+tool-short-grenades = GRANAT
+tool-short-sonic_hammer = ZVOK
+tool-short-emp_burst = EMP
+tool-short-gauss_rail = TIR
+tool-short-fpv_swarm = DRON
+tool-short-rod_from_god = PALICA
+tool-short-gravity_well = JAMA
+tool-short-air_heli = HELI
+tool-short-air_jet = LOVEC
+tool-short-volcano = VULKAN
+tool-short-tesla = TESLA
+tool-short-tesla_enemy = S.TSL
+tool-short-gun_tower = STREL
+tool-short-gun_tower_enemy = S.STR
+tool-short-bio_slush = BIO
+tool-short-bio_slush_enemy = S.BIO
+tool-short-sandbag = VREČA
+tool-short-start = START P1
+tool-short-start2 = START P2
 
 ## Imena podatkov
 
@@ -440,23 +441,23 @@ weather-heat_haze = vročina
 weather-random = naključno
 spawn-band = pas
 spawn-waves = valovi
-tier-light = lahki
-tier-medium = srednji
-tier-heavy = težki
-tier-super = super
+tier-light = LAHKI
+tier-medium = SREDNJI
+tier-heavy = TEŽKI
+tier-super = SUPER
 
-tank-scout = skavt
-tank-assault = assault
-tank-breaker = breaker
-tank-longbow = longbow
-tank-flak = flak
-tank-wraith = wraith
-tank-warden = warden
-tank-ravager = ravager
-tank-glacier = glacier
-tank-obelisk = obelisk
-tank-titan = titan
-tank-leviathan = leviathan
+tank-scout = SKAVT
+tank-assault = ASSAULT
+tank-breaker = BREAKER
+tank-longbow = LONGBOW
+tank-flak = FLAK
+tank-wraith = WRAITH
+tank-warden = WARDEN
+tank-ravager = RAVAGER
+tank-glacier = GLACIER
+tank-obelisk = OBELISK
+tank-titan = TITAN
+tank-leviathan = LEVIATHAN
 
 ## Bongove vrstice v urjenju (docs/training-stage.md). { $name } je
 ## ime bonga, ki govori (`bong-name-*`).

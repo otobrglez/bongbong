@@ -947,12 +947,12 @@ beside `POSE_REACH_SLACK_PX`.
 
 Data names by family (`named("tool", ..)`), so no `text::keys` constant;
 both inside their budgets (`every_language_fits_every_budget`), checked in
-Phase 2 - `zvočni top` stands by if `zvočno kladivo` overflows a row.
+Phase 2 - the Slovene is `zvočno kladivo` cut to `ZV. KLADIVO` to fit its row.
 
 | Key | en | sl |
 |---|---|---|
-| `tool-sonic_hammer` | sonic hammer | zvočno kladivo |
-| `tool-short-sonic_hammer` | sonic | zvok |
+| `tool-sonic_hammer` | SONIC HAMMER | ZV. KLADIVO |
+| `tool-short-sonic_hammer` | SONIC | ZVOK |
 
 The HUD shows the glyph and a count; the weapon has no other words.
 

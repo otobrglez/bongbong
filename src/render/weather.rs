@@ -41,9 +41,9 @@
 use sola_raylib::prelude::*;
 use std::sync::Arc;
 
-use crate::fx::Fx;
-use crate::ground::Depth;
-use crate::map::{cell_to_world, CellObject};
+use crate::fx::Impact;
+use crate::ground::{Depth, GroundGrid};
+use crate::map::{cell_to_world, CellObject, Theme, Weather};
 use crate::minimap::RoundKey;
 use crate::math::{Color, Rectangle, Vec2};
 use crate::render::canvas::GpuCanvas;
@@ -53,7 +53,76 @@ use crate::tuning::{tuning, Tuning};
 use crate::view::Camera;
 use crate::weather::plain::{self, Air, Block};
 use crate::weather::{lightning, lights_in, Light, Look, Plan, Rgb, Shape};
-use crate::{MAX_SEATS, OBSTACLE_GRID_SIZE};
+use crate::{Position, MAX_SEATS, OBSTACLE_GRID_SIZE};
+
+/// What a sky is drawn over (docs/weather.md): a round's field
+/// (`Scene::of_round`), or the builder's canvas previewing its map's sky
+/// (`editor::render`). The passes (`WeatherFx::begin`) and an arena's
+/// margins (`render::margin`) read it, never a round, so the two are drawn
+/// under one sky alike.
+pub struct Scene<'a> {
+    /// The look the sky is drawn in now (`Game::look`).
+    pub look: Look,
+    /// The sky in force: a sandstorm's gust crosses the field.
+    pub sky: Weather,
+    /// The clock the sky moves by.
+    pub time: f32,
+    pub field: (f32, f32),
+    pub theme: Theme,
+    /// The floor, which the ground pass draws bare; flat white where
+    /// `plain` (`Game::plain_canvas`).
+    pub ground: &'a GroundGrid,
+    pub plain: bool,
+    /// The water froze (`WaterLayout::is_frozen`).
+    pub frozen: bool,
+    /// Where the seats are: the air thins round them.
+    pub seats: Vec<Position>,
+    /// Every light thrown on the field this frame that can reach the
+    /// world rectangle given (`view::Camera::part`; `None`, the whole
+    /// field), each cast against the walls (`weather::lights_in`).
+    pub lights: Box<dyn Fn(Option<Rectangle>) -> Vec<Light> + 'a>,
+    /// How deep the water is at a field point (`WaterLayout::depth_at`).
+    pub depth: Box<dyn Fn(Position) -> Depth + 'a>,
+    /// Every road cell, for the cell mask.
+    pub roads: Box<dyn Fn() -> Vec<(i32, i32)> + 'a>,
+    /// What its cell mask is made from, and the frame drawn: a mask is made
+    /// again for another key or a frame counter that went back.
+    pub made: RoundKey,
+    pub frame: u64,
+}
+
+impl<'a> Scene<'a> {
+    /// `game`'s field under its sky, the particle layer's `impacts` among
+    /// its lights.
+    pub fn of_round(game: &'a Game, impacts: &'a [Impact]) -> Scene<'a> {
+        let t = tuning();
+        let look = game.look(&t);
+        let seats = game.players().into_iter().flatten().map(|e| crate::simulation::with_tank(&game.world, e, |tank| tank.position)).collect();
+        Scene {
+            look,
+            sky: game.weather(),
+            time: game.time,
+            field: game.map.field_size(),
+            theme: game.map.theme,
+            ground: &game.ground,
+            plain: game.plain_canvas,
+            frozen: game.water().is_frozen(),
+            seats,
+            lights: Box::new(move |part| lights_in(game, impacts, &look, &tuning(), part)),
+            depth: Box::new(|at| game.water.depth_at(at)),
+            roads: Box::new(|| game.map.iter_cells().filter(|(_, _, cell)| matches!(cell, CellObject::Road)).map(|(c, r, _)| (c, r)).collect()),
+            made: RoundKey::of(game),
+            frame: game.frame(),
+        }
+    }
+
+    /// The bare ground, as the field's floor draws it (`Game::paint_ground`).
+    fn paint_ground(&self, c: &mut impl crate::canvas::Canvas) {
+        if !self.plain {
+            crate::ground::draw(c, self.ground, self.theme, self.time);
+        }
+    }
+}
 
 /// The shaders' clock wraps after this many seconds. Their noise hashes
 /// the clock through positions (a raindrop's fall is `time * speed`
@@ -437,9 +506,9 @@ pub fn multiply_ambient<D: RaylibDraw>(d: &mut D, frame: &WeatherFrame, size: (i
 /// they meet; past it a cell is dry ground but where the water runs out of
 /// the map, which keeps the depth of the map cell it runs from, and no road
 /// leaves the field.
-pub fn margin_mask_bytes(game: &Game, grid: &crate::ground::GroundGrid) -> (i32, i32, Vec<u8>) {
-    let (field_cols, field_rows, field) = mask_bytes(game);
-    let (w, h) = game.map.field_size();
+pub fn margin_mask_bytes(scene: &Scene, grid: &crate::ground::GroundGrid) -> (i32, i32, Vec<u8>) {
+    let (field_cols, field_rows, field) = mask_bytes(scene);
+    let (w, h) = scene.field;
     let (map_cols, map_rows) = ((w / OBSTACLE_GRID_SIZE).ceil() as i32, (h / OBSTACLE_GRID_SIZE).ceil() as i32);
     let (ox, oy) = grid.origin();
     let (cols, rows) = (grid.cols as i32, grid.rows as i32);
@@ -455,7 +524,7 @@ pub fn margin_mask_bytes(game: &Game, grid: &crate::ground::GroundGrid) -> (i32,
             }
             if grid.water_at(wc, wr) {
                 let at = cell_to_world(wc.clamp(0, map_cols - 1), wr.clamp(0, map_rows - 1));
-                bytes[i] = match game.water.depth_at(at) {
+                bytes[i] = match (scene.depth)(at) {
                     Depth::Dry => 0,
                     Depth::Shallow => 128,
                     Depth::Deep | Depth::Ice => 255,
@@ -694,23 +763,22 @@ impl PassShaders {
 }
 
 impl WeatherFx {
-    /// Resolve this frame's weather for `game` and draw what has to exist
-    /// before pass 1: the light map (the round's lights and the particle
-    /// layer's hits) and the bare ground for the ground pass, both over
-    /// `camera`'s view. `None` is a clear frame - the sky in force draws
-    /// nothing, or its targets could not be made - and pass 1 runs as it
-    /// would with no weather at all.
-    pub fn begin(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, game: &Game, fx: &Fx, textures: &Textures, camera: &Camera) -> Option<WeatherFrame> {
+    /// Resolve this frame's weather over `scene` and draw what has to exist
+    /// before pass 1: the light map (its lights) and the bare ground for
+    /// the ground pass, both over `camera`'s view. `None` is a clear frame -
+    /// the sky in force draws nothing, or its targets could not be made -
+    /// and pass 1 runs as it would with no weather at all.
+    pub fn begin(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, scene: &Scene, textures: &Textures, camera: &Camera) -> Option<WeatherFrame> {
         let t = tuning();
-        let look = game.look(&t);
+        let look = scene.look;
         let plan = look.plan()?;
-        let (w, h) = game.map.field_size();
+        let (w, h) = scene.field;
         let size = camera.target_size();
         // Without the shaders the ground pass is the snow's blocks, which
         // need neither the bare ground's target nor the cell mask.
         let plain = self.shaders.is_none() || t.weather_without_shaders;
         let ground = plan.ground && !plain;
-        let cells = match self.ensure_targets(rl, thread, size).and_then(|()| if ground { self.ensure_mask(rl, thread, game) } else { Ok((1, 1)) }) {
+        let cells = match self.ensure_targets(rl, thread, size).and_then(|()| if ground { self.ensure_mask(rl, thread, scene) } else { Ok((1, 1)) }) {
             Ok(cells) => cells,
             Err(e) => {
                 if !self.warned {
@@ -722,10 +790,10 @@ impl WeatherFx {
         };
         // A strike is a whole-screen flash, so the reduced-flash knob that
         // calms the kill flash and the shake calms it too.
-        let flash = if look.lightning > 0.0 { (lightning(game.time, &t) * look.lightning * t.screen_fx_intensity).clamp(0.0, 1.5) } else { 0.0 };
+        let flash = if look.lightning > 0.0 { (lightning(scene.time, &t) * look.lightning * t.screen_fx_intensity).clamp(0.0, 1.5) } else { 0.0 };
         let ambient = look.ambient.map(|a| a + (1.05 - a).max(0.0) * (flash * 0.9).min(1.0));
         if plan.lit {
-            let all = lights_in(game, fx.impacts(), &look, &t, camera.part());
+            let all = (scene.lights)(camera.part());
             if self.disc.is_none() {
                 self.disc = make_disc(rl, thread);
             }
@@ -737,30 +805,27 @@ impl WeatherFx {
         if ground {
             rl.draw_texture_mode(thread, &mut targets.ground, |mut d| {
                 d.clear_background(Color::WHITE);
-                d.draw_mode2D(camera.in_target(), |mut d, _| game.paint_ground(&mut GpuCanvas::culled(&mut d, textures, camera.cull())));
+                d.draw_mode2D(camera.in_target(), |mut d, _| scene.paint_ground(&mut GpuCanvas::culled(&mut d, textures, camera.cull())));
             });
         }
         let mut seats = [Vector2::new(0.0, 0.0); MAX_SEATS];
         let mut seat_count = 0;
-        for entity in game.players().into_iter().flatten() {
-            let at = crate::simulation::with_tank(&game.world, entity, |tank| tank.position);
-            if seat_count < MAX_SEATS {
-                seats[seat_count] = Vector2::new(at.x, at.y);
-                seat_count += 1;
-            }
+        for at in scene.seats.iter().take(MAX_SEATS) {
+            seats[seat_count] = Vector2::new(at.x, at.y);
+            seat_count += 1;
         }
         // The gust the rules push the hulls with, drawn where it blows: its
         // age travels rather than its start, so the wrapped clock never
         // splits a front in two.
-        let gust = (t.weather_rules && game.weather() == crate::map::Weather::Sandstorm)
-            .then(|| crate::weather::gust_on_field(game.time, w, h, &t))
+        let gust = (t.weather_rules && scene.sky == Weather::Sandstorm)
+            .then(|| crate::weather::gust_on_field(scene.time, w, h, &t))
             .flatten()
-            .map(|g| (game.time - g.start, Vector2::new(g.dir.x, g.dir.y)));
+            .map(|g| (scene.time - g.start, Vector2::new(g.dir.x, g.dir.y)));
         Some(WeatherFrame {
             plan,
             look,
             ambient,
-            time: game.time.rem_euclid(CLOCK_WRAP_SECONDS),
+            time: scene.time.rem_euclid(CLOCK_WRAP_SECONDS),
             flash,
             camera: *camera,
             size,
@@ -768,7 +833,7 @@ impl WeatherFx {
             seats,
             seat_count,
             gust,
-            frozen: game.water().is_frozen(),
+            frozen: scene.frozen,
             plain,
             tuning: t,
         })
@@ -803,12 +868,13 @@ impl WeatherFx {
         Ok(())
     }
 
-    /// The cell mask for `game`'s map, made again only for another round
-    /// (`MaskFor`) - a round's water and roads never change - and uploaded
-    /// when it changed; the mask's size in cells.
-    fn ensure_mask(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, game: &Game) -> Result<(i32, i32), String> {
-        let made = MaskFor { round: RoundKey::of(game), origin: (0, 0) };
-        let frame = game.frame();
+    /// The cell mask for `scene`'s field, made again only for another key
+    /// (`MaskFor`) - a round's water and roads never change, a canvas's
+    /// key moves with every edit - and uploaded when it changed; the
+    /// mask's size in cells.
+    fn ensure_mask(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, scene: &Scene) -> Result<(i32, i32), String> {
+        let made = MaskFor { round: scene.made.clone(), origin: (0, 0) };
+        let frame = scene.frame;
         if let Some(mask) = &self.mask
             && self.mask_for.as_ref().is_some_and(|(was, last)| *was == made && frame >= *last)
         {
@@ -816,26 +882,26 @@ impl WeatherFx {
             self.mask_for = Some((made, frame));
             return Ok(cells);
         }
-        let (cols, rows, bytes) = mask_bytes(game);
+        let (cols, rows, bytes) = mask_bytes(scene);
         upload_mask(&mut self.mask, rl, thread, cols, rows, bytes)?;
         self.mask_for = Some((made, frame));
         Ok((cols, rows))
     }
 }
 
-/// The ground pass's per-cell facts about `game`'s map, RGBA8 row by row:
+/// The ground pass's per-cell facts about `scene`'s field, RGBA8 row by row:
 /// red the water's depth (0 dry, 128 a ford, 255 deep), green road. The
 /// grid is the ground layer's: cell `(c, r)` centred on `(c, r) * 32`, one
 /// more column and row than the field is wide and tall.
-fn mask_bytes(game: &Game) -> (i32, i32, Vec<u8>) {
-    let (w, h) = game.map.field_size();
+fn mask_bytes(scene: &Scene) -> (i32, i32, Vec<u8>) {
+    let (w, h) = scene.field;
     let cols = (w / OBSTACLE_GRID_SIZE).ceil() as i32 + 1;
     let rows = (h / OBSTACLE_GRID_SIZE).ceil() as i32 + 1;
     let mut bytes = vec![0u8; (cols * rows * 4).max(0) as usize];
     for r in 0..rows {
         for c in 0..cols {
             let i = ((r * cols + c) * 4) as usize;
-            bytes[i] = match game.water.depth_at(cell_to_world(c, r)) {
+            bytes[i] = match (scene.depth)(cell_to_world(c, r)) {
                 Depth::Dry => 0,
                 Depth::Shallow => 128,
                 Depth::Deep | Depth::Ice => 255,
@@ -843,8 +909,8 @@ fn mask_bytes(game: &Game) -> (i32, i32, Vec<u8>) {
             bytes[i + 3] = 255;
         }
     }
-    for (c, r, cell) in game.map.iter_cells() {
-        if matches!(cell, CellObject::Road) && (0..cols).contains(&c) && (0..rows).contains(&r) {
+    for (c, r) in (scene.roads)() {
+        if (0..cols).contains(&c) && (0..rows).contains(&r) {
             bytes[((r * cols + c) * 4 + 1) as usize] = 255;
         }
     }

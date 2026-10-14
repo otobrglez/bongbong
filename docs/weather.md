@@ -29,8 +29,11 @@ probe and the determinism pins hold it to that).
 - **Builder**: the MAP panel's SKY group is a tile per sky, ringed and
   ticked while the map holds it: a tap puts the sky in or takes it out,
   one undo step like every other settings field. With none in, the map is
-  clear and CLEAR shows ticked. The canvas stays clear, since a map is
-  edited in daylight; PLAY starts the round under the sky its seed picks.
+  clear and CLEAR shows ticked. The canvas previews the sky its map would
+  be fought under - the one the paused round's seed picks, so a map left
+  as it was shows that round's own sky - and DAY on the top-left plate
+  draws it by daylight for editing ("The builder's sky" below); PLAY
+  starts a fresh round under the sky its own seed picks.
 - **The pick**: a round takes one of its map's skies, every one as likely
   as the others, by `weather::pick_sky`, a hash of the round's seed;
   `random` is the pick over all of `Weather::SKIES` (`random_sky`). It is not a draw from
@@ -260,6 +263,41 @@ every sky this way where the shaders do work, and the dev server's
 `weather` reply and `status.weather` carry `without_shaders`, true for
 either reason.
 
+## The builder's sky
+
+The builder's canvas is drawn under its map's sky through the same passes
+(docs/game-editor-fusion.md §5). `MapEditor::map_sky` is `in_force` - the
+`weather_override` knob's sky where it names one, as for a local round -
+over the canvas's map with the seed of the round BUILD paused, so a map
+left as it was shows the very sky that round had, and a change to the SKY
+group shows its pick at once; `MapEditor::sky` is that, or clear while DAY is
+down - the top-left plate's button, there only while the map's sky is not
+clear, the session's choice and never the map's. The dev server's
+`status.builder.sky` and `status.builder.day` report them.
+
+The passes (`WeatherFx::begin`) and an arena's margins (`MarginFx::draw`)
+take a `render::weather::Scene` - what a sky is drawn over - rather than a
+`Game`: the look and the sky in force, the clock, the field's size, theme
+and floor, whether it is plain or its water frozen, the seats the air
+thins round, closures for its lights, its water's depth and its roads, and
+the key and frame its cell mask is made for. `Scene::of_round` is a
+round's. The builder's (`editor::render`'s `sky_scene`) is its canvas on
+the wall clock, its starts standing for the seats and its mask keyed by
+the canvas's cells (`minimap::RoundKey::of_canvas`), so an edit of the
+water or the roads makes the mask again. Its lights are a round's at rest
+(`MapEditor::canvas_lights`): each start's tank as its seat's, the bongs,
+the crates, the lamp posts, the towers, an active network's portals,
+every other lava cell and the craters asleep, cast against the canvas's
+own walls (`Occluders::over`). What shines by itself - the starts' lamps,
+the lava and the craters - is drawn over the lit canvas as in pass 4, and
+the editing marks go over the finished sky, so the dark never hides them.
+
+The sky is drawn wherever the canvas is drawn a texel per world pixel: at
+FIT on an arena, its margins under the same sky, and in a zoomed view's
+own target. A view of a large map zoomed so far out that its target holds
+less than a texel a world pixel (`editor::camera::scene_plan`) draws the
+canvas clear.
+
 ## Lights
 
 `weather::lights` gathers every light the round throws, each already cast
@@ -286,6 +324,13 @@ against the walls:
   particle layer is playing.
 - **The bongs and the pickups**, faintly, in their own colours
   (`pickup_glow_strength`), so a lamp can find them.
+
+Each source's light is one function - `tank_lights`, `bong_light`,
+`pickup_light`, `portal_light`, `fire_light`, `lava_light`,
+`crater_light`, `lamp_light`, `tower_lights` - and `cast_lights` drops
+what cannot reach the view and casts the rest. A round's lights
+(`lights_in`) and the builder's canvas's (above) are made of the same
+functions, so a lamp lights the canvas as it lights the round.
 
 **Shadows** come from `weather::Occluders`: the map's cells, marked where a
 tile's `Material::blocks_light` (brick, iron, wood, concrete and the towers; glass lets light
@@ -392,6 +437,10 @@ A driver that cannot compile the passes draws the sky without them
   the room's), and
   `text_tests` (every weather name fits its settings row in every
   language).
+- `editor_tests::day_draws_a_dark_maps_canvas_by_daylight` (DAY stands
+  only under a dark sky, the paused round's seed's pick, and draws the
+  canvas clear while it is down) and
+  `the_canvas_lights_its_starts_and_lamps_under_a_dark_sky`.
 - The picture itself is checked the way every effect is: `just run-dev`,
   `tuning_set {patch: {weather_override: N}}`, `step`, `screenshot`.
 

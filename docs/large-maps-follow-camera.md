@@ -69,8 +69,8 @@ Contents
   The world fills the screen edge to edge, under the notch and the home
   indicator; two small clusters sit inside the safe area at the top
   (Apple's guidance puts menus there, and the thumbs are at the bottom).
-  Health is already a ring under the tank; ammo joins it. The bar stays
-  as the builder's toolbar.
+  Health is already a ring under the tank; ammo joins it. The builder's
+  controls stand on plates in the same style.
 - **Edge arrows for threats and teammates, a lane warning, and a
   minimap for objectives on tablets and desktops.** Arrows sit where the
   line from the tank to the target meets an inset rectangle that avoids
@@ -487,8 +487,11 @@ at the bottom corners, where the floating stick already lives.
   number that matters most never needs a glance away.
 - **Fade under action:** a cluster drops to about 35% opacity while a
   tank or a shell is under it.
-- **The bar remains** as the builder's toolbar, where tools matter more
-  than pixels, at 44 pt on touch screens.
+- **The builder's plates** carry its controls in the same style, where
+  tools matter more than pixels, at 44 pt on touch screens: BACK and the
+  map's name top-left, the edit actions and PLAY top-right (PLAY in
+  BUILD's box), the tools on a tray along the bottom, over a canvas that
+  fills the window as play's field does (docs/game-editor-fusion.md §7).
 - **Banners, dialogs, the lobby, the level select and the end screen**
   move from the field camera to screen space; their geometry tables stop
   depending on the smallest shipped field.
@@ -513,9 +516,11 @@ on a coarse screen and is smooth on a fine one, as play's framing is
 (section 3); a pinch eases onto the nearest whole-block scale when it
 lifts. The canvas is drawn at a texel per world pixel into its own
 target and that is scaled to the window, so a fractional zoom never
-samples across a tile's edge; at FIT on an arena it is drawn exactly as
-before the camera existed. A field map's builder bitmap is the window's
-shape with the bar at the standard arena's size (`editor::camera`).
+samples across a tile's edge; at FIT on an arena it is drawn into the
+field's own bitmap and put on the window through the view a round of it
+uses, its margins round it - the picture play shows. A field map's
+builder bitmap is the whole window's shape at the standard arena's scale
+(`editor::chrome::canvas_frame`).
 
 - **A paint threshold on touch.** Below a cell of about 6 mm a finger
   cannot hit one cell; there a tap zooms in to a 9 mm cell at that point
@@ -540,10 +545,10 @@ shape with the bar at the standard arena's size (`editor::camera`).
   96 x 54 study map a cell of a wall stroke went from 53 ms and a 5.3 MB
   upload to 0.3 ms and 16 kB in a debug build.
 - **Select, move, copy and stamps** (`editor/select.rs`). A rectangle
-  select tool - BRUSH's list in the bar, the palette's brush row on a
-  folded bar: a drag draws the selection, a drag from inside it lifts its
-  cells and carries them, and a strip under the bar acts on it - COPY,
-  CUT, PASTE, a flip each way, DELETE, + STAMP and the STAMPS list
+  select tool - BRUSH's list on the tray, the palette's brush row on a
+  folded one: a drag draws the selection, a drag from inside it lifts its
+  cells and carries them, and a strip under the top plates acts on it -
+  COPY, CUT, PASTE, a flip each way, DELETE, + STAMP and the STAMPS list
   (Ctrl+C, Ctrl+X, Ctrl+V and Delete with a keyboard). A paste or a stamp
   is a ghost that follows the mouse, or that a finger drags or taps into
   place, until a press puts it down. Every move, paste, flip, cut and
@@ -552,10 +557,10 @@ shape with the bar at the standard arena's size (`editor::camera`).
   a paste puts one down only where the map holds none, so it never leaves
   two. Three stamps ship under `maps/stamps/` (a fort, a bunker, a river
   bend); the ones kept in a session live in memory, on every build. The
-  strip stands under the bar rather than beside the selection: it never
-  moves while a finger drags or pinches, never stands over the cells being
-  worked on, and eight finger-size buttons beside a selection would cover
-  a good part of a phone's canvas.
+  strip stands under the top-left plate rather than beside the selection:
+  it never moves while a finger drags or pinches, never stands over the
+  cells being worked on, and eight finger-size buttons beside a selection
+  would cover a good part of a phone's canvas.
 - **Fills and a scatter brush** (`editor/brush.rs`). The brush has a
   shape, BRUSH's list and the palette's brush row: PEN is the stroke;
   RECT draws a rectangle while the drag is held and fills it on the
@@ -602,8 +607,9 @@ shape with the bar at the standard arena's size (`editor::camera`).
   uploaded once (`editor::render::ThumbnailTextures`, the `BlockTexture`
   pattern), and the textures are freed the frame the list closes.
 - **Play from here.** PLAY starts from the map's start; PLAY HERE, beside
-  it in the bar, puts seat 1 on the drivable cell nearest the middle of
-  the view - with `battlefield::enemy_spawn_legal`'s clearance, out of
+  it on the top-right plate, puts seat 1 on the drivable cell nearest
+  the middle of the view - with `battlefield::enemy_spawn_legal`'s
+  clearance, out of
   deep water and off a portal, in the part of the map the map's own start
   drives in (`mode::play_here_cell`) - without touching the map or its
   history, and the round's camera opens there. Seat 2 on a couch starts
@@ -611,12 +617,13 @@ shape with the bar at the standard arena's size (`editor::camera`).
   nothing.
 - **The CHECK panel.** The linter the dev server's `lint` runs
   (`maplint::lint_map`), its findings carrying the cells they are about,
-  listed errors first in a paged panel hanging from the bar. A finding's
-  row pans and zooms the builder's camera onto its cells and marks them;
-  where the fix is unambiguous - a penned or missing start, a cut-off or
-  crowded player 2, a lone portal, a gate off the edge - FIX makes it as
-  one undo step. It runs when the panel opens and again after each edit
-  while it is open: about 29 ms on the 96 x 54 study map in a debug build.
+  listed errors first in a paged panel hanging under the top-right
+  plate. A finding's row pans and zooms the builder's camera onto its
+  cells and marks them; where the fix is unambiguous - a penned or
+  missing start, a cut-off or crowded player 2, a lone portal, a gate off
+  the edge - FIX makes it as one undo step. It runs when the panel opens
+  and again after each edit while it is open: about 29 ms on the 96 x 54
+  study map in a debug build.
 - **A loupe on touch.** While one finger paints where a cell is drawn
   under 12 mm (`builder_loupe_cell_mm`), a magnified view of the cells
   under it stands above the finger (left of it by the right edge, beside
@@ -1181,10 +1188,10 @@ setting with its anchor, incremental ground (`GroundGrid::repaint`) and
 the minimap navigator (`MapEditor::navigator_rect`, repainted per
 stroke), play from here (`mode::Session::play_here`), the lint panel (the
 CHECK panel), the loupe (`MapEditor::loupe`), the clear check
-(`MapFile::revision`, `MapEditor::par`) and the bar and its popups on the
-window in UI points like play's corners (`editor::chrome`: 44 pt on a
-touch screen, the categories folded into a palette on a narrow one, the
-long popups paged), select and stamps (`editor::select`), fills and
+(`MapFile::revision`, `MapEditor::par`) and the builder's plates and
+popups on the window in UI points in play's corner style (`editor::chrome`:
+44 pt on a touch screen, the categories folded into a palette on a narrow
+one, the long popups paged), select and stamps (`editor::select`), fills and
 scatter (`editor::brush`) and the Load list's thumbnails
 (`editor::thumbs`); from step 7 the Android `appCategory`, maps capped at
 what the wire carries, the laser's reach, the mark caps and the bounded

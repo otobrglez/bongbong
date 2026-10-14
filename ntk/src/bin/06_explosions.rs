@@ -21,6 +21,7 @@
 //! - Effects are layered: sprite animation, particles (owned by the app,
 //!   not the simulation), a full-screen shader pass, camera shake.
 
+use bongbong::editor::render::SkyFx;
 use bongbong::editor::{BuilderFrame, BuilderInput, EditorTextures, Tool};
 use bongbong::fx::Fx;
 use bongbong::render::game::{Effects, Textures};
@@ -39,7 +40,7 @@ use raylib::core::game_loop;
 use raylib::prelude::*;
 
 /// The field in 32 px cells: 1088 x 448 px - the game's own width, so the
-/// builder's bar fits, and roughly the other demos' height.
+/// builder's plates fit, and roughly the other demos' height.
 const COLS: f32 = 34.0;
 const ROWS: f32 = 14.0;
 /// Where the (hidden) player tank is parked: a corner cell.
@@ -83,7 +84,10 @@ fn main() {
     let target = load(&mut rl, "static/target_sheet.png");
     let barrel_explosion = load(&mut rl, "static/barrel_explosion.png");
     let ground = load(&mut rl, "static/punyworld/punyworld-overworld-tileset.png");
-    let bong_idle = load(&mut rl, &bongbong::canvas::Sheet::Bong { kind: bongbong::bong::BongKind::Spike, clip: bongbong::bong::BongAnim::Idle }.path());
+    // Every bong's filmstrips, as the game loads them: the builder draws
+    // whichever its map picks.
+    let bongs: Vec<bongbong::render::bong::BongTextures> =
+        bongbong::bong::BongKind::ALL.into_iter().map(|kind| bongbong::render::bong::BongTextures::load(&mut rl, &thread, kind)).collect();
     let eraser = load(&mut rl, "static/ui/eraser.png");
 
     // The three full-screen ripple shaders the renderer resolves in pass 2.
@@ -147,8 +151,8 @@ fn main() {
             }
         }
 
-        // The builder on the window, its bar along the top and the canvas
-        // under it; play's bare field fitted to the window. The demo never
+        // The builder on the window, its canvas under its plates; play's
+        // bare field fitted to the window. The demo never
         // opens a room, so the two online drivers cannot come up here; they
         // take the round's own view all the same.
         let map = session.builder.map();
@@ -181,7 +185,7 @@ fn main() {
             props: &props,
             barrel_explosion: &barrel_explosion,
             ground: &ground,
-            bongs: &[],
+            bongs: &bongs,
             // The demo paints a plain white canvas, which draws no ground
             // and so no floor shade.
             blocks: Vec::new(),
@@ -189,7 +193,7 @@ fn main() {
 
         match session.mode() {
             // BUILD: the game's builder, driven by the same input struct the
-            // game fills. 1/2/3 pick the drum tools without the bar.
+            // game fills. 1/2/3 pick the drum tools without the tray.
             Driver::Build => {
                 let key = |a: KeyboardKey, b: KeyboardKey| rl.is_key_pressed(a) || rl.is_key_pressed(b);
                 if key(KeyboardKey::KEY_ONE, KeyboardKey::KEY_KP_1) {
@@ -228,28 +232,18 @@ fn main() {
                         &build_frame,
                         bongbong::math::Color::WHITE,
                         &EditorTextures {
-                            obstacles: &obstacles,
-                            props: &props,
-                            ground: &ground,
-                            grass: &grass,
-                            trees: &trees,
-                            bushes: &bushes,
+                            sheets: textures,
                             // The grass theme's sheets are the ones loaded above.
                             theme: bongbong::map::Theme::Grass,
-                            target: &target,
-                            towers: &towers,
-                            crates: &crates,
-                            pickup_glyphs: &pickup_glyphs,
-                            portal: &portal,
-                            bong_idle: &bong_idle,
-                            enemy_bong_idle: &bong_idle,
+                            bong_idle: &bongs[session.builder.map().bong_kind(bongbong::bong::Side::Player).index()].idle,
+                            enemy_bong_idle: &bongs[session.builder.map().bong_kind(bongbong::bong::Side::Enemy).index()].idle,
                             eraser: &eraser,
-                            tanks: &tanks,
-                            shade: None,
                             minimap: None,
                             thumbnails: None,
                         },
                         session.question.as_ref(),
+                        SkyFx { weather: None, margins: None },
+                        None,
                     );
                     return;
                 }
@@ -283,7 +277,7 @@ fn main() {
             &view,
             &Camera::whole((width, height)),
             bongbong::math::Color::WHITE,
-            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None, indicators: None, bubble: None, minimap: None, margins: None, split: None, dissolve: None },
+            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None, indicators: None, bubble: None, minimap: None, margins: None, split: None, dissolve: None, swap: None },
             &textures,
             &layout_play,
             &PlayChrome::default(),
