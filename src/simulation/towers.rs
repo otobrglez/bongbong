@@ -202,9 +202,7 @@ impl Game {
             .filter_map(|(e, o)| {
                 TowerKind::from_material(o.material).map(|kind| {
                     let mut tower = Tower::new(kind, side_of_variant(o.variant), e, o.position);
-                    if kind.turns() && o.position.distance_to(middle) > 1.0 {
-                        tower.heading = heading_to(o.position, middle);
-                    }
+                    tower.heading = crate::tower::opening_heading(kind, o.position, middle, tower.heading);
                     (o.cell(), tower)
                 })
             })

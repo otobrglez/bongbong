@@ -15,10 +15,10 @@
 //! Nothing stands on it and nothing plays there: the simulation, the
 //! field's rect on the window, `View`'s mapping and every pointer are what
 //! they were, and the margins are drawn behind the field
-//! (`render::margin`), under the round's sky the way the field is. Only an
-//! arena in play, online or behind the lobby draws them; the builder keeps
-//! its plain canvas fill, and a followed field map shows the world it
-//! follows.
+//! (`render::margin`), under the round's sky the way the field is. An arena
+//! in play, online, behind the lobby or at FIT in the builder draws them
+//! (`render::weather::Scene` is a round's field or the builder's canvas);
+//! a followed field map shows the world it follows.
 //!
 //! Headless: `MarginFrame::of` is the world the window shows round the
 //! field, and `Margin` the ground and the shade made for it, kept until the

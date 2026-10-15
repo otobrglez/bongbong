@@ -89,6 +89,13 @@ const ORTHOGONAL: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 /// into a track (`Woods::floor`).
 const TRACK_RUN: usize = 3;
 
+/// How far from its trees an edit can change a wood, in cells, with room
+/// to spare: what an edit changes is read within two cells of a tree (a
+/// cell's flanks, a crown's lean, the undergrowth, the floor's reach), a
+/// trail counts the candidates two cells round it, and a track runs
+/// `TRACK_RUN` cells and two more into the meadow.
+const EDIT_REACH: i32 = 12;
+
 impl Woods {
     /// The woods of `map`: its trees, water and trails, and every crown.
     pub fn build(map: &MapFile) -> Woods {
@@ -118,6 +125,12 @@ impl Woods {
         let crowns: BTreeMap<(i32, i32), Crown> = woods.trees.keys().map(|&cell| (cell, woods.place_crown(cell))).collect();
         woods.crowns = crowns;
         woods
+    }
+
+    /// Whether an edit of `cell` can change these woods: a tree stands
+    /// within `EDIT_REACH` cells of it.
+    pub fn reaches(&self, (c, r): (i32, i32)) -> bool {
+        (c - EDIT_REACH..=c + EDIT_REACH).any(|col| self.trees.range((col, r - EDIT_REACH)..=(col, r + EDIT_REACH)).next().is_some())
     }
 
     /// No trees at all.

@@ -92,7 +92,7 @@ whole 2 px blocks, ramp steps, no RNG.
 - `CellObject::Target`, `kind = "target"` in a map.
 - Tuning, group `props`: `target_max_health` (spawn) and
   `target_burn_seconds`.
-- The builder: the `target` tool (`range target`, `tarča`) in the ACTOR
+- The builder: the `target` tool (`RANGE TARGET`, `TARČA`) in the ACTOR
   list beside the bongs - the thing on the field there to be shot at - and
   a prop's grey on the minimap.
 - The wire: `Material` and `IgnitedWhat` gained a variant, so

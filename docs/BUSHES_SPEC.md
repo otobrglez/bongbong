@@ -78,9 +78,10 @@ charred bush is grass's ash stub.
 
 The six kinds are tools in the **Plant** group with the nine trees, each
 icon on a patch of the theme's floor like tall grass. Plant is a group
-of its own because Ground with them was too long a list for a phone. A
-sixth group button costs the bar 56 points: a 1280 window drops the BUILD
-label and the arena's 1088 window drops the map's name, which the status
-line shows instead. Where even a phone's folded palette is too tall
-stacked, its groups flow one after another along the rows
-(`chrome::Palette`).
+of its own because Ground with them was too long a list for a phone. The
+six group buttons stand on the builder's tray along the bottom with BRUSH
+and the eraser; where they would take more than three quarters of the
+window's width - a phone's - the six and BRUSH fold into one TOOLS button
+and its palette (docs/game-editor-fusion.md §7). Where even a phone's
+folded palette is too tall stacked, its groups flow one after another
+along the rows (`chrome::Palette`).

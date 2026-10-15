@@ -290,8 +290,8 @@ Where the implementation departs from the sections above, and why:
 - **HUD, two players.** The fourth slot fits by setting the two-player
   weapon pairs in the 10 px font (`hud::CHAR_W_SMALL`); the single-player
   bar shifts the heart, HP and shells left instead.
-- The builder's short label for the pickup is `flame` (the cursor readout
-  has no room for `flamethrower`); the tool's name stays `flamethrower`.
+- The builder's short label for the pickup is `FLAME` (the cursor readout
+  has no room for `FLAMETHROWER`); the tool's name stays `FLAMETHROWER`.
 
 ## 13. Phases
 

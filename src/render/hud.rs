@@ -204,8 +204,8 @@ fn draw_full_corners(
 const CLUSTER_ROUNDNESS: f32 = 0.18;
 
 /// A corner cluster's plate: the dark fill alone, no edge, so the readouts
-/// stand on one quiet shape.
-fn draw_cluster_plate(d: &mut impl RaylibDraw, r: Rectangle, a: f32) {
+/// stand on one quiet shape - the builder's plates too.
+pub(crate) fn draw_cluster_plate(d: &mut impl RaylibDraw, r: Rectangle, a: f32) {
     d.draw_rectangle_rounded(r, CLUSTER_ROUNDNESS, 6, faded(PLATE_FILL, a));
 }
 
@@ -599,13 +599,33 @@ fn draw_level_button(d: &mut impl RaylibDraw, r: Rectangle, number: usize, open:
 }
 
 
-/// The dialog panel both questions share: shadow, rounded fill, outline,
-/// a 28 px title and a 16 px line under it, both centred by `text::width`.
+/// The dark panel every dialog, popup and screen of the chrome stands on -
+/// the questions, the builder's lists and panels, the lobby, the level
+/// select - so they read as one family: a drop shadow `PANEL_SHADOW_PT`
+/// down and right, the fill, and a thin dark edge, its corners
+/// `PANEL_RADIUS` round whatever its size.
+pub fn draw_panel(d: &mut impl RaylibDraw, panel: Rectangle) {
+    let roundness = (2.0 * PANEL_RADIUS / panel.width.min(panel.height).max(1.0)).min(1.0);
+    let shadow = Rectangle::new(panel.x + PANEL_SHADOW_PT, panel.y + PANEL_SHADOW_PT, panel.width, panel.height);
+    d.draw_rectangle_rounded(shadow, roundness, 8, PANEL_SHADOW);
+    d.draw_rectangle_rounded(panel, roundness, 8, PANEL_FILL);
+    d.draw_rectangle_rounded_lines_ex(panel, roundness, 8, 1.5, PANEL_EDGE);
+}
+
+/// A panel's corners' radius, in points.
+const PANEL_RADIUS: f32 = 8.0;
+/// How far a panel's shadow falls, down and right.
+const PANEL_SHADOW_PT: f32 = 4.0;
+/// A panel's fill: near opaque, so a list's icons and a dialog's words
+/// stay legible over any ground behind them.
+const PANEL_FILL: Color = Color::new(20, 20, 24, 240);
+const PANEL_SHADOW: Color = Color::new(0, 0, 0, 90);
+const PANEL_EDGE: Color = Color::new(0, 0, 0, 150);
+
+/// The dialog panel both questions share (`draw_panel`), a 28 px title
+/// and a 16 px line under it, both centred by `text::width`.
 fn draw_dialog_panel(d: &mut impl RaylibDraw, panel: Rectangle, title: &str, sub: &str) {
-    let shadow = Rectangle::new(panel.x + 4.0, panel.y + 4.0, panel.width, panel.height);
-    d.draw_rectangle_rounded(shadow, 0.08, 8, Color::new(0, 0, 0, 90));
-    d.draw_rectangle_rounded(panel, 0.08, 8, Color::new(20, 20, 24, 240));
-    d.draw_rectangle_rounded_lines_ex(panel, 0.08, 8, 1.5, Color::new(0, 0, 0, 150));
+    draw_panel(d, panel);
     let title_w = width(title, 28);
     d.draw_text(title, (panel.x + (DIALOG_W - title_w as f32) / 2.0) as i32, (panel.y + 22.0) as i32, 28, TEXT);
     let sub_w = width(sub, 16);
@@ -661,10 +681,7 @@ pub fn draw_question(d: &mut impl RaylibDraw, screen: Rect, area: Rect, question
     let (title, sub) = (t.fmt(title, &name), t.fmt(sub, &name));
     let room = (crate::hud::QUESTION_W - 32.0) as i32;
     let (title, sub) = (crate::text::fit(&title, room, 28), crate::text::fit(&sub, room, 16));
-    let shadow = Rectangle::new(r.panel.x + 4.0, r.panel.y + 4.0, r.panel.width, r.panel.height);
-    d.draw_rectangle_rounded(shadow, 0.08, 8, Color::new(0, 0, 0, 90));
-    d.draw_rectangle_rounded(r.panel, 0.08, 8, Color::new(20, 20, 24, 240));
-    d.draw_rectangle_rounded_lines_ex(r.panel, 0.08, 8, 1.5, Color::new(0, 0, 0, 150));
+    draw_panel(d, r.panel);
     let centre = r.panel.x + r.panel.width / 2.0;
     d.draw_text(&title, (centre - width(&title, 28) as f32 / 2.0) as i32, (r.panel.y + 22.0) as i32, 28, TEXT);
     d.draw_text(&sub, (centre - width(&sub, 16) as f32 / 2.0) as i32, (r.panel.y + 62.0) as i32, 16, DIM);

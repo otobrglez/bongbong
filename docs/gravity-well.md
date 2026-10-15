@@ -1233,17 +1233,17 @@ collapse's rings); `WELL_SIDE_REACH_SECONDS` (0.5) beside
 | Key | en | sl |
 |---|---|---|
 | `hud-well-anchor` (`keys::HUD_WELL_ANCHOR`) | FIRE AGAIN TO ANCHOR | ZNOVA SPROŽI ZA SIDRO |
-| `tool-gravity_well` | gravity well | težnostna jama |
-| `tool-short-gravity_well` | well | jama |
+| `tool-gravity_well` | GRAVITY WELL | TEŽN. JAMA |
+| `tool-short-gravity_well` | WELL | JAMA |
 
 `FIRE` names the trigger on a keyboard and the fire half on a touch screen
 alike, so the prompt needs no `-touch` twin (the rod's `LET GO`). `ZNOVA
 SPROŽI ZA SIDRO` ("fire again for the anchor") folds to `ZNOVA SPROZI ZA
-SIDRO`; `težnostna jama` ("gravity pit": `gravitacijska jama` overflowed the builder's list row and was taken back in Phase 2). **The budget**:
+SIDRO`; `TEŽN. JAMA` ("gravity pit", `težnostna jama` cut to fit the builder's list row; `gravitacijska jama` overflowed it and was taken back in Phase 2). **The budget**:
 `every_language_fits_every_budget` gains the prompt at `UI_SMALL_TEXT`
 within the block's width less 8 (`Corners::prompt`, the one-seat block on
 the smallest area) - the rod's measure; the tool names are measured by the
-existing tool budgets (144 and 48). Measured in Phase 2; `SPROŽI ZA SIDRO`
+existing tool budgets (144 and 60). Measured in Phase 2; `SPROŽI ZA SIDRO`
 stands by for Slovene if the line runs over, and `gravitacijski vodnjak`
 is not used (too long for the 144). The countdown on the well's arrow is
 digits: no key.

@@ -197,6 +197,7 @@ keys! {
     EDITOR_FILE = "editor-file";
     EDITOR_MAP = "editor-map";
     EDITOR_FIT = "editor-fit";
+    EDITOR_DAY = "editor-day";
     EDITOR_PLAY_HERE = "editor-play-here";
     EDITOR_CHECK = "editor-check";
     CHECK_TITLE = "check-title";
@@ -967,7 +968,7 @@ mod text_tests {
                 keys::FILE_SAVE,
                 crate::editor::chrome::BAR_SMALL_TEXT,
                 crate::editor::chrome::label_room(
-                    crate::editor::chrome::button_box(crate::math::Rectangle::new(0.0, 0.0, crate::editor::chrome::SAVE_BUTTON_W, 32.0), false),
+                    crate::editor::chrome::button_box(crate::math::Rectangle::new(0.0, 0.0, crate::editor::chrome::SAVE_BUTTON_W, 32.0)),
                     false,
                 ) as i32,
                 vec![],
@@ -1030,9 +1031,9 @@ mod text_tests {
         for touch in [false, true] {
             use crate::editor::chrome::{button_box, label_room};
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
-            let bar = crate::editor::Bar::of(&ui);
+            let bar = crate::editor::Bar::of(&ui, true);
             let size = crate::editor::chrome::BAR_SMALL_TEXT;
-            let room = |r: crate::math::Rectangle, caret: bool| label_room(button_box(r, touch), caret) as i32;
+            let room = |r: crate::math::Rectangle, caret: bool| label_room(button_box(r), caret) as i32;
             for (key, r, caret) in [
                 (keys::EDITOR_BACK, bar.back, true),
                 (keys::EDITOR_UNDO, bar.undo, false),
@@ -1040,6 +1041,7 @@ mod text_tests {
                 (keys::EDITOR_FILE, bar.file, true),
                 (keys::EDITOR_MAP, bar.map, true),
                 (keys::EDITOR_FIT, bar.fit, false),
+                (keys::EDITOR_DAY, bar.day.expect("a dark sky's bar has DAY"), false),
                 (keys::EDITOR_CHECK, bar.check, false),
                 (keys::EDITOR_PLAY_HERE, bar.here, false),
                 (keys::BUTTON_PLAY, bar.play, false),
@@ -1066,7 +1068,7 @@ mod text_tests {
         // at the bar's small size, with a mouse and on a touch screen.
         for touch in [false, true] {
             let w = if touch { crate::editor::chrome::STRIP_WORD_W.1 } else { crate::editor::chrome::STRIP_WORD_W.0 };
-            let room = crate::editor::chrome::label_room(crate::editor::chrome::button_box(crate::math::Rectangle::new(0.0, 0.0, w, 40.0), touch), false) as i32;
+            let room = crate::editor::chrome::label_room(crate::editor::chrome::button_box(crate::math::Rectangle::new(0.0, 0.0, w, 40.0)), false) as i32;
             let size = crate::editor::chrome::BAR_SMALL_TEXT;
             for button in crate::editor::StripButton::SELECTION.into_iter().chain(crate::editor::StripButton::GHOST) {
                 if let Some(key) = button.label_key() {
@@ -1144,9 +1146,9 @@ mod text_tests {
                     over.push(format!("{tag}: tool {} = {long:?} overflows its row", tool.name()));
                 }
                 // The short name is the status line's and the cursor
-                // readout's, kept to a word or two.
+                // readout's, kept to a word or two in capitals.
                 let short = catalogue.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or(long);
-                if width(&short, HUD_LABEL_SIZE) > 48 {
+                if width(&short, HUD_LABEL_SIZE) > 60 {
                     over.push(format!("{tag}: short tool name {short:?} is longer than a word or two"));
                 }
             }
@@ -1367,7 +1369,7 @@ mod text_tests {
         assert_eq!(en.fmt(keys::WAVE_BANNER, &[("n", 2.into())]), "WAVE 2");
         assert_eq!(en.fmt(keys::STATUS_BUFFER, &[("room", "ROOM".into()), ("code", "AK7QX".into()), ("seat", 2.into()), ("rtt", "".into()), ("ms", 100.into())]), "ROOM AK7QX - SEAT 2 - BUFFER 100 MS");
         assert_eq!(en.fmt(keys::STATUS_PING, &[("ms", 40.into())]), "PING 40 MS");
-        assert_eq!(en.named("tank", "scout"), "scout");
+        assert_eq!(en.named("tank", "scout"), "SCOUT");
         assert_eq!(en.named("tank", "unknown"), "unknown", "a name the catalogue lacks is itself");
         assert_eq!(en.message("no-such-message", &[]), None);
         let sl = Catalogue::new("sl");

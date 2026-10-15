@@ -387,7 +387,8 @@ pub fn water_icon_source_rec() -> Rectangle {
 /// What `build` makes of a map besides its cells: the theme (whether sand
 /// drifts over the open floor, and the colour the field's edge deepens
 /// toward) and whether that edge shade is baked at all - a round's field
-/// has it, the builder's canvas does not.
+/// and the builder's canvas have it; the floor a margin carries past the
+/// field (`GroundGrid::beyond`) does not.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Look {
     pub theme: Theme,
@@ -401,6 +402,12 @@ static NEXT_SHADE_STAMP: AtomicU64 = AtomicU64::new(1);
 /// A fresh name for a floor layer baked into a `BlockImage` - a shade, or
 /// the lava's scorched banks (`lava::LavaLayout::banks`) - from the one
 /// counter, so no two are ever taken for each other.
+/// How far in from the field's edge the floor past it reads the field's
+/// tiles (`GroundGrid::beyond`), in cells, with room to spare: the paint
+/// along the edge carries on outward, and a tile is shaped by the cells
+/// beside it.
+const EDGE_READS: i32 = 3;
+
 pub fn next_block_stamp() -> u64 {
     NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed)
 }
@@ -430,7 +437,8 @@ pub struct GroundGrid {
     /// room server builds a round's ground and never draws it, so it never
     /// pays for it.
     shade: OnceLock<Shade>,
-    /// This build's name for its shade (`NEXT_SHADE_STAMP`).
+    /// This build's name (`NEXT_SHADE_STAMP`), its shade's first; a
+    /// repaint that reaches the field's edge gives it another (`repaint`).
     stamp: u64,
     /// What the tiles were resolved from and with - the paint and the
     /// water read off it, the seed, the drifts - so `repaint` resolves the
@@ -460,8 +468,11 @@ impl GroundGrid {
     /// uploads only them). The grid is the one `build` makes of the edited
     /// lists with the same seed (`a_repaint_is_the_build_of_the_edited_lists`).
     /// A cell past the grid moves only the walls the shade gathers round,
-    /// as in `build`. Answers the grid cells whose tile can have changed,
-    /// in row order - every cell whose water `depth` can have, among them.
+    /// as in `build`. A tile that changed within `EDGE_READS` cells of the
+    /// field's edge, which the floor past it carries on (`beyond`), gives
+    /// the grid a new stamp, so the margins made from it are made again.
+    /// Answers the grid cells whose tile can have changed, in row order -
+    /// every cell whose water `depth` can have, among them.
     pub fn repaint(&mut self, cells: &[(i32, i32, CellFloor)]) -> Vec<(i32, i32)> {
         let mut paint = Vec::new();
         // Whether each cell is a wall now. The walls that went, then the
@@ -498,6 +509,10 @@ impl GroundGrid {
         }
         if let (false, Some(shade)) = (walls_moved.is_empty(), self.shade.get_mut()) {
             shade.rebake(&self.walls, &walls_moved);
+        }
+        let (cols, rows) = (self.cols as i32, self.rows as i32);
+        if touched.iter().any(|&(x, y)| x.min(y) < EDGE_READS || x >= cols - EDGE_READS || y >= rows - EDGE_READS) {
+            self.stamp = NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed);
         }
         let mut touched: Vec<(i32, i32)> = touched.into_iter().collect();
         touched.sort_by_key(|&(x, y)| (y, x));
@@ -2433,6 +2448,25 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    /// Water painted at the field's edge runs on into the floor past it, so
+    /// the repaint names the floor anew and the margins made from it are
+    /// made again (`margin::Margin::fits`); water in the middle leaves the
+    /// name, and the floor past the edge, as they were.
+    #[test]
+    fn a_repaint_at_the_edge_renames_the_floor_the_margins_carry() {
+        let look = Look::default();
+        let mut cells = std::collections::BTreeMap::new();
+        let mut grid = build_cells(W, H, look, &cells);
+        let name = grid.stamp();
+        set_floor(&mut cells, (5, 4), WATER);
+        grid.repaint(&[(5, 4, WATER)]);
+        assert_eq!(grid.stamp(), name, "water in the middle");
+        set_floor(&mut cells, (0, 2), WATER);
+        grid.repaint(&[(0, 2, WATER)]);
+        assert_ne!(grid.stamp(), name, "water at the edge");
+        assert!(grid.beyond(3).draws_like(&build_cells(W, H, look, &cells).beyond(3)), "the floor past the edge carries it");
     }
 
     #[test]

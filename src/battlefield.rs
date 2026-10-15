@@ -417,6 +417,9 @@ pub struct MapSpawn {
     /// order: not solid, nothing spawned - `Game::init` turns them into
     /// `Game::portals` (docs/teleporting.md).
     pub portal_cells: Vec<(i32, i32)>,
+    /// The variants rolled above, for the builder to draw the map as this
+    /// round shows it (`Game::looks`); its ground seed is `Game::init`'s.
+    pub looks: crate::obstacle::Looks,
 }
 
 /// Spawn every cell `map` defines as a live entity - walls as `Obstacle`s
@@ -489,6 +492,10 @@ pub fn spawn_from_map(
     let mut bong_pos = None;
     let mut enemy_bong_pos = None;
     let mut pickup_slots = Vec::new();
+    let mut looks = crate::obstacle::Looks::default();
+    for (i, m) in MATERIALS.iter().enumerate() {
+        looks.walls[i] = material_variant[m];
+    }
 
     for (col, row, obj) in map.iter_cells() {
         let pos = cell_to_world(col, row);
@@ -525,6 +532,7 @@ pub fn spawn_from_map(
                 // be compared against its untyped self.
                 let rolled = rng.random_range(0..material.variants());
                 let variant = obj.drum().map_or(rolled, |d| d as i32);
+                looks.tiles.insert((col, row), (material, variant));
                 // Zero chance draws no RNG, so a map with no trees replays
                 // exactly as it did before they existed. A dry tree's odds
                 // differ, never whether the roll is drawn.
@@ -603,7 +611,21 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, lava_cells, bong_pos, enemy_bong_pos, pickup_slots, grass_cells, bush_cells, oil_cells, portal_cells }
+    MapSpawn {
+        obstacle_positions,
+        wall_positions,
+        road_cells,
+        water_cells,
+        lava_cells,
+        bong_pos,
+        enemy_bong_pos,
+        pickup_slots,
+        grass_cells,
+        bush_cells,
+        oil_cells,
+        portal_cells,
+        looks,
+    }
 }
 
 /// Every cell a volcano's cone puts a tile on: its footprint inside the

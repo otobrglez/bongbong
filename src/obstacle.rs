@@ -622,6 +622,39 @@ impl Fuse {
     }
 }
 
+/// How a round dressed its map's tiles (`battlefield::spawn_from_map`):
+/// each wall material's one variant, each prop's and tree's own by cell,
+/// and the seed its ground was resolved with - the rolls the builder reads
+/// to draw its canvas as that round showed it (`editor::still`). Nothing
+/// that plays reads it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Looks {
+    /// Each of `MATERIALS`' variant, in that order.
+    pub walls: [i32; MATERIALS.len()],
+    /// Each prop's and tree's variant by cell, with the material it was
+    /// rolled for.
+    pub tiles: std::collections::HashMap<(i32, i32), (Material, i32)>,
+    /// The seed the round's ground was resolved with (`ground::build`).
+    pub ground_seed: u64,
+}
+
+impl Looks {
+    /// The variant every wall of `material` draws.
+    pub fn wall(&self, material: Material) -> i32 {
+        MATERIALS.iter().position(|&m| m == material).map_or(0, |i| self.walls[i])
+    }
+
+    /// The variant a prop or tree of `material` at `cell` draws: the
+    /// round's own roll where that tile stood in it, else one hashed from
+    /// the cell - a tile placed since stays as it is drawn, edit to edit.
+    pub fn tile(&self, material: Material, cell: (i32, i32)) -> i32 {
+        match self.tiles.get(&cell) {
+            Some(&(m, variant)) if m == material => variant,
+            _ => (crate::blast::seed_at(crate::map::cell_to_world(cell.0, cell.1), 47) % material.variants().max(1) as u32) as i32,
+        }
+    }
+}
+
 /// Which way a fence tile runs - decided at draw time from its fence
 /// neighbours (`fence_axis`), since obstacles never rotate and the map only
 /// stores the cell.

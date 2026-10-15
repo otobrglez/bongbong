@@ -1076,10 +1076,10 @@ Data names by family (`named("tool", ..)`), so no `text::keys` constant.
 
 | Key | en | sl |
 |---|---|---|
-| `tool-gauss_rail` | gauss rail | gaussov top |
-| `tool-short-gauss_rail` | rail | tir |
+| `tool-gauss_rail` | GAUSS RAIL | GAUSSOV TOP |
+| `tool-short-gauss_rail` | RAIL | TIR |
 
-`gaussov top` ("Gauss cannon") because the literal `gaussova tirnica`
+`GAUSSOV TOP` ("Gauss cannon") because the literal `gaussova tirnica`
 runs past the tool list's 144 pt at the font's own widths; both pass
 `every_language_fits_every_budget`. The HUD shows the glyph, a count and
 the gauge; the weapon has no other words.

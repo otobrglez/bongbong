@@ -371,6 +371,18 @@ fn blit_cell(c: &mut impl Canvas, rec: Rectangle, at: Position, rotation: f32, t
     c.blit(Sheet::Towers, rec, Rectangle::new(at.x, at.y, s, s), Vec2::new(s / 2.0, s / 2.0), rotation, tint);
 }
 
+/// Which way a `kind` tower at `at` faces when its round starts: a tower
+/// that turns faces `middle`, the middle of the field, where the fight
+/// will come from; any other keeps `rest`. The round's towers and the
+/// builder's canvas both start here.
+pub fn opening_heading(kind: TowerKind, at: Position, middle: Position, rest: f32) -> f32 {
+    if kind.turns() && at.distance_to(middle) > 1.0 {
+        crate::math::atan2(middle.x - at.x, -(middle.y - at.y)).to_degrees()
+    } else {
+        rest
+    }
+}
+
 /// A standing tower's shadow: its base in black at the obstacles' shadow
 /// opacity, offset along the shadow direction.
 pub fn draw_tower_shadow(c: &mut impl Canvas, kind: TowerKind, side: Side, at: Position) {

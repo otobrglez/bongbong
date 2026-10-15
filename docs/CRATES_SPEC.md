@@ -12,7 +12,7 @@ the drawing, the shows a crate puts on and the breakable crates behind
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
 | `static/crates_sheet.png` | 280 × 840 | 7 cols × 21 rows of 40 px | 1:1, centred on the pickup's 32 px cell (`CRATE_CELL`) |
-| `static/pickup_glyphs.png` | 24 × 504 | 1 col × 21 rows of 24 px | 1:1 on the field; 24 pt in the HUD and the builder's bar |
+| `static/pickup_glyphs.png` | 24 × 504 | 1 col × 21 rows of 24 px | 1:1 on the field; 24 pt in the HUD and on the builder's tray |
 
 Both are written by `tools/spritegen/gen_crates.py` (raw PNG bytes, no
 Pillow, deterministic - every choice is a position hash):
@@ -114,8 +114,8 @@ It draws, in order of precedence:
 The builder draws the crate's column 0 for a pickup cell at its own size,
 and a pickup tool's icon (`draw_tool_icon`) at a whole multiple of a sheet's
 scale centred on the icon, so every block stays: the crate where it fits
-(the list and the palette, every touch slot), the symbol alone in the bar's
-32 pt category button.
+(the list and the palette, every touch slot), the symbol alone in a
+category button on the tray.
 
 **The HUD** (`render::hud`) labels every readout with the symbol of the crate
 that fills it, at the symbol sheet's own 24 pt: the vitals' health (the

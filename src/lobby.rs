@@ -1043,7 +1043,7 @@ mod lobby_tests {
         assert_eq!(states, vec!["HOST", "READY", "AWAY"]);
         assert_eq!(view.seats[1].nick, "ana");
         assert!(view.seats[1].you && !view.seats[0].you);
-        assert_eq!(view.seats[0].chassis, "longbow", "the roster's chassis row");
+        assert_eq!(view.seats[0].chassis, "LONGBOW", "the roster's chassis row");
         assert_eq!(view.more, 0);
         // A refusal from the room is the line under the title.
         let refused = RoomView { note: Some("the room is full".into()), ..room };

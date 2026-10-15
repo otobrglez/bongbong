@@ -1,6 +1,6 @@
 # PRD: the map builder inside the game
 
-Status: requirements, 2026-09-10; implemented the same day (the code is the reference where the two differ). BB-140 (2026-10-13) changed the way between the modes: BUILD pauses the round instead of asking to leave it, and the bar's BACK comes back to it (sections 1, 2, 5, 6, 7 and 11). Supersedes the build-mode half of
+Status: requirements, 2026-09-10; implemented the same day (the code is the reference where the two differ). BB-140 (2026-10-13) changed the way between the modes: BUILD pauses the round instead of asking to leave it, and the builder's BACK comes back to it (sections 1, 2, 5, 6, 7 and 11). Supersedes the build-mode half of
 docs/hud-and-builder-layout-design.md (variant A, whose play half is
 implemented) and the "Entering the editor" section of
 docs/map-editor-design.md. Nothing here is implemented yet; the seams the
@@ -16,12 +16,13 @@ bar is small on a phone and what would fix it), docs/maps-to-levels.md
 ## 1. Summary
 
 The map editor stops being a separate `--editor` program and becomes a
-**mode of the game**. In play mode the HUD bar ends in a `BUILD` button.
-Pressing it pauses the round - nothing is asked, nothing is lost - and the
-bar becomes the builder's toolbar and the field becomes the map canvas,
-showing the *authored* map the round was built from. `BACK` at the bar's
-left end comes back to the paused round where it stood; `PLAY` at the same
-right-end slot as `BUILD` starts a fresh round on the edited map. The builder ships to every
+**mode of the game**. In play mode the HUD's top-right corner ends in a
+`BUILD` button. Pressing it pauses the round - nothing is asked, nothing is
+lost - and play's corners give way to the builder's plates over the same
+world, which becomes the map canvas: the *authored* map the round was built
+from, drawn as that round showed it. `BACK` at the top-left comes back to
+the paused round where it stood; `PLAY`, in the very box `BUILD` stood in,
+starts a fresh round on the edited map. The builder ships to every
 player, on desktop and on the web, mouse and touch alike. Edits live in
 memory for this pass; saving comes later. The dev server and the `bbmcp`
 MCP adapter learn the builder too, so an agent can enter it, edit, play
@@ -81,7 +82,9 @@ round as usual and then opens the builder on it.
 - **Screen-space UI scaling** (a 48 pt bar on a phone). The bar stays 32 px
   of the 1280x752 canvas; the builder gets finger-sized targets by opening
   them over the field instead. The mobile doc's `Layout::fit` is the fix
-  for the bar itself and is not part of this work.
+  for the bar itself and is not part of this work. *Status: the chrome is
+  in UI points now - the builder's controls stand on plates in play's
+  corner style, 44 pt on a touch screen (sections 7 and 10).*
 - **Validation before PLAY.** A map with no start cell, no bong, or an
   unreachable bong plays through `Game::init`'s existing fallbacks, as it
   does today from `-m`. The linter stays a dev tool.
@@ -97,11 +100,11 @@ round as usual and then opens the builder on it.
 ## 5. The two modes
 
 ```
-             BUILD (bar / Tab): the round pauses behind the builder
+             BUILD (corner / Tab): the round pauses behind the builder
    Play  ----------------------------------------------------->  Build
    round  <-----------------------------------------------------  canvas
-             BACK (bar / Esc): the same round, edits put away
-             PLAY (bar / Tab): game.map = builder.map; game.init()
+             BACK (plate / Esc): the same round, edits put away
+             PLAY (plate / Tab): game.map = builder.map; game.init()
 ```
 
 - A `Session` (`mode.rs`, section 13) owns a `Driver { Play, Build }` next
@@ -116,11 +119,43 @@ round as usual and then opens the builder on it.
   replaces it is the dev server's `restart` with a `map`/`map_toml`, which
   sets both the game's and the builder's map (and the baseline). No
   conversion from live entities, ever.
+- **The canvas is the round's world.** BUILD dresses the canvas in the
+  looks of the round it paused (`MapEditor::dress`, an
+  `editor::RoundLook`): each wall material's variant, each prop's and
+  tree's variant by cell and the ground's seed (`obstacle::Looks`, which
+  `battlefield::spawn_from_map` fills; `Game::looks`), each couch seat's
+  chassis and the round's seed - kept after BACK and PLAY until the next
+  BUILD brings a newer round's. The canvas is the map as a round stands it
+  (`editor::still::Still`: worked out whole on a whole-map edit, patched
+  cell by cell through a stroke, its woods settling when the stroke is
+  done), drawn by the round's
+  own painters: the tiles with their shadows and caps, the trees, the
+  grass and the woods' floor, each start as its seat's tank at round size
+  with `P1` or `P2` over it, the bongs with their rings, the towers facing
+  the way a round opens them, the lamps, crates, doors, flags and oil, on
+  the round's ground with its darkened field edge - the grass swaying, the
+  trees shimmering and the bongs idling on the wall clock. A start draws
+  the chassis its map names for its seat, else the paused round's, else
+  the first; a tile placed since BUILD draws a variant hashed from its
+  cell. What a round adds to its map - damage, wear, fires, the enemies -
+  stays out. `still_tests::the_still_picture_is_the_rounds` holds the
+  picture to a round's, and
+  `a_stroke_patches_the_picture_to_the_one_worked_out_whole` a patched
+  picture to one worked out whole.
+- **The same frame and the same sky.** The canvas fills the window as
+  play's field does (section 7), and it previews its map's sky through
+  the round's weather passes: the one the paused round's seed picks from
+  the map's skies (`MapEditor::map_sky`), so an unchanged map shows the
+  very sky the round had, lit by the canvas's own starts, bongs, crates,
+  lamps, towers, portals, lava and craters (docs/weather.md, "The
+  builder's sky"). DAY draws it by daylight for editing.
 - **Build -> Play by PLAY** clones the builder's map into `game.map` and
   calls `Game::init` for the field size. It is the dev server's `restart
   {map_toml}` path without the TOML. Every PLAY is a new round: new spawn
   rolls unless `--seed` pinned them, mission banner as on any restart. It is
-  the one thing that gives the paused round up.
+  the one thing that gives the paused round up. It comes in by the swap
+  below, never by the dissolve a round taking its way from an end screen
+  gets.
 - **Build -> Play by BACK** (`Session::back`) comes back to the round BUILD
   paused, exactly where it stood: the same frame, the end screen if it was
   one, nothing re-rolled. The round runs on its own map, so the canvas goes
@@ -131,6 +166,12 @@ round as usual and then opens the builder on it.
   nothing asks. BACK dims where there is no round to go back to: after
   FILE's "switch to the original?" was answered yes for the map the round
   is on, which ends that round as it would in play.
+- **The swap.** BUILD, BACK and PLAY leave the world where it stands and
+  change the chrome over it (`mode::Swap`, over `ui_swap_seconds`, 0.18 s,
+  eased out): the world the window left - a window-sized picture `app.rs`
+  takes the frame the swap starts - fades out over the one it opens on,
+  the builder's plates slide in from the window's top and bottom edges,
+  and play's corners fade up. At 0, or under reduced motion, it cuts.
 - `--editor` keeps working and means "start in Build": the game is
   initialised as usual (so PLAY has everything it needs) and paused behind
   the builder, so BACK plays it from its first frame.
@@ -141,42 +182,81 @@ round as usual and then opens the builder on it.
 
 ## 6. Play mode: the BUILD button
 
-- The play bar gains `BUILD` at its right end, the slot the layout doc
-  reserved (x 1200..1272 of 1280, full bar height). Drawn by `hud.rs` in the
-  bar's style: 18 px text, an outline, the builder's amber accent.
+- `BUILD` stands at the right end of the HUD's top-right corner cluster
+  (`hud::corners`' mode button, `MODE_BUTTON_W` wide), drawn by
+  `render::hud` as the corners' buttons are: its word and its outline in
+  the builder's amber accent. The builder's PLAY stands in exactly that box
+  wherever the corners are drawn at their full size (`chrome_tests`), so
+  the way into the builder and the way out are one place under a finger.
 - A click or tap on it, or `Tab`, enters the builder at once, mid-round, on
   the end screen, paused and in the intro alike. The round is paused by
   construction: outside play mode the driver does not call `Game::update`
   (and the dev server's `advance` is skipped), so no simulation pause flag
   is touched, and a round paused for an hour comes back bit for bit. With
   the players dialog or the level select up, the press closes that instead.
+- The corners swap for the builder's plates (section 5, "The swap"), the
+  world staying where it stood.
 - Coming back is the builder's `BACK` (section 5): the round resumes at
   once, with no "get ready" beat, as after the pause button.
 - Release builds, web included, have the button. The dev overlay label and
   the version line stay where they are.
 
-## 7. Build mode: the bar as toolbar
+## 7. Build mode: the plates and the tray
 
-One row, fixed slots, left to right. Widths are for the 1280 px bar; a
-`hud_tests`-style unit test pins that the slots do not overlap and end
-inside the bar.
+The canvas fills the whole window, as play's field does
+(`editor::chrome::BuilderFrame`): an arena through the very view a round of
+it uses (`View::fit_capped` under the round's scale cap) - at FIT with
+play's margin world round it (`render::margin::MarginFx`) and the window's
+backdrop past that -, a field map's canvas made to the window's shape
+(`chrome::canvas_frame`). The safe area keeps only the chrome. The
+builder's controls stand on three plates in play's corner style
+(`editor::chrome::Bar`, drawn by `render::hud::draw_cluster_plate`: play's
+plate fill, `PLATE_PAD` round one row of buttons), floating over the canvas
+as play's corners float over the field. `Bar::of` lays them out from the
+safe area in UI points; the painter, every hit test and the dev server's
+`status.builder.buttons` read it, and `chrome_tests` pins that no two
+buttons overlap and every one stands inside its plate and the safe area on
+every window from a phone to a 1440p monitor.
 
 ```
- x:   8      72          240                              748  796  840  888     960     1032         1200
-     [BUILD] [default *] [WALL ▾][PROP ▾][GROUND ▾][ACTOR ▾][PICKUP ▾] [⌫] [↶] [↷] [FILE ▾] [MAP ▾] [12,7 brick] [PLAY]
+ ┌───────────────────────┐          ┌────────────────────────────────────────────┐
+ │ [< BACK] [DAY] NAME * │          │ UNDO REDO FILE▾ MAP▾ FIT CHECK ⚑ HERE PLAY │
+ └───────────────────────┘          └────────────────────────────────────────────┘
+                                                                   ┌─────────────┐
+                    the canvas, the whole window                   │  navigator  │
+                                                                   └─────────────┘
+ ┌────────────────────┐ ┌────────────────────────────────────────────┐
+ │ WALL: BRICK 12,7 … │ │ [▣▾] [▣▾] [▣▾] [▣▾] [▣▾] [▣▾] [BRUSH▾] [⌫] │
+ └────────────────────┘ └────────────────────────────────────────────┘
+   the status plate       the tray, centred along the bottom
 ```
 
-| Slot | x | Width | Contents |
-| --- | --- | --- | --- |
-| Back | 8 | 76 | `BACK`: a left-pointing arrow and the word, the arrow alone where the bar is short of room; dim with no round to go back to, an amber dot while the canvas differs from the paused round's map. Back at one end, PLAY at the other. (The amber `BUILD` label stood here until BB-140.) |
-| Name | 72 | 160 | The map's display name (`MapFile::name`: `default` for the embedded map, `untitled` for none) plus ` *` while edited since load. |
-| Categories | 240 | 6 x 100 | `WALL`, `PROP`, `GROUND`, `PLANT` (the trees and bushes, docs/BUSHES_SPEC.md §4), `ACTOR`, `PICKUP`. Each button shows its category's *current* tool as its 32 px icon, full-bleed, with the tool's name in 10 px to the right and a caret. Click or tap the icon: select that tool. Click or tap the caret or name: open the list. Mouse wheel over the button: cycle inside the category. The active category is outlined in the accent, like the live weapon slot in play. |
-| Erase | 748 | 40 | The eraser tool: a plain brush that clears cells. Outlined while active. |
-| Undo / Redo | 796 / 840 | 40 each | Dimmed when the stack is empty. |
-| File | 888 | 64 | `FILE ▾`: `LOAD...` and `CLEAR MAP` on every build; `SAVE` and `SAVE AS...` on native, where a map can be written. |
-| Map | 960 | 64 | `MAP ▾`: opens the settings panel (section 9). |
-| Cursor | 1032 | 160 | `col,row` and what is in the cell: the hovered cell with a mouse, the last tapped cell on touch. Dim text. |
-| Play | 1200 | 72 | `PLAY`, in the same slot `BUILD` occupies in play mode. |
+| Plate | Where | What it holds, in order |
+| --- | --- | --- |
+| Top-left | the area's top-left corner, where play's vitals stand | `BACK`: a left-pointing arrow and the word; dim with no round to go back to, an amber dot while the canvas differs from the paused round's map. `DAY` (`BarButton::Day`), only while the map's sky is not clear: a press draws the canvas by daylight, another puts it under its sky again, the box washed while it is down (section 5). The map's name in capitals (`MapFile::name`: `default` for the embedded map, `untitled` for none) with ` *` while edited since load. |
+| Top-right | the area's top-right corner, where play's right cluster stands | `UNDO` and `REDO` (dim with nothing to take), `FILE ▾` (`LOAD...`, `SAVE` and `SAVE AS...` where a map can be written, `REVERT MAP` for a changed shipped map, `CLEAR MAP`), `MAP ▾` (section 9), `FIT`, `CHECK` and the clear flag, then `PLAY HERE` and `PLAY` at the right end - `PLAY` in the box play's corner draws `BUILD` in (section 6). Back at one end, go at the other. A button on either top plate is a play corner button's height, `hud::button_height`: 32 pt with a mouse, 44 on a touch screen. |
+| Tray | centred along the area's bottom | The six category buttons - `WALL`, `PROP`, `GROUND`, `PLANT` (the trees and bushes, docs/BUSHES_SPEC.md §4), `ACTOR`, `PICKUP` -, then `BRUSH` and the eraser. Its row is 36 pt with a mouse, so a tool's 32 px icon stands in its box a texel a point, and 44 on a touch screen (`chrome::tray_button_height`). A category button shows its category's *current* tool as its icon, with a caret: its icon half selects that tool, its list half opens the list, the wheel over it cycles inside the category; it is outlined in the accent while its category holds the brush. The tool's name is the status line's. The eraser is a plain brush that clears cells, outlined while it is the brush. |
+
+**Short of room nothing shrinks; it folds.** Along the top the name
+narrows and then goes (the status line names the map instead), then BACK's
+word (its arrow stays), then the clear flag folds into CHECK, which turns
+the flag's green once the map is cleared. Along the bottom, where the six
+category buttons, BRUSH and the eraser would take more than `TRAY_MOST`
+(three quarters) of the area's width - a phone's - the six and BRUSH fold
+into one `TOOLS` button whose palette holds every category and the brush's
+row, which leaves a phone's canvas its bottom edge. Every button keeps its
+full size, 44 pt both ways on a touch screen (`hud::UI_TOUCH_PT`).
+
+**What stands round the plates.** The status line is a plate of its own
+(`chrome::status_plate`), its words in capitals: the map's name where the
+top has no room for it whole, the active category and tool, the cell under
+the pointer (the last tapped one on touch) and what is in it, a
+rectangle's size, and any message. It stands beside the tray in the area's
+bottom-left corner where that leaves it `STATUS_MIN_W` (200 pt), else at
+the area's left just above the tray. The navigator stands where play's
+minimap does, under the top-right plate and flush with its right edge
+(docs/large-maps-follow-camera.md section 9); the select tool's strip
+hangs from the top-left of the room under the top plates.
 
 Categories and their tools, in list order:
 
@@ -191,63 +271,95 @@ Categories and their tools, in list order:
 Each category remembers its current tool for the session; the initial tool
 is the first in each list, and the active brush at entry is `WALL / brick`.
 
-Every button on the bar - and on the select tool's strip, and the Save
-prompt's SAVE - is drawn alike (`editor::chrome::button_box`, `Face` in
-`editor/render.rs`): a box 32 pt tall with a mouse and 40 pt on a touch
-screen, its slot less 4 pt, inside a square 2 pt outline as play's corner
-buttons are framed; every word in it at 14 pt (`BAR_SMALL_TEXT` - the
-folded bar is full at 720 pt, so the words cannot take the corners' 18);
-its outline a quiet grey while it can act and fainter round a dim word
-while it cannot (UNDO with nothing to undo, FIT at FIT), the box washed
-while its popup is up, the outline amber while it holds the brush in
-force, and PLAY, PLAY HERE, PLACE and SAVE in the amber, outline and word,
-as play's corner draws BUILD.
+Every button on the plates - and on the select tool's strip, and the Save
+prompt's SAVE - is framed as play's corner buttons are
+(`editor::chrome::button_box`, `Face` in `editor/render.rs`): its slot less
+4 pt at its right end and a 2 pt block above and below - 28 pt tall on a
+top plate with a mouse, 32 on the tray, 40 on a touch screen - inside a
+square 2 pt outline; every word in it at 14 pt (`BAR_SMALL_TEXT` - the top
+plates hold their row at `hud::UI_MIN_W`, so the words cannot take the
+corners' 18). Its colours say what it is: BACK in the text colour, outline
+and word, as play's pause button is; the edit actions a quiet grey outline
+round a word in the text colour, fainter round a dim word while they cannot
+act (UNDO with nothing to undo, FIT at FIT); CHECK in the clear flag's
+green, outline and word, once the map is cleared; PLAY, PLAY HERE, PLACE
+and SAVE in the amber, outline and word, as play's corner draws BUILD. A
+box is washed while its popup is up and outlined in the amber while it
+holds the brush in force.
 
-`FIT`, a 40 px button after `MAP ▾` (`SLOT_FIT`), puts the builder's
-camera back on the whole canvas; it is dim while the canvas is already at
-FIT. The camera itself - zoom, pan, the gestures, edge scroll - is
-docs/large-maps-follow-camera.md section 9 and section 10 below.
+`FIT`, after `MAP ▾`, puts the builder's camera back on the whole canvas;
+it is dim while the canvas is already at FIT. The camera itself - zoom,
+pan, the gestures, edge scroll - is docs/large-maps-follow-camera.md
+section 9 and section 10 below.
 
-`CHECK` (`SLOT_CHECK`), after FIT, opens the CHECK panel: the clear check's
-row, then the map linter's findings, a jump to each and its quick fix.
-After it a chequered flag (`SLOT_CLEAR`) is the clear check at a glance:
-green with the par beside it once this revision of the map has been won
-from plain PLAY, dim while it has not; a press opens the CHECK panel too.
-`PLAY HERE` (`SLOT_HERE`), just before PLAY, starts the round from the
-middle of the view instead of the map's start. All three are
-docs/large-maps-follow-camera.md section 9.
+`CHECK`, after FIT, opens the CHECK panel: the clear check's row, then the
+map linter's findings, a jump to each and its quick fix. After it a
+chequered flag is the clear check at a glance: green with the par beside
+it once this revision of the map has been won from plain PLAY, dim while
+it has not; a press opens the CHECK panel too. `PLAY HERE`, just before
+PLAY, starts the round from the middle of the view instead of the map's
+start. All three are docs/large-maps-follow-camera.md section 9.
 
 `BRUSH`, after the six category buttons, pictures how a press on the
 canvas works and opens a list of the ways: the brush's shapes - PEN, RECT
 (a rectangle filled on the release), FILL (a flood of the pressed cell's
 region) and SCATTER (a hashed share of the empty cells round the drag) -,
-the select tool and the STAMPS list; a bar too narrow for the categories folds it into
-TOOLS with them, as the palette's last row. With the select tool a strip of
-its actions - COPY, CUT, PASTE, the flips, DELETE, + STAMP, STAMPS, or
-PLACE, the flips and CANCEL while a paste ghost stands - hangs under the
-bar (`editor::chrome::Strip`; docs/large-maps-follow-camera.md section 9).
+the select tool and the STAMPS list; a tray folded into TOOLS carries it
+as the palette's last row. With the select tool a strip of its actions -
+COPY, CUT, PASTE, the flips, DELETE, + STAMP, STAMPS, or PLACE, the flips
+and CANCEL while a paste ghost stands - hangs from the top-left of the
+room under the top plates (`editor::chrome::Strip`;
+docs/large-maps-follow-camera.md section 9).
 
 ### Dropdowns
 
-- Open below the button, over the field, one panel in the editor's existing
-  rounded/bordered/shadowed style (`draw_panel`). Rows are **48 px tall and
-  200 px wide**: the 32 px icon with 8 px inset, the name in 18 px, the
-  current tool highlighted. A list never exceeds 7 rows (PICKUP), 336 px,
-  well inside the field.
+- A category's list, BRUSH's list and the TOOLS palette rise from their
+  button on the tray into the room between the top plates and the tray
+  (`BuilderFrame::over_tray`, `chrome::tray_list`/`tray_palette`); on a
+  window too short for their columns there they hang under the top plates
+  down the whole room, over the tray. FILE's menu and the MAP and CHECK
+  panels hang from their button under the top-right plate, and the Load
+  list, the STAMPS list and the Save prompt are centred in that room
+  (`BuilderFrame::room`). Rows are **48 pt tall and 200 pt wide**: the
+  32 px icon with 8 pt inset, the name in 18 pt, the current tool
+  highlighted; a list too long for its room runs on in a second column,
+  its rows shortening where the room is short, never under 44 pt.
+- Every list, panel and prompt stands on the chrome's one dark panel
+  (`render::hud::draw_panel`: a near-opaque fill, corners 8 pt round, a
+  4 pt drop shadow and a thin dark edge) - the one play's questions, the
+  lobby and the level select stand on too.
 - One popup at a time: opening any dropdown or the settings panel closes
   the others.
 - Closes on pick, `Esc`, or a press anywhere else. **That press is
   consumed**: it neither places a cell nor selects another tool, so a tap
   to dismiss a menu on a phone cannot paint through it.
-- The singleton badge (a dot on the icon when a bong/start/start2/enemy
-  bong is already placed) moves from the old palette to the dropdown row and to the
-  category button when that tool is current.
+- The singleton badge - a rimmed dot of 2 pt blocks in the clear flag's
+  green at the icon's top-right, while a bong, start, start2 or enemy bong
+  is already placed - stands on the dropdown row and the palette's cell,
+  and on the category button (or TOOLS) when that tool is current.
+
+### Marks on the canvas
+
+The canvas is the map as a round stands it (section 5); what only the
+builder shows is drawn over it after the sky, so the dark never hides it.
+The gates and the reaches are whole 2 px blocks of the palette's mark
+colours, as play's indicators mark the field (`indicators.rs`): each
+gate's chevron pointing in from its edge in `indicators::GATE_AMBER`
+rimmed in `indicators::RIM`, a square frame of the same blocks round a
+gate off the edge or a portal off its network, each tower's reach a faint
+ring of blocks in its side's colour. Over them stand each start's `P1` or
+`P2` over its tank, the select tool's marching outline, what the brush's
+shape is about to do, the CHECK panel's picked finding and the hover
+highlight. A cell the select tool carries or a paste ghost holds is drawn
+on its own as a tool's icon (`draw_cell`), a start or the enemy bong
+ringed in blocks of its colour - its seat's, or `indicators::HOSTILE`.
 
 ### Files
 
 - `FILE ▾` opens a menu of the same row style. `LOAD...` opens the **Load
-  list**: a centred panel over the field, 48 px rows, twelve visible with
-  the wheel scrolling the rest, every map `map::available_maps` offers -
+  list**: a panel centred in the room under the top plates, 48 pt rows,
+  at most `LOAD_VISIBLE_ROWS` (eight) a page, turned by a pager row and the
+  wheel, every map `map::available_maps` offers -
   the `maps/*.toml` files on native plus the maps shipped inside the
   binary (`default`, `default-desert`, `hunt-basic`, `waves-basic`, `portals`, marked `shipped`), which
   is all the web build can list since nothing outside `static/` ships in
@@ -291,18 +403,17 @@ bar (`editor::chrome::Strip`; docs/large-maps-follow-camera.md section 9).
   and every settings change is one step. A step stores the cells it changed
   with their before and after values, so undoing a 30-cell stroke is one
   action. Depth 200; a new edit clears the redo branch. `Ctrl+Z`/`Ctrl+Y`
-  (`Cmd` on macOS) and the two bar buttons. The stack is cleared on PLAY and
-  on RESET, not on switching modes and back.
+  (`Cmd` on macOS) and UNDO and REDO on the top-right plate. The stack is
+  cleared on PLAY and on RESET, not on switching modes and back.
 - `dirty` means "differs from the map as loaded at startup" (kept as a
   baseline copy), since there is nothing to save to. It drives the ` *` and
   the RESET row.
 
 ## 9. The MAP ▾ settings panel
 
-A panel hanging from the bar below the button: its top corners are square
-where it meets the bar's edge and the bottom ones rounded
-(`editor/render.rs`'s `draw_hanging_panel`). Its values are the `MapFile`
-fields, so nothing new is stored. `editor::chrome::MapPanel` is the one
+A panel hanging from MAP under the top-right plate, on the chrome's one
+dark panel (`render::hud::draw_panel`, section 7). Its values are the
+`MapFile` fields, so nothing new is stored. `editor::chrome::MapPanel` is the one
 geometry table the painter, every hit test and the dev server's
 `status.builder.buttons` read.
 
@@ -310,7 +421,7 @@ geometry table the painter, every hit test and the dev server's
 ROUND (the mission and the enemies), TANKS (the players' chassis), FIELD
 (the look and the size) and SKY (the skies a round may take), plus RESET
 MAP.
-- **Sections:** where the room under the bar holds the whole panel
+- **Sections:** where the room under the top plates holds the whole panel
   (884 x 432 pt; a desktop, a tablet), every group stands at once under
   its heading. ROUND and TANKS fill the left column; FIELD, SKY and RESET
   MAP fill the right.
@@ -384,14 +495,13 @@ honoured.
   the window's units per point).
 - A painting finger held near the canvas's edge scrolls it (edge scroll,
   the mouse's too).
-- The bar and the popups still take a finger as a press: a finger that
-  lands on them is not the canvas's.
-- Targets: everything a finger chooses **on the field** is 48 px or more
-  (dropdown rows, stepper buttons, dialog buttons). The bar buttons are
-  32 px tall in canvas pixels and about 21 CSS px on a phone; that is
-  accepted for this pass, and each bar button's hit rect extends 8 px above
-  and below its drawn box into the field/panel gutter so a slightly low tap
-  still lands.
+- The plates, the strip, the navigator and the popups still take a finger
+  as a press: a finger that lands on one is not the canvas's.
+- Targets: the chrome is in UI points, so every button on the plates and
+  the strip is 44 pt both ways on a touch screen (`hud::UI_TOUCH_PT`), and
+  every list row, stepper and dialog button 44 pt or more. Each plate
+  button's hit rect reaches `EDITOR_BAR_HIT_SLACK` (8 pt) above and below
+  its drawn box, so a slightly low tap still lands.
 - No hover on touch: the cursor readout shows the last tapped cell, the
   highlight stays there, and category buttons never rely on a hover state.
 - The web page needs no change: `touch-action: none` and the 1280x752
@@ -438,7 +548,7 @@ mode transitions can be unit-tested headlessly through
 | `builder_map` | `name?: string`, `map_toml?: string`, `map?: path` | Without parameters: the **builder's** map as TOML, its name, `dirty`, and a diff against the baseline (cells added, removed, changed; settings changed). With one: loads that map (by Load-list name, as inline text, or from a path) into the canvas as a single undo step and makes it the new baseline - the "load a map to test" path, and the way an agent hands back a map it edited as text. `map_get` keeps returning the map the *current round* was built from, which differs from this once the builder is dirty. |
 | `builder_files` | none | What `FILE > LOAD` offers: every loadable map with `on_disk`, and `can_save`. |
 | `builder_save` | `name?: string` | `FILE > SAVE` / `SAVE AS`: writes `maps/<name>.toml` (native), makes it the baseline. Replies like `builder_map`. |
-| `click` | `x`, `y` (window pixels, bar included), `button?: "left" \| "right"`, `drag_to?: [x, y]` | A raw press at a window position, in either mode: the bar's buttons, a dropdown row, a dialog button, a stepper, a field cell. With `drag_to`, a press, a straight drag to the second point and a release, crossing every cell on the way. In Play mode a left `click` on the field is a `tap`; in Build mode the reply names the world point and the cell under the press, through the builder's camera. This is how the *UI* is tested, as opposed to the model the tools above address directly. |
+| `click` | `x`, `y` (window pixels), `button?: "left" \| "right"`, `drag_to?: [x, y]` | A raw press at a window position, in either mode: the plates' buttons (`status.builder.buttons` names each one's rect), a dropdown row, a dialog button, a stepper, a field cell. With `drag_to`, a press, a straight drag to the second point and a release, crossing every cell on the way. In Play mode a left `click` on the field is a `tap`; in Build mode the reply names the world point and the cell under the press, through the builder's camera. This is how the *UI* is tested, as opposed to the model the tools above address directly. |
 | `key` | `key: "tab" \| "escape" \| "enter" \| "undo" \| "redo" \| "copy" \| "cut" \| "paste" \| "delete" \| "zoom_in" \| "zoom_out" \| "left" \| "right" \| "up" \| "down" \| ...`, `text?: string` | Presses one key (or types `text` into an open prompt) for one frame through the same `BuilderInput`. `undo`/`redo` are Ctrl+Z / Ctrl+Y, `copy`/`cut`/`paste` Ctrl+C / Ctrl+X / Ctrl+V and `delete` Delete on the selection, `zoom_in`/`zoom_out` are `+`/`-` (one step about the canvas's middle) and the arrows pan the canvas for a frame. |
 
 Existing tools in Build mode: `screenshot` and `overlays` work (the
@@ -454,12 +564,12 @@ baseline as well (section 5).
 
 ```
 mode                                   -> play
-build                                  -> dialog open
-screenshot                             -> the dimmed field and the dialog
-build {answer: "leave"}                -> build, tool wall/brick
-click {x: 340, y: 16}                  -> WALL dropdown open (the caret)
+build                                  -> build, tool wall/brick, the round paused
+screenshot                             -> the canvas as the round showed it, the plates over it
+status                                 -> builder.buttons: each button's window rect by name
+click {x, y} inside list_wall          -> WALL's list open, risen from the tray
 screenshot
-click {x: 340, y: 120}                 -> picked iron from the list
+click {x, y} inside tool_iron          -> picked iron from the list
 builder_paint {cells: [[10,5],[11,5],[12,5]]}
 builder_paint {cells: [[11,5]]}        -> toggle-erased the middle iron
 builder_undo
@@ -484,7 +594,7 @@ carries over unchanged once `play` has run; a seed given to an earlier
 - **Screen-space UI** (docs/mobile-and-scaling-design.md): when the bar is
   drawn at device points the 32 px limitation in section 10 goes away with
   no change to this design; the dropdowns and dialogs simply get sized in
-  points too.
+  points too. *Status: in place (sections 7 and 10).*
 - **Validation**: a `maplint`-light pass at PLAY that warns in the bar
   (`no start cell`, `bong unreachable`) is a natural next step once the
   linter's checks are callable on a `MapFile` without a full `Game::init`.
@@ -497,9 +607,9 @@ carries over unchanged once `play` has run; a seed given to an earlier
 | `mode.rs` (new) | `Session { driver: Driver, game: Game, builder: MapEditor, .. }` with the transitions as methods: `press_build`, `back`, `play`, `replace_map` (what `restart {map_toml}` calls). Both the window and the dev server go through these, so a tool and a click are the same path. No `RaylibHandle` in this file. |
 | `main.rs` | Gathers a `BuilderInput` (mouse/touch press, drag, wheel, `Tab`/`Esc`/`Enter`/Ctrl+Z/Ctrl+Y, typed text) in Build mode the way it gathers `simulation::Input` in Play, hands it to `Session`, and renders whichever mode is live. The `--editor` branch collapses into "start in Build". Feature `#[cfg]`s go. |
 | `Cargo.toml`, `justfile`, `.github/` | Remove `map-editor`; the builder is unconditional. `dev-tools` gates only the dev `SAVE`. |
-| `hud.rs` | `draw_bar` draws `BUILD` at the right-end slot and reports its rect (`hud::build_button_rect(panel)`) for hit-testing, so play-mode chrome stays in one file. |
+| `hud.rs` | `BUILD` is a corner button (`hud::corners`, `CornerButton::Build`), its rect the one the painter and the hit test read, so play-mode chrome stays in one file. |
 | `game.rs::render` | Draws the play chrome last, after the bar, since `render` owns `begin_drawing`. |
-| `editor.rs` | The palette, the hamburger-era `Close`, `New`, `Load` and the yellow debug line go. New: `Category` with a current tool each, dropdown state, the toggle-erase rule in `place`, an `UndoStack` of `Vec<(cell, before, after)>` steps plus settings steps, the settings panel, `EditorAction::Play`. **`update` takes a `BuilderInput` instead of reading raylib**, so the builder is drivable headlessly; hit-testing of the bar moves to slot constants in `hud.rs`'s style. `MapEditor::new` takes the baseline map and keeps a copy for RESET/dirty. Direct entry points for the tools: `select_tool(name)`, `stroke(cells, button)`, `undo/redo(n)`, `set_settings(patch)`, `load(map)`, `map_diff()`. |
+| `editor.rs` | The palette, the hamburger-era `Close`, `New`, `Load` and the yellow debug line go. New: `Category` with a current tool each, dropdown state, the toggle-erase rule in `place`, an `UndoStack` of `Vec<(cell, before, after)>` steps plus settings steps, the settings panel, `EditorAction::Play`. **`update` takes a `BuilderInput` instead of reading raylib**, so the builder is drivable headlessly; the builder's controls are one geometry table (`editor::chrome`: `Bar`, `PopupLayout`) the painter and every hit test read. `MapEditor::new` takes the baseline map and keeps a copy for RESET/dirty. Direct entry points for the tools: `select_tool(name)`, `stroke(cells, button)`, `undo/redo(n)`, `set_settings(patch)`, `load(map)`, `map_diff()`. |
 | `map.rs` | Nothing: `MapFile` already derives `Clone`, and the settings panel edits existing fields. |
 | `lib.rs` | The `EDITOR_PALETTE_*` constants become dropdown/panel constants; `Layout` unchanged. |
 | `devserver.rs`, `bin/bbmcp.rs` | `before_frame`/`advance` take the `Session` rather than a bare `Game`. `status` gains `mode`; the ten tools of section 11 are ten `ToolSpec` rows plus `dispatch` arms (`bbmcp` needs nothing, it reads `TOOLS`); the game-only tools refuse in Build with an `isError` naming `play`. Screenshots work in both modes (the presented frame). |
@@ -510,10 +620,16 @@ carries over unchanged once `play` has run; a seed given to an earlier
 
 Headless (`cargo test --lib`, extend `editor_tests`/`hud_tests`):
 
-- Bar slots in build mode do not overlap and end inside 1280 px, both with
-  and without the dev `SAVE` button.
-- Every dropdown fits inside the field for every category; rows are at
-  least 48 px.
+- The plates' buttons do not overlap and stand inside their plates and the
+  safe area on every window, with DAY and without, PLAY in the box play's
+  corner draws BUILD in; every popup fits its room, its rows at least
+  44 pt (`chrome_tests`).
+- The canvas is a round's picture: the same tiles, trees and tufts with
+  the same variants, edge masks and crowns as a round of the map
+  (`still_tests`); BUILD dresses the canvas in the round's looks and keeps
+  them through BACK and PLAY, the plates swap on BUILD, BACK and PLAY, and
+  PLAY starts with no dissolve, even from an end screen (`session_tests`); DAY shows only
+  under a dark sky and draws the canvas by daylight (`editor_tests`).
 - Toggle erase: pressing a cell holding the brush's object clears it;
   a drag that starts by clearing only clears; a drag that starts by
   painting never clears; a different material is overwritten, not toggled.
@@ -524,9 +640,8 @@ Headless (`cargo test --lib`, extend `editor_tests`/`hud_tests`):
 - Round trip: `Game::init` on a map, clone into the builder, edit, clone
   back, `Game::init` again, and the new round's obstacles match the edit
   (extend `mechanics_tests`' inline-map style).
-- Dev server, through `DevServer::headless()` on a `Session`: `build` opens
-  the dialog mid-round and skips it on the end screen; `build {answer}`
-  both ways; `play` starts a round whose obstacles match the builder's map
+- Dev server, through `DevServer::headless()` on a `Session`: `build`
+  enters at once and `back` comes back; `play` starts a round whose obstacles match the builder's map
   and leaves it frozen; `builder_paint` obeys the stroke rules and
   `builder_undo` reverses it; `builder_settings` round-trips `null` as
   auto and reports CLI overrides; `builder_map {map_toml}` loads and
@@ -537,14 +652,14 @@ Headless (`cargo test --lib`, extend `editor_tests`/`hud_tests`):
   covers the new rows for free.
 
 Windowed (`just run-dev` and the `mcp__bongbong__*` tools): the agent
-session of section 11, screenshotting the play bar with `BUILD`, the
-dialog, the build bar with a dropdown open, the settings panel and the
-round after `play`; `click` on the field in Build and confirm no order is
+session of section 11, screenshotting play's corners with `BUILD`, the
+builder's plates with a list open, the settings panel and the round after
+`play`; `click` on the field in Build and confirm no order is
 made; `click` outside an open dropdown and confirm the cell under it was
 not painted.
 
-On a phone: a PR preview (`bongbong-pr-<N>` on workers.dev), BUILD -> leave ->
-pick a tool from a dropdown -> paint and toggle-erase a few cells -> undo
+On a phone: a PR preview (`bongbong-pr-<N>` on workers.dev), BUILD -> pick
+a tool from a dropdown -> paint and toggle-erase a few cells -> undo
 -> MAP ▾ change tanks -> PLAY, with no mis-taps at phone width.
 
 ## 15. Open questions

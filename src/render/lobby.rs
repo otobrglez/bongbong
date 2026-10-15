@@ -22,12 +22,8 @@ use crate::tank::TEAM_COLORS;
 use crate::text::{keys, mission_title, text, width};
 use crate::{qr, Rect};
 
-/// The panel's fill and outline, the dialogs' so the three screens read
-/// as one family.
-const PANEL_FILL: Color = Color::new(20, 20, 24, 244);
-const PANEL_SHADOW: Color = Color::new(0, 0, 0, 90);
-const PANEL_EDGE: Color = Color::new(0, 0, 0, 150);
-/// The dim over the window behind it, the dialogs' again.
+/// The dim over the window behind the panel (`render::hud::draw_panel`),
+/// the dialogs'.
 const WINDOW_DIM: Color = Color::new(0, 0, 0, 150);
 /// A seat row's own backing, so the rows read as a list.
 const ROW_FILL: Color = Color::new(255, 255, 255, 14);
@@ -44,9 +40,7 @@ pub fn draw_lobby<D: RaylibDraw, S: Sheets>(d: &mut D, ui: &UiFrame, view: &Lobb
     let (screen, area) = (ui.screen, ui.area);
     d.draw_rectangle(0, 0, screen.w.ceil() as i32, screen.h.ceil() as i32, WINDOW_DIM);
     let panel = panel_rect(area);
-    d.draw_rectangle_rounded(Rectangle::new(panel.x + 4.0, panel.y + 4.0, panel.width, panel.height), 0.05, 8, PANEL_SHADOW);
-    d.draw_rectangle_rounded(panel, 0.05, 8, PANEL_FILL);
-    d.draw_rectangle_rounded_lines_ex(panel, 0.05, 8, 1.5, PANEL_EDGE);
+    crate::render::hud::draw_panel(d, panel);
 
     let c = content_rect(area);
     d.draw_text(&view.title, c.x as i32, c.y as i32, 22, ONLINE_COLOR);

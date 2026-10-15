@@ -149,8 +149,8 @@ grain the runtime glows and the weather's light pass step on:
   (`shadow_dir_x`/`_y`), fading out over `ground_wall_shade_cells` cells on
   a smoothstep. It pools on the side the walls' own shadows fall and thins
   on the lit side, and being per block it follows a wall's outline.
-- **The edge shade**, on a round's field only (`Look::edge_shade`; the
-  builder's canvas has none, since the author works right up to the frame).
+- **The edge shade**, on a round's field and on the builder's canvas,
+  which shows the field as a round does (`Look::edge_shade`).
   The distance outside a rounded rectangle inset `ground_edge_shade_px` from
   the edges, its corners rounded by `ground_edge_shade_round` times that
   reach, so the shade follows the frame and deepens into the corners;

@@ -282,10 +282,10 @@ fn publish_window(rl: &RaylibHandle, session: &Session, ui: &UiFrame, layout: &L
 /// this window shows, framed into the whole window, a bitmap pixel per
 /// world pixel (`FollowFrame`) - `Seating::Room` in a room's round, `Local`
 /// otherwise, the sight box the tuning table's. Play draws no bar: its HUD
-/// stands in the window's corners (`hud::corners`). The builder's bar
-/// stands on the window in UI points and its canvas under it
-/// (`editor::BuilderFrame`): an arena's field fitted there, a field map's
-/// canvas made to the shape of the window under the bar, the builder's own
+/// stands in the window's corners (`hud::corners`). The builder's canvas
+/// fills the window as play's field does, its plates over it in UI points
+/// (`editor::BuilderFrame`): an arena's field fitted there as a round's is,
+/// a field map's canvas made to the shape of the window, the builder's own
 /// camera choosing what of the map it shows. While a field map's
 /// establishing shot plays (`establish.rs`) its frame keeps the follow
 /// camera going underneath, but the targets hold the whole field, a texel a
@@ -339,9 +339,10 @@ impl Presentation {
             (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale * units, snap_half: t.view_scale_snap != 0 })
         };
         if mode == Driver::Build {
-            // The bar on the window under the safe area's top - and the
-            // band the web page's controls take along it on a touch screen,
-            // which the UI frame counts as one -, the canvas under it.
+            // The canvas over the whole window, as play's field is; the
+            // plates over it inside the safe area - and the band the web
+            // page's controls take on a touch screen, which the UI frame
+            // counts as one.
             let class = session.builder.map().class();
             let frame = crate::editor::BuilderFrame::new(*ui, field, class, cap);
             let bitmap = frame.layout.window_size();
@@ -1325,8 +1326,8 @@ pub fn run(args: Args) {
         let (w, h) = map.field_size();
         (w.round() as i32, h.round() as i32)
     };
-    // The window of the first frame: the field alone in Play, under the
-    // builder's bar (`HUD_BAR_HEIGHT`) with `--editor`.
+    // The window of the first frame: the field and `HUD_BAR_HEIGHT` more
+    // (`Layout::for_field`).
     let bitmap = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
     // The field a desktop window opens for: the map's when it is shown
     // whole, the standard field's when the camera follows it - a followed
@@ -1562,7 +1563,7 @@ pub fn run(args: Args) {
     // bake changed them, a new round or a builder edit, and drawn a quad
     // each.
     let mut round_blocks = crate::render::canvas::BlockTextures::default();
-    let mut builder_shade = crate::render::canvas::BlockTexture::default();
+    let mut builder_blocks = crate::render::canvas::BlockTextures::default();
     // The minimaps (minimap.rs): the round's, baked once per round and
     // patched where a tile dies, and the builder's navigator's, repainted
     // with every stroke - each uploaded only where it changed.
@@ -1574,6 +1575,13 @@ pub fn run(args: Args) {
     // The builder's own scene target, for a canvas zoomed or a field map
     // (`editor::render::BuilderScene`): made when first needed.
     let mut builder_scene = crate::editor::render::BuilderScene::default();
+    // The picture of the world the window left as BUILD, BACK or PLAY
+    // swaps the plates (`mode::Swap`), the window's size; and the camera
+    // play last drew through, for a field map's.
+    let mut swap_picture: Option<(sola_raylib::prelude::RenderTexture2D, (i32, i32))> = None;
+    let mut last_play_camera: Option<Camera> = None;
+    // The layout the last frame put the world on the window with.
+    let mut last_shown: Option<(View, Layout)> = None;
     // iOS dev-tools builds report frame time to the console every few
     // seconds: the phone has no keyboard for the overlay cycle and its dev
     // server is not reachable from the Mac, so the console is the one
@@ -1846,6 +1854,9 @@ pub fn run(args: Args) {
             let (width, height) = session.field_size();
             dev.before_frame(&mut session, width, height);
         }
+        // A swap a request started (`mode::Swap`): the world the window
+        // left, before this frame's layout can make the targets again.
+        take_swap_picture(rl, thread, &mut session, &mut swap_picture, &composite, &builder_scene, &margin_fx, last_shown, last_play_camera);
         // The field is the live mode's map's (a `restart` above may have
         // just swapped it).
         let (width, height) = session.field_size();
@@ -2178,6 +2189,18 @@ pub fn run(args: Args) {
             }
         }
 
+        // A swap a press started this frame (`mode::Swap`): the world the
+        // window left, before the frame lays the window out for the other
+        // mode.
+        take_swap_picture(rl, thread, &mut session, &mut swap_picture, &composite, &builder_scene, &margin_fx, last_shown, last_play_camera);
+        session.tick_swap(dt);
+        // A dev server holding the frames still draws no swap: its
+        // screenshots show the mode they asked for.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if dev.as_ref().is_some_and(|dev| dev.lockstep()) {
+            session.cut_swap();
+        }
+
         // A press this frame may have changed what the window shows -
         // BUILD, PLAY, a level started on another map: the frame presents
         // that rather than what it began with (its presses were hit-tested
@@ -2215,8 +2238,9 @@ pub fn run(args: Args) {
                 let camera = session.builder.view_camera(&layout);
                 dev.publish_camera(crate::follow::CameraReport { mode: crate::follow::CameraMode::Build, camera, layout, view, follow: None });
             }
-            let shade = builder_shade.sync(rl, thread, session.builder.ground().shade());
+            let blocks = builder_blocks.sync(rl, thread, &session.builder.block_images());
             let minimap = builder_minimap_texture.sync(rl, thread, session.builder.minimap().image());
+            let theme = session.builder.map().theme;
             session.builder.render(
                 rl,
                 thread,
@@ -2225,29 +2249,44 @@ pub fn run(args: Args) {
                 &plan.builder_frame(&ui),
                 BAR_FILL,
                 &EditorTextures {
-                    obstacles: &obstacles_texture,
-                    props: &props_texture,
-                    ground: &ground_textures[theme_index(session.builder.map().theme)],
-                    grass: &grass_textures[theme_index(session.builder.map().theme)],
-                    trees: &trees_texture,
-                    bushes: &bushes_texture,
-                    theme: session.builder.map().theme,
-                    target: &target_texture,
-                    towers: &towers_texture,
-                    crates: &crates_texture,
-                    pickup_glyphs: &pickup_glyphs_texture,
-                    // The bongs the canvas map picks, for their cells and
-                    // their tools' icons.
+                    sheets: Textures {
+                        tanks: &tanks_texture,
+                        tank_glow: &tank_glow_texture,
+                        tank_modules: &tank_modules_texture,
+                        tank_modules_glow: &tank_modules_glow_texture,
+                        shells: &shells_texture,
+                        plasma: &plasma_texture,
+                        minigun_bullets: &minigun_bullets_texture,
+                        missile: &missile_texture,
+                        obstacles: &obstacles_texture,
+                        props: &props_texture,
+                        barrel_explosion: &barrel_explosion_texture,
+                        ground: &ground_textures[theme_index(theme)],
+                        bongs: &bong_textures,
+                        grass: &grass_textures[theme_index(theme)],
+                        trees: &trees_texture,
+                        bushes: &bushes_texture,
+                        target: &target_texture,
+                        towers: &towers_texture,
+                        crates: &crates_texture,
+                        pickup_glyphs: &pickup_glyphs_texture,
+                        aircraft: &aircraft_texture,
+                        portal: &portal_texture,
+                        blocks,
+                    },
+                    theme,
+                    // The bongs the canvas map picks, for their tools' icons.
                     bong_idle: &bong_textures[session.builder.map().bong_kind(crate::bong::Side::Player).index()].idle,
                     enemy_bong_idle: &bong_textures[session.builder.map().bong_kind(crate::bong::Side::Enemy).index()].idle,
                     eraser: &eraser_texture,
-                    portal: &portal_texture,
-                    tanks: &tanks_texture,
-                    shade,
                     minimap,
                     thumbnails: Some(&builder_thumbnails),
                 },
                 session.question.as_ref(),
+                crate::editor::render::SkyFx { weather: Some(&mut weather_fx), margins: Some(&mut margin_fx) },
+                session.swap().filter(|swap| swap.from == Driver::Play).zip(swap_picture.as_ref()).map(|(swap, (picture, _))| {
+                    crate::editor::render::SwapLayer { picture, alpha: 1.0 - swap.progress(), slide: swap.progress() }
+                }),
             );
             // The presented frame is the builder; a pending `screenshot`
             // reads it from the screen here, or the client waits forever.
@@ -2257,6 +2296,7 @@ pub fn run(args: Args) {
             }
             #[cfg(all(feature = "dev-tools", target_os = "emscripten"))]
             publish_window(rl, &session, &ui, &layout, &view, frames_drawn, last_press);
+            last_shown = Some((view, layout));
             return;
         }
 
@@ -2689,6 +2729,9 @@ pub fn run(args: Args) {
         game.refresh_pictures(&views);
         let blocks = game.with_block_images(|images| round_blocks.sync(rl, thread, images));
         drop(pictures_stage);
+        // One camera's picture of the world, which a swap can start from:
+        // no couch split, no establishing shot.
+        let one_view = !establishing && split_view.is_none() && zoom_split.is_none();
         game.render(
             rl,
             thread,
@@ -2733,6 +2776,7 @@ pub fn run(args: Args) {
                     _ => None,
                 },
                 dissolve: Some(&mut dissolve),
+                swap: session.swap().filter(|swap| swap.from == Driver::Build).zip(swap_picture.as_ref()).map(|(swap, (picture, _))| (picture, 1.0 - swap.progress())),
             },
             &Textures {
                 tanks: &tanks_texture,
@@ -2762,7 +2806,11 @@ pub fn run(args: Args) {
             &layout,
             &chrome,
             &ui,
-            fade,
+            // Out of the builder the corners come up with the swap.
+            match session.swap() {
+                Some(swap) if swap.from == Driver::Build => Fade { left: fade.left * swap.progress(), right: fade.right * swap.progress() },
+                _ => fade,
+            },
         );
         // A pending screenshot reads the frame just presented.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
@@ -2774,7 +2822,54 @@ pub fn run(args: Args) {
         // What the local round showed, for BUILD to open the builder on.
         if session.mode() == Driver::Play {
             session.play_view = Some(camera.rect());
+            last_play_camera = one_view.then_some(camera);
         }
+        last_shown = Some((view, layout));
+    });
+}
+
+/// Where a swap starts (`mode::Swap`): the world the window left, as the
+/// last frame put it on the window with `shown` - the builder's canvas as
+/// it last stood (`BuilderScene::present_last`), or play's world from
+/// `composite` through `play_camera`, the one camera play's last frame
+/// showed it by - with an arena's margins, into `picture`, made the
+/// window's size. Play's last frame split for the couch or an
+/// establishing shot (no `play_camera`) leaves no picture: the world cuts
+/// and the plates still swap. Once a swap: a no-op when none started, or
+/// none was drawn yet.
+#[allow(clippy::too_many_arguments)]
+fn take_swap_picture(
+    rl: &mut RaylibHandle,
+    thread: &sola_raylib::prelude::RaylibThread,
+    session: &mut Session,
+    picture: &mut Option<(sola_raylib::prelude::RenderTexture2D, (i32, i32))>,
+    composite: &sola_raylib::prelude::RenderTexture2D,
+    builder_scene: &crate::editor::render::BuilderScene,
+    margin_fx: &crate::render::margin::MarginFx,
+    shown: Option<(View, Layout)>,
+    play_camera: Option<Camera>,
+) {
+    use sola_raylib::prelude::RaylibTextureModeExt;
+    let Some(from) = session.take_swap() else { return };
+    let Some((view, layout)) = shown else { return };
+    if from != Driver::Build && play_camera.is_none() {
+        *picture = None;
+        return;
+    }
+    let size = (view.window.0.ceil() as i32, view.window.1.ceil() as i32);
+    if !picture.as_ref().is_some_and(|(_, held)| *held == size) {
+        *picture = rl.load_render_texture(thread, size.0.max(1) as u32, size.1.max(1) as u32).ok().map(|t| (t, size));
+    }
+    let margins = crate::margin::MarginFrame::of(&view, &layout).zip(margin_fx.picture()).map(|(frame, target)| {
+        let at = layout.field_origin();
+        let in_bitmap = |r: crate::math::Rectangle| crate::math::Rectangle::new(r.x + at.x, r.y + at.y, r.width, r.height);
+        crate::render::view::Margins { target, rect: in_bitmap(frame.rect), parts: frame.parts(0.0).into_iter().map(in_bitmap).collect() }
+    });
+    let Some((picture, _)) = picture.as_mut() else { return };
+    rl.draw_texture_mode(thread, picture, |mut d| match (from, play_camera) {
+        (Driver::Build, _) => builder_scene.present_last(&mut d, composite, &view, BAR_FILL, margins.as_ref()),
+        (_, Some(camera)) if camera.follows() => crate::render::view::present_world(&mut d, composite, &camera, &view, &layout, BAR_FILL),
+        _ => crate::render::view::present_into(&mut d, composite, &view, BAR_FILL, margins.as_ref()),
     });
 }
 

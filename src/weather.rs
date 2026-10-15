@@ -500,23 +500,34 @@ pub struct Occluders {
 }
 
 impl Occluders {
+    /// A round's: every tile standing in it that stops light.
     pub fn of(game: &Game) -> Occluders {
-        let (w, h) = game.map.field_size();
+        let mut q = game.world.query::<&Obstacle>();
+        Occluders::over(game.map.field_size(), q.iter().filter(|o| o.material.blocks_light()).map(|o| o.cell()))
+    }
+
+    /// A field of `field` px whose light-stopping tiles stand on `cells`:
+    /// a round's (`of`), or the builder's canvas's.
+    pub fn over(field: (f32, f32), cells: impl Iterator<Item = (i32, i32)>) -> Occluders {
+        let (w, h) = field;
         let cols = (w / OBSTACLE_GRID_SIZE).ceil() as i32 + 1;
         let rows = (h / OBSTACLE_GRID_SIZE).ceil() as i32 + 1;
         let mut occ = Occluders { cols, rows, solid: vec![false; (cols * rows).max(0) as usize] };
-        for obstacle in game.world.query::<&Obstacle>().iter() {
-            if obstacle.material.blocks_light() {
-                let (c, r) = obstacle.cell();
-                occ.set(c, r);
-            }
+        for (c, r) in cells {
+            occ.set(c, r);
         }
         occ
     }
 
     fn set(&mut self, c: i32, r: i32) {
+        self.put(c, r, true);
+    }
+
+    /// Whether the cell `(c, r)` stops light now: the builder's canvas
+    /// takes an edit in cell by cell (`editor::Still::patch`).
+    pub fn put(&mut self, c: i32, r: i32, solid: bool) {
         if (0..self.cols).contains(&c) && (0..self.rows).contains(&r) {
-            self.solid[(r * self.cols + c) as usize] = true;
+            self.solid[(r * self.cols + c) as usize] = solid;
         }
     }
 
@@ -776,60 +787,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
         if player && game.hide_players {
             continue;
         }
-        if tank.is_wreck() {
-            if !tank.is_dead() {
-                let left = 1.0 - (tank.wreck_timer / t.wreck_burn_seconds.max(0.01)).clamp(0.0, 1.0);
-                let heat = scale([1.0, 0.5, 0.18], k * t.fire_light_strength * left.sqrt() * flicker(time, tank.position));
-                out.push(Light::point(tank.position, t.fire_light_radius_px * 0.6, heat));
-            }
-            continue;
-        }
-        // A disabled hull's lights are out (docs/emp-burst.md): no beam, no
-        // spotlight, no glow - only its sparks, in their bursts.
-        if tank.is_disabled() {
-            if t.emp_spark_light > 0.0 && crate::emp::sparking(crate::emp::spark_seed(tank.owner_slot()), time) {
-                out.push(Light::point(tank.position, 28.0, scale([0.58, 0.93, 0.89], k * t.emp_spark_light)).unshadowed());
-            }
-            continue;
-        }
-        // A cone from each of the hull's headlamps (`tank_art::HEADLIGHTS`),
-        // each at the beam's strength over the root of the lamps lit, so a
-        // pair or a four throws about one beam's light; damage puts them
-        // out as it puts out the lamps in the art - half from the damaged
-        // tier, all at critical. A turret searchlight's cone follows the aim.
-        let dir = heading(tank.visual_rotation);
-        let beam = headlight_color(player);
-        let length = t.headlight_length_px * if player { 1.0 } else { 0.8 };
-        let tier = tank.damage_tier();
-        let lamps = crate::tank_art::HEADLIGHTS[tank.row as usize];
-        let lit = match tier {
-            0 | 1 => lamps.len(),
-            2 => lamps.len().div_ceil(2),
-            _ => 0,
-        };
-        if length > 1.0 && t.headlight_strength > 0.0 && lit > 0 {
-            let each = k * t.headlight_strength / (lit as f32).sqrt();
-            for &(x, y) in &lamps[..lit] {
-                let at = hull_point(tank, (x, y));
-                out.push(Light::cone(at, dir, t.headlight_half_angle_deg.to_radians(), length, scale(beam, each)));
-                out.push(Light::point(at, 8.0, scale(beam, each * 0.8)).unshadowed());
-            }
-        }
-        if tier < 3 && t.headlight_strength > 0.0 {
-            for &(x, y, off) in crate::tank_art::SPOTLIGHTS[tank.row as usize] {
-                let at = turret_point(tank, (x, y));
-                let cone = heading(tank.turret_visual_rotation + off);
-                out.push(Light::cone(at, cone, (t.headlight_half_angle_deg * 0.55).to_radians(), length * 0.8, scale([1.0, 0.93, 0.8], k * t.headlight_strength * 0.75)));
-            }
-        }
-        if t.hull_glow_radius_px > 1.0 && t.hull_glow_strength > 0.0 {
-            let glow = match tank.player_index() {
-                Some(seat) => mix(rgb(crate::tank::team_color(seat)), [1.0, 1.0, 1.0], 0.45),
-                None => [0.9, 0.55, 0.38],
-            };
-            let strength = if player { 1.0 } else { 0.7 };
-            out.push(Light::point(tank.position, t.hull_glow_radius_px, scale(glow, k * t.hull_glow_strength * strength)).unshadowed());
-        }
+        tank_lights(&mut out, tank, player, k, t, time);
     }
     for (at, left) in game.burning_tanks() {
         let heat = scale([1.0, 0.52, 0.2], k * t.fire_light_strength * (left / t.flame_afterburn_seconds.max(0.01)).clamp(0.3, 1.0) * flicker(time, at));
@@ -839,34 +797,25 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     // The bongs and the pickups, faintly, so a lamp can find them.
     if t.pickup_glow_strength > 0.0 {
         for bong_entity in [game.bong, game.enemy_bong].into_iter().flatten() {
-            let (at, color, dead) = crate::simulation::with_bong(&game.world, bong_entity, |bong| {
-                let color = match bong.side {
-                    Side::Player => [0.45, 1.0, 0.55],
-                    Side::Enemy => [1.0, 0.45, 0.55],
-                };
-                (bong.position, color, bong.is_dead())
-            });
+            let (at, side, dead) = crate::simulation::with_bong(&game.world, bong_entity, |bong| (bong.position, bong.side, bong.is_dead()));
             if !dead {
-                out.push(Light::point(at, 38.0, scale(color, k * t.pickup_glow_strength)).unshadowed());
+                out.push(bong_light(at, side, k, t));
             }
         }
         for pickup in game.world.query::<&Pickup>().iter() {
-            out.push(Light::point(pickup.position, 26.0, scale(pickup_color(pickup.kind), k * t.pickup_glow_strength)).unshadowed());
+            out.push(pickup_light(pickup.position, pickup.kind, k, t));
         }
     }
 
     // Portals glow from below their spiral.
     if game.portals_active() {
         for (i, &at) in game.portals.iter().enumerate() {
-            let pulse = 0.85 + 0.15 * math::sin(time * 2.2 + i as f32 * 1.7);
-            out.push(Light::point(at, 112.0, scale([0.45, 0.6, 1.25], k * 0.9 * pulse)).still());
+            out.push(portal_light(i, at, time, k));
         }
     }
 
     // Fire: burning ground, burning tiles, lit fuses, drums in the air.
-    let fire = |at: Position, radius: f32, strength: f32| {
-        Light::point(at, radius, scale([1.0, 0.56, 0.22], k * t.fire_light_strength * strength * flicker(time, at)))
-    };
+    let fire = |at: Position, radius: f32, strength: f32| fire_light(at, radius, strength, k, t, time);
     for (at, left, total) in game.burning_cells() {
         let fade = (left / total.max(0.01)).clamp(0.0, 1.0).sqrt().max(0.25);
         out.push(fire(at, t.fire_light_radius_px, 1.1 * fade));
@@ -916,50 +865,28 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     if !game.lava.is_empty() || !game.volcanoes.is_empty() {
         let surge = game.lava_look().surge;
         for (col, row) in game.lava.cells().filter(|(c, r)| (c + r) % 2 == 0) {
-            let at = crate::map::cell_to_world(col, row);
-            out.push(Light::point(at, 76.0, scale([1.0, 0.45, 0.15], k * t.fire_light_strength * 0.75 * (1.0 + 0.5 * surge) * flicker(time, at))).unshadowed());
+            out.push(lava_light(crate::map::cell_to_world(col, row), surge, k, t, time));
         }
         for v in &game.volcanoes {
-            let phase = v.phase(game.time, t);
-            let flare = if phase.stage == crate::volcano::Stage::Erupt { (1.0 - phase.age / 0.6).max(0.0) } else { 0.0 };
-            out.push(Light::point(v.centre(), 110.0 + 90.0 * phase.heat + 160.0 * flare, scale([1.0, 0.5, 0.2], k * t.fire_light_strength * (0.6 + 0.9 * phase.heat + flare))).unshadowed());
+            out.push(crater_light(v.centre(), &v.phase(game.time, t), k, t));
         }
         for bomb in &game.lava_bombs {
             out.push(fire(bomb.ground_pos(t), 60.0, 0.9).unshadowed());
         }
     }
-    let lamp = scale([1.0, 0.82, 0.52], k * 1.15);
     // A post an EMP put out throws nothing, flickering back as it is drawn
     // (`emp::lamp_lit`).
     for at in game.lamp_posts().into_iter().filter(|&at| crate::emp::lamp_lit(at, game.lamps_out())) {
-        out.push(Light::point(at, t.lamp_light_px, scale(lamp, flicker(time, at))).still());
+        out.push(lamp_light(at, 1.0, k, t, time));
     }
     for lantern in &game.lanterns {
-        out.push(Light::point(lantern.position, t.lamp_light_px * 0.8, scale(lamp, flicker(time, lantern.position))).still());
+        out.push(lamp_light(lantern.position, 0.8, k, t, time));
     }
 
     // The towers: a tesla's coil as it charges and every bolt along its
     // path, a mortar's ooze and the globs it lobs, a tower on fire.
     for view in game.tower_views() {
-        // Offline (an EMP): its coil and its mortar's mouth are dark; a
-        // fire on it still burns.
-        if view.disabled > 0.0 {
-            if view.burning {
-                out.push(fire(view.position, t.fire_light_radius_px * 0.9, 1.0));
-            }
-            continue;
-        }
-        match view.kind {
-            TowerKind::Tesla if view.charge > 0.05 => {
-                let charge = view.charge * view.charge;
-                out.push(Light::point(view.position, 56.0 + 56.0 * charge, scale(TESLA_LIGHT, k * 1.1 * charge)));
-            }
-            TowerKind::Bio => out.push(Light::point(view.position, 44.0, scale(OOZE_LIGHT, k * 0.35)).unshadowed()),
-            _ => {}
-        }
-        if view.burning {
-            out.push(fire(view.position, t.fire_light_radius_px * 0.9, 1.0));
-        }
+        tower_lights(&mut out, &view, k, t, time);
     }
     for bolt in &game.tesla_bolts {
         let strength = k * t.shot_light_strength * bolt.alpha();
@@ -1154,10 +1081,146 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     }
 
     let occluders = t.light_shadows.then(|| Occluders::of(game));
-    out.into_iter()
-        .filter(|light| view.is_none_or(|v| light.reaches(v)))
-        .map(|light| light.cast(occluders.as_ref(), t.light_wall_bleed_px))
-        .collect()
+    cast_lights(out, occluders.as_ref(), view, t)
+}
+
+/// `lights` less every one that cannot reach `view` (`None` keeps them
+/// all), each cast against `occluders`' walls where there are any.
+pub fn cast_lights(lights: Vec<Light>, occluders: Option<&Occluders>, view: Option<Rectangle>, t: &Tuning) -> Vec<Light> {
+    lights.into_iter().filter(|light| view.is_none_or(|v| light.reaches(v))).map(|light| light.cast(occluders, t.light_wall_bleed_px)).collect()
+}
+
+// Each source's light at a sky whose lights show `k` (`Look::lights`): what
+// a round throws (`lights_in`) and what the builder's canvas throws where
+// it previews its map's sky (`editor::still`), from one rule each.
+
+/// The lights `tank` throws, a seat's (`player`) or an enemy's: a wreck
+/// burning until it is a dead hulk, a disabled hull's sparks, or a live
+/// hull's headlamps, its turret's searchlights and its glow in its seat's
+/// colour.
+pub fn tank_lights(out: &mut Vec<Light>, tank: &Tank, player: bool, k: f32, t: &Tuning, time: f32) {
+    if tank.is_wreck() {
+        if !tank.is_dead() {
+            let left = 1.0 - (tank.wreck_timer / t.wreck_burn_seconds.max(0.01)).clamp(0.0, 1.0);
+            let heat = scale([1.0, 0.5, 0.18], k * t.fire_light_strength * left.sqrt() * flicker(time, tank.position));
+            out.push(Light::point(tank.position, t.fire_light_radius_px * 0.6, heat));
+        }
+        return;
+    }
+    // A disabled hull's lights are out (docs/emp-burst.md): no beam, no
+    // spotlight, no glow - only its sparks, in their bursts.
+    if tank.is_disabled() {
+        if t.emp_spark_light > 0.0 && crate::emp::sparking(crate::emp::spark_seed(tank.owner_slot()), time) {
+            out.push(Light::point(tank.position, 28.0, scale([0.58, 0.93, 0.89], k * t.emp_spark_light)).unshadowed());
+        }
+        return;
+    }
+    // A cone from each of the hull's headlamps (`tank_art::HEADLIGHTS`),
+    // each at the beam's strength over the root of the lamps lit, so a
+    // pair or a four throws about one beam's light; damage puts them
+    // out as it puts out the lamps in the art - half from the damaged
+    // tier, all at critical. A turret searchlight's cone follows the aim.
+    let dir = heading(tank.visual_rotation);
+    let beam = headlight_color(player);
+    let length = t.headlight_length_px * if player { 1.0 } else { 0.8 };
+    let tier = tank.damage_tier();
+    let lamps = crate::tank_art::HEADLIGHTS[tank.row as usize];
+    let lit = match tier {
+        0 | 1 => lamps.len(),
+        2 => lamps.len().div_ceil(2),
+        _ => 0,
+    };
+    if length > 1.0 && t.headlight_strength > 0.0 && lit > 0 {
+        let each = k * t.headlight_strength / (lit as f32).sqrt();
+        for &(x, y) in &lamps[..lit] {
+            let at = hull_point(tank, (x, y));
+            out.push(Light::cone(at, dir, t.headlight_half_angle_deg.to_radians(), length, scale(beam, each)));
+            out.push(Light::point(at, 8.0, scale(beam, each * 0.8)).unshadowed());
+        }
+    }
+    if tier < 3 && t.headlight_strength > 0.0 {
+        for &(x, y, off) in crate::tank_art::SPOTLIGHTS[tank.row as usize] {
+            let at = turret_point(tank, (x, y));
+            let cone = heading(tank.turret_visual_rotation + off);
+            out.push(Light::cone(at, cone, (t.headlight_half_angle_deg * 0.55).to_radians(), length * 0.8, scale([1.0, 0.93, 0.8], k * t.headlight_strength * 0.75)));
+        }
+    }
+    if t.hull_glow_radius_px > 1.0 && t.hull_glow_strength > 0.0 {
+        let glow = match tank.player_index() {
+            Some(seat) => mix(rgb(crate::tank::team_color(seat)), [1.0, 1.0, 1.0], 0.45),
+            None => [0.9, 0.55, 0.38],
+        };
+        let strength = if player { 1.0 } else { 0.7 };
+        out.push(Light::point(tank.position, t.hull_glow_radius_px, scale(glow, k * t.hull_glow_strength * strength)).unshadowed());
+    }
+}
+
+/// A live bong's faint glow on `side`'s colour, so a lamp can find it.
+pub fn bong_light(at: Position, side: Side, k: f32, t: &Tuning) -> Light {
+    let color = match side {
+        Side::Player => [0.45, 1.0, 0.55],
+        Side::Enemy => [1.0, 0.45, 0.55],
+    };
+    Light::point(at, 38.0, scale(color, k * t.pickup_glow_strength)).unshadowed()
+}
+
+/// A crate's faint glow in its kind's colour.
+pub fn pickup_light(at: Position, kind: PickupKind, k: f32, t: &Tuning) -> Light {
+    Light::point(at, 26.0, scale(pickup_color(kind), k * t.pickup_glow_strength)).unshadowed()
+}
+
+/// The `i`th portal of an active network glowing from below its spiral.
+pub fn portal_light(i: usize, at: Position, time: f32, k: f32) -> Light {
+    let pulse = 0.85 + 0.15 * math::sin(time * 2.2 + i as f32 * 1.7);
+    Light::point(at, 112.0, scale([0.45, 0.6, 1.25], k * 0.9 * pulse)).still()
+}
+
+/// A fire's light at `at`, `radius` px, flickering.
+pub fn fire_light(at: Position, radius: f32, strength: f32, k: f32, t: &Tuning, time: f32) -> Light {
+    Light::point(at, radius, scale([1.0, 0.56, 0.22], k * t.fire_light_strength * strength * flicker(time, at)))
+}
+
+/// A lava cell's glow, brighter in the volcanoes' `surge`; a round lights
+/// every other cell.
+pub fn lava_light(at: Position, surge: f32, k: f32, t: &Tuning, time: f32) -> Light {
+    Light::point(at, 76.0, scale([1.0, 0.45, 0.15], k * t.fire_light_strength * 0.75 * (1.0 + 0.5 * surge) * flicker(time, at))).unshadowed()
+}
+
+/// A crater's light by its heat, flaring as it erupts.
+pub fn crater_light(centre: Position, phase: &crate::volcano::Phase, k: f32, t: &Tuning) -> Light {
+    let flare = if phase.stage == crate::volcano::Stage::Erupt { (1.0 - phase.age / 0.6).max(0.0) } else { 0.0 };
+    Light::point(centre, 110.0 + 90.0 * phase.heat + 160.0 * flare, scale([1.0, 0.5, 0.2], k * t.fire_light_strength * (0.6 + 0.9 * phase.heat + flare))).unshadowed()
+}
+
+/// A lamp post's warm, steady pool - a lantern's `reach` of it smaller -,
+/// which the walls cast shadows from.
+pub fn lamp_light(at: Position, reach: f32, k: f32, t: &Tuning, time: f32) -> Light {
+    let lamp = scale([1.0, 0.82, 0.52], k * 1.15);
+    Light::point(at, t.lamp_light_px * reach, scale(lamp, flicker(time, at))).still()
+}
+
+/// A tower's lights: a tesla's coil as it charges, a mortar's ooze, a
+/// tower on fire. Offline (an EMP), its coil and its mortar's mouth are
+/// dark; a fire on it still burns.
+pub fn tower_lights(out: &mut Vec<Light>, view: &crate::tower::TowerView, k: f32, t: &Tuning, time: f32) {
+    let fire = |at: Position, radius: f32, strength: f32| fire_light(at, radius, strength, k, t, time);
+    if view.disabled > 0.0 {
+        if view.burning {
+            out.push(fire(view.position, t.fire_light_radius_px * 0.9, 1.0));
+        }
+        return;
+    }
+    match view.kind {
+        TowerKind::Tesla if view.charge > 0.05 => {
+            let charge = view.charge * view.charge;
+            out.push(Light::point(view.position, 56.0 + 56.0 * charge, scale(TESLA_LIGHT, k * 1.1 * charge)));
+        }
+        TowerKind::Bio => out.push(Light::point(view.position, 44.0, scale(OOZE_LIGHT, k * 0.35)).unshadowed()),
+        _ => {}
+    }
+    if view.burning {
+        out.push(fire(view.position, t.fire_light_radius_px * 0.9, 1.0));
+    }
 }
 
 #[cfg(test)]

@@ -901,15 +901,15 @@ Constants (geometry, not feel) in `emp.rs`: `RING_INNER_PX` (6, 12),
 | Key | en | sl |
 |---|---|---|
 | `hud-weapon-offline` (`keys::HUD_WEAPON_OFFLINE`) | WPN OFFLINE | IZPAD OROŽJA |
-| `tool-emp_burst` | emp burst | emp sunek |
-| `tool-short-emp_burst` | emp | emp |
+| `tool-emp_burst` | EMP BURST | EMP SUNEK |
+| `tool-short-emp_burst` | EMP | EMP |
 
 `IZPAD OROŽJA` ("weapon outage") folds to `IZPAD OROZJA`. The budget:
 `every_language_fits_every_budget` gains the offline words, split at the
 first space (`hud::offline_lines`), each line within `WEAPON_SLOT_W - 4`
 (60) at `HUD_LABEL_SIZE` - `WPN` 21, `OFFLINE` 44, `IZPAD` 31, `OROZJA`
 40 at the font's own widths. The tool names are measured by the existing
-tool budgets (144 and 48). Both languages fit (the budget test runs
+tool budgets (144 and 60). Both languages fit (the budget test runs
 over every shipped language).
 
 ## 8. Wire

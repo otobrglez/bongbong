@@ -1,8 +1,9 @@
 //! The builder with raylib: `MapEditor::render` (the canvas through its
-//! camera, then the chrome on the window in UI points - the bar, the open
-//! popup, the status line, the navigator and the loupe), the bar and popup
-//! painters, the tool icons and the field markers, and `EditorTextures`,
-//! the sheets the builder draws from. A child of `editor` because it draws
+//! camera - the map as a round stands it (`still.rs`) under its sky, the
+//! editing marks over it - then the chrome on the window in UI points - the
+//! plates, the open popup, the status plate, the navigator and the loupe),
+//! the plates' and popups' painters, the tool icons and the field markers,
+//! and `EditorTextures`, the sheets the builder draws from. A child of `editor` because it draws
 //! the builder's private state; the edit model, every hit test and the
 //! chrome's geometry (`chrome.rs`) stay headless.
 
@@ -16,7 +17,7 @@ use super::chrome::{
 };
 use crate::text::{keys, text};
 use crate::canvas::Sheet;
-use crate::bong::{BongAnim, BongKind, Side};
+use crate::bong::{BongKind, Side};
 use crate::hud::{Hints, BAR_FILL, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
 use crate::math::{Color, Rectangle};
 use crate::obstacle;
@@ -30,10 +31,6 @@ const ICON_PX: f32 = 32.0;
 const DROPDOWN_TEXT_X: i32 = 48;
 use super::chrome::{MAP_CHECK, MAP_HEADING_SIZE, MAP_LABEL_SIZE, MAP_SKY_SIZE, MAP_SWATCH, MAP_VALUE_SIZE};
 
-/// What the canvas area shows where the map is not: past its edges when
-/// the whole of a field map is shown, and under the field before the
-/// ground is drawn.
-const CANVAS_FILL: Color = Color::new(30, 30, 34, 255);
 
 /// The width the default font gives `text` at `size`: `text::width`,
 /// which is `MeasureText`'s answer with no handle.
@@ -66,64 +63,25 @@ fn label(tool: Tool) -> String {
     text().named("tool", tool.name())
 }
 
-/// A tool's name as the status line and the cursor readout spell it: the
-/// catalogue's `tool-short-<name>` where the language has one, else its
-/// full name.
-fn short_label(tool: Tool) -> String {
-    let t = text();
-    t.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or_else(|| t.named("tool", tool.name()))
-}
+use crate::render::hud::draw_panel;
+use crate::{EDITOR_PANEL_SEGMENTS, OBSTACLE_GRID_SIZE};
 
-/// What the cursor readout calls the object in a cell.
-fn cell_label(obj: &CellObject) -> String {
-    TOOLS.iter().copied().find(|t| t.object().as_ref() == Some(obj)).map_or_else(|| "?".to_string(), short_label)
-}
-
-use crate::{
-    EDITOR_PANEL_BORDER_OPACITY, EDITOR_PANEL_BORDER_THICKNESS, EDITOR_PANEL_FILL, EDITOR_PANEL_FILL_OPACITY, EDITOR_PANEL_ROUNDNESS,
-    EDITOR_PANEL_SEGMENTS, EDITOR_PANEL_SHADOW_OFFSET, EDITOR_PANEL_SHADOW_OPACITY, OBSTACLE_GRID_SIZE,
-};
-
-/// The sprite atlases the builder needs to draw placed objects and their
-/// bar/dropdown icons - a small subset of `game::Textures`, plus the one
-/// texture only the builder uses (`eraser`, see docs/map-editor-design.md).
+/// What the builder draws from: every sheet a round draws from (`sheets`,
+/// the canvas map's theme's ground and grass among them, and the canvas's
+/// baked images - its floor shade and forest floor - as their `blocks`),
+/// so the canvas paints its tiles, trees, tanks and bongs as a round does
+/// (`still.rs`); plus what only the builder draws from.
 pub struct EditorTextures<'a> {
-    pub obstacles: &'a Texture2D,
-    /// The props sheet (`obstacle::Sheet::Props`).
-    pub props: &'a Texture2D,
-    /// The ground tileset of the canvas map's theme
-    /// (`Theme::ground_texture_path`) - `app.rs` picks it per frame.
-    pub ground: &'a Texture2D,
-    /// The tall-grass sheet of the canvas map's theme
-    /// (`Theme::grass_texture_path`).
-    pub grass: &'a Texture2D,
+    pub sheets: crate::render::game::Textures<'a>,
     /// The idle filmstrip of the players' bong the canvas map picks
-    /// (`MapFile::bong_kind`), for its cell and the BONG tool.
+    /// (`MapFile::bong_kind`), for the BONG tool's icon.
     pub bong_idle: &'a Texture2D,
-    /// The same for the enemy's bong, for its cell and the ENEMY BONG tool.
+    /// The same for the enemy's bong, for the ENEMY BONG tool's icon.
     pub enemy_bong_idle: &'a Texture2D,
-    /// static/crates_sheet.png - the pickups' crates, a row per kind.
-    pub crates: &'a Texture2D,
-    /// static/pickup_glyphs.png - the crates' symbols on their own: a
-    /// pickup tool's icon where its crate does not fit.
-    pub pickup_glyphs: &'a Texture2D,
     pub eraser: &'a Texture2D,
-    /// static/portal_sheet.png - the spiral and its bar icon (portal.rs).
-    pub portal: &'a Texture2D,
-    pub tanks: &'a Texture2D,
-    pub trees: &'a Texture2D,
-    /// static/bushes_sheet.png - bushes and reeds (docs/BUSHES_SPEC.md).
-    pub bushes: &'a Texture2D,
     /// The canvas map's theme: a desert map's trees are drawn dry
     /// (`Material::is_dry`), as the round will draw them.
     pub theme: Theme,
-    /// static/target_sheet.png - the range board.
-    pub target: &'a Texture2D,
-    /// static/towers_sheet.png - the defence towers' bases and tops.
-    pub towers: &'a Texture2D,
-    /// The canvas's floor shade as `app.rs` uploaded it before the frame,
-    /// with the stamp it was baked under.
-    pub shade: Option<(u64, &'a Texture2D)>,
     /// The navigator's picture (`MapEditor::minimap`) as `app.rs` uploaded
     /// it before the frame, with the stamp it was baked under.
     pub minimap: Option<(u64, &'a Texture2D)>,
@@ -178,6 +136,70 @@ impl ThumbnailTextures {
 pub struct BuilderScene {
     held: Option<(RenderTexture2D, (i32, i32))>,
     loupe: Option<(RenderTexture2D, (i32, i32))>,
+    /// The view drawn under its map's sky: the weather's passes ping-pong
+    /// with a target of the camera's own size (`render::weather`), so it is
+    /// made to that size exactly.
+    sky: Option<(RenderTexture2D, (i32, i32))>,
+    /// How the last frame put the canvas on the window.
+    last: Option<Shown>,
+}
+
+/// What the builder draws its canvas's sky and an arena's margins with:
+/// the round's own passes (`app.rs` holds them for the session).
+pub struct SkyFx<'a> {
+    pub weather: Option<&'a mut crate::render::weather::WeatherFx>,
+    pub margins: Option<&'a mut crate::render::margin::MarginFx>,
+}
+
+/// The swap into the builder (`mode::Swap`), as a frame draws it: the
+/// picture of the world the window left (`app.rs` takes it the frame BUILD
+/// is pressed, the window's size) over the canvas at `alpha`, and the
+/// plates `slide` of the way in from the window's edges.
+pub struct SwapLayer<'a> {
+    pub picture: &'a RenderTexture2D,
+    pub alpha: f32,
+    pub slide: f32,
+}
+
+/// The picture a swap draws over the window, `alpha` of it: the window's
+/// size, the right way up.
+pub fn draw_swap_picture(d: &mut impl RaylibDraw, picture: &RenderTexture2D, alpha: f32) {
+    let (w, h) = (picture.texture.width as f32, picture.texture.height as f32);
+    let a = (255.0 * alpha.clamp(0.0, 1.0)).round() as u8;
+    d.draw_texture_pro(picture, Rectangle::new(0.0, 0.0, w, -h), Rectangle::new(0.0, 0.0, w, h), Vector2::new(0.0, 0.0), 0.0, Color::new(255, 255, 255, a));
+}
+
+/// How the last frame put the canvas on the window (`BuilderScene::last`),
+/// for a swap out of the builder to take its picture from.
+#[derive(Clone, Copy, Debug)]
+enum Shown {
+    /// `composite`, through the frame's view (FIT on an arena).
+    Composite,
+    /// The scene target's or the sky's texels `source`, onto `area`.
+    Held { source: Rectangle, area: Rectangle },
+    Sky { source: Rectangle, area: Rectangle },
+}
+
+impl BuilderScene {
+    /// The canvas as the last frame put it on the window - `composite`
+    /// through `view` with `margins` round it, or a target's texels onto
+    /// the canvas area -, with no chrome: what a swap out of the builder
+    /// fades from (`app.rs`).
+    pub fn present_last(&self, d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: &crate::view::View, backdrop: Color, margins: Option<&crate::render::view::Margins>) {
+        let shown = match self.last {
+            Some(Shown::Held { source, area }) => self.held.as_ref().map(|(t, _)| (t, source, area)),
+            Some(Shown::Sky { source, area }) => self.sky.as_ref().map(|(t, _)| (t, source, area)),
+            _ => None,
+        };
+        match shown {
+            Some((target, source, area)) => {
+                d.clear_background(Color::BLACK);
+                crate::render::view::letterbox(d, view, backdrop);
+                d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
+            None => crate::render::view::present_into(d, composite, view, backdrop, margins),
+        }
+    }
 }
 
 /// The target in `slot`, holding at least `need` texels: made, grown or
@@ -198,42 +220,53 @@ fn hold<'a>(
     slot.as_mut().map(|(texture, _)| texture)
 }
 
-/// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
-/// game. It holds the sheets a map can show at rest; a sheet only a live
-/// round draws from (damage, blasts, the bong's other clips) is a
-/// programming error here.
+/// The texels a sky's target over a view off FIT is held at, its view
+/// needing `need` (`ScenePlan::size`): the held target's `held` while it
+/// covers `need` with no more than `SKY_SLACK` times three to spare a
+/// side, else `need` grown by `SKY_SLACK` or more to a whole number of
+/// it - never past `SCENE_MAX_TEXELS` where `need` is not. The view's
+/// texels shift by one or two as it pans across the block grid and grow
+/// or shrink a few a frame through a pinch: held this way, neither makes
+/// the sky's targets again (`hold_exact`, `WeatherFx::begin`) but every
+/// `SKY_SLACK` texels of a pinch.
+fn sky_size(held: Option<(i32, i32)>, need: (i32, i32)) -> (i32, i32) {
+    let most = super::camera::SCENE_MAX_TEXELS as i32;
+    let side = |held: Option<i32>, need: i32| match held {
+        Some(h) if (need..=need + 3 * SKY_SLACK).contains(&h) => h,
+        _ => (((need.max(1) + SKY_SLACK - 1) / SKY_SLACK + 1) * SKY_SLACK).min(most).max(need),
+    };
+    (side(held.map(|h| h.0), need.0), side(held.map(|h| h.1), need.1))
+}
+
+/// The step a sky's target is held to (`sky_size`), in texels.
+const SKY_SLACK: i32 = 64;
+
+/// The target in `slot`, `size` texels exactly: made again for any other
+/// size.
+fn hold_exact<'a>(
+    slot: &'a mut Option<(RenderTexture2D, (i32, i32))>,
+    rl: &mut RaylibHandle,
+    thread: &RaylibThread,
+    size: (i32, i32),
+) -> Option<&'a mut RenderTexture2D> {
+    let size = (size.0.max(1), size.1.max(1));
+    if !slot.as_ref().is_some_and(|(_, held)| *held == size) {
+        *slot = None;
+        let texture = rl.load_render_texture(thread, size.0 as u32, size.1 as u32).ok()?;
+        *slot = Some((texture, size));
+    }
+    slot.as_mut().map(|(texture, _)| texture)
+}
+
+/// The builder's `Sheet` lookup: the round's (`game::Textures`), its
+/// blocks the canvas's own.
 impl Sheets for EditorTextures<'_> {
     fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
-        self.shade.filter(|(held, _)| *held == stamp).map(|(_, texture)| texture)
+        self.sheets.blocks_texture(stamp)
     }
 
     fn texture(&self, sheet: Sheet) -> &Texture2D {
-        match sheet {
-            // Picked per frame by `app.rs` from the canvas's theme, the
-            // theme `render` names here.
-            Sheet::Ground(_) => self.ground,
-            Sheet::Walls => self.obstacles,
-            Sheet::Props => self.props,
-            Sheet::Trees => self.trees,
-            Sheet::Bushes => self.bushes,
-            Sheet::Target => self.target,
-            Sheet::Towers => self.towers,
-            Sheet::Grass(_) => self.grass,
-            Sheet::Portal => self.portal,
-            Sheet::Tanks => self.tanks,
-            Sheet::Crates => self.crates,
-            Sheet::PickupGlyphs => self.pickup_glyphs,
-            Sheet::Bong { clip: BongAnim::Idle, kind } if kind.side() == Side::Enemy => self.enemy_bong_idle,
-            Sheet::Bong { clip: BongAnim::Idle, .. } => self.bong_idle,
-            Sheet::TankGlow
-            | Sheet::TankModules
-            | Sheet::TankModulesGlow
-            | Sheet::BarrelExplosion
-            | Sheet::Aircraft
-            | Sheet::Bong { .. } => {
-                panic!("the builder has no {sheet:?} sheet")
-            }
-        }
+        self.sheets.texture(sheet)
     }
 }
 impl MapEditor {
@@ -248,14 +281,17 @@ impl MapEditor {
     /// camera, then the chrome over it on the window in UI points. At FIT
     /// on an arena - the camera `Camera::whole` over the field's own bitmap
     /// - the canvas is drawn into `composite` (the field, `layout`'s size)
-    /// and that is presented through `frame.view` under the bar, exactly as
-    /// `Game::render` does for an arena's round. Any other view draws the
-    /// canvas into `scene` at a texel per world pixel (`scene_plan`), the
-    /// way a round draws its world, and puts the view's texels straight
-    /// onto the window's canvas area (`window_mapping`), so a whole-block
-    /// zoom keeps its blocks whole on the glass. Either way the window
-    /// round the canvas is `backdrop`, and the chrome
-    /// (`draw_window_chrome`) goes over everything.
+    /// and that is presented through `frame.view` with an arena's margins
+    /// round it (`render::margin`), exactly as `Game::render` does for an
+    /// arena's round. Any other view draws the canvas into `scene` at a
+    /// texel per world pixel (`scene_plan`), the way a round draws its
+    /// world, and puts the view's texels straight onto the window's canvas
+    /// area (`window_mapping`), so a whole-block zoom keeps its blocks whole
+    /// on the glass. Under a sky (`MapEditor::sky`) the canvas is drawn in
+    /// the weather's passes as a round's field is (`draw_under_sky`), where
+    /// it is drawn a texel a world pixel. The window past the canvas is
+    /// `backdrop`, and the chrome (`draw_window_chrome`) goes over
+    /// everything.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -267,75 +303,262 @@ impl MapEditor {
         backdrop: Color,
         textures: &EditorTextures,
         question: Option<&crate::mapstore::Question>,
+        mut sky: SkyFx,
+        swap: Option<SwapLayer>,
     ) {
         let (layout, view) = (&frame.layout, &frame.view);
         let cursor = self.cursor_cell(frame);
         // A clock read, not an input: the builder has no round clock, and
-        // the wall clock animates the water and turns a placed portal so
-        // the author sees what a round will show.
+        // the wall clock animates the water, the grass and the sky and
+        // turns a placed portal, so the author sees what a round will show.
         let time = rl.get_time() as f32;
         let camera = self.view_camera(layout);
         let field = self.map.field_size();
         let chrome = self.chrome(frame);
         // The chrome's camera goes straight onto the window.
         let units = crate::render::view::window_camera_units(rl);
-        if camera == crate::view::Camera::whole(field) && (layout.field.w, layout.field.h) == field {
+        let canvas = self.sky_scene(time);
+        let fit = camera == crate::view::Camera::whole(field) && (layout.field.w, layout.field.h) == field;
+        let plan = scene_plan(&camera);
+        // The view the sky is drawn over: the whole field at FIT on an
+        // arena, else the scene plan's while it keeps a texel a world pixel
+        // - a view of a large map far out draws its canvas clear -, as
+        // large as the target it is held in (`sky_size`).
+        let under = if fit {
+            Some(camera)
+        } else {
+            let size = sky_size(scene.sky.as_ref().map(|(_, size)| *size), plan.size);
+            (plan.zoom == 1.0).then(|| crate::view::Camera {
+                field,
+                origin: plan.origin,
+                offset: crate::math::Vec2::new(0.0, 0.0),
+                size: (size.0 as f32, size.1 as f32),
+                scale: 1.0,
+                margin: 0.0,
+            })
+        };
+        let weather = match (sky.weather.as_deref_mut(), under) {
+            (Some(fx), Some(c)) => fx.begin(rl, thread, &canvas, &textures.sheets, &c),
+            _ => None,
+        };
+        if fit {
             // The canvas into the bitmap, the bitmap onto the window.
-            rl.draw_texture_mode(thread, composite, |mut d| {
-                d.clear_background(CANVAS_FILL);
-                self.draw_canvas(&mut d, textures, time, cursor, None);
-            });
-            let magnified = self.loupe(frame).and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
+            match (sky.weather.as_deref_mut(), &weather) {
+                (Some(fx), Some(w)) => self.draw_under_sky(rl, thread, composite, fx, w, &camera, textures, time, cursor),
+                _ => rl.draw_texture_mode(thread, composite, |mut d| {
+                    d.clear_background(backdrop);
+                    self.draw_canvas(&mut d, textures, time, cursor, None);
+                }),
+            }
+            let margin_frame = crate::margin::MarginFrame::of(view, layout);
+            let sky_pair = match (sky.weather.as_deref_mut(), weather.as_ref()) {
+                (Some(fx), Some(w)) => Some((fx, w)),
+                _ => None,
+            };
+            let margins = match (margin_frame, sky.margins.as_deref_mut()) {
+                (Some(mf), Some(fx)) => {
+                    let at = layout.field_origin();
+                    let in_bitmap = |r: Rectangle| Rectangle::new(r.x + at.x, r.y + at.y, r.width, r.height);
+                    fx.draw(rl, thread, &canvas, &mf, &textures.sheets, backdrop, sky_pair).map(|target| crate::render::view::Margins {
+                        target,
+                        rect: in_bitmap(mf.rect),
+                        parts: mf.parts(0.0).into_iter().map(in_bitmap).collect(),
+                    })
+                }
+                _ => None,
+            };
+            let magnified = self.loupe(frame).and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time, backdrop)?)));
+            scene.last = Some(Shown::Composite);
             rl.draw(thread, |mut d| {
-                crate::render::view::present_into(&mut d, composite, view, backdrop, None);
-                self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units, question);
+                crate::render::view::present_into(&mut d, composite, view, backdrop, margins.as_ref());
+                if let Some(swap) = &swap {
+                    draw_swap_picture(&mut d, swap.picture, swap.alpha);
+                }
+                let slide = swap.as_ref().map_or(1.0, |s| s.slide);
+                self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units, question, slide);
             });
             return;
         }
-        let plan = scene_plan(&camera);
-        // Room for the view at FIT too, which is the most a zoom of this
-        // map in this window ever needs: a pinch never reallocates.
-        let mut fit = self.camera;
-        fit.fit();
-        let most = scene_plan(&fit.view(&self.viewport_in(layout))).size;
-        let Some(target) = hold(&mut scene.held, rl, thread, (plan.size.0.max(most.0), plan.size.1.max(most.1))) else {
-            return;
-        };
-        let cull = camera.cull();
-        let in_target = Camera2D { offset: Vector2::new(0.0, 0.0), target: plan.origin.into(), rotation: 0.0, zoom: plan.zoom };
-        let held = Rectangle::new(
-            plan.origin.x,
-            plan.origin.y,
-            target.texture.width as f32 / plan.zoom,
-            target.texture.height as f32 / plan.zoom,
-        );
-        rl.draw_texture_mode(thread, target, |mut d| {
-            d.clear_background(CANVAS_FILL);
-            d.draw_mode2D(in_target, |mut d, _| {
-                self.draw_canvas(&mut d, textures, time, cursor, cull);
-                cover_past_field(&mut d, field, held);
+        let area = window_mapping(&camera, view, layout).area;
+        let s = plan.source;
+        // Under the sky where its target can be made, else clear.
+        let mut skied = false;
+        if let (Some(fx), Some(w), Some(c)) = (sky.weather.as_deref_mut(), weather.as_ref(), under)
+            && let Some(target) = hold_exact(&mut scene.sky, rl, thread, c.target_size())
+        {
+            self.draw_under_sky(rl, thread, target, fx, w, &c, textures, time, cursor);
+            let held = Rectangle::new(plan.origin.x, plan.origin.y, target.texture.width as f32, target.texture.height as f32);
+            rl.draw_texture_mode(thread, target, |mut d| d.draw_mode2D(c.in_target(), |mut d, _| cover_past_field(&mut d, field, held, backdrop)));
+            skied = true;
+        }
+        if !skied {
+            // Room for the view at FIT too, which is the most a zoom of this
+            // map in this window ever needs: a pinch never reallocates.
+            let mut fit = self.camera;
+            fit.fit();
+            let most = scene_plan(&fit.view(&self.viewport_in(layout))).size;
+            let Some(target) = hold(&mut scene.held, rl, thread, (plan.size.0.max(most.0), plan.size.1.max(most.1))) else {
+                return;
+            };
+            let cull = camera.cull();
+            let in_target = Camera2D { offset: Vector2::new(0.0, 0.0), target: plan.origin.into(), rotation: 0.0, zoom: plan.zoom };
+            let held = Rectangle::new(plan.origin.x, plan.origin.y, target.texture.width as f32 / plan.zoom, target.texture.height as f32 / plan.zoom);
+            rl.draw_texture_mode(thread, target, |mut d| {
+                d.clear_background(backdrop);
+                d.draw_mode2D(in_target, |mut d, _| {
+                    self.draw_canvas(&mut d, textures, time, cursor, cull);
+                    cover_past_field(&mut d, field, held, backdrop);
+                });
             });
-        });
+        }
+        let magnified = self.loupe(frame).and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time, backdrop)?)));
+        let shown = if skied { scene.sky.as_ref() } else { scene.held.as_ref() };
+        let Some((target, _)) = shown else { return };
         // A render texture reads back bottom-up.
         let height = target.texture.height as f32;
-        let s = plan.source;
         let source = Rectangle::new(s.x, height - s.y - s.height, s.width, -s.height);
-        let area = window_mapping(&camera, view, layout).area;
-        let magnified = self.loupe(frame).and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
-        let Some((target, _)) = scene.held.as_ref() else { return };
+        let last = if skied { Shown::Sky { source, area } } else { Shown::Held { source, area } };
         rl.draw(thread, |mut d| {
             d.clear_background(Color::BLACK);
             crate::render::view::letterbox(&mut d, view, backdrop);
             d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-            self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units, question);
+            if let Some(swap) = &swap {
+                draw_swap_picture(&mut d, swap.picture, swap.alpha);
+            }
+            let slide = swap.as_ref().map_or(1.0, |s| s.slide);
+            self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units, question, slide);
         });
+        scene.last = Some(last);
+    }
+
+    /// What the canvas's sky is drawn over (`render::weather::Scene`): its
+    /// map's sky in force (`MapEditor::sky`), the canvas's floor and water,
+    /// its starts as the seats and its lights (`canvas_lights`), on the
+    /// wall clock.
+    fn sky_scene(&self, time: f32) -> crate::render::weather::Scene<'_> {
+        let t = crate::tuning::tuning();
+        let sky = self.sky();
+        let look = crate::weather::Look::of(sky, &t);
+        let frozen = crate::weather::freezes(sky, &t);
+        crate::render::weather::Scene {
+            look,
+            sky,
+            time,
+            field: self.map.field_size(),
+            theme: self.map.theme,
+            ground: &self.ground,
+            plain: self.plain_canvas,
+            frozen,
+            seats: self.still().seats().map(|tank| tank.position).collect(),
+            lights: Box::new(move |part| self.canvas_lights(&look, time, part)),
+            depth: Box::new(|at| {
+                let (col, row) = map::world_to_cell(at);
+                self.ground.depth(col, row)
+            }),
+            roads: Box::new(|| self.cell_index().cells().iter().filter(|(_, _, o)| *o == CellObject::Road).map(|&(c, r, _)| (c, r)).collect()),
+            made: crate::minimap::RoundKey::of_canvas(&self.map, self.cell_index().digest(), frozen),
+            frame: self.edits,
+        }
+    }
+
+    /// Pass 1 of the canvas under `frame`'s sky into `target`, the size of
+    /// `camera`'s view a texel a world pixel, as `Game::draw_world` runs a
+    /// round's: the canvas under the light (`draw_canvas_world`) - on the
+    /// ground pass's bare, weathered ground where the sky has one -,
+    /// multiplied by the light map, then what shines by itself
+    /// (`draw_canvas_glowing`), then the air over it all; with the
+    /// shaders the stages ping-pong with the weather's own target and end
+    /// in `target`, without them each goes straight into it. The editing
+    /// marks go over the finished sky, so the dark never hides them.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_under_sky(
+        &self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        target: &mut RenderTexture2D,
+        fx: &mut crate::render::weather::WeatherFx,
+        frame: &crate::render::weather::WeatherFrame,
+        camera: &crate::view::Camera,
+        textures: &EditorTextures,
+        time: f32,
+        cursor: Option<(i32, i32)>,
+    ) {
+        use crate::render::weather::{draw_blocks, draw_flash, multiply_light};
+        let cull = camera.cull();
+        let in_target = camera.in_target();
+        let plan = frame.plan;
+        let day_pools = frame.day_light_pools();
+        if frame.plain {
+            let Some(light) = fx.light_map() else { return };
+            let mut blocks = Vec::new();
+            rl.draw_texture_mode(thread, target, |mut d| {
+                d.clear_background(Color::WHITE);
+                d.draw_mode2D(in_target, |mut d, _| {
+                    frame.plain_snow_cover(&mut blocks);
+                    let snowed = !blocks.is_empty();
+                    if snowed {
+                        if !self.plain_canvas {
+                            ground::draw(&mut GpuCanvas::culled(&mut d, textures, cull), &self.ground, self.map.theme, time);
+                        }
+                        draw_blocks(&mut d, &blocks);
+                    }
+                    self.draw_canvas_world(&mut d, textures, time, cull, snowed);
+                    if !plan.lit {
+                        self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools);
+                    }
+                });
+                if plan.lit {
+                    multiply_light(&mut d, light, frame);
+                    d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools));
+                }
+                if plan.sky {
+                    blocks.clear();
+                    frame.plain_air(&mut blocks);
+                    d.draw_mode2D(in_target, |mut d, _| draw_blocks(&mut d, &blocks));
+                    draw_flash(&mut d, frame);
+                }
+            });
+        } else {
+            let Some((lit_target, mut passes)) = fx.stages() else { return };
+            // Each stage draws into the other buffer from the one before
+            // it, so the last lands in `target`.
+            let first_in_target = plan.lit == plan.sky;
+            {
+                let first: &mut RenderTexture2D = if first_in_target { &mut *target } else { &mut *lit_target };
+                rl.draw_texture_mode(thread, first, |mut d| {
+                    d.clear_background(Color::WHITE);
+                    if plan.ground {
+                        passes.draw_ground(&mut d, frame);
+                    }
+                    d.draw_mode2D(in_target, |mut d, _| {
+                        self.draw_canvas_world(&mut d, textures, time, cull, plan.ground);
+                        if !plan.lit {
+                            self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools);
+                        }
+                    });
+                });
+            }
+            if plan.lit {
+                let (under, to): (&RenderTexture2D, &mut RenderTexture2D) =
+                    if first_in_target { (&*target, &mut *lit_target) } else { (&*lit_target, &mut *target) };
+                rl.draw_texture_mode(thread, to, |mut d| {
+                    passes.draw_lit(&mut d, under, frame);
+                    d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools));
+                });
+            }
+            if plan.sky {
+                rl.draw_texture_mode(thread, target, |mut d| passes.draw_sky(&mut d, lit_target, frame));
+            }
+        }
+        rl.draw_texture_mode(thread, target, |mut d| d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_marks(&mut d, textures, time, cursor, cull)));
     }
 
     /// The chrome over the canvas on the window, in UI points through
     /// `frame.ui`'s scale - carried in framebuffer pixels, `units` to the
     /// window unit (`render::view::window_camera_units`): the status line
-    /// and the navigator, the bar, the open popup and, over a painting
-    /// finger, the loupe.
+    /// and the navigator, the plates, the open popup and, over a painting
+    /// finger, the loupe - the plates and what stands by them `slide` of
+    /// the way in from the window's edges (`mode::Swap`; 1 is home).
     #[allow(clippy::too_many_arguments)]
     fn draw_window_chrome(
         &self,
@@ -348,17 +571,23 @@ impl MapEditor {
         magnified: Option<(&Loupe, &RenderTexture2D)>,
         units: f32,
         question: Option<&crate::mapstore::Question>,
+        slide: f32,
     ) {
+        // Out past the window's top and bottom edges at the slide's start.
+        let away = 1.0 - slide.clamp(0.0, 1.0);
+        let top = -away * (chrome.bar.left.y + chrome.bar.left.height);
+        let bottom = away * (frame.ui.screen.h - chrome.bar.tray.y);
+        let bar = chrome.bar.slid(top, bottom);
         let ui = crate::render::view::onto_window(
             Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.ui.scale },
             units,
         );
         d.draw_mode2D(ui, |mut d, _| {
-            self.draw_status_line(&mut d, frame, chrome, cursor);
-            self.draw_navigator(&mut d, frame, textures, camera);
-            self.draw_bar(&mut d, &chrome.bar, textures);
+            self.draw_status_line(&mut d, frame, chrome, cursor, bottom);
+            self.draw_navigator(&mut d, frame, textures, camera, top);
+            self.draw_bar(&mut d, &bar, textures);
             if let Some(strip) = &chrome.strip {
-                self.draw_strip(&mut d, strip, chrome.bar.touch);
+                self.draw_strip(&mut d, strip);
             }
             self.draw_popup(&mut d, chrome, textures, frame.ui.hints);
             if let Some((loupe, picture)) = magnified {
@@ -373,8 +602,8 @@ impl MapEditor {
 
     /// The world `loupe` shows, drawn into its own target at a texel a
     /// world pixel - the canvas without the cursor's highlight, the world
-    /// past the field in the canvas fill - so nothing drawn over the canvas
-    /// (the status line, the navigator, the bar) and nothing past what the
+    /// past the field in the window's backdrop - so nothing drawn over the
+    /// canvas (the status plate, the navigator, the plates) and nothing past what the
     /// scene target holds ever shows in it.
     #[allow(clippy::too_many_arguments)]
     fn draw_loupe_world<'a>(
@@ -385,6 +614,7 @@ impl MapEditor {
         loupe: &Loupe,
         textures: &EditorTextures,
         time: f32,
+        backdrop: Color,
     ) -> Option<&'a RenderTexture2D> {
         let w = loupe.world;
         let target = hold(slot, rl, thread, (w.width.ceil() as i32, w.height.ceil() as i32))?;
@@ -394,20 +624,21 @@ impl MapEditor {
         let cull = Rectangle::new(w.x - m, w.y - m, w.width + 2.0 * m, w.height + 2.0 * m);
         let field = self.map.field_size();
         rl.draw_texture_mode(thread, target, |mut d| {
-            d.clear_background(CANVAS_FILL);
+            d.clear_background(backdrop);
             d.draw_mode2D(in_target, |mut d, _| {
                 self.draw_canvas(&mut d, textures, time, None, Some(cull));
-                cover_past_field(&mut d, field, held);
+                cover_past_field(&mut d, field, held, backdrop);
             });
         });
         Some(&*target)
     }
 
-    /// The navigator (`navigator_rect`), in UI points under the bar and
-    /// the popups: the canvas's picture as its upload holds it, and the
-    /// outline of what `camera` shows over it.
-    fn draw_navigator(&self, d: &mut impl RaylibDraw, frame: &BuilderFrame, textures: &EditorTextures, camera: &crate::view::Camera) {
+    /// The navigator (`navigator_rect`), in UI points under the popups,
+    /// `dy` down while it slides in (`mode::Swap`): the canvas's picture as
+    /// its upload holds it, and the outline of what `camera` shows over it.
+    fn draw_navigator(&self, d: &mut impl RaylibDraw, frame: &BuilderFrame, textures: &EditorTextures, camera: &crate::view::Camera, dy: f32) {
         let (Some(rect), Some((stamp, texture))) = (self.navigator_rect(frame), textures.minimap) else { return };
+        let rect = Rectangle::new(rect.x, rect.y + dy, rect.width, rect.height);
         if stamp != self.minimap.image().stamp {
             return;
         }
@@ -417,221 +648,290 @@ impl MapEditor {
         crate::render::minimap::draw_minimap(d, rect, texture, field, &picture, 1.0);
     }
 
-    /// The status line, in UI points along the bottom-left of the room
-    /// under the bar (`chrome::status_line`), short of the navigator: the
-    /// map's name where the bar has no room for it whole, the active tool,
-    /// the cell under the pointer (or the last tapped one), and any
-    /// message - cut to the room it has.
-    fn draw_status_line(&self, d: &mut impl RaylibDraw, frame: &BuilderFrame, chrome: &Chrome, cursor: Option<(i32, i32)>) {
-        let until = self.navigator_rect(frame).map(|r| Corners::plate(r).x);
-        let at = chrome::status_line(chrome.room, until);
-        let mut line = String::new();
-        let name = self.bar_name();
-        if chrome.bar.name.is_none_or(|r| text_width(&name, HUD_TEXT_SIZE) > r.width) {
-            line.push_str(&format!("{name}   "));
-        }
-        line.push_str(&format!(
-            "{}: {}",
-            self.active_category().map_or_else(|| text().get(keys::EDITOR_TOOL), |c| c.label()),
-            short_label(self.active_tool)
-        ));
-        if let Some((col, row)) = cursor {
-            let under = self.map.cell(col, row).map(cell_label).unwrap_or_default();
-            line.push_str(&format!("   {col},{row} {under}"));
-        }
-        // The size of the rectangle a RECT drag is drawing, else of the
-        // paste ghost while one stands, else of the selection.
-        if let Some(rect) = self.rect_stroke().map(|(r, _)| r).or(self.ghost().map(|g| g.rect())).or(self.selection()) {
-            line.push_str(&format!("   {}x{}", rect.cols, rect.rows));
-        }
-        if let Some(status) = &self.status {
-            line.push_str(&format!("   {status}"));
-        }
+    /// The status line, in UI points on its plate by the tray
+    /// (`chrome::status_plate`), its words in the catalogue's capitals as
+    /// the corners' are: the map's name where the top has no room for it
+    /// whole, the active tool, the cell under the pointer (or the last
+    /// tapped one), and any message - cut to the room it has.
+    fn draw_status_line(&self, d: &mut impl RaylibDraw, frame: &BuilderFrame, chrome: &Chrome, cursor: Option<(i32, i32)>, dy: f32) {
+        let line = self.status_words(chrome, cursor);
         let size = chrome::STATUS_TEXT;
-        d.draw_text(&fit_text(&line, at.width, size), at.x as i32, at.y as i32, size, Color::LIGHTGRAY);
+        let plate = self.status_rect(frame, chrome, cursor);
+        let plate = Rectangle::new(plate.x, plate.y + dy, plate.width, plate.height);
+        if plate.width <= 2.0 * chrome::STATUS_PAD {
+            return;
+        }
+        crate::render::hud::draw_cluster_plate(d, plate, 1.0);
+        let fitted = fit_text(&line, plate.width - 2.0 * chrome::STATUS_PAD, size);
+        let y = (plate.y + (plate.height - size as f32) / 2.0) as i32;
+        d.draw_text(&fitted, (plate.x + chrome::STATUS_PAD) as i32, y, size, TEXT);
     }
 
-    /// The canvas in world pixels - ground, placed objects and the hover
-    /// highlight - for a `Camera2D` that puts the world where the frame
-    /// shows it. `cull` is the world rectangle worth drawing
-    /// (`Camera::cull`); `None` draws everything.
+    /// The canvas in world pixels - the map as a round stands it, then the
+    /// editing marks over it (`draw_canvas_world`, `draw_canvas_marks`) -
+    /// for a `Camera2D` that puts the world where the frame shows it. `cull`
+    /// is the world rectangle worth drawing (`Camera::cull`); `None` draws
+    /// everything.
     fn draw_canvas<D: RaylibDraw>(&self, d: &mut D, textures: &EditorTextures, time: f32, cursor: Option<(i32, i32)>, cull: Option<Rectangle>) {
+        self.draw_canvas_world(d, textures, time, cull, false);
+        self.draw_canvas_marks(d, textures, time, cursor, cull);
+    }
+
+    /// The map as a round stands it (`still.rs`), what a sky's light falls
+    /// on (`Game::paint_field_lit`'s share of the canvas): the ground and
+    /// its shade - the ground tileset left out where the sky's ground pass
+    /// has drawn it (`ground_drawn`) -, the forest floor and the oil, the
+    /// portals, the lava and the volcanoes asleep, the tiles, and what
+    /// stands among the grass, the trees over it.
+    fn draw_canvas_world<D: RaylibDraw>(&self, d: &mut D, textures: &EditorTextures, time: f32, cull: Option<Rectangle>, ground_drawn: bool) {
         let (width, height) = self.map.field_size();
         let culled = |pos: Position, reach: f32| {
             cull.is_some_and(|r| pos.x < r.x - reach || pos.y < r.y - reach || pos.x > r.x + r.width + reach || pos.y > r.y + r.height + reach)
         };
-        {
-            if self.plain_canvas {
+        if self.plain_canvas {
+            if !ground_drawn {
                 d.draw_rectangle(0, 0, width as i32, height as i32, Color::WHITE);
-            } else {
+            }
+        } else {
+            if !ground_drawn {
                 ground::draw(&mut GpuCanvas::culled(&mut *d, textures, cull), &self.ground, self.map.theme, time);
-                ground::draw_shade(&mut GpuCanvas::new(&mut *d, textures), &self.ground);
             }
+            ground::draw_shade(&mut GpuCanvas::new(&mut *d, textures), &self.ground);
+        }
+        self.still().paint_floor(&mut GpuCanvas::culled(&mut *d, textures, cull));
 
-            // The cells as the kept index holds them, made once per edit
-            // rather than parsed and sorted again every frame.
-            let index = self.cell_index();
-            // Portals first, under every other cell: three cells of art on
-            // one anchor cell, and the cells are row-sorted, so a portal
-            // drawn in the loop would cover a wall placed above it. Ghosted
-            // while the network is inactive (fewer than two), with the
-            // anchor outlined like a gate off its edge - placed, not
-            // usable. `time` is the wall clock above.
-            let portals = index.portals();
-            let active = portals.len() >= 2;
-            let tint = if active { Color::WHITE } else { Color::new(255, 255, 255, 110) };
-            for &(col, row) in portals {
-                let pos = map::cell_to_world(col, row);
-                if culled(pos, 0.0) {
-                    continue;
-                }
+        // Portals first, under every other cell: three cells of art on one
+        // anchor cell, and the cells are row-sorted, so a portal drawn in
+        // the loop would cover a wall placed above it. Ghosted while the
+        // network is inactive (fewer than two): placed, not usable.
+        let portals = self.cell_index().portals();
+        let tint = if portals.len() >= 2 { Color::WHITE } else { Color::new(255, 255, 255, 110) };
+        for &(col, row) in portals {
+            let pos = map::cell_to_world(col, row);
+            if !culled(pos, 0.0) {
                 draw_portal(&mut GpuCanvas::new(&mut *d, textures), pos, time, tint);
-                if !active {
-                    let size = OBSTACLE_GRID_SIZE;
-                    d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, GATE_COLOR);
-                }
             }
+        }
 
-            // The lava over the ground, from the canvas's own layout, then
-            // each volcano's cone at its crater (docs/volcano.md): a round's
-            // picture, asleep and calm, under every other cell.
-            let lava = self.lava_layout();
-            if !lava.is_empty() {
-                let look = crate::lava::Look { surge: 0.0, speed: crate::tuning::tuning().lava_flow_speed };
-                let mut c = GpuCanvas::new(&mut *d, textures);
-                for (col, row) in lava.cells() {
-                    if !culled(map::cell_to_world(col, row), 0.0) {
-                        crate::lava::draw_cell(&mut c, &lava, col, row, time, look, false, 1.0);
-                        crate::lava::draw_floes(&mut c, &lava, col, row, time, look);
-                    }
+        // The lava over the ground, from the canvas's own layout, then each
+        // volcano's cone at its crater (docs/volcano.md): a round's picture,
+        // asleep and calm, under every other cell.
+        let lava = self.lava_layout();
+        if !lava.is_empty() {
+            let look = crate::lava::Look { surge: 0.0, speed: crate::tuning::tuning().lava_flow_speed };
+            let mut c = GpuCanvas::new(&mut *d, textures);
+            for (col, row) in lava.cells() {
+                if !culled(map::cell_to_world(col, row), 0.0) {
+                    crate::lava::draw_cell(&mut c, &lava, col, row, time, look, false, 1.0);
+                    crate::lava::draw_floes(&mut c, &lava, col, row, time, look);
                 }
             }
-            let t = crate::tuning::tuning();
-            for &(col, row) in &self.map.volcano_cells() {
-                let pos = map::cell_to_world(col, row);
-                if culled(pos, 96.0) {
-                    continue;
-                }
+        }
+        let t = crate::tuning::tuning();
+        for (pos, picture) in self.volcano_pictures(&lava) {
+            if culled(pos, 96.0) {
+                continue;
+            }
+            let asleep = crate::volcano::phase(-1.0, 0.0, &t);
+            let mut c = GpuCanvas::new(&mut *d, textures);
+            crate::volcano::draw_skirt(&mut c, pos, &picture);
+            crate::volcano::draw_cone_shadow(&mut c, pos, &picture, (t.shadow_dir_x, t.shadow_dir_y));
+            crate::volcano::draw_cone(&mut c, pos, &picture, &asleep, time);
+        }
+
+        // Its tiles, then what stands - the crates, the starts' tanks, the
+        // bongs, the towers and lamps among the grass -, the trees over them.
+        let still = self.still();
+        still.paint_tiles(&mut GpuCanvas::culled(&mut *d, textures, cull), time);
+        still.paint_standing(&mut GpuCanvas::culled(&mut *d, textures, cull), time);
+    }
+
+    /// Each volcano's crater and its cone's picture, its outlets where the
+    /// canvas's lava leaves it.
+    fn volcano_pictures(&self, lava: &crate::lava::LavaLayout) -> Vec<(Position, std::sync::Arc<crate::volcano::ConePicture>)> {
+        self.still()
+            .volcanoes()
+            .iter()
+            .map(|&(col, row)| {
                 let outlets: Vec<f32> = lava
                     .cells()
                     .filter(|&(c, r)| (-1..=1).any(|dr| (-1..=1).any(|dc| crate::volcano::in_footprint(col, row, c + dc, r + dr))))
                     .map(|(c, r)| ((r - row) as f32).atan2((c - col) as f32))
                     .collect();
-                let picture = crate::volcano::cone(&outlets);
-                let asleep = crate::volcano::phase(-1.0, 0.0, &t);
-                let mut c = GpuCanvas::new(&mut *d, textures);
-                crate::volcano::draw_skirt(&mut c, pos, &picture);
-                crate::volcano::draw_cone_shadow(&mut c, pos, &picture, (t.shadow_dir_x, t.shadow_dir_y));
-                crate::volcano::draw_cone(&mut c, pos, &picture, &asleep, time);
+                (map::cell_to_world(col, row), crate::volcano::cone(&outlets))
+            })
+            .collect()
+    }
+
+    /// What shines by itself under a dark sky (`Game::paint_field_glowing`'s
+    /// share of the canvas), as bright as the sky lets it: each start's
+    /// tank's lamps, strips and sensor eye, and the lava and the craters
+    /// drawn again whole. `day_pools` is 1 in daylight and falls as the
+    /// sky's lights rise (`WeatherFrame::day_light_pools`).
+    fn draw_canvas_glowing<D: RaylibDraw>(&self, d: &mut D, textures: &EditorTextures, time: f32, cull: Option<Rectangle>, day_pools: f32) {
+        let glow = 1.0 - day_pools;
+        if glow <= 0.0 {
+            return;
+        }
+        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            let mut c = GpuCanvas::new(&mut bd, textures);
+            for tank in self.still().seats().filter(|tank| !crate::view::culled(cull, tank.position)) {
+                crate::tank::draw_tank_glow(&mut c, tank, time, glow);
             }
-
-            // Only the rows the cull spans (`CellIndex::near`).
-            for (col, row, obj) in index.near(cull) {
-                // Road and water are painted into `self.ground`, lava,
-                // volcanoes and portals in the pre-passes above.
-                if matches!(obj, CellObject::Road | CellObject::Water | CellObject::Lava | CellObject::Volcano | CellObject::Portal) {
-                    continue;
-                }
-                let pos = map::cell_to_world(*col, *row);
-                // A tower's reach ring spreads far past its cell.
-                let reach = obj.tower().map_or(0.0, |(kind, _)| kind.range());
-                if culled(pos, reach) {
-                    continue;
-                }
-                draw_cell(d, textures, (width, height), pos, obj, 255, time);
+        });
+        let lava = self.lava_layout();
+        let volcanoes = self.volcano_pictures(&lava);
+        if lava.is_empty() && volcanoes.is_empty() {
+            return;
+        }
+        let t = crate::tuning::tuning();
+        let look = crate::lava::Look { surge: 0.0, speed: t.lava_flow_speed };
+        let asleep = crate::volcano::phase(-1.0, 0.0, &t);
+        let mut c = GpuCanvas::culled(&mut *d, textures, cull);
+        for (col, row) in lava.cells() {
+            if !crate::view::culled(cull, map::cell_to_world(col, row)) {
+                crate::lava::draw_cell(&mut c, &lava, col, row, time, look, true, 1.0);
             }
-
-            // The select tool's marks over the map, then what the brush's
-            // shape is about to do.
-            self.draw_selection(d, textures, time, &culled);
-            self.draw_brush_marks(d, textures, time, cursor, &culled);
-
-            // The finding the CHECK panel picked, over the map.
-            self.draw_lint_marks(d, &culled);
-
-            // Hover highlight - no visible grid lines otherwise, per
-            // docs/map-editor-design.md. On touch this is the last tapped
-            // cell.
-            if let Some((col, row)) = cursor {
-                let pos = map::cell_to_world(col, row);
-                let size = OBSTACLE_GRID_SIZE;
-                d.draw_rectangle_lines_ex(
-                    Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size),
-                    2.0,
-                    Color::new(255, 255, 255, 160),
-                );
+        }
+        for (pos, picture) in volcanoes {
+            if !crate::view::culled(cull, pos) {
+                crate::volcano::draw_cone_glow_with(&mut c, pos, &picture, None, &asleep, time, 1.0);
             }
         }
     }
 
-    /// The map's name as the bar shows it, a `*` after it while edited.
-    fn bar_name(&self) -> String {
-        format!("{}{}", self.name(), if self.dirty() { " *" } else { "" })
+    /// The editing marks over the map - never darkened by its sky: a
+    /// portal off its network outlined like a gate off its edge, each
+    /// gate's chevron pointing in from its edge, each tower's reach, each
+    /// start's seat, the select tool's marks, what the brush's shape is
+    /// about to do, the finding the CHECK panel picked, and the hover
+    /// highlight.
+    fn draw_canvas_marks<D: RaylibDraw>(&self, d: &mut D, textures: &EditorTextures, time: f32, cursor: Option<(i32, i32)>, cull: Option<Rectangle>) {
+        let (width, height) = self.map.field_size();
+        let culled = |pos: Position, reach: f32| {
+            cull.is_some_and(|r| pos.x < r.x - reach || pos.y < r.y - reach || pos.x > r.x + r.width + reach || pos.y > r.y + r.height + reach)
+        };
+        let index = self.cell_index();
+        let size = OBSTACLE_GRID_SIZE;
+        if index.portals().len() < 2 {
+            for &(col, row) in index.portals() {
+                let pos = map::cell_to_world(col, row);
+                if !culled(pos, 0.0) {
+                    draw_block_frame(d, pos, GATE_FRAME_HALF, GATE_COLOR, 255);
+                }
+            }
+        }
+        for (col, row, obj) in index.near(cull) {
+            let pos = map::cell_to_world(*col, *row);
+            match obj {
+                CellObject::Gate if !culled(pos, 0.0) => match gate_inward(pos, width, height) {
+                    Some(inward) => draw_gate_chevron(d, pos, inward, 255),
+                    None => draw_block_frame(d, pos, GATE_FRAME_HALF, GATE_COLOR, 255),
+                },
+                _ => {
+                    if let Some((kind, side)) = obj.tower()
+                        && !culled(pos, kind.range())
+                    {
+                        let reach = if side == crate::bong::Side::Enemy { ENEMY_RING_COLOR } else { crate::tank::team_color(0) };
+                        draw_block_ring(d, pos, kind.range(), 1, Color::new(reach.r, reach.g, reach.b, 90));
+                    }
+                }
+            }
+        }
+        for tank in self.still().seats() {
+            if !culled(tank.position, tank.size()) {
+                draw_seat_label(d, tank);
+            }
+        }
+
+        // The select tool's marks over the map, then what the brush's
+        // shape is about to do.
+        self.draw_selection(d, textures, time, &culled);
+        self.draw_brush_marks(d, textures, time, cursor, &culled);
+
+        // The finding the CHECK panel picked, over the map.
+        self.draw_lint_marks(d, &culled);
+
+        // Hover highlight - no visible grid lines otherwise, per
+        // docs/map-editor-design.md. On touch this is the last tapped
+        // cell.
+        if let Some((col, row)) = cursor {
+            let pos = map::cell_to_world(col, row);
+            d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, Color::new(255, 255, 255, 160));
+        }
     }
 
-    /// The bar (docs/game-editor-fusion.md section 7), in UI points as
-    /// `Bar::of` laid it out: the strip across the window, BACK, the map's
-    /// name with a `*` while edited where the bar has the room, the five
-    /// category buttons or the TOOLS button they fold into, the eraser,
-    /// UNDO, REDO, FILE, MAP, FIT, CHECK, the clear flag where it is not
-    /// folded into CHECK, PLAY HERE and PLAY - every button in one box
-    /// (`chrome::button_box`) and by one rule of colours (`Face`), its
-    /// words at one size.
+
+
+    /// The controls (docs/game-editor-fusion.md section 7), in UI points
+    /// as `Bar::of` laid them out, on play's corner plates
+    /// (`render::hud::draw_cluster_plate`): BACK and the map's name with a
+    /// `*` while edited where the top has the room; UNDO, REDO, FILE, MAP,
+    /// FIT, CHECK, the clear flag where it is not folded into CHECK, PLAY
+    /// HERE and PLAY; along the bottom the six category buttons or the
+    /// TOOLS button they fold into, BRUSH and the eraser - every button in
+    /// one box (`chrome::button_box`) and by one rule of colours (`Face`),
+    /// its words at one size.
     fn draw_bar(&self, d: &mut impl RaylibDraw, bar: &Bar, textures: &EditorTextures) {
-        d.draw_rectangle_rec(bar.strip, BAR_FILL);
-        let touch = bar.touch;
+        for plate in bar.plates() {
+            crate::render::hud::draw_cluster_plate(d, plate, 1.0);
+        }
         let text_y = |r: Rectangle| (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-        self.draw_back_button(d, bar.back, bar.back_word, touch);
+        self.draw_back_button(d, bar.back, bar.back_word);
+        // DAY, washed while it is down and the canvas drawn by daylight.
+        if let Some(r) = bar.day {
+            draw_word_button(d, r, &text().get(keys::EDITOR_DAY), Face::IDLE.open(self.day()));
+        }
         if let Some(r) = bar.name {
             d.draw_text(&fit_text(&self.bar_name(), r.width, HUD_TEXT_SIZE), r.x as i32, text_y(r), HUD_TEXT_SIZE, TEXT);
         }
         match &bar.tools {
             BarTools::Categories(buttons) => {
                 for (category, button) in Category::ALL.into_iter().zip(buttons) {
-                    self.draw_category_button(d, button, textures, category, touch);
+                    self.draw_category_button(d, button, textures, category);
                 }
             }
-            BarTools::Folded(r) => self.draw_tools_button(d, *r, textures, touch),
+            BarTools::Folded(r) => self.draw_tools_button(d, *r, textures),
         }
         if let Some(r) = bar.brush {
-            self.draw_brush_button(d, r, touch);
+            self.draw_brush_button(d, r);
         }
 
-        let erase = button_box(bar.erase, touch);
+        let erase = button_box(bar.erase);
         draw_box(d, erase, Face::IDLE.in_force(self.active_tool == Tool::Eraser));
         draw_tool_icon(d, textures, self.map.theme, Tool::Eraser, icon_box(erase, false));
 
         let undo = Face::able(self.history.undo_depth() > 0);
-        draw_word_button(d, bar.undo, touch, &text().get(keys::EDITOR_UNDO), undo);
+        draw_word_button(d, bar.undo, &text().get(keys::EDITOR_UNDO), undo);
         let redo = Face::able(self.history.redo_depth() > 0);
-        draw_word_button(d, bar.redo, touch, &text().get(keys::EDITOR_REDO), redo);
+        draw_word_button(d, bar.redo, &text().get(keys::EDITOR_REDO), redo);
 
         let file_open = matches!(self.popup, Some(Popup::File | Popup::Load { .. } | Popup::Save { .. }));
-        draw_menu_button(d, bar.file, touch, &text().get(keys::EDITOR_FILE), Face::IDLE.open(file_open));
+        draw_menu_button(d, bar.file, &text().get(keys::EDITOR_FILE), Face::IDLE.open(file_open));
         let map_open = matches!(self.popup, Some(Popup::Settings { .. }));
-        draw_menu_button(d, bar.map, touch, &text().get(keys::EDITOR_MAP), Face::IDLE.open(map_open));
+        draw_menu_button(d, bar.map, &text().get(keys::EDITOR_MAP), Face::IDLE.open(map_open));
         // FIT, dim while the whole canvas is what is shown.
-        draw_word_button(d, bar.fit, touch, &text().get(keys::EDITOR_FIT), Face::able(!self.camera.is_fit()));
+        draw_word_button(d, bar.fit, &text().get(keys::EDITOR_FIT), Face::able(!self.camera.is_fit()));
         let check_open = matches!(self.popup, Some(Popup::Lint { .. }));
-        // With the flag folded into it, CHECK says a cleared map in the
-        // flag's green; its panel's first row has the par.
-        let cleared = bar.clear.is_none() && self.par().is_some();
-        draw_word_button(d, bar.check, touch, &text().get(keys::EDITOR_CHECK), Face::IDLE.open(check_open).cleared(cleared));
+        // CHECK says a cleared map in the flag's green; its panel's first
+        // row has the par.
+        let cleared = self.par().is_some();
+        draw_word_button(d, bar.check, &text().get(keys::EDITOR_CHECK), Face::IDLE.open(check_open).cleared(cleared));
         if let Some(r) = bar.clear {
             draw_clear_readout(d, r, self.par(), BAR_SMALL_TEXT);
         }
 
-        draw_word_button(d, bar.here, touch, &text().get(keys::EDITOR_PLAY_HERE), Face::ACTION);
-        draw_word_button(d, bar.play, touch, &text().get(keys::BUTTON_PLAY), Face::ACTION);
+        draw_word_button(d, bar.here, &text().get(keys::EDITOR_PLAY_HERE), Face::ACTION);
+        draw_word_button(d, bar.play, &text().get(keys::BUTTON_PLAY), Face::ACTION);
     }
 
     /// BACK: its arrow, and its word after it where `word`, dim while
     /// there is no round to go back to, and an amber dot in its top right
     /// corner while the canvas differs from that round's map - edits BACK
     /// will put away (`MapEditor::off_round`).
-    fn draw_back_button(&self, d: &mut impl RaylibDraw, slot: Rectangle, word: bool, touch: bool) {
-        let bx = button_box(slot, touch);
-        let face = Face::able(self.can_go_back());
+    fn draw_back_button(&self, d: &mut impl RaylibDraw, slot: Rectangle, word: bool) {
+        let bx = button_box(slot);
+        let face = if self.can_go_back() { Face::BACK } else { Face::DIM };
         draw_box(d, bx, face);
         let arrow = chrome::back_arrow_at(bx, word);
         draw_back_arrow(d, arrow.x as i32, arrow.y as i32, face.ink);
@@ -650,10 +950,10 @@ impl MapEditor {
     /// end and a caret at its right, outlined in the amber while the
     /// active brush is one of its tools and washed while its list is up.
     /// The tool's name is in the status line.
-    fn draw_category_button(&self, d: &mut impl RaylibDraw, button: &CategoryButton, textures: &EditorTextures, category: Category, touch: bool) {
+    fn draw_category_button(&self, d: &mut impl RaylibDraw, button: &CategoryButton, textures: &EditorTextures, category: Category) {
         let open = matches!(self.popup, Some(Popup::Dropdown(c)) if c == category);
         let face = Face::IDLE.open(open).in_force(self.active_category() == Some(category));
-        let icon = draw_menu_box(d, button.rect, touch, face);
+        let icon = draw_menu_box(d, button.rect, face);
         let tool = self.current_tool(category);
         draw_tool_icon(d, textures, self.map.theme, tool, icon);
         if self.singleton_placed(tool) {
@@ -665,11 +965,11 @@ impl MapEditor {
     /// icon - the select tool's while it is the brush, or while the eraser
     /// is the brush the tool it came from - and a caret, outlined in the
     /// amber while a tool from the palette is the brush.
-    fn draw_tools_button(&self, d: &mut impl RaylibDraw, rect: Rectangle, textures: &EditorTextures, touch: bool) {
+    fn draw_tools_button(&self, d: &mut impl RaylibDraw, rect: Rectangle, textures: &EditorTextures) {
         let selecting = self.active_tool == Tool::Select;
         let open = matches!(self.popup, Some(Popup::Palette));
         let face = Face::IDLE.open(open).in_force(self.active_category().is_some() || selecting);
-        let icon = draw_menu_box(d, rect, touch, face);
+        let icon = draw_menu_box(d, rect, face);
         if selecting {
             draw_brush_icon(d, BrushRow::Select, icon, TEXT);
         } else {
@@ -684,10 +984,10 @@ impl MapEditor {
     /// BRUSH: the picture of what a press on the canvas does - the brush's
     /// shape, or the select tool - and a caret, outlined in the amber while
     /// the select tool is the brush.
-    fn draw_brush_button(&self, d: &mut impl RaylibDraw, rect: Rectangle, touch: bool) {
+    fn draw_brush_button(&self, d: &mut impl RaylibDraw, rect: Rectangle) {
         let open = matches!(self.popup, Some(Popup::Brush | Popup::Stamps { .. }));
         let face = Face::IDLE.open(open).in_force(self.tool() == Tool::Select);
-        let icon = draw_menu_box(d, rect, touch, face);
+        let icon = draw_menu_box(d, rect, face);
         draw_brush_icon(d, self.brush_shown(), icon, TEXT);
     }
 
@@ -748,10 +1048,10 @@ impl MapEditor {
         }
     }
 
-    /// The select tool's strip under the bar: its plate and its buttons,
-    /// drawn as the bar's are - a word's, or a flip's picture -, a dim one
-    /// where it cannot act, PLACE in the amber.
-    fn draw_strip(&self, d: &mut impl RaylibDraw, strip: &Strip, touch: bool) {
+    /// The select tool's strip under the top plates: its plate and its
+    /// buttons, drawn as the plates' are - a word's, or a flip's picture -,
+    /// a dim one where it cannot act, PLACE in the amber.
+    fn draw_strip(&self, d: &mut impl RaylibDraw, strip: &Strip) {
         crate::render::hud::draw_plate(d, strip.panel, crate::render::hud::PLATE_EDGE, 1.0);
         for slot in &strip.slots {
             let face = match (slot.enabled, slot.button) {
@@ -760,9 +1060,9 @@ impl MapEditor {
                 (true, _) => Face::IDLE,
             };
             match slot.button {
-                StripButton::FlipH => draw_flip_button(d, slot.rect, touch, Axis::Horizontal, face),
-                StripButton::FlipV => draw_flip_button(d, slot.rect, touch, Axis::Vertical, face),
-                button => draw_word_button(d, slot.rect, touch, &strip_label(button), face),
+                StripButton::FlipH => draw_flip_button(d, slot.rect, Axis::Horizontal, face),
+                StripButton::FlipV => draw_flip_button(d, slot.rect, Axis::Vertical, face),
+                button => draw_word_button(d, slot.rect, &strip_label(button), face),
             }
         }
     }
@@ -787,9 +1087,9 @@ impl MapEditor {
                 let typed = tail_fit(&format!("{name}_"), chrome::SAVE_NAME_W, 18);
                 d.draw_text(&typed, (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
                 let face = if name.is_empty() { Face::DIM } else { Face::ACTION };
-                draw_word_button(d, chrome::save_button(panel, touch), touch, &text().get(keys::FILE_SAVE), face);
+                draw_word_button(d, chrome::save_button(panel, touch), &text().get(keys::FILE_SAVE), face);
                 let hint = text().get(hints.pick(keys::EDITOR_SAVE_HINT, keys::EDITOR_SAVE_HINT_TOUCH));
-                d.draw_text(&hint, (panel.x + 12.0) as i32, (panel.y + 58.0) as i32, UI_SMALL_TEXT, Color::GRAY);
+                d.draw_text(&hint, (panel.x + 12.0) as i32, (panel.y + 58.0) as i32, UI_SMALL_TEXT, DIM);
             }
             _ => {}
         }
@@ -924,7 +1224,7 @@ impl MapEditor {
     /// headings, every control shown and RESET MAP.
     fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &chrome::MapPanel, textures: &EditorTextures) {
         let t = text();
-        draw_hanging_panel(d, layout.panel);
+        draw_panel(d, layout.panel);
         let settings = self.settings();
         let cli = self.cli_overrides;
         let mark = t.get(keys::SETTINGS_CLI);
@@ -944,7 +1244,7 @@ impl MapEditor {
             }
         }
         if let Some((_, first)) = layout.tabs.first() {
-            d.draw_rectangle_rec(Rectangle::new(first.x + first.width - 1.0, layout.panel.y, 1.0, layout.panel.height), PANEL_BORDER);
+            d.draw_rectangle_rec(Rectangle::new(first.x + first.width - 1.0, layout.panel.y, 1.0, layout.panel.height), crate::render::hud::PLATE_EDGE);
         }
         for (tab, rect) in &layout.headings {
             let label = t.get(tab.key());
@@ -1039,7 +1339,7 @@ impl MapEditor {
                         let x = middle.x + (middle.width - size - 8.0 - w) / 2.0;
                         let icon = Rectangle::new(x, middle.y + (middle.height - size) / 2.0, size, size);
                         for src in crate::tank::chassis_icon_source_recs(kind, seat) {
-                            d.draw_texture_pro(textures.tanks, src, icon, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                            d.draw_texture_pro(textures.sheets.tanks, src, icon, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
                         }
                         d.draw_text(&words, (x + size + 8.0) as i32, text_y(middle, MAP_VALUE_SIZE), MAP_VALUE_SIZE, TEXT);
                     }
@@ -1073,7 +1373,7 @@ impl MapEditor {
     fn draw_lint_panel(&self, d: &mut impl RaylibDraw, layout: &chrome::LintLayout, page: usize, hints: Hints) {
         let t = text();
         let len = self.lint_len();
-        draw_hanging_panel(d, layout.panel);
+        draw_panel(d, layout.panel);
         let header = layout.row(0);
         let left = (header.x + LINT_TEXT_INSET) as i32;
         d.draw_text(&t.get(keys::CHECK_TITLE), left, (header.y + 8.0) as i32, LINT_TITLE_SIZE, TEXT);
@@ -1384,9 +1684,10 @@ fn draw_back_arrow(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
     }
 }
 
-/// The singleton badge: a dot at an icon's top-right corner.
+/// The singleton badge: a dot of 2 x 2 blocks in the clear flag's green,
+/// rimmed, at an icon's top-right corner.
 fn draw_badge(d: &mut impl RaylibDraw, right: f32, top: f32) {
-    d.draw_circle((right - 5.0) as i32, (top + 5.0) as i32, 4.0, Color::LIME);
+    draw_rimmed_blocks(d, Position::new(right - 6.0, top + 4.0), &[(0, 0), (1, 0), (0, 1), (1, 1)], LINT_CLEAN, 255);
 }
 
 /// How a button of the bar, the select tool's strip or the Save prompt
@@ -1401,8 +1702,9 @@ struct Face {
     wash: bool,
 }
 
-/// A button that can act: a quiet outline round a word in the text colour.
-const EDGE: Color = Color::new(255, 255, 255, 70);
+/// A button that can act: a grey outline - the players button's in play -
+/// round a word in the text colour.
+const EDGE: Color = DIM;
 /// A button that cannot act now: an outline fainter still round a dim word.
 const EDGE_DIM: Color = Color::new(255, 255, 255, 30);
 /// What a button is washed with while its popup is up, as a list's row in
@@ -1412,6 +1714,9 @@ const WASH: Color = Color::new(255, 255, 255, 40);
 impl Face {
     /// A button that can act.
     const IDLE: Face = Face { edge: EDGE, ink: TEXT, wash: false };
+    /// BACK, the way out to the round: in the text colour, outline and
+    /// word, as play's pause button is.
+    const BACK: Face = Face { edge: TEXT, ink: TEXT, wash: false };
     /// A button that cannot act now: UNDO with nothing to undo, FIT at FIT,
     /// COPY with nothing selected, SAVE with no name.
     const DIM: Face = Face { edge: EDGE_DIM, ink: DIM, wash: false };
@@ -1437,7 +1742,7 @@ impl Face {
     }
 
     /// Outline and word in the clear flag's green while the map is
-    /// cleared: CHECK, where the bar has folded the flag into it.
+    /// cleared: CHECK.
     fn cleared(self, on: bool) -> Face {
         if on { Face { edge: LINT_CLEAN, ink: LINT_CLEAN, ..self } } else { self }
     }
@@ -1460,8 +1765,8 @@ fn word_at(bx: Rectangle, left: f32, right: f32, word: &str) -> (i32, i32) {
 
 /// A word's button in `slot`: UNDO, REDO, FIT, CHECK, PLAY HERE, PLAY, the
 /// strip's words and the Save prompt's SAVE.
-fn draw_word_button(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, word: &str, face: Face) {
-    let bx = button_box(slot, touch);
+fn draw_word_button(d: &mut impl RaylibDraw, slot: Rectangle, word: &str, face: Face) {
+    let bx = button_box(slot);
     draw_box(d, bx, face);
     let (x, y) = word_at(bx, bx.x, bx.x + bx.width, word);
     d.draw_text(word, x, y, BAR_SMALL_TEXT, face.ink);
@@ -1470,8 +1775,8 @@ fn draw_word_button(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, word:
 /// A button opening a popup in `slot`: its box and its caret at the right
 /// end; the icon box before the caret (`chrome::icon_box`) for the caller
 /// to draw into. The category buttons, BRUSH and TOOLS.
-fn draw_menu_box(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, face: Face) -> Rectangle {
-    let bx = button_box(slot, touch);
+fn draw_menu_box(d: &mut impl RaylibDraw, slot: Rectangle, face: Face) -> Rectangle {
+    let bx = button_box(slot);
     draw_box(d, bx, face);
     let caret = caret_at(bx);
     draw_caret(d, caret.x as i32, caret.y as i32, DIM);
@@ -1480,66 +1785,14 @@ fn draw_menu_box(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, face: Fa
 
 /// FILE / MAP: a word's button opening a menu, the word centred in the
 /// room before the caret.
-fn draw_menu_button(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, word: &str, face: Face) {
-    let bx = button_box(slot, touch);
+fn draw_menu_button(d: &mut impl RaylibDraw, slot: Rectangle, word: &str, face: Face) {
+    let bx = button_box(slot);
     draw_box(d, bx, face);
     let caret = caret_at(bx);
     let (x, y) = word_at(bx, bx.x + BOX_EDGE + BOX_PAD, caret.x - CARET_GAP, word);
     d.draw_text(word, x, y, BAR_SMALL_TEXT, face.ink);
     draw_caret(d, caret.x as i32, caret.y as i32, DIM);
 }
-
-/// Draw a rounded, bordered, drop-shadowed panel background - shared by
-/// the builder's panels (the dropdowns, the FILE menu and its Load list,
-/// the Save prompt), per docs/map-editor-design.md's "Panel chrome"
-/// section; the MAP panel is `draw_hanging_panel`'s.
-pub fn draw_panel(d: &mut impl RaylibDraw, rect: Rectangle) {
-    d.draw_rectangle_rounded(panel_shadow(rect), EDITOR_PANEL_ROUNDNESS, EDITOR_PANEL_SEGMENTS, PANEL_SHADOW);
-    d.draw_rectangle_rounded(rect, EDITOR_PANEL_ROUNDNESS, EDITOR_PANEL_SEGMENTS, PANEL_FILL);
-    d.draw_rectangle_rounded_lines_ex(rect, EDITOR_PANEL_ROUNDNESS, EDITOR_PANEL_SEGMENTS, EDITOR_PANEL_BORDER_THICKNESS, PANEL_BORDER);
-}
-
-/// A panel hanging from the bar - the MAP settings panel: `draw_panel`'s
-/// shadow, fill and border with the top corners square, so the panel
-/// meets the bar's straight edge, and the bottom ones rounded as raylib
-/// rounds them (the radius `EDITOR_PANEL_ROUNDNESS` of half the shorter
-/// side, the border outside the panel).
-pub fn draw_hanging_panel(d: &mut impl RaylibDraw, rect: Rectangle) {
-    let r = rect.width.min(rect.height) * EDITOR_PANEL_ROUNDNESS / 2.0;
-    fill_hanging(d, panel_shadow(rect), r, PANEL_SHADOW);
-    fill_hanging(d, rect, r, PANEL_FILL);
-    // The border: a run across the top and down both sides to the
-    // corners, a quarter ring round each, the bottom edge between them.
-    let (x, y, w, h, t) = (rect.x, rect.y, rect.width, rect.height, EDITOR_PANEL_BORDER_THICKNESS);
-    d.draw_rectangle_rec(Rectangle::new(x - t, y - t, w + 2.0 * t, t), PANEL_BORDER);
-    d.draw_rectangle_rec(Rectangle::new(x - t, y, t, h - r), PANEL_BORDER);
-    d.draw_rectangle_rec(Rectangle::new(x + w, y, t, h - r), PANEL_BORDER);
-    d.draw_rectangle_rec(Rectangle::new(x + r, y + h, w - 2.0 * r, t), PANEL_BORDER);
-    d.draw_ring(Vector2::new(x + r, y + h - r), r, r + t, 90.0, 180.0, EDITOR_PANEL_SEGMENTS, PANEL_BORDER);
-    d.draw_ring(Vector2::new(x + w - r, y + h - r), r, r + t, 0.0, 90.0, EDITOR_PANEL_SEGMENTS, PANEL_BORDER);
-}
-
-/// The hanging panel's shape in one colour, laid in pieces that never
-/// overlap, since every panel colour is translucent: all of it above the
-/// bottom corners, the strip between them and a quarter disc in each.
-fn fill_hanging(d: &mut impl RaylibDraw, rect: Rectangle, r: f32, color: Color) {
-    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
-    d.draw_rectangle_rec(Rectangle::new(x, y, w, h - r), color);
-    d.draw_rectangle_rec(Rectangle::new(x + r, y + h - r, w - 2.0 * r, r), color);
-    d.draw_circle_sector(Vector2::new(x + r, y + h - r), r, 90.0, 180.0, EDITOR_PANEL_SEGMENTS, color);
-    d.draw_circle_sector(Vector2::new(x + w - r, y + h - r), r, 0.0, 90.0, EDITOR_PANEL_SEGMENTS, color);
-}
-
-/// A panel's drop shadow: the panel moved down and right.
-fn panel_shadow(rect: Rectangle) -> Rectangle {
-    Rectangle::new(rect.x + EDITOR_PANEL_SHADOW_OFFSET, rect.y + EDITOR_PANEL_SHADOW_OFFSET, rect.width, rect.height)
-}
-
-// Every panel's colours, from lib.rs's `EDITOR_PANEL_*` knobs.
-const PANEL_SHADOW: Color = Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_SHADOW_OPACITY) as u8);
-const PANEL_FILL: Color =
-    Color::new(EDITOR_PANEL_FILL.0, EDITOR_PANEL_FILL.1, EDITOR_PANEL_FILL.2, (255.0 * EDITOR_PANEL_FILL_OPACITY) as u8);
-const PANEL_BORDER: Color = Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_BORDER_OPACITY) as u8);
 
 /// A tool's icon inside `rect` (4 px inset).
 pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme: Theme, tool: Tool, rect: Rectangle) {
@@ -1554,19 +1807,19 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         }
         Tool::Drum(drum) => {
             let src = obstacle::drum_source_rec(drum);
-            d.draw_texture_pro(textures.props, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_texture_pro(textures.sheets.props, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::OilTrail => {
             d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(97, 149, 65, 255));
             let src = obstacle::oil_source_rec(Position::new(0.0, 0.0));
-            d.draw_texture_pro(textures.props, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_texture_pro(textures.sheets.props, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Road => {
             d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(150, 111, 74, 255));
         }
         Tool::Water => {
             // The pack's flat water, straight off the theme's tileset.
-            d.draw_texture_pro(textures.ground, ground::water_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_texture_pro(textures.sheets.ground, ground::water_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Bong => {
             let src = Rectangle::new(0.0, 0.0, crate::BONG_TEXTURE_SIZE, crate::BONG_TEXTURE_SIZE);
@@ -1576,14 +1829,14 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
             draw_player_ring(d, center, dest.width / 2.0, 0, 255);
             for src in crate::tank::icon_source_recs(0) {
-                d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                d.draw_texture_pro(textures.sheets.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             }
         }
         Tool::Start2 => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
             draw_player_ring(d, center, dest.width / 2.0, 1, 255);
             for src in crate::tank::icon_source_recs(1) {
-                d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                d.draw_texture_pro(textures.sheets.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             }
         }
         Tool::EnemyBong => {
@@ -1594,10 +1847,10 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         }
         Tool::Gate => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_gate_chevron(d, center, dest.width, Position::new(1.0, 0.0), GATE_COLOR);
+            draw_gate_chevron(d, center, Position::new(1.0, 0.0), 255);
         }
         Tool::Portal => {
-            d.draw_texture_pro(textures.portal, portal_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_texture_pro(textures.sheets.portal, portal_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::TallGrass => {
             // One tuft from the nature sheet on a patch of the theme's
@@ -1607,7 +1860,7 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(r, g, b, 255));
             let cell = crate::GRASS_TEXTURE_SIZE;
             let src = Rectangle::new(0.0, 0.0, cell, cell);
-            d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_texture_pro(textures.sheets.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Forest => {
             // A little wood on a patch of the theme's floor: two trees
@@ -1631,7 +1884,7 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             let (r, g, b) = theme.floor_color();
             d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(r, g, b, 255));
             let src = crate::grass::bush_source_rec(bush, theme);
-            d.draw_texture_pro(textures.bushes, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_texture_pro(textures.sheets.bushes, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Pickup(pickup) => {
             // The crate as it stands on the field - the brush is the thing
@@ -1641,9 +1894,9 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             // to reach into the inset.
             let side = rect.width.min(rect.height);
             let (texture, cell, src) = if side >= crate::CRATE_CELL {
-                (textures.crates, crate::CRATE_CELL, crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT))
+                (textures.sheets.crates, crate::CRATE_CELL, crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT))
             } else {
-                (textures.pickup_glyphs, crate::PICKUP_GLYPH_CELL, crate::pickup::glyph_src(pickup))
+                (textures.sheets.pickup_glyphs, crate::PICKUP_GLYPH_CELL, crate::pickup::glyph_src(pickup))
             };
             let size = cell * (side / cell).floor().max(1.0);
             let at = Rectangle::new((rect.x + (rect.width - size) / 2.0).round(), (rect.y + (rect.height - size) / 2.0).round(), size, size);
@@ -1652,7 +1905,7 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         Tool::Tower(kind, side) => {
             // Base and top as a round draws them, the top pointing up.
             for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
-                d.draw_texture_pro(textures.towers, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                d.draw_texture_pro(textures.sheets.towers, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             }
         }
         Tool::Eraser => {
@@ -1773,7 +2026,7 @@ const LIFTED_ALPHA: u8 = 230;
 /// does not draw tens of thousands of sprites a frame.
 const RECT_GHOST_CELLS: usize = 4096;
 /// What an erasing RECT drag is outlined in.
-const ERASE_MARK: Color = Color::new(230, 60, 60, 220);
+const ERASE_MARK: Color = crate::indicators::HOSTILE;
 /// How opaque the paste ghost's cells are drawn.
 const GHOST_ALPHA: u8 = 150;
 
@@ -1791,7 +2044,7 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
     match *obj {
         CellObject::Barrel { drum: Some(drum) } => {
             let src = obstacle::drum_source_rec(drum);
-            d.draw_texture_pro(textures.props, src, dest, origin, 0.0, tint);
+            d.draw_texture_pro(textures.sheets.props, src, dest, origin, 0.0, tint);
         }
         CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence | CellObject::Target => {
             // At the sheet's own cell size: the cell for a wall or a prop,
@@ -1805,7 +2058,7 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
         }
         CellObject::Oil => {
             let src = obstacle::oil_source_rec(pos);
-            d.draw_texture_pro(textures.props, src, dest, origin, 0.0, tint);
+            d.draw_texture_pro(textures.sheets.props, src, dest, origin, 0.0, tint);
         }
         CellObject::Tree
         | CellObject::Pine
@@ -1836,14 +2089,14 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let reach = if side == crate::bong::Side::Enemy { Color::new(230, 60, 60, 70) } else { Color::new(77, 155, 230, 70) };
             d.draw_circle_lines(pos.x as i32, pos.y as i32, kind.range(), faded(reach));
             for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
-                d.draw_texture_pro(textures.towers, src, dest, origin, 0.0, tint);
+                d.draw_texture_pro(textures.sheets.towers, src, dest, origin, 0.0, tint);
             }
         }
         CellObject::Road => {
             d.draw_rectangle_rec(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), faded(ROAD_TILE));
         }
         CellObject::Water => {
-            d.draw_texture_pro(textures.ground, ground::water_icon_source_rec(), dest, origin, 0.0, tint);
+            d.draw_texture_pro(textures.sheets.ground, ground::water_icon_source_rec(), dest, origin, 0.0, tint);
         }
         // A lifted or pasted lava cell on its own: the stream piece with
         // no neighbours. The canvas draws the map's lava from its layout.
@@ -1874,14 +2127,14 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let src = Rectangle::new(0.0, 0.0, cell, cell);
             let scale = cell * crate::tuning::tuning().grass_scale;
             let at = Rectangle::new(pos.x, pos.y + size / 2.0, scale, scale);
-            d.draw_texture_pro(textures.grass, src, at, Vector2::new(scale / 2.0, scale), 0.0, tint);
+            d.draw_texture_pro(textures.sheets.grass, src, at, Vector2::new(scale / 2.0, scale), 0.0, tint);
         }
         CellObject::Bush | CellObject::BerryBush | CellObject::Juniper | CellObject::Fern | CellObject::AutumnBush | CellObject::Reeds => {
             // The bush as a round stands it: its first variant, dry on a
             // desert map, filling its cell.
             let bush = obj.bush().expect("a bush cell grows a bush");
             let src = crate::grass::bush_source_rec(bush, textures.theme);
-            d.draw_texture_pro(textures.bushes, src, dest, origin, 0.0, tint);
+            d.draw_texture_pro(textures.sheets.bushes, src, dest, origin, 0.0, tint);
         }
         CellObject::Bong => {
             let src = Rectangle::new(0.0, 0.0, crate::BONG_TEXTURE_SIZE, crate::BONG_TEXTURE_SIZE);
@@ -1891,7 +2144,7 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let player = u8::from(*obj == CellObject::Start2);
             draw_player_ring(d, pos, size / 2.0, player as usize, alpha);
             for src in crate::tank::icon_source_recs(player) {
-                d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, tint);
+                d.draw_texture_pro(textures.sheets.tanks, src, dest, origin, 0.0, tint);
             }
         }
         CellObject::EnemyBong => {
@@ -1900,8 +2153,8 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             d.draw_texture_pro(textures.enemy_bong_idle, src, dest, origin, 0.0, tint);
         }
         CellObject::Gate => match gate_inward(pos, field.0, field.1) {
-            Some(inward) => draw_gate_chevron(d, pos, size, inward, faded(GATE_COLOR)),
-            None => d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, faded(GATE_COLOR)),
+            Some(inward) => draw_gate_chevron(d, pos, inward, alpha),
+            None => draw_block_frame(d, pos, GATE_FRAME_HALF, GATE_COLOR, alpha),
         },
         CellObject::Pickup { pickup } => {
             // The crate at its own size, a little past its cell, as a round
@@ -1909,9 +2162,23 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let size = crate::CRATE_CELL;
             let src = crate::pickup::crate_src(pickup, crate::CRATE_COL_INTACT);
             let dest = Rectangle::new(pos.x, pos.y, size, size);
-            d.draw_texture_pro(textures.crates, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, tint);
+            d.draw_texture_pro(textures.sheets.crates, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, tint);
         }
     }
+}
+
+/// A start's seat over its tank, `P1` or `P2` in the seat's colour on a
+/// black drop: what a round shows for its first seconds (`draw_player_label`),
+/// shown for as long as the canvas is.
+fn draw_seat_label(d: &mut impl RaylibDraw, tank: &crate::tank::Tank) {
+    let Some(index) = tank.player_index() else { return };
+    let word = text().fmt(keys::SEAT_LABEL, &[("n", (index + 1).into())]);
+    let size = HUD_TEXT_SIZE;
+    let w = text_width(&word, size);
+    let x = (tank.position.x - w / 2.0).round() as i32;
+    let y = (tank.position.y - tank.size() / 2.0 - size as f32 - 4.0).round() as i32;
+    d.draw_text(&word, x + 1, y + 1, size, Color::BLACK);
+    d.draw_text(&word, x, y, size, crate::tank::team_color(index));
 }
 
 /// The road tool's own tile colour, the dirt under a lifted or pasted
@@ -1972,8 +2239,8 @@ fn strip_label(button: StripButton) -> String {
 /// A flip's strip button: a button's box round a picture of whole 2 pt
 /// blocks - two arrowheads pointing away from a bar between them, left and
 /// right for `Axis::Horizontal`, up and down for `Axis::Vertical`.
-fn draw_flip_button(d: &mut impl RaylibDraw, slot: Rectangle, touch: bool, axis: Axis, face: Face) {
-    let bx = button_box(slot, touch);
+fn draw_flip_button(d: &mut impl RaylibDraw, slot: Rectangle, axis: Axis, face: Face) {
+    let bx = button_box(slot);
     draw_box(d, bx, face);
     let (cx, cy) = ((bx.x + bx.width / 2.0).round(), (bx.y + bx.height / 2.0).round());
     let mut block = |along: f32, across: f32, w: f32, h: f32| {
@@ -2024,20 +2291,25 @@ fn draw_thumbnail(d: &mut impl RaylibDraw, rect: Rectangle, thumb: Option<&thumb
 /// The atlas a material's icon comes from.
 fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &'a Texture2D {
     match sheet {
-        obstacle::Sheet::Walls => textures.obstacles,
-        obstacle::Sheet::Props => textures.props,
-        obstacle::Sheet::Trees => textures.trees,
-        obstacle::Sheet::Target => textures.target,
-        obstacle::Sheet::Towers => textures.towers,
+        obstacle::Sheet::Walls => textures.sheets.obstacles,
+        obstacle::Sheet::Props => textures.sheets.props,
+        obstacle::Sheet::Trees => textures.sheets.trees,
+        obstacle::Sheet::Target => textures.sheets.target,
+        obstacle::Sheet::Towers => textures.sheets.towers,
         other => panic!("a map cell never draws from {other:?}"),
     }
 }
 
-/// The enemy side's marker colour - the red ground ring the game draws
-/// under the enemy bong, so an `enemy_bong` cell reads the same here.
-const ENEMY_RING_COLOR: Color = Color::new(230, 60, 60, 220);
+/// The marks' colours, the off-screen indicators' (docs/PALETTE.md): the
+/// hostile red - an enemy bong's ring, an erasing drag's outline -, the
+/// gates' amber, and the near-black every mark is rimmed in.
+const ENEMY_RING_COLOR: Color = crate::indicators::HOSTILE;
+const GATE_COLOR: Color = crate::indicators::GATE_AMBER;
+const MARK_RIM: Color = crate::indicators::RIM;
 
-const GATE_COLOR: Color = Color::ORANGE;
+/// A cell's block frame (`draw_block_frame`): 7 blocks out from its middle,
+/// so the frame and its rim stand inside the cell.
+const GATE_FRAME_HALF: i32 = 7;
 
 /// `alpha` of an opaque marker's own alpha: what a lifted or pasted
 /// cell's marker is drawn at.
@@ -2045,35 +2317,87 @@ fn scaled(c: Color, alpha: u8) -> Color {
     Color::new(c.r, c.g, c.b, ((c.a as u32 * alpha as u32) / 255) as u8)
 }
 
-/// A flat red ring of radius `radius` centred on `center`, `alpha` of
-/// its own strength.
+/// A ring of blocks in the hostile red, radius `radius` round `center`,
+/// `alpha` of its own strength: an enemy bong's icon or carried cell.
 fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, alpha: u8) {
-    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, scaled(ENEMY_RING_COLOR, alpha));
-    d.draw_circle_v(center, radius * 0.75, scaled(Color::new(230, 60, 60, 50), alpha));
+    draw_block_ring(d, center, radius - 1.0, 2, scaled(ENEMY_RING_COLOR, alpha));
 }
 
-/// A player's team-coloured ring, the same shape as the enemy bong's red
-/// one, under the start markers: a `start` cell reads as "a tank, the blue
-/// one" and `start2` as the pink one, the colours the tanks will be.
+/// A player's team-coloured ring of blocks, the enemy bong's shape: a
+/// `start` cell's icon or carried cell reads as "a tank, the blue one" and
+/// `start2` as the pink one, the colours the tanks will be.
 fn draw_player_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, player: usize, alpha: u8) {
-    let c = crate::tank::team_color(player as u8);
-    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, scaled(Color::new(c.r, c.g, c.b, 220), alpha));
-    d.draw_circle_v(center, radius * 0.75, scaled(Color::new(c.r, c.g, c.b, 50), alpha));
+    draw_block_ring(d, center, radius - 1.0, 2, scaled(crate::tank::team_color(player as u8), alpha));
 }
 
-/// A chevron of overall size `size` at `center` in `color`, its point
-/// aimed along `inward` (a unit axis vector) - the direction a tank
-/// rolling in through the gate travels.
-fn draw_gate_chevron(d: &mut impl RaylibDraw, center: Position, size: f32, inward: Position, color: Color) {
-    let half = size / 2.0 - 3.0;
-    let side = Position::new(-inward.y, inward.x);
-    let tip = center + inward * half;
-    let tail = center - inward * (half * 0.4);
-    let wing_a = tail + side * half;
-    let wing_b = tail - side * half;
-    d.draw_line_ex(wing_a, tip, 3.0, color);
-    d.draw_line_ex(wing_b, tip, 3.0, color);
-    d.draw_line_ex(center - inward * half, tip, 3.0, color);
+/// A gate's chevron pointing up, in 2 px blocks from its tip down: what
+/// `draw_gate_chevron` turns to point along a gate's way in.
+const CHEVRON: [&str; 6] = ["....#....", "...###...", "..##.##..", ".##...##.", "##.....##", "#.......#"];
+
+/// A gate's chevron at `center`, its point aimed along `inward` (a unit
+/// axis vector) - the way a tank rolling in through the gate travels -
+/// in whole 2 px blocks of the gates' amber rimmed near-black, as play's
+/// indicators mark a gate (`indicators.rs`), at `alpha` of its strength.
+fn draw_gate_chevron(d: &mut impl RaylibDraw, center: Position, inward: Position, alpha: u8) {
+    let (rows, cols) = (CHEVRON.len() as i32, CHEVRON[0].len() as i32);
+    let cells: Vec<(i32, i32)> = CHEVRON
+        .iter()
+        .enumerate()
+        .flat_map(|(row, line)| line.chars().enumerate().filter(|&(_, c)| c == '#').map(move |(col, _)| (col as i32 - cols / 2, row as i32 - rows / 2)))
+        .map(|(i, j)| match (inward.x.round() as i32, inward.y.round() as i32) {
+            (0, 1) => (i, -j),
+            (1, 0) => (-j, i),
+            (-1, 0) => (j, i),
+            _ => (i, j),
+        })
+        .collect();
+    draw_rimmed_blocks(d, center, &cells, GATE_COLOR, alpha);
+}
+
+/// A square frame of blocks `half` blocks out from `center` in `color`,
+/// rimmed: a gate off the field's edge, a portal off its network -
+/// placed, not usable - and play's gate frame's shape.
+fn draw_block_frame(d: &mut impl RaylibDraw, center: Position, half: i32, color: Color, alpha: u8) {
+    let cells: Vec<(i32, i32)> = (-half..=half).flat_map(|j| (-half..=half).map(move |i| (i, j))).filter(|&(i, j)| i.abs() == half || j.abs() == half).collect();
+    draw_rimmed_blocks(d, center, &cells, color, alpha);
+}
+
+/// `cells` - block offsets from the block `center` lies in - in `color`,
+/// with a near-black rim a block wide round them (`indicators::RIM`), the
+/// way every mark reads on grass, sand, snow and a dark field alike.
+fn draw_rimmed_blocks(d: &mut impl RaylibDraw, center: Position, cells: &[(i32, i32)], color: Color, alpha: u8) {
+    let (cx, cy) = ((center.x / 2.0).floor() as i32 * 2, (center.y / 2.0).floor() as i32 * 2);
+    let lit: std::collections::HashSet<(i32, i32)> = cells.iter().copied().collect();
+    let mut rim: Vec<(i32, i32)> = lit.iter().flat_map(|&(i, j)| (-1..=1).flat_map(move |dj| (-1..=1).map(move |di| (i + di, j + dj)))).filter(|c| !lit.contains(c)).collect();
+    rim.sort_unstable();
+    rim.dedup();
+    for (cells, color) in [(rim.as_slice(), MARK_RIM), (cells, color)] {
+        let color = scaled(color, alpha);
+        for &(i, j) in cells {
+            d.draw_rectangle(cx + i * 2, cy + j * 2, 2, 2, color);
+        }
+    }
+}
+
+/// A ring of 2 px blocks `radius` px round `center`, `width` blocks deep
+/// inward, in `color`: the starts' and the enemy bong's rings where a
+/// round's own are not drawn (an icon, a carried cell), and a tower's
+/// reach.
+fn draw_block_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, width: i32, color: Color) {
+    let mut blocks: Vec<(i32, i32)> = Vec::new();
+    for k in 0..width.max(1) {
+        let r = (radius - 2.0 * k as f32).max(1.0);
+        let n = (std::f32::consts::TAU * r / 1.5).ceil() as usize;
+        for s in 0..n {
+            let a = s as f32 / n as f32 * std::f32::consts::TAU;
+            blocks.push((((center.x + r * a.cos()) / 2.0).floor() as i32, ((center.y + r * a.sin()) / 2.0).floor() as i32));
+        }
+    }
+    blocks.sort_unstable();
+    blocks.dedup();
+    for (x, y) in blocks {
+        d.draw_rectangle(x * 2, y * 2, 2, 2, color);
+    }
 }
 
 impl FileRow {
@@ -2220,12 +2544,13 @@ fn cells_text(cells: f32) -> String {
     if cells.fract() == 0.0 { format!("{}", cells as i32) } else { format!("{cells}") }
 }
 
-/// Paint the world `held` shows past the field's edge in the canvas fill.
-/// The ground reaches half a tile past every edge and a tree, a tower's
-/// reach ring or a gate's chevron in an edge cell leans out of it; a
-/// round's field area clips all of that, and so does this, so a view that
-/// shows past the edge draws the map its own size.
-fn cover_past_field(d: &mut impl RaylibDraw, field: (f32, f32), held: Rectangle) {
+/// Paint the world `held` shows past the field's edge in `backdrop`, the
+/// window's own past the canvas. The ground reaches half a tile past every
+/// edge and a tree, a tower's reach ring or a gate's chevron in an edge
+/// cell leans out of it; a round's field area clips all of that, and so
+/// does this, so a view that shows past the edge draws the map its own
+/// size.
+fn cover_past_field(d: &mut impl RaylibDraw, field: (f32, f32), held: Rectangle, backdrop: Color) {
     let (w, h) = field;
     let (left, top, right, bottom) = (held.x, held.y, held.x + held.width, held.y + held.height);
     for strip in [
@@ -2235,7 +2560,7 @@ fn cover_past_field(d: &mut impl RaylibDraw, field: (f32, f32), held: Rectangle)
         Rectangle::new(w, 0.0, right - w, h),
     ] {
         if strip.width > 0.0 && strip.height > 0.0 {
-            d.draw_rectangle_rec(strip, CANVAS_FILL);
+            d.draw_rectangle_rec(strip, backdrop);
         }
     }
 }
@@ -2268,16 +2593,16 @@ mod bar_tests {
 
     /// A category button's icon and caret, with a mouse and on a touch
     /// screen: the icon inside the icon half and inside the button's drawn
-    /// box, the caret clear of it in the list half and inside the box, at
-    /// the 38 pt a desktop's bar draws it at with a mouse, the icon
-    /// centred top to bottom in the bar.
+    /// box, the caret clear of it in the list half and inside the box - 38
+    /// pt in from the button's left with a mouse, the icon a texel a point
+    /// there, centred top to bottom in the tray's row.
     #[test]
     fn a_category_buttons_icon_and_caret_stay_in_their_halves() {
         for touch in [false, true] {
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
-            let bar = Bar::of(&ui);
+            let bar = Bar::of(&ui, false);
             let button = bar.category(Category::Wall).expect("a wide bar has the five");
-            let bx = button_box(button.rect, touch);
+            let bx = button_box(button.rect);
             let icon = icon_box(bx, true);
             let caret = caret_at(bx);
             assert!(icon.x >= button.icon.x && icon.x + icon.width <= button.icon.x + button.icon.width, "touch={touch}: {icon:?}");
@@ -2286,43 +2611,78 @@ mod bar_tests {
             assert!(caret.x + chrome::CARET_W <= bx.x + bx.width - BOX_EDGE, "touch={touch}: the caret leaves the button");
             if !touch {
                 assert_eq!(caret.x - button.rect.x, 38.0);
-                let y = button.rect.y + (crate::HUD_BAR_HEIGHT as f32 - ICON_PX) / 2.0;
+                let y = button.rect.y + (chrome::tray_button_height(false) - ICON_PX) / 2.0;
                 assert_eq!(icon, Rectangle::new(button.rect.x, y, ICON_PX, ICON_PX));
             }
         }
     }
 
-    /// Every button of the bar is drawn in one box: as tall as every
-    /// other, at the same height in the bar, its slot less the same gap -
-    /// with a mouse and on a touch screen, folded or not.
+    /// Every button of a plate is drawn in one box: as tall as every other
+    /// on its plate, at the same height in it, its slot less the same gap
+    /// and a 2 pt block above and below - with a mouse and on a touch
+    /// screen, folded or not.
     #[test]
     fn every_bar_button_is_drawn_in_one_box() {
         for touch in [false, true] {
             for width in [1600.0, 720.0] {
                 let ui = crate::hud::UiFrame::new((width, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
-                let bar = Bar::of(&ui);
-                let mut slots = vec![bar.erase, bar.undo, bar.redo, bar.file, bar.map, bar.fit, bar.check, bar.here, bar.play];
+                let bar = Bar::of(&ui, true);
+                let top = vec![bar.back, bar.day.expect("DAY"), bar.undo, bar.redo, bar.file, bar.map, bar.fit, bar.check, bar.here, bar.play];
+                let mut tray = vec![bar.erase];
                 match &bar.tools {
-                    BarTools::Categories(buttons) => slots.extend(buttons.iter().map(|b| b.rect)),
-                    BarTools::Folded(r) => slots.push(*r),
+                    BarTools::Categories(buttons) => tray.extend(buttons.iter().map(|b| b.rect)),
+                    BarTools::Folded(r) => tray.push(*r),
                 }
-                slots.extend(bar.brush);
-                let first = button_box(slots[0], touch);
-                for slot in slots {
-                    let bx = button_box(slot, touch);
-                    assert_eq!((bx.y, bx.height), (first.y, first.height), "touch={touch} width={width}: {slot:?}");
-                    assert_eq!(slot.width - bx.width, chrome::BOX_GAP);
+                tray.extend(bar.brush);
+                for slots in [top, tray] {
+                    let first = button_box(slots[0]);
+                    for slot in slots {
+                        let bx = button_box(slot);
+                        assert_eq!((bx.y, bx.height), (first.y, first.height), "touch={touch} width={width}: {slot:?}");
+                        assert_eq!((slot.width - bx.width, slot.height - bx.height), (chrome::BOX_GAP, 4.0));
+                    }
                 }
             }
         }
     }
 
-    /// The cursor readout spells a cell the way the dev server does.
+    /// The cursor readout spells a cell the way the dev server names its
+    /// tool, in capitals as all the chrome's words are.
     #[test]
     fn the_readout_names_cells_by_their_tool() {
-        assert_eq!(cell_label(&CellObject::Start2), "start2");
-        assert_eq!(cell_label(&CellObject::Start), "start");
-        assert_eq!(cell_label(&CellObject::Portal), "portal");
-        assert_eq!(cell_label(&CellObject::TallGrass), "grass");
+        assert_eq!(cell_label(&CellObject::Start2), "START2");
+        assert_eq!(cell_label(&CellObject::Start), "START");
+        assert_eq!(cell_label(&CellObject::Portal), "PORTAL");
+        assert_eq!(cell_label(&CellObject::TallGrass), "GRASS");
+    }
+}
+
+#[cfg(test)]
+mod sky_tests {
+    use super::*;
+
+    /// A pan moves a view's texels by one or two across the block grid and
+    /// a pinch a few a frame: the sky's target keeps its size through the
+    /// one and is made again only every `SKY_SLACK` texels of the other,
+    /// always covering the view and never past the most a GPU takes.
+    #[test]
+    fn the_skys_target_holds_through_a_pan_and_steps_through_a_pinch() {
+        let first = sky_size(None, (1281, 721));
+        assert!(first.0 >= 1281 && first.1 >= 721);
+        for need in [(1281, 721), (1282, 722), (1280, 720), (1283, 721)] {
+            assert_eq!(sky_size(Some(first), need), first, "a pan to {need:?}");
+        }
+        let mut held = first;
+        let mut made = 0;
+        for w in (600..=3000).step_by(3) {
+            let need = (w, w / 2);
+            let size = sky_size(Some(held), need);
+            assert!(size.0 >= need.0 && size.1 >= need.1, "{size:?} covers {need:?}");
+            made += usize::from(size != held);
+            held = size;
+        }
+        assert!(made <= 2400 / SKY_SLACK as usize + 2, "{made} targets through the pinch");
+        let most = super::super::camera::SCENE_MAX_TEXELS as i32;
+        assert_eq!(sky_size(None, (most - 3, 10)).0, most);
     }
 }

@@ -20,7 +20,7 @@
 //! - **A two-finger tap undoes and a three-finger tap redoes** (Procreate,
 //!   Pixaki): the fingers down at once, lifted within `builder_tap_seconds`
 //!   of the first landing, none past the slop.
-//! - A finger that landed anywhere but the canvas - the bar, an open popup
+//! - A finger that landed anywhere but the canvas - a plate, an open popup
 //!   - is never part of a gesture (`update`'s `adopt`).
 
 use crate::math::Vec2;

@@ -1269,15 +1269,15 @@ beside `SeatStill`.
 |---|---|---|
 | `hud-rod-aim` (`keys::HUD_ROD_AIM`) | AIM, THEN LET GO TO CALL | NAMERI, NATO SPUSTI ZA UDAR |
 | `hud-rod-cancel` (`keys::HUD_ROD_CANCEL`) | LET GO HERE TO CANCEL | SPUSTI TUKAJ ZA PREKLIC |
-| `tool-rod_from_god` | rod from god | božja palica |
-| `tool-short-rod_from_god` | rod | palica |
+| `tool-rod_from_god` | ROD FROM GOD | BOŽJA PALICA |
+| `tool-short-rod_from_god` | ROD | PALICA |
 
 `LET GO` serves both a key and a thumb, so the prompt needs no `-touch`
-twin; `STEER`/`AIM` names no key either. `božja palica` ("God's rod") folds
-to `bozja palica`. **The budget**: `every_language_fits_every_budget` gains
+twin; `STEER`/`AIM` names no key either. `BOŽJA PALICA` ("God's rod") folds
+to `BOZJA PALICA`. **The budget**: `every_language_fits_every_budget` gains
 both prompt lines at `UI_SMALL_TEXT` within the block's width less 8
 (`Corners::prompt`, the one-seat block on the smallest area); the tool names
-are measured by the existing tool budgets (144 and 48). Measured in Phase 2;
+are measured by the existing tool budgets (144 and 60). Measured in Phase 2;
 `NAMERI IN SPUSTI` ("aim and let go") stands by for Slovene if the aim line
 runs over, and `udar` ("strike") for the short name. The countdown is
 digits, drawn as blocks: no key.

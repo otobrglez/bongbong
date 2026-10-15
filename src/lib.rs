@@ -427,16 +427,14 @@ pub const ONLINE_AVAILABLE: bool = cfg!(feature = "online");
 /// number - a net layer sizes its roster from here.
 pub const MAX_SEATS: usize = 8;
 
-// The builder's bar's height with a mouse, in UI points (docs/hud-and-
-// builder-layout-design.md, variant A; `editor::chrome::Bar`): a play
-// corner plate's height with a mouse - a readouts' row (`hud::ROW_H`, 32)
-// and `hud::PLATE_PAD` above and below it - so the builder's bar reads at
-// the HUD's scale, its buttons' drawn boxes a HUD button's 32 and the tool
-// icons a cell's 32 inside it; a touch screen's bar is a finger's 44
-// (`hud::UI_TOUCH_PT`). The bar stands on the window above the builder's
-// canvas, never in its bitmap; play mode draws no bar, its HUD standing in
-// the window's corners (`hud::corners`). Layout, not a knob: the dev panel
-// has no business resizing it.
+// A play corner plate's height with a mouse, in UI points
+// (docs/hud-and-builder-layout-design.md): a readouts' row (`hud::ROW_H`,
+// 32) and `hud::PLATE_PAD` above and below it - the builder's top plates'
+// too (`editor::chrome::Bar::plate_height`). A desktop window opens this
+// much taller than its field (`Layout::for_field`), and the builder's
+// headless frame stands its canvas in such a window. Neither mode draws a
+// bar: the chrome stands on the window in plates over the world. Layout,
+// not a knob: the dev panel has no business resizing it.
 pub const HUD_BAR_HEIGHT: i32 = 40;
 
 /// An axis-aligned window rectangle in pixels, the one shape `Layout`
@@ -465,8 +463,8 @@ impl Rect {
 /// *field* size with its origin at (0, 0); play's bitmap and the builder's
 /// canvas are the field alone (`bare`), the chrome round them standing on
 /// the window in UI points (`hud::UiFrame`). `for_field` is the field
-/// under a bar of `HUD_BAR_HEIGHT`: the size a desktop window opens at for
-/// the builder (`app.rs`), its bar over its canvas.
+/// under a band of `HUD_BAR_HEIGHT`: the size a desktop window opens at
+/// (`app.rs`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
     pub field: Rect,
@@ -474,8 +472,8 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// The layout for a battlefield of `width` x `height` under a bar: the
-    /// bar on top, the field below it, origin `(0, HUD_BAR_HEIGHT)`.
+    /// The layout for a battlefield of `width` x `height` under a band: the
+    /// band on top, the field below it, origin `(0, HUD_BAR_HEIGHT)`.
     pub fn for_field(width: f32, height: f32) -> Self {
         let bar = HUD_BAR_HEIGHT as f32;
         Layout {
@@ -486,7 +484,7 @@ impl Layout {
 
     /// A bitmap of the field alone: what play mode and an online round
     /// draw, the HUD standing in the window's corners (`hud::corners`), and
-    /// the builder's canvas, its bar standing on the window above it
+    /// the builder's canvas, its plates standing on the window over it
     /// (`editor::BuilderFrame`). The panel is empty, along the field's top
     /// edge.
     pub fn bare(width: f32, height: f32) -> Self {
@@ -967,26 +965,10 @@ pub const PLASMA_TEXTURE_SIZE: f32 = 32.0;
 // tuning, reduced 20% after it read too big on screen.
 pub const PLASMA_SCALE: f32 = 2.08;
 
-/// Corner roundness passed to `draw_rectangle_rounded` (raylib's 0..1
-/// fraction of the shorter side, not a pixel radius) - small on purpose, a
-/// gentle curve rather than a pill shape.
-pub const EDITOR_PANEL_ROUNDNESS: f32 = 0.12;
-/// Segment count for the rounded-rect draw calls - raylib's usual default.
+/// Segment count for the builder's rounded-rect draw calls - raylib's
+/// usual default.
 pub const EDITOR_PANEL_SEGMENTS: i32 = 8;
-/// Panel drop-shadow offset, in pixels (down-right), and its opacity
-/// fraction of solid black.
-pub const EDITOR_PANEL_SHADOW_OFFSET: f32 = 4.0;
-pub const EDITOR_PANEL_SHADOW_OPACITY: f32 = 0.35;
-/// Panel border thickness, in pixels, and its opacity fraction of solid
-/// black.
-pub const EDITOR_PANEL_BORDER_THICKNESS: f32 = 1.5;
-pub const EDITOR_PANEL_BORDER_OPACITY: f32 = 0.6;
-/// Panel fill color (a dark near-opaque backing so icon sprites with
-/// transparent/light edges stay legible over any battlefield tile behind
-/// them) and its opacity.
-pub const EDITOR_PANEL_FILL: (u8, u8, u8) = (20, 20, 24);
-pub const EDITOR_PANEL_FILL_OPACITY: f32 = 0.85;
-/// The build bar's popups (docs/game-editor-fusion.md sections 7 and 9),
+/// The builder's popups (docs/game-editor-fusion.md sections 7 and 9),
 /// in UI points (`editor::chrome`): a dropdown row and a MAP panel row are
 /// one finger-sized 48 pt tall, a category's list is 200 pt wide.
 pub const EDITOR_DROPDOWN_ROW_H: f32 = 48.0;

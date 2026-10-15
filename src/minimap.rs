@@ -488,6 +488,14 @@ pub struct RoundKey {
 }
 
 impl RoundKey {
+    /// The builder's canvas of `map`, its cells' digest `cells`
+    /// (`CellIndex::digest`) standing for a round's seed: an edit of its
+    /// water or roads is another key.
+    pub fn of_canvas(map: &crate::map::MapFile, cells: u64, frozen: bool) -> RoundKey {
+        let (w, h) = map.field_size();
+        RoundKey { seed: cells, field: (w.to_bits(), h.to_bits()), theme: map.theme, cells: map.cells.len(), frozen, name: map.name.clone() }
+    }
+
     /// The round `game` holds.
     pub fn of(game: &Game) -> RoundKey {
         let (w, h) = game.map.field_size();

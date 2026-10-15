@@ -1,62 +1,64 @@
 //! The builder's chrome in UI points (docs/large-maps-follow-camera.md §8,
-//! §9; docs/game-editor-fusion.md §7): the bar along the window's top
-//! inside the safe area, the popups hanging from it, the status line, the
-//! navigator and the loupe - laid out on the window from its size in points
-//! the way play's corners are (`hud::UiFrame`), never at the canvas's
-//! scale, so a phone's bar is a finger's height and its text no smaller
-//! than a phone can read, while a desktop at UI scale 1 draws its bar a
+//! §9; docs/game-editor-fusion.md §7): play's corner plates and a tray
+//! floating over the canvas, the popups from them, the status plate, the
+//! navigator and the loupe - laid out on the window from its size in
+//! points the way play's corners are (`hud::UiFrame`), never at the
+//! canvas's scale, so a phone's buttons are a finger's height and its text
+//! no smaller than a phone can read, while a desktop at UI scale 1 draws a
 //! point a pixel.
 //!
 //! `BuilderFrame` is where the builder stands on the window this frame:
-//! the canvas's bitmap - the canvas alone, no bar - and the view that puts
-//! it on the window under the bar, and the UI frame the chrome is laid out
-//! in. `Bar` and `PopupLayout` (gathered by `MapEditor::chrome`) are the one
-//! geometry table the painter (`render.rs`), every hit test (`mod.rs`), the
-//! dev server's `status.builder.buttons` and `click`, and the web build's
+//! the canvas's bitmap and the view that puts it over the whole window, as
+//! play puts its field, and the UI frame the chrome is laid out in. `Bar`
+//! and `PopupLayout` (gathered by `MapEditor::chrome`) are the one geometry
+//! table the painter (`render.rs`), every hit test (`mod.rs`), the dev
+//! server's `status.builder.buttons` and `click`, and the web build's
 //! `bb_ui_json` read.
 //!
-//! **The bar is laid out from the safe area's width** in points. With the
-//! room - a desktop window, a tablet - it is one row: BACK (the way back to
-//! the round BUILD paused), the map's name, the six category buttons and
-//! the BRUSH button (the brush's shape, the select tool and the stamps),
-//! the eraser, UNDO, REDO, FILE, MAP, FIT, CHECK and the clear flag from
-//! the left, PLAY HERE and PLAY at the right end - back at one end, go at
-//! the other. Where it has less, the name goes first (the status line
-//! names the map instead), then BACK's word (its arrow stays), then the
-//! clear flag folds into CHECK (which opens the same panel and turns green
-//! once the map is cleared), and then the six category buttons and BRUSH
-//! fold into one TOOLS button that opens a palette of every category with
-//! the brush's row under them - which may give the flag back -, so every
-//! button stays reachable at its full size - 44 points on both sides on a
-//! touch screen (`hud::UI_TOUCH_PT`) - rather than shrinking. A UI frame is
-//! never narrower than `hud::UI_MIN_W` points (`UiFrame::new` shrinks the
-//! point instead), and the folded bar fits that on a touch screen.
+//! **The controls stand on three plates** (`Bar`), play's corners' (8 pt
+//! inside the safe area, a button's height and `PLATE_PAD` round it): BACK,
+//! DAY under a dark sky and the map's name at the top-left, where play's
+//! vitals stand; UNDO, REDO, FILE, MAP, FIT, CHECK and the clear flag, then
+//! PLAY HERE and PLAY at the top-right, PLAY in the box play's BUILD stands
+//! in - back at one end, go at the other; and the tools on a tray along the
+//! bottom: the six category buttons, BRUSH and the eraser. Where the top
+//! has less room the name narrows and goes first, then BACK's word (its
+//! arrow stays), then the clear flag folds into CHECK (which opens the same
+//! panel and turns green once the map is cleared); where the six and BRUSH
+//! would take more than `TRAY_MOST` of the width - a phone's - they fold
+//! into one TOOLS button that opens a palette of every category with the
+//! brush's row under them. Every button stays at its full size - 44 points
+//! on both sides on a touch screen (`hud::UI_TOUCH_PT`) - rather than
+//! shrinking. A UI frame is never narrower than `hud::UI_MIN_W` points
+//! (`UiFrame::new` shrinks the point instead).
 //!
-//! **The popups take the room under the bar**: a list too long for it runs
-//! on in a second column, and the MAP panel, the CHECK panel, the Load list
-//! and the STAMPS list turn pages by a pager row - the touch screen's way,
-//! since it has no wheel - where their rows do not fit.
+//! **The popups take the room under the top plates** (`BuilderFrame::room`)
+//! - FILE, MAP, CHECK, the Load and STAMPS lists, the Save prompt -, and the
+//! tray's rise into the room over the tray (`over_tray`): a list too long
+//! for it runs on in a second column, and the MAP panel, the CHECK panel,
+//! the Load list and the STAMPS list turn pages by a pager row - the touch
+//! screen's way, since it has no wheel - where their rows do not fit.
 //!
-//! **The select tool's actions stand in a strip under the bar** (`Strip`):
-//! COPY, CUT, PASTE, the two flips, DELETE, keeping the selection as a
-//! stamp and the STAMPS list - or, while a paste ghost stands on the
-//! canvas, PLACE, the flips and CANCEL - a finger's size on a touch screen,
-//! on a plate from the room's top-left corner. Under the bar rather than
-//! beside the selection: it never moves while a finger drags the selection
-//! or pans and pinches the view, it never stands over the cells being
-//! worked on (only a selection at the very top of the view meets it), and
-//! eight finger-size buttons beside a selection would cover a good part of
-//! a phone's canvas wherever the selection was.
+//! **The select tool's actions stand in a strip under the top plates**
+//! (`Strip`): COPY, CUT, PASTE, the two flips, DELETE, keeping the
+//! selection as a stamp and the STAMPS list - or, while a paste ghost
+//! stands on the canvas, PLACE, the flips and CANCEL - a finger's size on a
+//! touch screen, on a plate from the room's top-left corner. There rather
+//! than beside the selection: it never moves while a finger drags the
+//! selection or pans and pinches the view, it never stands over the cells
+//! being worked on (only a selection at the very top of the view meets
+//! it), and eight finger-size buttons beside a selection would cover a good
+//! part of a phone's canvas wherever the selection was.
 
 use crate::framing::MapClass;
-use crate::hud::{button_height, UiFrame, PLATE_PAD, UI_EDGE_PT};
+use crate::hud::{button_height, UiFrame, PLATE_PAD, ROW_GAP, SIDE_GAP};
 use crate::math::{Rectangle, Vec2};
 use crate::view::{ScaleCap, View};
 use crate::{Layout, EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, HUD_BAR_HEIGHT};
 
 use super::{BrushRow, Category, FieldKind, MapField, MapTab, PanelButton};
 
-/// The text size of every word on a button of the bar - UNDO, REDO, FILE,
+/// The text size of every word on a button of the plates - UNDO, REDO, FILE,
 /// MAP, FIT, CHECK, PLAY HERE, PLAY - and of the clear flag's par, the
 /// select tool's strip's words and the Save prompt's SAVE, with a mouse
 /// and on a touch screen alike: 14 points, between the HUD's small words
@@ -85,22 +87,20 @@ pub const BOX_PAD: f32 = 2.0;
 pub const CARET_W: f32 = 10.0;
 pub const CARET_GAP: f32 = 4.0;
 
-/// A button box's height: the bar's icon box - 32 points with a mouse, 40
-/// on a touch screen - so an icon's sprite (drawn 4 in) stands `BOX_PAD`
-/// clear of the outline, and every button of the bar is as tall as every
-/// other.
-pub fn box_height(touch: bool) -> f32 {
-    if touch { 40.0 } else { 32.0 }
+/// The height of a tray's button: 36 points with a mouse, so a tool's
+/// 32 px icon stands in its box a texel a point, and a finger's on a touch
+/// screen. The top plates' buttons are play's corners' (`hud::button_height`).
+pub fn tray_button_height(touch: bool) -> f32 {
+    if touch { button_height(true) } else { 36.0 }
 }
 
 /// The drawn box of a button standing in `slot`: the slot less `BOX_GAP`
-/// at its right end, `box_height` tall (or the slot's height, where that
-/// is less) and centred in it top to bottom on a whole point. One box for
-/// every button, so none is taller, wider-framed or differently cornered
-/// than the next.
-pub fn button_box(slot: Rectangle, touch: bool) -> Rectangle {
-    let h = box_height(touch).min(slot.height);
-    Rectangle::new(slot.x, slot.y + ((slot.height - h) / 2.0).floor(), slot.width - BOX_GAP, h)
+/// at its right end and a 2 pt block above and below it, as play's corner
+/// buttons are framed - 28 points tall on a top plate with a mouse, 32 on
+/// the tray, 40 on a touch screen. One box for every button, so none is
+/// wider-framed or differently cornered than the next.
+pub fn button_box(slot: Rectangle) -> Rectangle {
+    Rectangle::new(slot.x, slot.y + 2.0, slot.width - BOX_GAP, slot.height - 4.0)
 }
 
 /// The width a label has in `bx`: inside its outline and `BOX_PAD` clear
@@ -124,28 +124,21 @@ pub fn icon_box(bx: Rectangle, caret: bool) -> Rectangle {
     Rectangle::new(x, bx.y, side, side)
 }
 
-/// The bar's height: `HUD_BAR_HEIGHT` with a mouse - a play corner
-/// plate's - and a finger's (`hud::UI_TOUCH_PT`) on a touch screen. The
-/// select tool's strip's buttons are as tall.
-pub fn bar_height(touch: bool) -> f32 {
-    if touch { button_height(true) } else { HUD_BAR_HEIGHT as f32 }
-}
-
 /// The CHECK panel's width, in points: a finding's words, its place and
 /// its FIX button, and the panel's two hint lines in the chrome's small
 /// text in every language.
 pub const LINT_PANEL_W: f32 = 500.0;
 
 /// The most findings one page of the CHECK panel lists, where the room
-/// under the bar holds them.
+/// under the top plates holds them.
 pub const LINT_PAGE_ROWS: usize = 7;
 
 /// The CHECK panel's rows above its findings: the header and the clear
 /// check.
 pub const LINT_HEAD_ROWS: usize = 2;
 
-/// The most rows the Load list shows at once (eight fit under the bar of a
-/// desktop's window); fewer where the room under the bar holds fewer.
+/// The most rows the Load list shows at once (eight fit under the top
+/// plates of a desktop's window); fewer where the room holds fewer.
 pub const LOAD_VISIBLE_ROWS: usize = 8;
 
 /// The Load list's width.
@@ -199,8 +192,8 @@ pub const PALETTE_LABEL_W: f32 = 72.0;
 /// A palette cell: a dropdown row's height, square.
 pub const PALETTE_CELL: f32 = EDITOR_DROPDOWN_ROW_H;
 
-/// The least room the map's name keeps in the bar before it gives its
-/// place up to the buttons: a few letters and the edited mark.
+/// The least room the map's name keeps on the top-left plate before it
+/// gives its place up to the buttons: a few letters and the edited mark.
 pub const NAME_MIN_W: f32 = 64.0;
 
 /// The status line's text size and its rise from the area's bottom edge.
@@ -227,6 +220,14 @@ pub const HERE_W: f32 = 92.0;
 /// the caret's room; `chrome_tests`, `text_tests`).
 pub const BACK_WORD_W: f32 = 76.0;
 
+/// The most of the area's width the tray's six category buttons, BRUSH
+/// and the eraser may take before they fold into TOOLS (`Bar::of`).
+pub const TRAY_MOST: f32 = 0.75;
+
+/// DAY's width: its word in its box in every language (`label_room`;
+/// `text_tests`).
+pub const DAY_W: f32 = 52.0;
+
 /// BACK's arrow's size in points: a left-pointing triangle of 2 pt
 /// blocks.
 pub const BACK_ARROW: (f32, f32) = (6.0, 10.0);
@@ -250,11 +251,13 @@ pub fn back_arrow_at(bx: Rectangle, word: bool) -> Vec2 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Metrics {
     /// BACK as its arrow alone, and with its word after the arrow where
-    /// the bar has the room; both keep the same gap.
+    /// the top has the room; both keep the same gap.
     back: Slot,
     back_word: Slot,
     /// The map's name and its edited mark.
     name: Slot,
+    /// DAY, after BACK while the canvas's sky is dark.
+    day: Slot,
     /// A category button: its icon half and its list half.
     category_icon: f32,
     category_list: f32,
@@ -283,6 +286,7 @@ const MOUSE: Metrics = Metrics {
     back: slot(44.0, 4.0),
     back_word: slot(BACK_WORD_W, 4.0),
     name: slot(152.0, 8.0),
+    day: slot(DAY_W, 4.0),
     category_icon: 36.0,
     category_list: 20.0,
     categories_gap: 8.0,
@@ -305,6 +309,7 @@ const TOUCH: Metrics = Metrics {
     back: slot(44.0, 4.0),
     back_word: slot(BACK_WORD_W, 4.0),
     name: slot(152.0, 8.0),
+    day: slot(DAY_W, 4.0),
     category_icon: 44.0,
     category_list: 44.0,
     categories_gap: 8.0,
@@ -336,7 +341,7 @@ pub struct CategoryButton {
     pub list: Rectangle,
 }
 
-/// The tool categories in the bar: a button each, or folded into one.
+/// The tool categories on the tray: a button each, or folded into one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BarTools {
     /// The six category buttons, in `Category::ALL` order; BRUSH follows
@@ -347,23 +352,35 @@ pub enum BarTools {
     Folded(Rectangle),
 }
 
-/// The builder's bar in UI points: the strip along the window's top, under
-/// the safe area's top edge (and the web page's band, which the UI frame
-/// counts as one), across the window's whole width, and every element on
-/// it inside the safe area. `Bar::of` lays it out; the painter, the hit
-/// tests and the dev server read it.
+/// The builder's controls in UI points, on the corner clusters' plates
+/// (`hud::corners`), floating over the canvas as play's corners float over
+/// the field: BACK and the map's name on a plate in the top-left corner,
+/// where the vitals stand in play; the edit actions on a plate in the
+/// top-right corner, PLAY at its right end where BUILD stands in play; the
+/// tools on a tray along the bottom, centred. Every plate is a button's
+/// height and `PLATE_PAD` round it - play's - inside the safe area.
+/// `Bar::of` lays them out; the painter, the hit tests and the dev server
+/// read it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bar {
-    pub strip: Rectangle,
+    /// The top-left plate: BACK and the name.
+    pub left: Rectangle,
+    /// The top-right plate: UNDO to CHECK, PLAY HERE and PLAY.
+    pub right: Rectangle,
+    /// The tray along the bottom: the tools.
+    pub tray: Rectangle,
     /// BACK, at the left end: the round BUILD paused, back where it stood
     /// (`mode::Session::back`).
     pub back: Rectangle,
-    /// BACK carries its word after the arrow - where the bar has the room.
+    /// BACK carries its word after the arrow - where the top has the room.
     pub back_word: bool,
-    /// The map's name, where the bar has the room.
+    /// DAY, after BACK: the canvas drawn by daylight while held down
+    /// (`MapEditor::day`). Only while the canvas's sky is dark.
+    pub day: Option<Rectangle>,
+    /// The map's name, where the top has the room.
     pub name: Option<Rectangle>,
     pub tools: BarTools,
-    /// BRUSH, after the five category buttons; `None` on a folded bar,
+    /// BRUSH, after the six category buttons; `None` on a folded tray,
     /// whose palette carries the brush's row instead.
     pub brush: Option<Rectangle>,
     pub erase: Rectangle,
@@ -373,7 +390,7 @@ pub struct Bar {
     pub map: Rectangle,
     pub fit: Rectangle,
     pub check: Rectangle,
-    /// The clear flag after CHECK; `None` where the bar folds it into
+    /// The clear flag after CHECK; `None` where the top folds it into
     /// CHECK, which then shows a cleared map in the flag's green.
     pub clear: Option<Rectangle>,
     pub here: Rectangle,
@@ -382,7 +399,7 @@ pub struct Bar {
     pub touch: bool,
 }
 
-/// What a press on the bar lands on.
+/// What a press on the plates lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BarButton {
     /// The icon half of a category button: select its current tool.
@@ -407,64 +424,84 @@ pub enum BarButton {
     PlayHere,
     /// BACK to the round BUILD paused.
     Back,
+    /// The canvas by daylight, or under its sky again.
+    Day,
 }
 
 impl Bar {
-    /// The strip alone: across the window, from the safe area's top edge,
-    /// `bar_height` tall - 44 points on a touch screen and 40 with a
-    /// mouse.
-    pub fn strip_of(ui: &UiFrame) -> Rectangle {
-        Rectangle::new(0.0, ui.area.y - UI_EDGE_PT, ui.screen.w, bar_height(ui.touch))
+    /// A top plate's height: a button's (`hud::button_height`) and
+    /// `PLATE_PAD` above and below - play's corner plates'.
+    pub fn plate_height(touch: bool) -> f32 {
+        button_height(touch) + 2.0 * PLATE_PAD
     }
 
-    /// The bar laid out in `ui` (see the module docs): PLAY at the safe
-    /// area's right end with PLAY HERE before it; from the left BACK and
-    /// the buttons in a row - the clear flag folded into CHECK, then the
-    /// five category buttons and BRUSH folded into TOOLS, where the row
-    /// would not reach PLAY HERE with them -, then BACK's word and the
-    /// map's name in what room is left.
-    pub fn of(ui: &UiFrame) -> Bar {
-        let m = metrics(ui.touch);
-        let strip = Self::strip_of(ui);
-        let (top, h) = (strip.y, strip.height);
-        let left = ui.area.x;
-        let right = ui.area.x + ui.area.w;
-        let at = |x: f32, w: f32| Rectangle::new(x, top, w, h);
+    /// The tray's height: a tray button's (`tray_button_height`) and
+    /// `PLATE_PAD` above and below.
+    pub fn tray_height(touch: bool) -> f32 {
+        tray_button_height(touch) + 2.0 * PLATE_PAD
+    }
 
-        let play = at(right - m.play, m.play);
+    /// The controls laid out in `ui` (see the module docs), DAY among them
+    /// where the canvas's sky is `dark`. Along the top, PLAY at the area's
+    /// right end, PLAY HERE before it and the edit actions before that;
+    /// BACK at its left end, then DAY, then the map's name. Short of room
+    /// the name narrows and goes first, then BACK's word, then the clear
+    /// flag folds into CHECK. Along the bottom the six category buttons,
+    /// BRUSH and the eraser, or - where they would take more than
+    /// `TRAY_MOST` of the area's width, a phone's - TOOLS and the eraser,
+    /// which leaves a phone's canvas its bottom edge.
+    pub fn of(ui: &UiFrame, dark: bool) -> Bar {
+        let m = metrics(ui.touch);
+        let a = ui.area;
+        let h = button_height(ui.touch);
+        let plate_h = Self::plate_height(ui.touch);
+        let row = |y: f32| move |x: f32, w: f32| Rectangle::new(x, y, w, h);
+        let at = row(a.y + PLATE_PAD);
+
+        // The top: the right plate's row from its right end, the left
+        // plate's from its left, `SIDE_GAP` at least between them.
+        let right_edge = a.x + a.w - PLATE_PAD;
+        let play = at(right_edge - m.play, m.play);
         let here = at(play.x - m.here.gap - m.here.w, m.here.w);
-        let room = here.x - m.right_gap - left;
-        // BACK's arrow and the row from the eraser to CHECK, whatever comes
-        // first; the clear flag after it where it stands on its own.
-        let row: f32 = [m.back, m.erase, m.undo, m.redo, m.file, m.map, m.fit, m.check].iter().map(|s| s.w + s.gap).sum();
+        let actions: f32 = [m.undo, m.redo, m.file, m.map, m.fit, m.check].iter().map(|s| s.w + s.gap).sum();
         let flag_w = m.clear.w + m.clear.gap;
-        let categories = Category::ALL.len() as f32 * (m.category_icon + m.category_list) + m.categories_gap + m.brush.w + m.brush.gap;
-        let folded_w = m.folded.w + m.folded.gap;
-        let width = |folded: bool, flag: bool| row + if folded { folded_w } else { categories } + if flag { flag_w } else { 0.0 };
-        let (folded, flag) =
-            [(false, true), (false, false), (true, true), (true, false)].into_iter().find(|&(folded, flag)| width(folded, flag) <= room).unwrap_or((true, false));
-        let mut spare = room - width(folded, flag);
-        let word = m.back_word.w - m.back.w;
-        let back_word = spare >= word;
-        if back_word {
-            spare -= word;
-        }
-        let name_w = if spare >= m.name.w + m.name.gap {
+        let right_w = |flag: bool| PLATE_PAD + actions + if flag { flag_w } else { 0.0 } + m.right_gap + m.here.w + m.here.gap + m.play + PLATE_PAD;
+        let day_w = if dark { m.back.gap + m.day.w } else { 0.0 };
+        let left_w = |word: bool| PLATE_PAD + if word { m.back_word.w } else { m.back.w } + day_w + PLATE_PAD;
+        let top = a.w - SIDE_GAP;
+        let (back_word, flag) =
+            [(true, true), (false, true), (false, false)].into_iter().find(|&(word, flag)| left_w(word) + right_w(flag) <= top).unwrap_or((false, false));
+        let spare = top - left_w(back_word) - right_w(flag);
+        let name_w = if spare >= m.name.w + m.back.gap {
             Some(m.name.w)
-        } else if spare >= NAME_MIN_W + m.name.gap {
-            Some(spare - m.name.gap)
+        } else if back_word && spare >= NAME_MIN_W + m.back.gap {
+            Some(spare - m.back.gap)
         } else {
             None
         };
-
         let back_w = if back_word { m.back_word.w } else { m.back.w };
-        let back = at(left, back_w);
-        let mut x = left + back_w + m.back.gap;
-        let name = name_w.map(|w| {
-            let r = at(x, w);
-            x += w + m.name.gap;
+        let back = at(a.x + PLATE_PAD, back_w);
+        let day = dark.then(|| at(back.x + back_w + m.back.gap, m.day.w));
+        let name = name_w.map(|w| at(back.x + back_w + day_w + m.back.gap, w));
+        let left = Rectangle::new(a.x, a.y, left_w(back_word) + name_w.map_or(0.0, |w| w + m.back.gap), plate_h);
+        let right = Rectangle::new(right_edge + PLATE_PAD - right_w(flag), a.y, right_w(flag), plate_h);
+        let mut x = right.x + PLATE_PAD;
+        let mut next = |s: Slot| {
+            let r = at(x, s.w);
+            x += s.w + s.gap;
             r
-        });
+        };
+        let (undo, redo, file, map, fit, check) = (next(m.undo), next(m.redo), next(m.file), next(m.map), next(m.fit), next(m.check));
+        let clear = flag.then(|| next(m.clear));
+
+        // The tray, centred along the bottom.
+        let categories = Category::ALL.len() as f32 * (m.category_icon + m.category_list) + m.categories_gap + m.brush.w + m.brush.gap;
+        let tray_w = |folded: bool| PLATE_PAD + if folded { m.folded.w + m.folded.gap } else { categories } + m.erase.w + PLATE_PAD;
+        let folded = tray_w(false) > a.w * TRAY_MOST;
+        let tray_h = tray_button_height(ui.touch);
+        let tray = Rectangle::new((a.x + (a.w - tray_w(folded)) / 2.0).floor(), a.y + a.h - tray_h - 2.0 * PLATE_PAD, tray_w(folded), tray_h + 2.0 * PLATE_PAD);
+        let at = |x: f32, w: f32| Rectangle::new(x, tray.y + PLATE_PAD, w, tray_h);
+        let mut x = tray.x + PLATE_PAD;
         let (tools, brush) = if folded {
             let r = at(x, m.folded.w);
             x += m.folded.w + m.folded.gap;
@@ -479,17 +516,54 @@ impl Bar {
             x += categories;
             (BarTools::Categories(buttons), Some(brush))
         };
-        let mut next = |s: Slot| {
-            let r = at(x, s.w);
-            x += s.w + s.gap;
-            r
-        };
-        let (erase, undo, redo, file, map, fit, check) = (next(m.erase), next(m.undo), next(m.redo), next(m.file), next(m.map), next(m.fit), next(m.check));
-        let clear = flag.then(|| next(m.clear));
-        Bar { strip, back, back_word, name, tools, brush, erase, undo, redo, file, map, fit, check, clear, here, play, touch: ui.touch }
+        let erase = at(x, m.erase.w);
+        Bar { left, right, tray, back, back_word, day, name, tools, brush, erase, undo, redo, file, map, fit, check, clear, here, play, touch: ui.touch }
     }
 
-    /// The category button of `category`, while the five are in the bar.
+    /// These controls moved `top` points down along the top and `bottom`
+    /// down along the bottom (negative, up): where they stand while they
+    /// slide in (`mode::Swap`).
+    pub fn slid(&self, top: f32, bottom: f32) -> Bar {
+        let t = |r: Rectangle| Rectangle::new(r.x, r.y + top, r.width, r.height);
+        let b = |r: Rectangle| Rectangle::new(r.x, r.y + bottom, r.width, r.height);
+        let tools = match self.tools {
+            BarTools::Categories(buttons) => BarTools::Categories(buttons.map(|c| CategoryButton { rect: b(c.rect), icon: b(c.icon), list: b(c.list) })),
+            BarTools::Folded(r) => BarTools::Folded(b(r)),
+        };
+        Bar {
+            left: t(self.left),
+            right: t(self.right),
+            tray: b(self.tray),
+            back: t(self.back),
+            day: self.day.map(t),
+            name: self.name.map(t),
+            tools,
+            brush: self.brush.map(b),
+            erase: b(self.erase),
+            undo: t(self.undo),
+            redo: t(self.redo),
+            file: t(self.file),
+            map: t(self.map),
+            fit: t(self.fit),
+            check: t(self.check),
+            clear: self.clear.map(t),
+            here: t(self.here),
+            play: t(self.play),
+            ..*self
+        }
+    }
+
+    /// The three plates: what a press lands on before the canvas.
+    pub fn plates(&self) -> [Rectangle; 3] {
+        [self.left, self.right, self.tray]
+    }
+
+    /// Whether `p` (UI points) is on a plate.
+    pub fn covers(&self, p: Vec2) -> bool {
+        self.plates().iter().any(|r| r.contains(p))
+    }
+
+    /// The category button of `category`, while the six are on the tray.
     pub fn category(&self, category: Category) -> Option<CategoryButton> {
         match &self.tools {
             BarTools::Categories(buttons) => Some(buttons[category.index()]),
@@ -509,6 +583,7 @@ impl Bar {
     /// Every press target with what it is, in the order a press is tested.
     pub fn buttons(&self) -> Vec<(BarButton, Rectangle)> {
         let mut out = vec![(BarButton::Play, self.play), (BarButton::Back, self.back), (BarButton::File, self.file)];
+        out.extend(self.day.map(|r| (BarButton::Day, r)));
         match &self.tools {
             BarTools::Categories(buttons) => {
                 for (category, b) in Category::ALL.into_iter().zip(buttons) {
@@ -546,7 +621,7 @@ impl Bar {
         Category::ALL.into_iter().find(|&c| self.category(c).is_some_and(|b| hit_rect(b.rect).contains(p)))
     }
 
-    /// The bar's buttons a tool presses by name (`status.builder.buttons`).
+    /// The plates' buttons a tool presses by name (`status.builder.buttons`).
     pub fn named(&self) -> Vec<(String, Rectangle)> {
         let mut out: Vec<(String, Rectangle)> = vec![
             ("play".into(), self.play),
@@ -571,6 +646,7 @@ impl Bar {
         }
         out.extend(self.brush.map(|r| ("brush".to_string(), r)));
         out.extend(self.clear.map(|r| ("clear".to_string(), r)));
+        out.extend(self.day.map(|r| ("day".to_string(), r)));
         out
     }
 }
@@ -582,9 +658,9 @@ pub fn hit_rect(rect: Rectangle) -> Rectangle {
 }
 
 /// Where the builder stands on the window this frame: the canvas's bitmap
-/// (`layout` - its field area the canvas area, with no bar in it), the view
-/// that puts that bitmap on the window under the bar, and the UI frame the
-/// chrome is laid out in. A pointer reaches the canvas through `view`
+/// (`layout` - its field area the canvas area), the view that puts that
+/// bitmap over the whole window, and the UI frame the chrome is laid out
+/// in. A pointer reaches the canvas through `view`
 /// (`to_canvas`) and the chrome through `ui` (`to_ui`); `BuilderInput`
 /// carries the window's own coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -596,38 +672,30 @@ pub struct BuilderFrame {
 
 impl BuilderFrame {
     /// The builder on the window `ui` describes, for a map of `field` world
-    /// pixels and class `class`: the bar along the top (`Bar::strip_of`),
-    /// and under it the canvas, between the safe area's sides - so a notch
-    /// or a rounded corner never stands over the map's edge columns - down
-    /// to the window's bottom. An arena's bitmap is its field, fitted into
-    /// that region at the scale a round's would be (`cap`) and letterboxed
-    /// - at FIT the very picture a round draws of it. A field map's bitmap
-    /// is made to the region's shape (`canvas_frame`) and the builder's
-    /// camera chooses what of the map it shows.
+    /// pixels and class `class`: the canvas over the whole window, as play
+    /// draws its field, the controls floating over it (`Bar`). An arena's
+    /// bitmap is its field, fitted into the window at the scale a round's
+    /// is (`cap`) and letterboxed - at FIT the very picture a round draws
+    /// of it, where a round draws it. A field map's bitmap is made to the
+    /// window's shape (`canvas_frame`) and the builder's camera chooses
+    /// what of the map it shows.
     pub fn new(ui: UiFrame, field: (f32, f32), class: MapClass, cap: Option<ScaleCap>) -> BuilderFrame {
         let window = (ui.screen.w * ui.scale, ui.screen.h * ui.scale);
-        let strip = Bar::strip_of(&ui);
-        let top = (strip.y + strip.height) * ui.scale;
-        let left = (ui.area.x - UI_EDGE_PT) * ui.scale;
-        let right = (ui.area.x + ui.area.w + UI_EDGE_PT) * ui.scale;
-        let region = ((right - left).max(1.0), (window.1 - top).max(1.0));
         let (layout, view) = if class.follows() {
-            canvas_frame(region, cap)
+            canvas_frame(window, cap)
         } else {
-            (Layout::bare(field.0, field.1), View::fit_capped(field, region, cap))
+            (Layout::bare(field.0, field.1), View::fit_capped(field, window, cap))
         };
-        let view = View { window, offset: Vec2::new(view.offset.x + left, view.offset.y + top), ..view };
-        BuilderFrame { layout, view, ui }
+        BuilderFrame { layout, view: View { window, ..view }, ui }
     }
 
-    /// The builder in a window of the map's field and a 40 px bar
-    /// (`HUD_BAR_HEIGHT`) over it, a unit a point, nothing inset, no
-    /// touch: what a dev server with no window lays the builder out in, and
-    /// the tests. A field of at
-    /// least `hud::UI_MIN_W` x `UI_MIN_H` less the bar (720 x 312) - the
-    /// standard arena's, say - stands at (0, 40) at its own size; a smaller
-    /// one shrinks the UI point (`UiFrame::new`), so its bar is shorter and
-    /// the field is centred in the room left under it.
+    /// The builder in a window the map's field wide and `HUD_BAR_HEIGHT`
+    /// taller than it, a unit a point, nothing inset, no touch: what a dev
+    /// server with no window lays the builder out in, and the tests. An
+    /// arena of at least `hud::UI_MIN_W` x `UI_MIN_H` less 40 (720 x 312) -
+    /// the standard arena's, say - stands at its own size, letterboxed 20
+    /// points from the top; a smaller one shrinks the UI point
+    /// (`UiFrame::new`).
     pub fn headless(field: (f32, f32), class: MapClass) -> BuilderFrame {
         let window = (field.0.max(1.0), field.1.max(1.0) + HUD_BAR_HEIGHT as f32);
         BuilderFrame::new(UiFrame::plain(window), field, class, None)
@@ -653,9 +721,11 @@ impl BuilderFrame {
         self.view.to_bitmap(self.ui.to_window(ui))
     }
 
-    /// The bar, laid out in this frame's UI.
+    /// The controls laid out in this frame's UI with no DAY: every button
+    /// on the right plate and the tray stands where it stands with it
+    /// (`MapEditor::bar` lays out the canvas's own).
     pub fn bar(&self) -> Bar {
-        Bar::of(&self.ui)
+        Bar::of(&self.ui, false)
     }
 
     /// The canvas area on the window, in UI points.
@@ -666,13 +736,22 @@ impl BuilderFrame {
         Rectangle::new(a.x, a.y, b.x - a.x, b.y - a.y)
     }
 
-    /// The room under the bar, inside the safe area: what the popups hang
-    /// in and centre in, and where the status line and the navigator stand.
-    pub fn under_bar(&self) -> Rectangle {
-        let strip = Bar::strip_of(&self.ui);
+    /// The room under the top plates, inside the safe area: what the
+    /// popups from the top hang in and centre in, the select tool's strip
+    /// and the navigator stand in. It runs down over the tray: an open
+    /// popup takes the presses round it (a press outside one closes it).
+    pub fn room(&self) -> Rectangle {
         let a = self.ui.area;
-        let top = strip.y + strip.height;
+        let top = a.y + Bar::plate_height(self.ui.touch) + ROW_GAP;
         Rectangle::new(a.x, top, a.w, (a.y + a.h - top).max(0.0))
+    }
+
+    /// The room between the top plates and the tray: what the tray's
+    /// popups rise into, and where the status plate stands.
+    pub fn over_tray(&self) -> Rectangle {
+        let room = self.room();
+        let bottom = self.bar().tray.y - ROW_GAP;
+        Rectangle::new(room.x, room.y, room.width, (bottom - room.y).max(0.0))
     }
 
     /// Device pixels per UI point, given the canvas's device pixels per
@@ -683,13 +762,12 @@ impl BuilderFrame {
     }
 }
 
-/// How a field map's canvas lands under the bar in `region` (the window
-/// under the bar, in its units): a bitmap made to the region's shape - no
-/// letterbox - at the scale the standard field would be fitted into it
-/// (`View::fit_capped` under the same `cap`), so a bitmap pixel is the same
-/// size over a field map as over an arena in the same window. The view
-/// puts it at the region's corner; `BuilderFrame::new` moves it under the
-/// bar.
+/// How a field map's canvas lands in `region` (the window, in its units):
+/// a bitmap made to the region's shape - no letterbox - at the scale the
+/// standard field would be fitted into it (`View::fit_capped` under the
+/// same `cap`), so a bitmap pixel is the same size over a field map as
+/// over an arena in the same window. The view puts it at the region's
+/// corner.
 pub fn canvas_frame(region: (f32, f32), cap: Option<ScaleCap>) -> (Layout, View) {
     let standard = (crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
     let scale = View::fit_capped(standard, region, cap).scale;
@@ -699,12 +777,13 @@ pub fn canvas_frame(region: (f32, f32), cap: Option<ScaleCap>) -> (Layout, View)
 }
 
 /// The builder's chrome on one frame, in UI points (`MapEditor::chrome`):
-/// the bar, the room under it, the open popup's layout and, with the select
-/// tool and no popup open, the action strip.
+/// the plates, the room under the top ones, the open popup's layout and,
+/// with the select tool and no popup open, the action strip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chrome {
     pub bar: Bar,
-    /// The room under the bar inside the safe area (`BuilderFrame::under_bar`).
+    /// The room under the top plates inside the safe area
+    /// (`BuilderFrame::room`).
     pub room: Rectangle,
     pub popup: Option<PopupLayout>,
     pub strip: Option<Strip>,
@@ -787,13 +866,20 @@ fn slide(x: f32, w: f32, room: Rectangle) -> f32 {
     x.min(room.x + room.width - w).max(room.x)
 }
 
-/// Whole rows of `row_h` the room under the bar holds, at least one.
+/// The top of a popup `h` points tall from `anchor` in `room`: along the
+/// room's top under a button over it, risen against the room's bottom
+/// from a button under it - the tray's.
+fn hang_y(anchor: Rectangle, room: Rectangle, h: f32) -> f32 {
+    if anchor.y >= room.y + room.height { room.y + room.height - h } else { room.y }
+}
+
+/// Whole rows of `row_h` the room holds, at least one.
 fn rows_in(room: Rectangle, row_h: f32) -> usize {
     ((room.height / row_h).floor() as usize).max(1)
 }
 
-/// A list of `n` rows of `w` x `EDITOR_DROPDOWN_ROW_H` hanging from
-/// `anchor` under the bar: one column where the room holds it, else as
+/// A list of `n` rows of `w` x `EDITOR_DROPDOWN_ROW_H` from `anchor` in
+/// `room` (`hang_y`): one column where the room holds it, else as
 /// many columns as it takes, the rows shared out evenly; where those
 /// columns would leave the room's width, the rows shorten - never under a
 /// finger's `UI_TOUCH_PT` - until the columns the room is wide for hold
@@ -810,7 +896,8 @@ pub fn hanging_list(anchor: Rectangle, room: Rectangle, n: usize, w: f32) -> Row
     let columns = n.max(1).div_ceil(max);
     let per_column = n.max(1).div_ceil(columns);
     let width = columns as f32 * w;
-    Rows { panel: Rectangle::new(slide(anchor.x, width, room), room.y, width, per_column as f32 * h), per_column, row_w: w, row_h: h }
+    let height = per_column as f32 * h;
+    Rows { panel: Rectangle::new(slide(anchor.x, width, room), hang_y(anchor, room, height), width, height), per_column, row_w: w, row_h: h }
 }
 
 /// The palette the folded TOOLS button opens: a row per category - its
@@ -863,7 +950,7 @@ impl Palette {
             let w = PALETTE_LABEL_W + per_row as f32 * cell;
             let h = (total + 1) as f32 * cell;
             let pack = Pack::Stacked { rows, total };
-            return Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h), per_row, cell, pack };
+            return Palette { panel: Rectangle::new(slide(anchor.x, w, room), hang_y(anchor, room, h), w, h), per_row, cell, pack };
         }
         let cell = crate::hud::UI_TOUCH_PT;
         let width = ((room.width / cell).floor() as usize).max(NAME_CELLS + BrushRow::ALL.len());
@@ -871,7 +958,7 @@ impl Palette {
         let w = width as f32 * cell;
         let h = (total + 1) as f32 * cell;
         let pack = Pack::Flow { width, starts, total };
-        Palette { panel: Rectangle::new(slide(anchor.x, w, room), room.y, w, h), per_row, cell, pack }
+        Palette { panel: Rectangle::new(slide(anchor.x, w, room), hang_y(anchor, room, h), w, h), per_row, cell, pack }
     }
 
     /// Each category on rows of its own, `per_row` tools to a row: the
@@ -977,7 +1064,7 @@ impl Palette {
 
 /// The MAP panel's one geometry table (docs/game-editor-fusion.md section
 /// 9): the map file's keys in four groups (`MapTab`) and RESET MAP. Where
-/// the room under the bar holds them all - a desktop, a tablet - every group
+/// the room under the top plates holds them all - a desktop, a tablet - every group
 /// stands at once as a section with its heading, ROUND and TANKS in the
 /// left column, FIELD, SKY and RESET MAP in the right (`MapShape::Sections`);
 /// where it does not - a phone, a small window - a rail of tabs down the
@@ -1193,7 +1280,7 @@ pub fn stepper_inc(rect: Rectangle) -> Rectangle {
 }
 
 /// The CHECK panel: its header and the clear check's row, a page of
-/// findings - as many as the room under the bar holds, `LINT_PAGE_ROWS`
+/// findings - as many as the room under the top plates holds, `LINT_PAGE_ROWS`
 /// at most - and, past a page, the pager.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LintLayout {
@@ -1246,7 +1333,7 @@ impl LintLayout {
     }
 }
 
-/// The Load list: centred in the room under the bar, a row per map shown,
+/// The Load list: centred in the room under the top plates, a row per map shown,
 /// and, where there are more maps than rows, a pager as its last row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LoadLayout {
@@ -1377,7 +1464,7 @@ impl StripButton {
     }
 
     /// Its width in points: a word's button, or a picture's - a finger's
-    /// size on a touch screen, the bar's small buttons' with a mouse.
+    /// size on a touch screen, the plates' small buttons' with a mouse.
     pub fn width(self, touch: bool) -> f32 {
         match (self.is_icon(), touch) {
             (true, true) => STRIP_ICON_W.1,
@@ -1389,14 +1476,14 @@ impl StripButton {
 }
 
 /// A strip button with a word, with a mouse and on a touch screen: its
-/// label in the bar's small text (`BAR_SMALL_TEXT`) inside its box
+/// label in the plates' small text (`BAR_SMALL_TEXT`) inside its box
 /// (`button_box`, `label_room`), the room `text_tests` holds every
 /// language to.
 pub const STRIP_WORD_W: (f32, f32) = (82.0, 82.0);
 
-/// A strip button with a picture: square, the bar's height (`bar_height`)
-/// - 40 with a mouse, 44 on a touch screen.
-pub const STRIP_ICON_W: (f32, f32) = (40.0, 44.0);
+/// A strip button with a picture: square, a button's height
+/// (`hud::button_height`) - 32 with a mouse, 44 on a touch screen.
+pub const STRIP_ICON_W: (f32, f32) = (32.0, 44.0);
 
 /// Between two of the strip's buttons.
 const STRIP_GAP: f32 = 4.0;
@@ -1411,7 +1498,8 @@ pub struct StripSlot {
 }
 
 /// The select tool's action strip (the module docs): its buttons in a row
-/// on a plate hanging under the bar from the room's top-left corner.
+/// on a plate hanging from the top-left corner of the room under the top
+/// plates.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Strip {
     /// The plate: a press inside it is the strip's, never the canvas's.
@@ -1423,7 +1511,7 @@ impl Strip {
     /// The strip of `buttons` (each with whether it can act now) in `room`,
     /// laid out for a touch screen or a mouse.
     pub fn of(room: Rectangle, touch: bool, buttons: &[(StripButton, bool)]) -> Strip {
-        let h = bar_height(touch);
+        let h = button_height(touch);
         let y = room.y + PLATE_PAD;
         let mut x = room.x + PLATE_PAD;
         let slots: Vec<StripSlot> = buttons
@@ -1450,7 +1538,7 @@ impl Strip {
     }
 }
 
-/// The Save prompt, centred in the room under the bar.
+/// The Save prompt, centred in the room under the top plates.
 pub fn save_prompt(room: Rectangle) -> Rectangle {
     crate::hud::centred_in(crate::Rect::new(room.x, room.y, room.width, room.height), SAVE_PROMPT.0, SAVE_PROMPT.1)
 }
@@ -1467,18 +1555,58 @@ pub fn menu_list(anchor: Rectangle, room: Rectangle, n: usize) -> Rows {
     hanging_list(anchor, room, n, EDITOR_DROPDOWN_W)
 }
 
-/// Where the status line's text starts and how wide it may run: from the
-/// left of the room under the bar, its baseline at the room's bottom, up
-/// to `until` (the navigator's plate) or the room's right edge.
-pub fn status_line(room: Rectangle, until: Option<f32>) -> Rectangle {
-    let x = room.x + 8.0;
-    let right = until.map_or(room.x + room.width, |u| u - 8.0);
-    Rectangle::new(x, room.y + room.height - STATUS_TEXT as f32, (right - x).max(0.0), STATUS_TEXT as f32)
+/// A list of `n` rows from a button on the tray: risen into the room over
+/// the tray (`BuilderFrame::over_tray`), or - where its columns would not
+/// fit there, a short window's - hanging under the top plates down the
+/// whole room, over the tray, as a list from the top does.
+pub fn tray_list(anchor: Rectangle, frame: &BuilderFrame, n: usize) -> Rows {
+    let over = frame.over_tray();
+    let rows = menu_list(anchor, over, n);
+    if within(rows.panel, over) { rows } else { menu_list(anchor, frame.room(), n) }
 }
 
-/// The navigator's picture of `size` points in the room under the bar: in
-/// its bottom-right corner, its plate's pad in from the edges, never more
-/// than half the room either way. `None` where it would have no size.
+/// The palette from the tray's TOOLS: risen into the room over the tray,
+/// or hanging down the whole room where it would not fit there.
+pub fn tray_palette(anchor: Rectangle, frame: &BuilderFrame) -> Palette {
+    let over = frame.over_tray();
+    let palette = Palette::of(anchor, over);
+    if within(palette.panel, over) { palette } else { Palette::of(anchor, frame.room()) }
+}
+
+/// Whether `r` lies inside `room`.
+fn within(r: Rectangle, room: Rectangle) -> bool {
+    r.x >= room.x - 1e-3 && r.y >= room.y - 1e-3 && r.x + r.width <= room.x + room.width + 1e-3 && r.y + r.height <= room.y + room.height + 1e-3
+}
+
+/// The status plate's text: the size of the words, and the plate's pad
+/// round them each side.
+pub const STATUS_PAD: f32 = 8.0;
+
+/// The status plate (`MapEditor::draw_status_line`) for words `want`
+/// points wide, in UI points: along the bottom beside the tray, in the
+/// area's bottom-left corner where the room left of the tray holds a
+/// plate of `STATUS_MIN_W`, else in the room over the tray's left end;
+/// never wider than that room. Its words run `STATUS_PAD` in from its
+/// left edge, centred top to bottom.
+pub fn status_plate(bar: &Bar, area: crate::Rect, over_tray: Rectangle, want: f32) -> Rectangle {
+    let h = STATUS_TEXT as f32 + 2.0 * STATUS_PAD;
+    let beside = bar.tray.x - SIDE_GAP - area.x;
+    let (x, y, room) = if beside >= STATUS_MIN_W {
+        (area.x, bar.tray.y + bar.tray.height - h, beside)
+    } else {
+        (over_tray.x, over_tray.y + over_tray.height - h, over_tray.width)
+    };
+    Rectangle::new(x, y, (want + 2.0 * STATUS_PAD).min(room).max(0.0), h)
+}
+
+/// The least room the status plate takes beside the tray rather than over
+/// it: the tool's name and a cell's place.
+pub const STATUS_MIN_W: f32 = 200.0;
+
+/// The navigator's picture of `size` points where play's minimap stands
+/// (`hud::corners`): under the top-right plate, flush with its right edge,
+/// its plate's pad in from the room's edges, never more than half the
+/// room either way. `None` where it would have no size.
 pub fn navigator(room: Rectangle, size: (f32, f32)) -> Option<Rectangle> {
     let (w, h) = size;
     if !(w > 0.0 && h > 0.0) {
@@ -1489,7 +1617,7 @@ pub fn navigator(room: Rectangle, size: (f32, f32)) -> Option<Rectangle> {
         return None;
     }
     let (w, h) = (w * fit, h * fit);
-    Some(Rectangle::new(room.x + room.width - PLATE_PAD - w, room.y + room.height - PLATE_PAD - h, w, h))
+    Some(Rectangle::new(room.x + room.width - PLATE_PAD - w, room.y + PLATE_PAD, w, h))
 }
 
 #[cfg(test)]
@@ -1541,112 +1669,138 @@ mod chrome_tests {
             && r.y + r.height <= outer.y + outer.height + 1e-3
     }
 
-    /// The safe area itself: the chrome's area and its edges.
-    fn safe(ui: &UiFrame) -> Rectangle {
-        Rectangle::new(ui.area.x - UI_EDGE_PT, ui.area.y - UI_EDGE_PT, ui.area.w + 2.0 * UI_EDGE_PT, ui.area.h + 2.0 * UI_EDGE_PT)
-    }
-
     fn overlap(a: Rectangle, b: Rectangle) -> bool {
         a.x < b.x + b.width - 1e-3 && b.x < a.x + a.width - 1e-3 && a.y < b.y + b.height - 1e-3 && b.y < a.y + a.height - 1e-3
     }
 
-    /// The bar on every window: inside the safe area under its top edge,
-    /// every button inside the chrome's area, no two overlapping, PLAY at
-    /// the right end, 44 points both ways on a touch screen and the 40 a
-    /// desktop's bar has with a mouse; BRUSH beside the five categories
-    /// exactly while they are in the bar.
+    /// The plates on every window, with DAY and without: each inside the
+    /// chrome's area, apart from the others; every button inside its own
+    /// plate - BACK, DAY and the name the top-left one's, UNDO to PLAY the
+    /// top-right one's, the tools the tray's - no two overlapping, a
+    /// button's height (`hud::button_height`) and on a touch screen a
+    /// finger's width; BACK at the area's left end, the tray along its
+    /// bottom and centred, and PLAY in the very box play's corner draws
+    /// BUILD in wherever the corners stand at their full size.
     #[test]
-    fn the_bar_holds_every_button_inside_the_safe_area_on_every_window() {
+    fn the_plates_hold_every_button_inside_the_safe_area_on_every_window() {
+        let play_shape = crate::hud::CornerShape {
+            layout: crate::hud::HudLayout::One,
+            chips: 0,
+            level_button: true,
+            online: true,
+            players: true,
+            restart: false,
+            build: true,
+            leave: false,
+            pause: true,
+            lines: 0,
+            minimap: None,
+            lanterns: false,
+            heat_shield: false,
+            air_support: false,
+        };
         for ui in frames() {
-            let bar = Bar::of(&ui);
-            assert_eq!(bar.brush.is_some(), matches!(bar.tools, BarTools::Categories(_)), "{ui:?}");
-            if let (Some(brush), Some(pickup)) = (bar.brush, bar.category(Category::Pickup)) {
-                assert!(brush.x >= pickup.rect.x + pickup.rect.width && brush.x + brush.width <= bar.erase.x, "{ui:?}: BRUSH between the five and the eraser");
-            }
-            assert!(inside(Rectangle::new(0.0, bar.strip.y, bar.strip.width, bar.strip.height), Rectangle::new(0.0, 0.0, ui.screen.w, ui.screen.h)));
-            assert!(bar.strip.y >= safe(&ui).y - 1e-3, "{ui:?}: the bar under the safe area's top");
-            let buttons = bar.buttons();
-            let mut rects: Vec<Rectangle> = buttons.iter().map(|(_, r)| *r).collect();
-            rects.extend(bar.name);
-            for r in &rects {
-                assert!(inside(*r, Rectangle::new(ui.area.x, bar.strip.y, ui.area.w, bar.strip.height)), "{ui:?}: {r:?} leaves the bar");
-            }
-            for (i, a) in rects.iter().enumerate() {
-                for b in &rects[i + 1..] {
-                    assert!(!overlap(*a, *b), "{ui:?}: {a:?} overlaps {b:?}");
+            for dark in [false, true] {
+                let bar = Bar::of(&ui, dark);
+                let area = Rectangle::new(ui.area.x, ui.area.y, ui.area.w, ui.area.h);
+                assert_eq!(bar.brush.is_some(), matches!(bar.tools, BarTools::Categories(_)), "{ui:?}");
+                assert_eq!(bar.day.is_some(), dark, "{ui:?}: DAY while the sky is dark");
+                for plate in bar.plates() {
+                    assert!(inside(plate, area), "{ui:?}: the plate {plate:?} leaves {area:?}");
+                }
+                assert_eq!((bar.left.height, bar.right.height, bar.tray.height), (Bar::plate_height(ui.touch), Bar::plate_height(ui.touch), Bar::tray_height(ui.touch)));
+                assert!(!overlap(bar.left, bar.right) && !overlap(bar.left, bar.tray) && !overlap(bar.right, bar.tray), "{ui:?}: plates overlap");
+                let mut left: Vec<Rectangle> = vec![bar.back];
+                left.extend(bar.day);
+                left.extend(bar.name);
+                let right = vec![bar.undo, bar.redo, bar.file, bar.map, bar.fit, bar.check, bar.here, bar.play];
+                let mut tray = vec![bar.erase];
+                tray.extend(bar.brush);
+                match &bar.tools {
+                    BarTools::Categories(buttons) => tray.extend(buttons.iter().map(|b| b.rect)),
+                    BarTools::Folded(r) => tray.push(*r),
+                }
+                for (plate, buttons) in [(bar.left, &left), (bar.right, &right), (bar.tray, &tray)] {
+                    for r in buttons.iter() {
+                        assert!(inside(*r, plate), "{ui:?}: {r:?} leaves its plate {plate:?}");
+                    }
+                }
+                let mut rects: Vec<Rectangle> = bar.buttons().iter().map(|(_, r)| *r).collect();
+                rects.extend(bar.name);
+                for (i, a) in rects.iter().enumerate() {
+                    for b in &rects[i + 1..] {
+                        assert!(!overlap(*a, *b), "{ui:?}: {a:?} overlaps {b:?}");
+                    }
+                }
+                for (button, r) in bar.buttons() {
+                    let tall = if inside(r, bar.tray) { tray_button_height(ui.touch) } else { button_height(ui.touch) };
+                    assert_eq!(r.height, tall, "{ui:?}: {button:?}");
+                    if ui.touch {
+                        assert!(r.width >= UI_TOUCH_PT - 1e-3, "{ui:?}: {button:?} is {} wide", r.width);
+                    }
+                }
+                assert!((bar.back.x - (ui.area.x + PLATE_PAD)).abs() < 1e-3, "{ui:?}: BACK at the left end");
+                assert!(bar.here.x + bar.here.width <= bar.play.x);
+                assert!((bar.tray.y + bar.tray.height - (ui.area.y + ui.area.h)).abs() < 1e-3, "{ui:?}: the tray along the bottom");
+                let centre = bar.tray.x + bar.tray.width / 2.0 - (ui.area.x + ui.area.w / 2.0);
+                assert!(centre.abs() <= 1.0, "{ui:?}: the tray centred");
+                let corners = crate::hud::corners(&ui, &play_shape);
+                if corners.scale == 1.0 {
+                    assert_eq!(Some(bar.play), corners.build, "{ui:?}: PLAY in BUILD's box");
                 }
             }
-            let least = if ui.touch { UI_TOUCH_PT } else { HUD_BAR_HEIGHT as f32 };
-            for (button, r) in &buttons {
-                assert!(r.height >= least - 1e-3, "{ui:?}: {button:?} is {} tall", r.height);
-                if ui.touch {
-                    assert!(r.width >= UI_TOUCH_PT - 1e-3, "{ui:?}: {button:?} is {} wide", r.width);
-                }
-            }
-            assert!((bar.play.x + bar.play.width - (ui.area.x + ui.area.w)).abs() < 1e-3, "PLAY at the right end");
-            assert!(bar.here.x + bar.here.width <= bar.play.x);
-            assert!((bar.back.x - ui.area.x).abs() < 1e-3, "{ui:?}: BACK at the left end");
         }
     }
 
-    /// A desktop's window lays the bar's slots out a point a pixel, BACK
-    /// with its word at the left end and BRUSH after the six categories;
-    /// short of room the name narrows and goes first, then BACK's word,
-    /// then the clear flag folds into CHECK, then the categories and BRUSH
-    /// fold rather than shrink a button - which gives the room back.
+    /// A desktop's window lays the plates out a point a pixel: BACK with
+    /// its word and the name at the top-left, PLAY where BUILD stands, the
+    /// tray centred along the bottom; short of room the name narrows and
+    /// goes first, then BACK's word, then the clear flag folds into CHECK,
+    /// and a tray wider than the area folds the categories and BRUSH into
+    /// TOOLS rather than shrink a button.
     #[test]
-    fn a_desktops_bar_keeps_its_slots_and_a_narrow_one_folds() {
+    fn a_desktops_plates_keep_their_slots_and_a_narrow_one_folds() {
         let ui = UiFrame::plain((1366.0, 768.0));
-        let bar = Bar::of(&ui);
-        assert_eq!(bar.strip, Rectangle::new(0.0, 0.0, 1366.0, 40.0));
-        assert_eq!((bar.back, bar.back_word), (Rectangle::new(8.0, 0.0, BACK_WORD_W, 40.0), true));
-        assert_eq!(bar.name, Some(Rectangle::new(88.0, 0.0, 152.0, 40.0)));
-        let wall = bar.category(Category::Wall).expect("six category buttons");
-        assert_eq!(wall.rect, Rectangle::new(248.0, 0.0, 56.0, 40.0));
-        assert_eq!(wall.icon.width, 36.0);
-        let slots = [
-            (bar.brush.expect("BRUSH beside the six"), 592.0, 56.0),
-            (bar.erase, 656.0, 44.0),
-            (bar.undo, 704.0, 52.0),
-            (bar.redo, 760.0, 52.0),
-            (bar.file, 816.0, 60.0),
-            (bar.map, 880.0, 60.0),
-            (bar.fit, 944.0, 44.0),
-            (bar.check, 992.0, 76.0),
-            (bar.clear.expect("the flag beside CHECK"), 1070.0, 52.0),
-            (bar.here, 1190.0, HERE_W),
-            (bar.play, 1286.0, 72.0),
-        ];
-        for (r, x, w) in slots {
-            assert_eq!((r.x, r.width, r.y, r.height), (x, w, 0.0, 40.0), "{r:?}");
+        let bar = Bar::of(&ui, false);
+        assert_eq!(bar.left, Rectangle::new(8.0, 8.0, 4.0 + BACK_WORD_W + 4.0 + 152.0 + 4.0, 40.0));
+        assert_eq!((bar.back, bar.back_word), (Rectangle::new(12.0, 12.0, BACK_WORD_W, 32.0), true));
+        assert_eq!(bar.name, Some(Rectangle::new(92.0, 12.0, 152.0, 32.0)));
+        assert_eq!(bar.play, Rectangle::new(1282.0, 12.0, 72.0, 32.0));
+        assert_eq!(bar.here, Rectangle::new(1186.0, 12.0, HERE_W, 32.0));
+        assert_eq!(bar.right.x + bar.right.width, 1358.0);
+        let slots = [(bar.undo, 52.0), (bar.redo, 52.0), (bar.file, 60.0), (bar.map, 60.0), (bar.fit, 44.0), (bar.check, 76.0)];
+        let mut x = bar.right.x + PLATE_PAD;
+        for (r, w) in slots {
+            assert_eq!((r.x, r.width, r.y, r.height), (x, w, 12.0, 32.0), "{r:?}");
+            x = r.x + r.width + if r == bar.check { 2.0 } else { 4.0 };
         }
-        // Wider: the same slots from the left, PLAY HERE and PLAY at the
-        // right end.
-        let wide = Bar::of(&UiFrame::plain((1600.0, 900.0)));
-        assert_eq!((wide.erase.x, wide.clear.map(|r| r.x), wide.play.x), (656.0, Some(1070.0), 1600.0 - 8.0 - 72.0));
-        // A 1280 window: the name narrowed, everything else whole.
-        let laptop = Bar::of(&UiFrame::plain((1280.0, 720.0)));
-        assert!(laptop.back_word && laptop.clear.is_some() && matches!(laptop.tools, BarTools::Categories(_)), "{laptop:?}");
-        assert_eq!(laptop.name, Some(Rectangle::new(88.0, 0.0, 132.0, 40.0)));
-        // The arena's own window: the name gone (the status line names the
-        // map) and the flag folded into CHECK, every button whole.
-        let arena = Bar::of(&UiFrame::plain((1088.0, 576.0)));
-        assert!(arena.name.is_none() && arena.clear.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
-        assert_eq!((arena.erase.x, arena.check.x, arena.here.x), (496.0, 832.0, 912.0));
-        // Narrower: the categories and BRUSH fold into TOOLS, and the room
-        // it frees gives the flag, BACK's word and a narrowed name back;
-        // narrower still, BACK is its arrow alone and the flag folds again.
-        let narrow = Bar::of(&UiFrame::plain((900.0, 500.0)));
-        assert!(narrow.brush.is_none() && matches!(narrow.tools, BarTools::Folded(_)), "{narrow:?}");
-        assert!(narrow.back_word && narrow.clear.is_some(), "{narrow:?}");
-        assert_eq!(narrow.name.map(|r| r.width), Some(100.0));
-        let narrower = Bar::of(&UiFrame::plain((720.0, 400.0)));
-        assert!(narrower.name.is_none() && !narrower.back_word && narrower.clear.is_none(), "{narrower:?}");
-        assert!(matches!(narrower.tools, BarTools::Folded(_)), "{narrower:?}");
-        assert_eq!((narrower.back.width, narrower.erase.width), (44.0, 44.0), "folded, not shrunk");
+        assert_eq!(bar.clear.map(|r| r.x), Some(x), "the flag after CHECK");
+        assert_eq!(bar.tray, Rectangle::new(453.0, 716.0, 460.0, 44.0));
+        let wall = bar.category(Category::Wall).expect("six category buttons");
+        assert_eq!(wall.rect, Rectangle::new(457.0, 720.0, 56.0, 36.0));
+        assert_eq!(wall.icon.width, 36.0);
+        assert_eq!(bar.erase, Rectangle::new(453.0 + 460.0 - 4.0 - 44.0, 720.0, 44.0, 36.0));
+        // DAY after BACK, the name after it.
+        let dark = Bar::of(&ui, true);
+        assert_eq!(dark.day, Some(Rectangle::new(92.0, 12.0, DAY_W, 32.0)));
+        assert_eq!(dark.name.map(|r| r.x), Some(92.0 + DAY_W + 4.0));
+        // Narrower: the name narrows, then goes; BACK's word next and the
+        // flag last, every button whole.
+        let laptop = Bar::of(&UiFrame::plain((820.0, 500.0)), false);
+        assert!(laptop.back_word && laptop.clear.is_some(), "{laptop:?}");
+        assert!(laptop.name.is_some_and(|r| r.width < 152.0 && r.width >= NAME_MIN_W), "{laptop:?}");
+        let narrow = Bar::of(&UiFrame::plain((720.0, 400.0)), false);
+        assert!(narrow.name.is_none() && narrow.back_word && narrow.clear.is_some(), "{narrow:?}");
+        let phone = Bar::of(&UiFrame::new((852.0, 393.0), 1.0, 1.0, crate::hud::Insets { left: 59.0, top: 0.0, right: 59.0, bottom: 21.0 }, true), true);
+        assert!(phone.name.is_none() && !phone.back_word && phone.day.is_some() && phone.clear.is_some(), "{phone:?}");
+        assert!(matches!(phone.tools, BarTools::Folded(_)) && phone.brush.is_none(), "a phone's tray folds the six and BRUSH: {phone:?}");
+        assert_eq!((phone.back.width, phone.erase.width), (44.0, 44.0), "folded, not shrunk");
+        // A tablet's holds them.
+        let tablet = Bar::of(&UiFrame::new((1180.0, 820.0), 1.0, 1.0, crate::hud::Insets::default(), true), false);
+        assert!(matches!(tablet.tools, BarTools::Categories(_)), "{tablet:?}");
     }
 
-    /// Every label the bar draws fits its box in every shipped language, at
+    /// Every label the plates draw fits its box in every shipped language, at
     /// the size it is drawn in, on every window: BACK after its arrow, FILE
     /// and MAP beside their carets, every other button's word in its box,
     /// all at one size, and the clear flag's longest par beside the flag;
@@ -1658,7 +1812,7 @@ mod chrome_tests {
             let t = Catalogue::new(tag);
             for touch in [false, true] {
                 let ui = UiFrame::new((1600.0, 900.0), 1.0, 1.0, Insets::default(), touch);
-                let bar = Bar::of(&ui);
+                let bar = Bar::of(&ui, true);
                 let small = BAR_SMALL_TEXT;
                 assert!(small >= 11);
                 let fits = |key, size: i32, room: f32| {
@@ -1669,20 +1823,21 @@ mod chrome_tests {
                 // after its arrow, in a caret's room, and FILE and MAP
                 // before their carets.
                 assert!(bar.back_word, "a wide bar has BACK's word");
-                let arrow = back_arrow_at(button_box(bar.back, touch), true);
-                assert!(arrow.x + BACK_ARROW.0 <= button_box(bar.back, touch).x + BOX_EDGE + BOX_PAD + CARET_W, "the arrow in the caret's room");
+                let arrow = back_arrow_at(button_box(bar.back), true);
+                assert!(arrow.x + BACK_ARROW.0 <= button_box(bar.back).x + BOX_EDGE + BOX_PAD + CARET_W, "the arrow in the caret's room");
                 for (key, r) in [(keys::EDITOR_BACK, bar.back), (keys::EDITOR_FILE, bar.file), (keys::EDITOR_MAP, bar.map)] {
-                    fits(key, small, label_room(button_box(r, touch), true));
+                    fits(key, small, label_room(button_box(r), true));
                 }
                 for (key, r) in [
                     (keys::EDITOR_UNDO, bar.undo),
                     (keys::EDITOR_REDO, bar.redo),
                     (keys::EDITOR_FIT, bar.fit),
+                    (keys::EDITOR_DAY, bar.day.expect("a dark sky's bar has DAY")),
                     (keys::EDITOR_CHECK, bar.check),
                     (keys::EDITOR_PLAY_HERE, bar.here),
                     (keys::BUTTON_PLAY, bar.play),
                 ] {
-                    fits(key, small, label_room(button_box(r, touch), false));
+                    fits(key, small, label_room(button_box(r), false));
                 }
                 // The readout has no box: the flag, then the par from 16 in.
                 let clear = bar.clear.expect("a wide bar has the flag");
@@ -1696,43 +1851,50 @@ mod chrome_tests {
         }
     }
 
-    /// Every popup fits the room under the bar on every window - inside the
-    /// chrome's area, under the bar - with its rows a finger's height, and
-    /// pages where the room is short: the category lists in columns, the
-    /// palette whole, the MAP panel, the CHECK panel and the Load list
-    /// paged.
+    /// Every popup fits its room on every window, with its rows a
+    /// finger's height and pages where the room is short: the top's - the
+    /// FILE menu, the MAP panel, the CHECK panel, the Load and STAMPS
+    /// lists, the Save prompt - in the room under the top plates, and the
+    /// tray's - the category lists in columns, the palette whole, BRUSH's
+    /// list - risen from the tray into the room over it.
     #[test]
-    fn every_popup_fits_under_the_bar_on_every_window() {
+    fn every_popup_fits_its_room_on_every_window() {
         for ui in frames() {
             let frame = BuilderFrame::new(ui, (1088.0, 544.0), MapClass::Arena, None);
             let bar = frame.bar();
-            let room = frame.under_bar();
-            assert!(room.height >= 6.0 * EDITOR_DROPDOWN_ROW_H, "{ui:?}: {room:?}");
-            let check = |what: &str, r: Rectangle| {
-                assert!(inside(r, room), "{ui:?}: {what} {r:?} leaves {room:?}");
-                assert!(r.y >= bar.strip.y + bar.strip.height - 1e-3, "{what} over the bar");
-            };
-            for category in Category::ALL {
+            let room = frame.room();
+            let tray = frame.over_tray();
+            assert!(room.height >= 5.0 * EDITOR_DROPDOWN_ROW_H, "{ui:?}: {room:?}");
+            assert!(tray.y + tray.height <= bar.tray.y && tray.y >= bar.left.y + bar.left.height, "{ui:?}: {tray:?}");
+            let in_room = |room: Rectangle| move |what: &str, r: Rectangle| assert!(inside(r, room), "{ui:?}: {what} {r:?} leaves {room:?}");
+            let check = in_room(room);
+            // A list from the tray rises against it where it fits over it,
+            // else hangs down the whole room.
+            for category in Category::ALL.into_iter().filter(|&c| bar.category(c).is_some()) {
                 let n = category.tools().count();
-                let list = menu_list(bar.tools_anchor(category), room, n);
+                let list = tray_list(bar.tools_anchor(category), &frame, n);
                 check("a list", list.panel);
+                if inside(list.panel, tray) {
+                    assert!((list.panel.y + list.panel.height - (tray.y + tray.height)).abs() < 1e-3, "{ui:?}: a list rises from the tray");
+                }
                 for i in 0..n {
                     check("a list row", list.row(i));
                     assert!(list.row(i).height >= UI_TOUCH_PT);
                 }
             }
-            let palette = Palette::of(bar.tools_anchor(Category::Wall), room);
-            check("the palette", palette.panel);
+            let palette = tray_palette(bar.tools_anchor(Category::Wall), &frame);
+            let check_palette = check;
+            check_palette("the palette", palette.panel);
             for category in Category::ALL {
                 for i in 0..category.tools().count() {
                     let cell = palette.cell(category, i);
-                    check("a palette cell", cell);
+                    check_palette("a palette cell", cell);
                     assert!(cell.width >= UI_TOUCH_PT && cell.height >= UI_TOUCH_PT);
                 }
             }
             for i in 0..BrushRow::ALL.len() {
                 let cell = palette.brush_cell(i);
-                check("a palette brush cell", cell);
+                check_palette("a palette brush cell", cell);
                 assert!(cell.width >= UI_TOUCH_PT && cell.height >= UI_TOUCH_PT);
             }
             // Every name and cell apart, a row shared by two categories
@@ -1744,13 +1906,13 @@ mod chrome_tests {
                 placed.extend((0..category.tools().count()).map(|i| (format!("{category:?} {i}"), palette.cell(category, i))));
             }
             for (i, (what, a)) in placed.iter().enumerate() {
-                check(what, *a);
+                check_palette(what, *a);
                 for (other, b) in &placed[i + 1..] {
                     let apart = a.x + a.width <= b.x + 1e-3 || b.x + b.width <= a.x + 1e-3 || a.y + a.height <= b.y + 1e-3 || b.y + b.height <= a.y + 1e-3;
                     assert!(apart, "{ui:?}: {what} {a:?} overlaps {other} {b:?}");
                 }
             }
-            let brush = menu_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), room, BrushRow::ALL.len());
+            let brush = tray_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), &frame, BrushRow::ALL.len());
             check("BRUSH's list", brush.panel);
             for i in 0..BrushRow::ALL.len() {
                 check("a BRUSH row", brush.row(i));
@@ -1850,26 +2012,26 @@ mod chrome_tests {
     /// The select tool's strip on every window, both its faces: on a plate
     /// hanging from the room's top-left corner, inside the room, its
     /// buttons in a row inside the plate with none overlapping another, a
-    /// finger's size both ways on a touch screen and the bar's height with
+    /// finger's size both ways on a touch screen and a button's height with
     /// a mouse; a press on a live button comes back through the UI frame
     /// onto it, and one on a dim button presses nothing.
     #[test]
-    fn the_strip_hangs_under_the_bar_inside_the_room_on_every_window() {
+    fn the_strip_hangs_under_the_top_plates_inside_the_room_on_every_window() {
         for ui in frames() {
             let frame = BuilderFrame::new(ui, (1088.0, 544.0), MapClass::Arena, None);
-            let (bar, room) = (frame.bar(), frame.under_bar());
+            let (bar, room) = (frame.bar(), frame.room());
             for face in [&StripButton::SELECTION[..], &StripButton::GHOST[..]] {
                 let buttons: Vec<(StripButton, bool)> = face.iter().enumerate().map(|(i, &b)| (b, i % 3 != 1)).collect();
                 let strip = Strip::of(room, ui.touch, &buttons);
                 assert!(inside(strip.panel, room), "{ui:?}: the strip {:?} leaves {room:?}", strip.panel);
-                assert!(strip.panel.y >= bar.strip.y + bar.strip.height - 1e-3, "{ui:?}: the strip over the bar");
+                assert!(strip.panel.y >= bar.left.y + bar.left.height - 1e-3, "{ui:?}: the strip over the top plates");
                 assert_eq!(strip.slots.len(), face.len());
                 for (i, slot) in strip.slots.iter().enumerate() {
                     assert!(inside(slot.rect, strip.panel), "{ui:?}: {:?} leaves its plate", slot.button);
                     if ui.touch {
                         assert!(slot.rect.width >= UI_TOUCH_PT - 1e-3 && slot.rect.height >= UI_TOUCH_PT - 1e-3, "{ui:?}: {:?} {:?}", slot.button, slot.rect);
                     } else {
-                        assert_eq!(slot.rect.height, HUD_BAR_HEIGHT as f32);
+                        assert_eq!(slot.rect.height, button_height(false));
                     }
                     for other in &strip.slots[i + 1..] {
                         assert!(!overlap(slot.rect, other.rect), "{ui:?}: {:?} overlaps {:?}", slot.button, other.button);
@@ -1890,7 +2052,7 @@ mod chrome_tests {
     #[test]
     fn a_desktops_popups_keep_their_shape() {
         let frame = BuilderFrame::headless((1088.0, 544.0), MapClass::Arena);
-        let (bar, room) = (frame.bar(), frame.under_bar());
+        let (bar, room) = (frame.bar(), frame.room());
         let map = MapPanel::of(bar.map, room, MapTab::Sky, true);
         assert_eq!(map.shape, MapShape::Sections);
         assert_eq!((map.panel.width, map.panel.height), MapPanel::sections_size());
@@ -1898,9 +2060,11 @@ mod chrome_tests {
         let lint = LintLayout::of(bar.check, room, 30);
         assert_eq!(lint.per_page, LINT_PAGE_ROWS);
         assert_eq!(LoadLayout::of(room, 40).per_page, LOAD_VISIBLE_ROWS - 1);
-        let prop = menu_list(bar.tools_anchor(Category::Prop), room, Category::Prop.tools().count());
+        let desk = BuilderFrame::new(UiFrame::plain((1366.0, 768.0)), (1088.0, 544.0), MapClass::Arena, None);
+        let tray = desk.over_tray();
+        let prop = tray_list(desk.bar().tools_anchor(Category::Prop), &desk, Category::Prop.tools().count());
         assert_eq!(prop.per_column, Category::Prop.tools().count());
-        assert_eq!(prop.panel.y, HUD_BAR_HEIGHT as f32, "hanging from the bar");
+        assert_eq!(prop.panel.y + prop.panel.height, tray.y + tray.height, "risen from the tray");
     }
 
     /// A press anywhere on a button's drawn box, in window coordinates on
@@ -1908,7 +2072,7 @@ mod chrome_tests {
     #[test]
     fn a_press_on_a_button_round_trips_through_the_ui_frame() {
         for ui in frames() {
-            let bar = Bar::of(&ui);
+            let bar = Bar::of(&ui, false);
             for (button, r) in bar.buttons() {
                 for (fx, fy) in [(0.5, 0.5), (0.1, 0.1), (0.9, 0.9)] {
                     let at = Vec2::new(r.x + r.width * fx, r.y + r.height * fy);
@@ -1922,69 +2086,40 @@ mod chrome_tests {
         }
     }
 
-    /// The canvas lands under the bar: an arena letterboxed at its own
-    /// shape, a field map filling the window under it; both through the
-    /// frame's view, from the window back to the bitmap.
+    /// The canvas fills the window as play's field does: an arena
+    /// letterboxed at its own shape in the very view a round of it is
+    /// presented through (`View::fit_capped` over the window), a field map
+    /// filling the window to a bitmap pixel; both through the frame's view,
+    /// from the window back to the bitmap. The safe area keeps the chrome,
+    /// not the canvas.
     #[test]
-    fn the_canvas_stands_under_the_bar() {
-        for ui in frames() {
-            let strip = Bar::strip_of(&ui);
-            let bottom = (strip.y + strip.height) * ui.scale;
+    fn the_canvas_fills_the_window_as_plays_field_does() {
+        let insets = Insets { left: 59.0 * 3.0, top: 0.0, right: 59.0 * 3.0, bottom: 21.0 * 3.0 };
+        let phone = [false, true].map(|touch| UiFrame::new((852.0 * 3.0, 393.0 * 3.0), 3.0, 1.0, insets, touch));
+        for ui in frames().into_iter().chain(phone) {
+            let window = (ui.screen.w * ui.scale, ui.screen.h * ui.scale);
             for (field, class) in [((1088.0, 544.0), MapClass::Arena), ((96.0 * 32.0, 54.0 * 32.0), MapClass::Field)] {
                 let frame = BuilderFrame::new(ui, field, class, None);
                 let f = frame.layout.field;
                 let corner = frame.view.to_window(Vec2::new(f.x, f.y));
-                assert!(corner.y >= bottom - 0.5, "{ui:?} {class:?}: the canvas starts under the bar at {corner:?}");
                 let far = frame.view.to_window(Vec2::new(f.x + f.w, f.y + f.h));
-                let (ww, wh) = (ui.screen.w * ui.scale, ui.screen.h * ui.scale);
-                assert!(far.x <= ww + 0.5 && far.y <= wh + 0.5, "{ui:?} {class:?}: off the window at {far:?}");
                 if class == MapClass::Field {
-                    let (left, right) = ((ui.area.x - UI_EDGE_PT) * ui.scale, (ui.area.x + ui.area.w + UI_EDGE_PT) * ui.scale);
-                    assert!(
-                        (far.y - wh).abs() <= frame.view.scale + 0.5 && (corner.x - left).abs() <= frame.view.scale + 0.5 && (far.x - right).abs() <= frame.view.scale + 0.5,
-                        "{ui:?}: a field map fills the safe area's sides under the bar"
-                    );
+                    let px = frame.view.scale + 0.5;
+                    assert!(corner.x.abs() <= px && corner.y.abs() <= px, "{ui:?}: {corner:?}");
+                    assert!((far.x - window.0).abs() <= px && (far.y - window.1).abs() <= px, "{ui:?}: a field map fills the window, {far:?}");
                 } else {
-                    assert!(((far.x - corner.x) / (far.y - corner.y) - 2.0).abs() < 0.01, "the arena keeps its shape");
+                    let round = View::fit_capped(field, window, None);
+                    assert_eq!((frame.view.scale, frame.view.offset), (round.scale, round.offset), "{ui:?}: a round's view");
                 }
                 let p = Vec2::new(f.x + f.w * 0.3, f.y + f.h * 0.7);
-                let round = frame.to_canvas(frame.view.to_window(p));
-                assert!((round.x - p.x).abs() < 1e-2 && (round.y - p.y).abs() < 1e-2);
+                let back = frame.to_canvas(frame.view.to_window(p));
+                assert!((back.x - p.x).abs() < 1e-2 && (back.y - p.y).abs() < 1e-2);
             }
         }
-        // A desktop's arena stands right under the 40 pt bar at its own
-        // size.
-        let frame = BuilderFrame::headless((1088.0, 544.0), MapClass::Arena);
-        assert_eq!((frame.view.scale, frame.view.offset), (1.0, Vec2::new(0.0, HUD_BAR_HEIGHT as f32)));
-    }
-
-    /// The canvas keeps to the safe area's sides on every window - on a
-    /// phone in landscape the notch's side and the rounded corners' - an
-    /// arena letterboxed between them and a field map filling them to a
-    /// bitmap pixel, with a mouse and on a touch screen.
-    #[test]
-    fn the_canvas_keeps_to_the_safe_areas_sides() {
-        // An iPhone in landscape: 852 x 393 points at three device pixels
-        // a point, the notch's 59 points on either side, the home
-        // indicator's 21 under the glass.
-        let insets = Insets { left: 59.0 * 3.0, top: 0.0, right: 59.0 * 3.0, bottom: 21.0 * 3.0 };
-        let phone = [false, true].map(|touch| UiFrame::new((852.0 * 3.0, 393.0 * 3.0), 3.0, 1.0, insets, touch));
-        for ui in frames().into_iter().chain(phone) {
-            let s = safe(&ui);
-            for (field, class) in [((1088.0, 544.0), MapClass::Arena), ((96.0 * 32.0, 54.0 * 32.0), MapClass::Field)] {
-                let frame = BuilderFrame::new(ui, field, class, None);
-                let c = frame.canvas_ui();
-                assert!(c.x >= s.x - 1e-3 && c.x + c.width <= s.x + s.width + 1e-3, "{ui:?} {class:?}: the canvas {c:?} leaves the safe area's sides {s:?}");
-                if class == MapClass::Field {
-                    let px = frame.view.scale / ui.scale;
-                    assert!(c.x - s.x <= px + 1e-3 && s.x + s.width - (c.x + c.width) <= px + 1e-3, "{ui:?}: a field map fills them, {c:?} in {s:?}");
-                }
-            }
-        }
-        // The phone's: 59 points in on either side.
-        let frame = BuilderFrame::new(phone[1], (96.0 * 32.0, 54.0 * 32.0), MapClass::Field, None);
-        let c = frame.canvas_ui();
-        assert!(c.x >= 59.0 - 1e-3 && c.x + c.width <= 852.0 - 59.0 + 1e-3, "{c:?}");
+        // A desktop's arena in a window of its own size stands at its own
+        // size, flush with the window's corner.
+        let frame = BuilderFrame::new(UiFrame::plain((1088.0, 544.0)), (1088.0, 544.0), MapClass::Arena, None);
+        assert_eq!((frame.view.scale, frame.view.offset), (1.0, Vec2::new(0.0, 0.0)));
     }
 
     /// A field map's canvas is the shape of the room it is given - no

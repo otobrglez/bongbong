@@ -7,8 +7,8 @@ the `simulation::Game::init`/`update` wiring (walls/road/bong/pickup slots),
 `src/editor/` (`MapEditor`) and `static/ui/eraser.png` are all in place.
 The editor is no longer a standalone `--editor` driver behind a Cargo
 feature: it is the game's Build mode (`src/mode.rs`, `src/editor/`),
-compiled into every build, entered from the play bar's `BUILD` button and
-left through `PLAY`, per docs/game-editor-fusion.md. The sections below
+compiled into every build, entered from play's `BUILD` button and left
+through `BACK` or `PLAY`, per docs/game-editor-fusion.md. The sections below
 that describe the floating bottom palette, the hamburger, the
 New/Save/Load/Close toolbar and the `map-editor` feature gate are the
 original design and are superseded by that PRD; the data model, the cell
@@ -148,9 +148,14 @@ snaps every obstacle to the grid today.
 ## Placeable objects & toolbar
 
 *Status: the floating bottom-centre palette described here is gone. The
-same tools now sit in the 32 px HUD bar as five category dropdowns
-(WALL / PROP / GROUND / ACTOR / PICKUP) plus an eraser button - see
-docs/game-editor-fusion.md section 7. The object table is still current.*
+same tools now sit on the builder's tray along the bottom of the window as
+six category dropdowns (WALL / PROP / GROUND / PLANT / ACTOR / PICKUP),
+BRUSH and an eraser button, folded into one TOOLS palette on a phone - see
+docs/game-editor-fusion.md section 7. The object table is still current;
+its icons are the lists' and the palette's. The canvas itself draws each
+cell as a round stands it, in the looks of the round BUILD paused - its
+variants, its ground, its seats' chassis - with only the editing marks
+over it (docs/game-editor-fusion.md sections 5 and 7).*
 
 Bottom-center palette (horizontally centered as one panel, anchored a
 small fixed margin above the bottom edge — not full-width), one icon per
@@ -173,7 +178,7 @@ object, left to right:
 | Tank (player 2 start) | single `Start2` placement | player 2's spawn in a two-player round (docs/two-players.md); singleton, independent of `Start`; the same tank icon over player 2's blue ring |
 | Enemy bong | single `EnemyBong` placement (`kind = "enemy_bong"`) | the Hunt mission's target (docs/maps-to-levels.md); singleton, same move-on-click behavior as Bong; drawn as the bong idle sprite over a red ground ring, the same marker the game draws under it. Ignored by missions without an enemy bong |
 | Portal | a `Portal` cell (`kind = "portal"`) | GROUND category: a teleport anchor (docs/teleporting.md); any number, not solid, the ~3x3 spiral drawn around it spills over neighbours that stay paintable. Ghosted with an outlined anchor until a second one is placed (`portal-alone`). Icon from `portal_sheet.png`'s last cell |
-| Gate | a `Gate` cell (`kind = "gate"`) | a wave roll-in gate; any number. Meant for nav-grid edge cells (col 0, last col, row 0, last row of the `PATHFIND_CELL_SIZE` grid), where it's drawn as an orange chevron pointing inward; anywhere else it's a plain orange square and the linter's `gate-not-on-edge` flags it. A map with any gate cells uses only those; one with none has its gates scanned from the wall layout each wave |
+| Gate | a `Gate` cell (`kind = "gate"`) | a wave roll-in gate; any number. Meant for nav-grid edge cells (col 0, last col, row 0, last row of the `PATHFIND_CELL_SIZE` grid), where it's drawn as an amber chevron of 2 px blocks pointing inward; anywhere else as a square frame of them, and the linter's `gate-not-on-edge` flags it. A map with any gate cells uses only those; one with none has its gates scanned from the wall layout each wave |
 | Health pickup | a `Pickup` spawn slot, kind `Health` | see "Pickups: fixed spawn slots" below |
 | Ammo pickup | a `Pickup` spawn slot, kind `Ammo` | " |
 | Laser pickup | a `Pickup` spawn slot, kind `Laser` | " |
@@ -219,11 +224,13 @@ popups) for visual consistency — one small `draw_panel(rect, ...)` helper
 in `editor.rs` used by every panel in the editor rather than one-off
 drawing code per toolbar.
 
-*Status: `draw_panel` survives and now draws the category dropdowns, the
-FILE menu and its Load list and the dev Save prompt (docs/game-editor-fusion.md
-section 7); the top-right toolbar it was written for is gone. The MAP
-settings panel hangs from the bar and is `draw_hanging_panel`'s: the same
-shadow, fill and border with square top corners against the bar.*
+*Status: the panel is `render::hud::draw_panel` (a near-opaque dark fill,
+corners 8 pt round, a 4 pt drop shadow, a thin dark edge), the one every
+dialog, popup and screen of the chrome stands on: the builder's category
+dropdowns, the TOOLS palette, the FILE menu and its Load list, the STAMPS
+list, the Save prompt and the MAP and CHECK panels
+(docs/game-editor-fusion.md section 7), and play's questions, the lobby and
+the level select. The top-right toolbar it was written for is gone.*
 
 ### Eraser icon
 
@@ -521,7 +528,7 @@ random ones do — no special-casing needed there.
 ### Entering the editor (`--editor [path]`, or in-game via a hamburger button)
 
 *Status: superseded by docs/game-editor-fusion.md sections 5 and 6. The
-in-game entry is the play bar's `BUILD` button (or `Tab`), which pauses
+in-game entry is play's `BUILD` button (or `Tab`), which pauses
 the round for the builder's `BACK` to come back to (`mode::Session`);
 `--editor` still works and means "start in Build". Nothing is seeded from live entities -
 the builder edits `Game::map`, the authored map.*

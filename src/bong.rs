@@ -301,6 +301,32 @@ pub enum BongAnim {
 }
 
 impl Bong {
+    /// A bong of `kind` fighting for `side`, as a round sets one down at
+    /// `position`: at full health, facing right, nothing under way. `body`
+    /// is its collider; the builder's canvas, which only draws one, passes
+    /// `RigidBodyHandle::invalid()`.
+    pub fn at_rest(side: Side, position: Position, kind: BongKind, body: RigidBodyHandle) -> Bong {
+        Bong {
+            side,
+            position,
+            health: tuning().bong_max_health,
+            max_health: tuning().bong_max_health,
+            kind,
+            body,
+            hurt_timer: 0.0,
+            hop_timer: 0.0,
+            hop_start: position,
+            hop_end: position,
+            hop_cooldown: 0.0,
+            attack_timer: 0.0,
+            attack_cooldown: 0.0,
+            facing: Facing::Right,
+            death_elapsed: None,
+            stun_timer: 0.0,
+            pulled: false,
+        }
+    }
+
     /// Side length of this bong's sprite on screen, matching `Tank::size`/
     /// `Obstacle::size` - what sizes its ground ring (`draw_bong_ring`)
     /// exactly as a tank's sizes the tank's.

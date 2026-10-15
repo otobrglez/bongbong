@@ -14,18 +14,20 @@
 //!
 //! The edit model (strokes with the toggle-erase rule, the MAP settings,
 //! load/reset, the undo stack in `history.rs`) and every hit test are this
-//! file, built into every build; the bar, the popups, the status line, the
-//! navigator and the loupe are the chrome on top, laid out on the window in
-//! UI points by `chrome.rs` - the one geometry table the hit tests here,
-//! the painter (`render.rs`, behind the `render` feature) and the dev
-//! server read - and drawn by `render.rs`. The canvas is the bitmap under
-//! the bar (`chrome::BuilderFrame`).
+//! file, built into every build; the plates, the popups, the status plate,
+//! the navigator and the loupe are the chrome on top, laid out on the
+//! window in UI points by `chrome.rs` - the one geometry table the hit
+//! tests here, the painter (`render.rs`, behind the `render` feature) and
+//! the dev server read - and drawn by `render.rs`. The canvas fills the
+//! window under them, as play's field does (`chrome::BuilderFrame`), drawn
+//! as a round of its map stands (`still.rs`), in the looks of the round
+//! BUILD paused (`dress`) and under its map's sky (`sky`).
 //!
 //! **The canvas has its own camera** (`camera.rs`,
 //! docs/large-maps-follow-camera.md §9): FIT shows the whole map - an
-//! arena at the scale its round is drawn at, letterboxed under the bar -
+//! arena at the scale its round is drawn at, letterboxed as the round is -
 //! and the wheel at the cursor, a middle or Space drag, `+`/`-`, the
-//! arrows and the bar's FIT button zoom and pan it. Every pointer goes
+//! arrows and the FIT button zoom and pan it. Every pointer goes
 //! through that camera before a cell is hit-tested (`cell_at`), and the
 //! canvas is drawn through the same one, so a press paints the cell drawn
 //! under it at every zoom.
@@ -63,7 +65,7 @@
 //! outlined until Escape, a press outside it or another tool clears it. A
 //! drag from inside it lifts its cells and carries them, landing on the
 //! release; COPY, CUT, PASTE, the flips, DELETE and keeping it as a stamp
-//! are the strip's buttons under the bar (`chrome::Strip`) and Ctrl+C,
+//! are the strip's buttons under the top plates (`chrome::Strip`) and Ctrl+C,
 //! Ctrl+X, Ctrl+V and Delete; a paste or a stamp is a ghost that follows
 //! the mouse - or stands where a finger drags or taps it - until a press
 //! puts it down. Every move, paste, flip, cut and delete is one `EditStep`.
@@ -86,6 +88,7 @@ pub mod index;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod select;
+pub mod still;
 pub mod thumbs;
 #[cfg(feature = "render")]
 pub use render::{EditorTextures, ThumbnailTextures};
@@ -111,9 +114,10 @@ use crate::bong::{BongKind, Side};
 use crate::tower::TowerKind;
 use crate::tank::TankKind;
 use crate::{Layout, PATHFIND_CELL_SIZE, Position};
-use chrome::{LintLayout, LoadLayout, MapPanel, Palette, LINT_HEAD_ROWS};
+use chrome::{LintLayout, LoadLayout, MapPanel, LINT_HEAD_ROWS};
 pub use history::{CellChange, EditStep, MapDiff, MapSettings, UndoStack};
 pub use index::CellIndex;
+pub use still::{RoundLook, Still};
 
 /// The builder's accent: the amber the `BUILD` label, the active
 /// category's outline and the mode button share (`hud::BUILD_COLOR`).
@@ -274,6 +278,19 @@ pub enum Tool {
     /// carries or pastes rather than paints. BRUSH's list and the palette's
     /// brush row pick it; any other tool clears the selection.
     Select,
+}
+
+/// A tool's name as the status line and the cursor readout spell it: the
+/// catalogue's `tool-short-<name>` where the language has one, else its
+/// full name.
+fn short_label(tool: Tool) -> String {
+    let t = crate::text::text();
+    t.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or_else(|| t.named("tool", tool.name()))
+}
+
+/// What the cursor readout calls the object in a cell.
+fn cell_label(obj: &CellObject) -> String {
+    TOOLS.iter().copied().find(|t| t.object().as_ref() == Some(obj)).map_or_else(|| "?".to_string(), short_label)
 }
 
 /// Every tool, in bar order: the categories one after another, then the
@@ -645,15 +662,15 @@ enum Popup {
     Dropdown(Category),
     /// BRUSH's list, below its button.
     Brush,
-    /// The palette of every category's tools and the brush's row, below
-    /// the TOOLS button a narrow bar folds the six category buttons and
+    /// The palette of every category's tools and the brush's row, over
+    /// the TOOLS button a phone's tray folds the six category buttons and
     /// BRUSH into.
     Palette,
-    /// The STAMPS list under the bar: the shipped stamps then the ones
+    /// The STAMPS list under the top plates: the shipped stamps then the ones
     /// saved this session, `scroll` rows in.
     Stamps { scroll: usize },
     /// The MAP panel, below the MAP button, showing `tab` where the room
-    /// under the bar puts its groups behind tabs.
+    /// under the top plates puts its groups behind tabs.
     Settings { tab: MapTab },
     /// The FILE menu, below the FILE button.
     File,
@@ -911,10 +928,20 @@ pub struct MapEditor {
     /// shows its current tool while the eraser is the brush.
     last_category: Category,
     ground: GroundGrid,
-    /// Fixed for this builder session (rolled once in `new`) and reused by
-    /// every `rebuild_ground` call - see `ground::build`'s `seed` param -
-    /// so grass tiles do not re-randomise on every edit.
+    /// The seed every `rebuild_ground` lays the floor with - see
+    /// `ground::build`'s `seed` param - so grass tiles do not re-randomise
+    /// on every edit: the round's once BUILD has dressed the canvas in its
+    /// looks (`dress`), rolled once in `new` until then.
     ground_seed: u64,
+    /// The looks of the round BUILD last paused (`dress`), which the
+    /// canvas is drawn in (`still`).
+    look: RoundLook,
+    /// The canvas as a round stands it (`still.rs`): worked out on the
+    /// first frame after an edit or a new look.
+    still: std::cell::OnceCell<Still>,
+    /// DAY is down: the canvas drawn by daylight whatever its sky (`sky`),
+    /// for editing in the dark. The session's choice, not the map's.
+    day: bool,
     popup: Option<Popup>,
     /// One-line feedback (saved/error) shown at the field's bottom.
     status: Option<String>,
@@ -1080,6 +1107,9 @@ impl MapEditor {
             last_category: Category::Wall,
             ground: GroundGrid::default(),
             ground_seed: rand::rng().random(),
+            look: RoundLook::default(),
+            still: std::cell::OnceCell::new(),
+            day: false,
             plain_canvas: false,
             popup: None,
             status: None,
@@ -1240,14 +1270,15 @@ impl MapEditor {
     /// strip's buttons and the navigator press only inside the plates
     /// `on_canvas` leaves out.
     fn lands_on_canvas(&self, window: Vec2, frame: &BuilderFrame) -> bool {
-        frame.bar().hit(frame.to_ui(window)).is_none() && self.on_canvas(frame.to_canvas(window), frame)
+        self.bar(frame).hit(frame.to_ui(window)).is_none() && self.on_canvas(frame.to_canvas(window), frame)
     }
 
     /// Where the navigator's picture stands (docs/large-maps-follow-camera.md
-    /// §9), in UI points: a minimap of the canvas in the bottom-right corner
-    /// of the room under the bar (`chrome::navigator`) - the status line
-    /// runs along the bottom-left, the bar's buttons and their popups hang
-    /// from the top -, sized like play's minimap (`MinimapRules::size_pt`)
+    /// §9), in UI points: a minimap of the canvas where play's minimap
+    /// stands, in the top-right corner of the room under the top plates
+    /// (`chrome::navigator`) - the status plate stands by the tray, the
+    /// popups hang from the top plates and rise from the tray -, sized
+    /// like play's minimap (`MinimapRules::size_pt`)
     /// and never more than half that room either way; its plate is
     /// `Corners::plate` round it. `None` at FIT on an arena, where it would
     /// show just what the canvas shows, and while an open popup's panel
@@ -1259,7 +1290,7 @@ impl MapEditor {
         if self.camera.is_fit() && self.map.class() == crate::framing::MapClass::Arena {
             return None;
         }
-        let rect = chrome::navigator(frame.under_bar(), MinimapRules::current().size_pt(self.map.field_size()))?;
+        let rect = chrome::navigator(frame.room(), MinimapRules::current().size_pt(self.map.field_size()))?;
         if self.popup.is_some() {
             let plate = Corners::plate(rect);
             if self.chrome(frame).popup.is_some_and(|popup| overlaps(popup.panel(), plate)) {
@@ -1349,6 +1380,98 @@ impl MapEditor {
     pub fn set_round(&mut self, round: Option<MapFile>) {
         self.paused = round.map(|map| Box::new(Paused { map, baseline: self.baseline.clone(), index: std::cell::OnceCell::new() }));
         self.off_round.set(None);
+    }
+
+    /// Draw the canvas in the looks of the round BUILD paused (`RoundLook`):
+    /// its walls', props' and trees' variants, its ground's seed, its
+    /// seats' chassis and its sky - kept until a newer round's come.
+    pub fn dress(&mut self, look: RoundLook) {
+        if look == self.look {
+            return;
+        }
+        let reseed = look.tiles.ground_seed != self.ground_seed;
+        self.ground_seed = look.tiles.ground_seed;
+        self.look = look;
+        self.still.take();
+        if reseed {
+            self.rebuild_ground();
+        }
+    }
+
+    /// The looks the canvas is drawn in (`dress`).
+    pub fn look(&self) -> &RoundLook {
+        &self.look
+    }
+
+    /// The sky PLAY would fight this canvas under: one of its map's skies,
+    /// picked by the seed of the round BUILD paused as that round picked
+    /// its own (`weather::in_force`) - so an unchanged map shows the very
+    /// sky the round had.
+    pub fn map_sky(&self) -> Weather {
+        crate::weather::in_force(self.map.weather, self.look.seed, false, &crate::tuning::tuning())
+    }
+
+    /// The sky the canvas is drawn under: its map's (`map_sky`), or a clear
+    /// one while DAY is down.
+    pub fn sky(&self) -> Weather {
+        if self.day { Weather::Clear } else { self.map_sky() }
+    }
+
+    /// DAY is down (`sky`).
+    pub fn day(&self) -> bool {
+        self.day
+    }
+
+    /// Every light the canvas throws under `look` at `time` that can reach
+    /// `part` (`None`: the whole field), cast against its walls: what
+    /// `weather::lights_in` gives the same things at rest in a round - the
+    /// still picture's (`Still::lights`), the portals of a network, the lava
+    /// and the craters asleep. What the builder lights its map's sky with.
+    pub fn canvas_lights(&self, look: &crate::weather::Look, time: f32, part: Option<Rectangle>) -> Vec<crate::weather::Light> {
+        let t = crate::tuning::tuning();
+        let k = look.lights;
+        if k <= 0.0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        self.still().lights(&mut out, k, &t, time);
+        let index = self.cell_index();
+        if index.portals().len() >= 2 {
+            for (i, &(col, row)) in index.portals().iter().enumerate() {
+                out.push(crate::weather::portal_light(i, map::cell_to_world(col, row), time, k));
+            }
+        }
+        let lava = self.lava_layout();
+        for (col, row) in lava.cells().filter(|(c, r)| (c + r) % 2 == 0) {
+            out.push(crate::weather::lava_light(map::cell_to_world(col, row), 0.0, k, &t, time));
+        }
+        let asleep = crate::volcano::phase(-1.0, 0.0, &t);
+        for &(col, row) in self.still().volcanoes() {
+            out.push(crate::weather::crater_light(map::cell_to_world(col, row), &asleep, k, &t));
+        }
+        let occluders = t.light_shadows.then(|| self.still().occluders());
+        crate::weather::cast_lights(out, occluders, part, &t)
+    }
+
+    /// The controls laid out in `frame`, DAY among them while the
+    /// canvas's map is fought under a sky other than a clear one.
+    pub fn bar(&self, frame: &BuilderFrame) -> Bar {
+        Bar::of(&frame.ui, self.map_sky() != Weather::Clear)
+    }
+
+    /// The canvas as a round stands it (`still.rs`), worked out on the
+    /// first read after an edit or a new look.
+    pub fn still(&self) -> &Still {
+        self.still.get_or_init(|| Still::build(&self.map, self.cell_index().cells(), &self.look))
+    }
+
+    /// Every baked image the canvas draws from, for the window's GPU
+    /// copies: the floor shade, then the forest floor where the canvas has
+    /// trees.
+    pub fn block_images(&self) -> Vec<&crate::canvas::BlockImage> {
+        let mut images = vec![self.ground.shade()];
+        images.extend(self.still().woods_floor());
+        images
     }
 
     /// There is a round BUILD paused to go back to: BACK can act.
@@ -1577,6 +1700,7 @@ impl MapEditor {
         self.edits += 1;
         self.lint_marked = None;
         self.index.take();
+        self.still.take();
         self.dirty.set(None);
         self.off_round.set(None);
         if !self.framed {
@@ -1585,15 +1709,25 @@ impl MapEditor {
     }
 
     /// `map_changed` for an edit of the cells `changes` touched alone: the
-    /// kept index takes them in (`CellIndex::update`) rather than being
-    /// worked out again from the whole map on the next read - a stroke on
-    /// a large map costs a search a cell a frame, not a sort of the map.
+    /// kept index and the still picture take them in (`CellIndex::update`,
+    /// `Still::patch`) rather than being worked out again from the whole
+    /// map on the next read - a stroke on a large map costs a search a cell
+    /// a frame, not a sort of the map. Outside a stroke a picture whose
+    /// woods the edit may have changed is worked out again whole; through
+    /// one its woods wait for the release (`finish_stroke_changes`).
     fn cells_changed(&mut self, changes: &[CellChange]) {
         let index = self.index.take();
+        let still = self.still.take();
         self.map_changed();
         if let Some(mut index) = index {
             index.update(&self.map, changes);
             let _ = self.index.set(index);
+        }
+        if let Some(mut still) = still
+            && still.patch(&self.map, &self.look, changes)
+            && (self.stroke.is_some() || !still.stale_woods())
+        {
+            let _ = self.still.set(still);
         }
     }
 
@@ -1928,6 +2062,11 @@ impl MapEditor {
             self.replant();
         }
         let Some(stroke) = self.stroke.take() else { return Vec::new() };
+        // The woods the stroke may have changed are worked out again now
+        // it is done (`cells_changed`).
+        if self.still.get().is_some_and(Still::stale_woods) {
+            self.still.take();
+        }
         let changes = stroke.changes;
         if !changes.is_empty() {
             self.history.push(EditStep::Cells(changes.clone()));
@@ -2639,9 +2778,9 @@ impl MapEditor {
                 }
             }
         }
-        // The canvas shows the walls' shade but not the round's edge shade:
-        // the author works right up to the frame.
-        let look = ground::Look { theme: self.map.theme, edge_shade: false };
+        // The floor as a round lays it: the walls' shade and the field's
+        // darkened edge.
+        let look = ground::Look { theme: self.map.theme, edge_shade: true };
         self.ground = ground::build(width, height, self.ground_seed, &road_cells, &water_cells, &wall_cells, look);
         // The navigator's picture, the water as deep as the ground has it.
         self.minimap = Minimap::of_map(&self.map, |col, row| self.ground.depth(col, row));
@@ -3124,12 +3263,13 @@ impl MapEditor {
     /// the open popup laid out for what the builder holds. What the
     /// painter draws, every hit test reads and the dev server reports.
     pub fn chrome(&self, frame: &BuilderFrame) -> Chrome {
-        let bar = frame.bar();
-        let room = frame.under_bar();
+        let bar = self.bar(frame);
+        let room = frame.room();
+        // The tray's popups rise from it into the room over it.
         let popup = self.popup.as_ref().map(|popup| match popup {
-            Popup::Dropdown(category) => PopupLayout::Dropdown(*category, chrome::menu_list(bar.tools_anchor(*category), room, category.tools().count())),
-            Popup::Brush => PopupLayout::Brush(chrome::menu_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), room, BrushRow::ALL.len())),
-            Popup::Palette => PopupLayout::Palette(Palette::of(bar.tools_anchor(Category::Wall), room)),
+            Popup::Dropdown(category) => PopupLayout::Dropdown(*category, chrome::tray_list(bar.tools_anchor(*category), frame, category.tools().count())),
+            Popup::Brush => PopupLayout::Brush(chrome::tray_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), frame, BrushRow::ALL.len())),
+            Popup::Palette => PopupLayout::Palette(chrome::tray_palette(bar.tools_anchor(Category::Wall), frame)),
             Popup::Settings { tab } => PopupLayout::Settings(MapPanel::of(bar.map, room, *tab, self.settings().spawn == SpawnKind::Waves)),
             Popup::File => PopupLayout::File(chrome::menu_list(bar.file, room, self.file_rows().len())),
             Popup::Load { entries, .. } => PopupLayout::Load(LoadLayout::of(room, entries.len())),
@@ -3243,15 +3383,73 @@ impl MapEditor {
     }
 
     /// Whether a point in UI points lands on the builder's own chrome (the
-    /// bar, the open popup, the select tool's strip, the navigator on its
-    /// plate) - a press there never paints the cell behind it and the hover
-    /// highlight hides.
+    /// plates, the open popup, the select tool's strip, the navigator on its
+    /// plate, the status plate) - a press there never paints the cell
+    /// behind it and the hover highlight hides. The status plate is taken as
+    /// wide as it stands while it names the cell under the point, the most
+    /// it ever covers there: it is drawn no wider once the point is on it.
     fn point_on_ui(&self, point: Vec2, frame: &BuilderFrame) -> bool {
         let chrome = self.chrome(frame);
-        chrome.bar.strip.contains(point)
-            || chrome.popup.is_some_and(|popup| popup.panel().contains(point))
+        chrome.bar.covers(point)
+            || chrome.popup.as_ref().is_some_and(|popup| popup.panel().contains(point))
             || chrome.strip.as_ref().is_some_and(|strip| strip.panel.contains(point))
             || self.navigator_rect(frame).is_some_and(|r| Corners::plate(r).contains(point))
+            || self.status_rect(frame, &chrome, self.field_cell(frame.ui_to_canvas(point), frame)).contains(point)
+    }
+
+    /// The cell of the field under a point of the canvas's bitmap, chrome
+    /// or not (`canvas_cell` leaves the chrome out).
+    fn field_cell(&self, bitmap: Vec2, frame: &BuilderFrame) -> Option<(i32, i32)> {
+        let layout = &frame.layout;
+        let world = self.view_camera(layout).to_world(layout.to_field(bitmap));
+        let (w, h) = self.map.field_size();
+        (layout.field.contains(bitmap) && world.x >= 0.0 && world.x < w && world.y >= 0.0 && world.y < h).then(|| map::world_to_cell(world))
+    }
+
+    /// The status line's words (`chrome::status_plate`), the pointer on
+    /// `cursor`: the map's name where the top-left plate has no room for it
+    /// whole, the active category and tool, the cell under the pointer and
+    /// what is in it, a rectangle's size, and any message.
+    fn status_words(&self, chrome: &Chrome, cursor: Option<(i32, i32)>) -> String {
+        let mut line = String::new();
+        let name = self.bar_name();
+        if chrome.bar.name.is_none_or(|r| crate::text::width(&name, crate::hud::HUD_TEXT_SIZE) as f32 > r.width) {
+            line.push_str(&format!("{name}   "));
+        }
+        line.push_str(&format!(
+            "{}: {}",
+            self.active_category().map_or_else(|| crate::text::text().get(crate::text::keys::EDITOR_TOOL), |c| c.label()),
+            short_label(self.active_tool)
+        ));
+        if let Some((col, row)) = cursor {
+            let under = self.map.cell(col, row).map(cell_label).unwrap_or_default();
+            line.push_str(&format!("   {col},{row} {under}"));
+        }
+        // The size of the rectangle a RECT drag is drawing, else of the
+        // paste ghost while one stands, else of the selection.
+        if let Some(rect) = self.rect_stroke().map(|(r, _)| r).or(self.ghost().map(|g| g.rect())).or(self.selection()) {
+            line.push_str(&format!("   {}x{}", rect.cols, rect.rows));
+        }
+        if let Some(status) = &self.status {
+            line.push_str(&format!("   {status}"));
+        }
+        line
+    }
+
+    /// The status plate in UI points with the pointer on `cursor`
+    /// (`status_words`, `chrome::status_plate`).
+    fn status_rect(&self, frame: &BuilderFrame, chrome: &Chrome, cursor: Option<(i32, i32)>) -> Rectangle {
+        let want = crate::text::width(&self.status_words(chrome, cursor), chrome::STATUS_TEXT) as f32;
+        chrome::status_plate(&chrome.bar, frame.ui.area, frame.over_tray(), want)
+    }
+
+    /// The map's name as the top-left plate shows it, in capitals as the
+    /// plates' words are, a `*` after it while edited. A name is the map's
+    /// own, never a word of the catalogue, and spelled in ASCII letters,
+    /// digits, `-` and `_` (`editor-bad-name`), so its capitals need no
+    /// language's case rules.
+    fn bar_name(&self) -> String {
+        format!("{}{}", self.name().to_ascii_uppercase(), if self.dirty() { " *" } else { "" })
     }
 
     /// Whether a row of BRUSH's list can be picked now: a shape the brush
@@ -3363,7 +3561,7 @@ impl MapEditor {
         // Chrome only reacts to the press edge, never every frame a drag
         // happens to stay over it.
         if input.pressed
-            && let Some(button) = frame.bar().hit(frame.to_ui(window))
+            && let Some(button) = self.bar(frame).hit(frame.to_ui(window))
         {
             self.settle();
             return self.press_bar_button(button);
@@ -3527,7 +3725,7 @@ impl MapEditor {
     /// it zooms at the cursor - a whole-block step a notch on a coarse
     /// screen, smoothly on a fine one.
     fn wheel(&mut self, window: Vec2, wheel: f32, frame: &BuilderFrame, rules: &CanvasRules) {
-        if let Some(category) = frame.bar().category_at(frame.to_ui(window)) {
+        if let Some(category) = self.bar(frame).category_at(frame.to_ui(window)) {
             self.cycle_tool(category, wheel < 0.0);
             return;
         }
@@ -3801,6 +3999,7 @@ impl MapEditor {
             BarButton::Map => self.popup = Some(Popup::Settings { tab: MapTab::Round }),
             BarButton::Fit => self.camera.fit(),
             BarButton::Check => self.open_lint(),
+            BarButton::Day => self.day = !self.day,
         }
         EditorAction::None
     }
@@ -3921,7 +4120,7 @@ impl MapEditor {
                 // the panel laid out for what that run found.
                 let lint = if self.lint_report().is_none_or(|(_, stale)| stale) {
                     self.run_lint();
-                    LintLayout::of(frame.bar().check, frame.under_bar(), self.lint_len())
+                    LintLayout::of(self.bar(frame).check, frame.room(), self.lint_len())
                 } else {
                     lint
                 };
@@ -4929,6 +5128,45 @@ mod editor_tests {
         ed.named_buttons(frame).iter().any(|(n, _)| n == name)
     }
 
+    /// DAY stands on the top-left plate while the canvas's map is fought
+    /// under a dark sky - picked by the paused round's seed as the round
+    /// picked it - and draws the canvas by daylight while it is down; a
+    /// clear map has none.
+    #[test]
+    fn day_draws_a_dark_maps_canvas_by_daylight() {
+        let frame = arena();
+        let mut ed = MapEditor::new(MapFile::new());
+        assert_eq!(ed.map_sky(), Weather::Clear);
+        assert!(!has_named(&ed, &frame, "day"), "a clear sky has no DAY");
+        let mut night = MapFile::new();
+        night.weather = crate::map::Skies::of(Weather::Night);
+        ed.load(night);
+        assert_eq!((ed.map_sky(), ed.sky()), (Weather::Night, Weather::Night));
+        assert!(has_named(&ed, &frame, "day"));
+        press_named(&mut ed, &frame, "day");
+        assert_eq!((ed.map_sky(), ed.sky(), ed.day()), (Weather::Night, Weather::Clear, true));
+        press_named(&mut ed, &frame, "day");
+        assert_eq!(ed.sky(), Weather::Night);
+        assert!(ed.map().cells.is_empty(), "DAY paints nothing");
+    }
+
+    /// The canvas throws a round's lights at rest under a dark sky - each
+    /// start's headlamps and glow, the lamp posts - and none in daylight.
+    #[test]
+    fn the_canvas_lights_its_starts_and_lamps_under_a_dark_sky() {
+        let t = crate::tuning::Tuning::DEFAULT;
+        let mut map = MapFile::new();
+        map.set_cell(4, 4, CellObject::Start);
+        map.set_cell(10, 4, CellObject::Lamp);
+        let ed = MapEditor::new(map);
+        assert!(ed.canvas_lights(&crate::weather::Look::of(Weather::Clear, &t), 0.0, None).is_empty());
+        let night = ed.canvas_lights(&crate::weather::Look::of(Weather::Night, &t), 0.0, None);
+        let start = map::cell_to_world(4, 4);
+        assert!(night.len() >= 3, "a headlamp, its lamp, the glow and the post: {}", night.len());
+        assert!(night.iter().any(|l| l.at.distance_to(start) < 32.0), "lit at the start");
+        assert!(night.iter().any(|l| l.at == map::cell_to_world(10, 4)), "lit at the post");
+    }
+
     /// The window rect a named button stands at (`named_buttons`, which
     /// are UI points, through the UI frame).
     fn named(ed: &MapEditor, frame: &BuilderFrame, name: &str) -> Rectangle {
@@ -4953,6 +5191,23 @@ mod editor_tests {
 
     fn center(r: Rectangle) -> Vec2 {
         Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+    }
+
+    /// The canvas runs under the status plate: a press on the plate paints
+    /// nothing, and one on the canvas just above it paints as ever.
+    #[test]
+    fn a_press_on_the_status_plate_never_paints_the_cell_under_it() {
+        for frame in [arena(), touch_arena().1] {
+            let mut ed = MapEditor::new(MapFile::new());
+            let plate = frame.ui.rect_to_window(ed.status_rect(&frame, &ed.chrome(&frame), None));
+            let on = Vec2::new(plate.x + plate.width - 4.0, plate.y + plate.height / 2.0);
+            assert!(ed.field_cell(frame.to_canvas(on), &frame).is_some(), "the canvas runs under the plate at {on:?}");
+            click(&mut ed, &frame, on);
+            assert!(ed.map().cells.is_empty(), "a press on the plate");
+            let above = Vec2::new(on.x, plate.y - 24.0);
+            click(&mut ed, &frame, above);
+            assert_eq!(ed.map().cells.len(), 1, "a press above it");
+        }
     }
 
     #[test]
@@ -5135,7 +5390,7 @@ mod editor_tests {
         let Some(PopupLayout::Lint(lint)) = ed.chrome(&frame).popup else { panic!("the CHECK panel") };
         let per = lint.per_page;
         assert!(len > per, "{len} findings");
-        let room = frame.under_bar();
+        let room = frame.room();
         assert!(lint.panel.y + lint.panel.height <= room.y + room.height, "the panel fits under the bar");
         let panel = frame.ui.rect_to_window(lint.panel);
         assert!(named(&ed, &frame, "finding_0").y > panel.y, "under the header");
@@ -5167,7 +5422,7 @@ mod editor_tests {
         let wall = bar.category(Category::Wall).expect("a desktop's bar has the six");
         assert_eq!(bar.hit(frame.to_ui(below(wall.rect))), Some(BarButton::CategoryMenu(Category::Wall)));
         assert_eq!(bar.hit(frame.to_ui(below(bar.map))), Some(BarButton::Map));
-        let far = Vec2::new(bar.map.x + 2.0, bar.strip.y + bar.strip.height + EDITOR_BAR_HIT_SLACK + 1.0);
+        let far = Vec2::new(bar.map.x + 2.0, bar.right.y + bar.right.height + EDITOR_BAR_HIT_SLACK + 1.0);
         assert_eq!(bar.hit(far), None);
         // A press in the slack under MAP opens it and paints nothing.
         let mut ed = MapEditor::new(MapFile::new());
@@ -5177,24 +5432,24 @@ mod editor_tests {
     }
 
     /// Every category's rows and the MAP panel's buttons are a finger's
-    /// size and stand in the room under the bar on a phone and a desktop,
-    /// with and without touch.
+    /// size and stand in the room under the top plates on a phone and a
+    /// desktop, with and without touch.
     #[test]
-    fn every_list_row_and_map_stepper_is_a_fingers_size_under_the_bar() {
+    fn every_list_row_and_map_stepper_is_a_fingers_size_in_the_room() {
         for window in [(568.0, 320.0), (852.0, 393.0), (1088.0, 576.0), (1920.0, 1080.0)] {
             for touch in [false, true] {
                 let ui = UiFrame::new(window, 1.0, 1.0, Insets::default(), touch);
                 let frame = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
-                let (bar, room) = (frame.bar(), frame.under_bar());
+                let (bar, room) = (frame.bar(), frame.room());
                 let inside = |r: Rectangle| {
                     r.x >= room.x - 1e-3 && r.y >= room.y - 1e-3 && r.x + r.width <= room.x + room.width + 1e-3 && r.y + r.height <= room.y + room.height + 1e-3
                 };
-                for category in Category::ALL {
+                for category in Category::ALL.into_iter().filter(|&c| bar.category(c).is_some()) {
                     let n = category.tools().count();
-                    let list = chrome::menu_list(bar.tools_anchor(category), room, n);
+                    let list = chrome::tray_list(bar.tools_anchor(category), &frame, n);
                     for i in 0..n {
                         let row = list.row(i);
-                        assert!(row.height >= 48.0 && inside(row), "{window:?} touch={touch} {}: {row:?}", category.name());
+                        assert!(row.height >= crate::hud::UI_TOUCH_PT && inside(row), "{window:?} touch={touch} {}: {row:?}", category.name());
                     }
                 }
                 for tab in MapTab::ALL {
@@ -5440,7 +5695,7 @@ mod editor_tests {
     #[test]
     fn the_spawn_plan_moves_no_other_group() {
         let frame = arena();
-        let (bar, room) = (frame.bar(), frame.under_bar());
+        let (bar, room) = (frame.bar(), frame.room());
         let band = MapPanel::of(bar.map, room, MapTab::Round, false);
         let waves = MapPanel::of(bar.map, room, MapTab::Round, true);
         assert_eq!((band.panel, &band.headings, band.reset), (waves.panel, &waves.headings, waves.reset));
@@ -5519,8 +5774,9 @@ mod editor_tests {
         press_named(&mut ed, &frame, "fit");
         assert!(ed.camera().is_fit());
         assert!(ed.map().cells.is_empty());
-        // The wheel over the bar's empty parts zooms nothing.
-        ed.update(&BuilderInput { pointer: Some(Vec2::new(1000.0, 10.0)), wheel: 1.0, ..Default::default() }, &frame);
+        // The wheel over a plate's empty parts zooms nothing.
+        let name = ed.bar(&frame).name.expect("a desktop's top-left plate has the name");
+        ed.update(&BuilderInput { pointer: Some(frame.ui.to_window(center(name))), wheel: 1.0, ..Default::default() }, &frame);
         assert!(ed.camera().is_fit());
     }
 
@@ -5625,8 +5881,8 @@ mod editor_tests {
                                     // Through the canvas, as `on_canvas` reads it, so a
                                     // point on the plate's edge is judged alike both ways.
                                     let ui = frame.canvas_to_ui(frame.to_canvas(at));
-                                    if ed.navigator_rect(&frame).is_some_and(|r| Corners::plate(r).contains(ui)) {
-                                        assert_eq!(got, None, "the navigator stands over the canvas there");
+                                    if ed.point_on_ui(ui, &frame) {
+                                        assert_eq!(got, None, "the chrome stands over the canvas there");
                                     } else if inside {
                                         assert_eq!(got, Some((col, row)), "{window:?} arena={arena} steps={zoom_steps} pan={pan:?} at {at:?}");
                                     } else {
@@ -5662,15 +5918,15 @@ mod editor_tests {
     /// world point under it at the view's zoom, a drag carries the view
     /// along until it lifts, a move after the lift does nothing, and none
     /// of it paints; from FIT a press zooms in to a tap's zoom there. Its
-    /// picture stands in the bottom-right corner of the room under the bar,
-    /// over the canvas.
+    /// picture stands where play's minimap does, in the top-right corner of
+    /// the room under the top plates, over the canvas.
     #[test]
     fn the_navigators_click_and_drag_move_the_builder_camera() {
         let (mut ed, frame) = big_editor((1920.0, 1080.0), 1.0, true);
         let layout = frame.layout;
         let nav = ed.navigator_rect(&frame).expect("a field map has one at FIT");
-        let room = frame.under_bar();
-        assert!(nav.x > room.x + room.width / 2.0 && nav.y > room.y + room.height / 2.0, "in the bottom-right: {nav:?} of {room:?}");
+        let room = frame.room();
+        assert!(nav.x > room.x + room.width / 2.0 && nav.y < room.y + room.height / 2.0, "in the top-right: {nav:?} of {room:?}");
         let plate = Corners::plate(nav);
         assert!(plate.x + plate.width <= room.x + room.width && plate.y + plate.height <= room.y + room.height);
         let canvas = frame.canvas_ui();
@@ -5766,7 +6022,7 @@ mod editor_tests {
         let screen = CanvasScreen { device_per_px: 1.0, points_per_px: 1.0, coarse: true, ..Default::default() };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         assert_eq!(ed.navigator_rect(&frame), None);
-        let corner = canvas_at(&frame, frame.layout.field.w - 40.0, frame.layout.field.h - 30.0);
+        let corner = canvas_at(&frame, frame.layout.field.w - 40.0, 90.0);
         assert!(ed.cell_at(corner, &frame).is_some(), "the canvas, all of it");
         ed.update(&BuilderInput { zoom_in: true, ..Default::default() }, &frame);
         let nav = ed.navigator_rect(&frame).expect("zoomed in, a navigator");
@@ -6230,8 +6486,14 @@ mod editor_tests {
         assert_eq!(ed.open_menu(), Some("map"));
         assert!(ed.map().cells.is_empty());
         // With the popup open a finger on the canvas past it only closes
-        // it (the MAP panel hangs over the cells nearer the bar).
-        let Vec2 { x, y } = on_cell(&ed, &frame, 10, 16);
+        // it (the MAP panel hangs over the cells nearer the top-right
+        // plate).
+        let panel = ed.chrome(&frame).popup.expect("the MAP panel").panel();
+        let Vec2 { x, y } = (0..17)
+            .rev()
+            .map(|row| on_cell(&ed, &frame, 2, row))
+            .find(|&p| !panel.contains(frame.to_ui(p)) && ed.lands_on_canvas(p, &frame))
+            .expect("a cell clear of the panel");
         fingers(&mut ed, &frame, &[vec![(2, x, y)], vec![(2, x + 60.0, y)]]);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing finger painted");
@@ -6725,6 +6987,31 @@ mod editor_tests {
         let t = std::time::Instant::now();
         let mut ed = MapEditor::new(dense_map());
         eprintln!("dense 250 x 250, {} cells: opened in {:.0} ms", ed.map().cells.len(), ms(t, 1));
+        let _ = ed.cell_index();
+        let t = std::time::Instant::now();
+        std::hint::black_box(ed.still());
+        eprintln!("  its still picture: {:.1} ms", ms(t, 1));
+        let t = std::time::Instant::now();
+        std::hint::black_box(crate::woods::Woods::build(ed.map()));
+        eprintln!("    of which its woods: {:.1} ms", ms(t, 1));
+        let t = std::time::Instant::now();
+        std::hint::black_box(ed.map().iter_cells().count());
+        eprintln!("    a walk of its cells: {:.1} ms", ms(t, 1));
+        // A stroke through the woods: each frame's cell painted and taken
+        // into the picture, then the release, which works the woods out
+        // again.
+        ed.select_tool(Tool::Prop(Material::Sandbag));
+        ed.begin_stroke((60, 61), false);
+        let t = std::time::Instant::now();
+        for i in 0..20 {
+            ed.stroke_to((61 + i, 61));
+            std::hint::black_box(ed.still());
+        }
+        let patched = ms(t, 20);
+        let t = std::time::Instant::now();
+        ed.finish_stroke();
+        std::hint::black_box(ed.still());
+        eprintln!("  its still picture on a stroke's frame: {patched:.2} ms; at the stroke's end: {:.1} ms", ms(t, 1));
         // What the clear flag works out once after an edit, while the
         // session has cleared a revision of the canvas.
         let t = std::time::Instant::now();

@@ -229,6 +229,65 @@ pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
     out
 }
 
+/// Whether `obstacle` is drawn as a tile (`paint_tile_run`): a wall or a
+/// prop - not a tree, whose crown stands over the tanks, nor a tower, a
+/// lamp, a volcano or a door, which their own painters draw.
+pub fn is_tile(obstacle: &Obstacle) -> bool {
+    !obstacle.material.is_tree() && !obstacle.material.is_tower() && !obstacle.material.is_drawn()
+}
+
+/// Every tile of `tiles` (`is_tile`), in the order given, as a round draws
+/// one: its drop shadow while `shadows`, the tile at its variant, then
+/// the lighting along whichever of its faces face open ground, so a run
+/// of tiles reads as one structure rather than as a grid. `fences` is
+/// every fence's cell, which way each runs (`fence_axis`). The round's
+/// tiles (`Game::paint_tiles`) and the builder's canvas (`editor::still`)
+/// are drawn by this one loop. Each tile the canvas culls is left out.
+pub fn paint_tile_run<'a>(c: &mut impl Canvas, tiles: impl Iterator<Item = &'a Obstacle>, fences: &HashSet<(i32, i32)>, shadows: bool, time: f32) {
+    for obstacle in tiles {
+        if c.culls(obstacle.position) {
+            continue;
+        }
+        let axis = fence_axis(obstacle, fences);
+        if shadows {
+            draw_obstacle_shadow(c, obstacle, axis);
+        }
+        draw_obstacle(c, obstacle, axis, time);
+        draw_obstacle_cap(c, obstacle);
+    }
+}
+
+/// `trees` back to front by where each crown is drawn (`woods.rs` moves it
+/// off its cell), cell order breaking ties: their 48 px sprites overlap on
+/// a 32 px grid, and without an order the crowns of a grove pop in and out
+/// of each other.
+pub fn sort_trees<T: std::borrow::Borrow<Obstacle>>(trees: &mut [T]) {
+    trees.sort_by(|a, b| {
+        let (a, b) = (a.borrow(), b.borrow());
+        (a.position.y + a.crown.dy).total_cmp(&(b.position.y + b.crown.dy)).then(a.position.x.total_cmp(&b.position.x))
+    });
+}
+
+/// One tree as a round stands it: its shadow while `shadows`, its crown
+/// leaning `lean` and drawn `alpha` opaque (a canopy cut away over a
+/// player's hull is see-through), and its flames while it burns. The
+/// round's woods (`Game::paint_standing`) and the builder's
+/// (`editor::still`) are drawn by this.
+pub fn paint_tree(c: &mut impl Canvas, tree: &Obstacle, lean: f32, alpha: f32, shadows: bool, time: f32) {
+    if shadows {
+        draw_tree_shadow(c, tree, lean, time, alpha);
+    }
+    if alpha < 1.0 {
+        let alpha = (255.0 * alpha.clamp(0.0, 1.0)) as u8;
+        crate::obstacle::draw_tree_tinted(c, tree, lean, time, crate::math::Color::new(255, 255, 255, alpha));
+    } else {
+        draw_tree(c, tree, lean, time);
+    }
+    if tree.burning {
+        crate::pyro::draw(c, &tile_flames(tree, time));
+    }
+}
+
 /// What the aftermath puts in the air over the field this frame
 /// (`Game::aftermath_air`, docs/aftermath.md).
 #[derive(Default)]
@@ -514,24 +573,9 @@ impl Game {
             crate::volcano::draw_cone_with(c, v.centre(), &picture, molten, &v.phase(self.time, &t), self.time);
         }
         drop(pictures);
-        for obstacle in self
-            .world
-            .query::<&Obstacle>()
-            .iter()
-            .filter(|o| !o.material.is_tree() && !o.material.is_tower() && !o.material.is_drawn())
-        {
-            if c.culls(obstacle.position) {
-                continue;
-            }
-            let axis = fence_axis(obstacle, &fences);
-            if self.shadows_enabled {
-                draw_obstacle_shadow(c, obstacle, axis);
-            }
-            draw_obstacle(c, obstacle, axis, self.time);
-            // Lighting along whichever faces face open ground, so a run
-            // of tiles reads as one structure rather than as a grid.
-            draw_obstacle_cap(c, obstacle);
-        }
+        let mut tiles = self.world.query::<&Obstacle>();
+        paint_tile_run(c, tiles.iter().filter(|o| is_tile(o)), &fences, self.shadows_enabled, self.time);
+        drop(tiles);
         // Training doors and flags (docs/training-stage.md): drawn by
         // their own code, doors with the tiles, flags standing on the
         // ground beside them.
@@ -697,9 +741,7 @@ impl Game {
             .collect();
         let mut tree_query = self.world.query::<&Obstacle>();
         let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree() && !culled(cull, o.position)).collect();
-        // Back to front by where each crown is drawn (`woods.rs` moves it
-        // off its cell), cell order breaking ties.
-        trees.sort_by(|a, b| (a.position.y + a.crown.dy).total_cmp(&(b.position.y + b.crown.dy)).then(a.position.x.total_cmp(&b.position.x)));
+        sort_trees(&mut trees);
         let t = crate::tuning::tuning();
         // The players' hulls, for the canopy cutaway: the crowns hiding
         // much of one are drawn see-through, so a player never loses their
@@ -715,18 +757,8 @@ impl Game {
         for (tree, &see_through) in trees.iter().zip(&cutaway) {
             // A sonic wave passing sways the crown away from its pivot.
             let lean = tree_lean(tree, &movers) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
-            if self.shadows_enabled {
-                draw_tree_shadow(c, tree, lean, self.time, if see_through { t.canopy_cutaway_alpha } else { 1.0 });
-            }
-            if see_through {
-                let alpha = (255.0 * t.canopy_cutaway_alpha.clamp(0.0, 1.0)) as u8;
-                crate::obstacle::draw_tree_tinted(c, tree, lean, self.time, crate::math::Color::new(255, 255, 255, alpha));
-            } else {
-                draw_tree(c, tree, lean, self.time);
-            }
-            if tree.burning {
-                crate::pyro::draw(c, &tile_flames(tree, self.time));
-            }
+            let alpha = if see_through { t.canopy_cutaway_alpha } else { 1.0 };
+            paint_tree(c, tree, lean, alpha, self.shadows_enabled, self.time);
         }
     }
 
