@@ -66,11 +66,6 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-        with:
-          driver-opts: network=host
-
       - name: Login to Docker Registry
         run: |
           echo "${{ secrets.DOCKER_REGISTRY_PASSWORD }}" \
@@ -86,25 +81,15 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Building $IMAGE:$TAG"
 
-      # The build cache is GitHub's (scope `rooms-server`), which a run
-      # reads at the runner's own speed - the registry is reached through a
-      # Tailscale relay, too slow to pull the Dockerfile's dependency layer
-      # from. A PR reads master's entries, which ci.yml's `rooms-cache` job
-      # writes, and its own. A plain `docker buildx build` is given no
-      # Actions runtime token, so the step before it exposes one.
-      - name: Expose the Actions cache to buildx
-        uses: crazy-max/ghaction-github-runtime@v3
-
+      # The shared build (.github/actions/build-rooms): it reads master's
+      # cache, which ci.yml's `rooms-cache` job writes, and writes none of
+      # its own, so a PR's first push starts from master's dependency layer
+      # and the PR adds nothing to the Actions cache. A PR that changes
+      # Cargo.lock rebuilds its dependencies on every push until it merges.
       - name: Build and push
-        run: |
-          docker buildx build \
-            --network host \
-            --platform linux/amd64 \
-            --cache-from type=gha,scope=rooms-server \
-            --cache-to type=gha,scope=rooms-server,mode=max \
-            -t "$IMAGE:${{ steps.tag.outputs.tag }}" \
-            --push \
-            .
+        uses: ./.github/actions/build-rooms
+        with:
+          tags: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v5

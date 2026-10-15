@@ -1,0 +1,42 @@
+name: PR Caches
+
+# Deletes a PR's Actions cache entries when the PR closes. A run reads
+# only caches saved on its own ref or on master, so nothing but the PR's
+# own re-runs could ever read them again, yet they count against the
+# repository's 10 GB until they age out - and over that limit GitHub
+# evicts the least recently used entries first, master's among them, which
+# every PR and release tag starts from.
+#
+# Fork PRs: a fork's `pull_request` run gets a read-only token that cannot
+# delete, so the job runs for same-repo branches only - the same guard as
+# pr-preview.yml and pr-server.yml. A fork's entries age out on their own.
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  delete:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      # No checkout: the ref is all it needs. Each entry is listed and
+      # deleted by id; one that is already gone is not worth a red X.
+      - name: Delete this PR's caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          ids=$(gh api --paginate "repos/$REPO/actions/caches?ref=$REF&per_page=100" \
+            --jq '.actions_caches[] | "\(.id) \(.size_in_bytes) \(.key)"')
+          if [ -z "$ids" ]; then
+            echo "No caches on $REF."
+            exit 0
+          fi
+          while read -r id size key; do
+            echo "Deleting $key ($((size / 1048576)) MB)"
+            gh api -X DELETE "repos/$REPO/actions/caches/$id" || echo "  could not delete $id"
+          done <<< "$ids"

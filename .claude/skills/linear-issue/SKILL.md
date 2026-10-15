@@ -113,7 +113,7 @@ pre-existing failure, a follow-up): file it with `linear-file`, don't fold it in
 - Wait for CI (rule 4): `sleep 30; gh pr checks <N> --watch --interval 30`
   as one `run_in_background` command (you are woken when it exits) - the
   sleep because, until the workflows register, it reports no checks and
-  exits 1. Every PR runs `ci.yml`'s `test`, the web preview, the room
+  exits 1. Every PR runs `ci.yml`'s `test` and `check`, the web preview, the room
   server and the Claude review; a `skipping` check (a label-gated build, a
   close-only job) counts as green.
   - Exit 0, everything `pass` or `skipping`: `save_issue` state

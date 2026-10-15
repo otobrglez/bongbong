@@ -1,6 +1,8 @@
-# Test lane (Phase 6 of docs/gameplay-verification-design.md): cargo test
-# (unit + determinism + map lint), a check that the whole workspace
-# compiles, plus the budgeted probe fixture sweeps.
+# Test lane (Phase 6 of docs/gameplay-verification-design.md), as two jobs
+# that run side by side: `test` (cargo test - unit, determinism, map lint)
+# and `check` (the whole workspace compiles, then the budgeted probe
+# fixture sweeps). Each builds the game crate once; one after the other
+# they were the longest check on a PR.
 # Deliberately separate from the deploy lanes (cloudflare-deploy.yml /
 # pr-preview.yml) and never touching release.yml (cargo-dist-generated).
 name: CI
@@ -17,15 +19,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The whole `cargo test --lib` suite: pathfind/shell-sweep/tile-seam/
+  # weapon-queue units, the seeded-replay determinism guard, and the
+  # static map linter with its supported-map gate.
   test:
     runs-on: ubuntu-latest
     env:
       # The dev profile at opt-level 1 (dependencies stay at Cargo.toml's
       # opt-level 3): the game crate takes about a minute longer to compile
       # and its tests, the CPU thumbnail renders and the probe sweeps run
-      # several times faster, which is the larger share of this job. Debug
+      # several times faster, which is the larger share of both jobs. Debug
       # assertions and overflow checks stay on, and the determinism pins
-      # hold at either level. Line tables only keep the target small.
+      # hold at either level. Line tables only keep the target small. The
+      # `check` job sets the same two.
       CARGO_PROFILE_DEV_OPT_LEVEL: "1"
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
@@ -34,7 +40,8 @@ jobs:
       # raylib-sys builds raylib from source - same system dev packages as
       # the release builds (keep in sync with dist-workspace.toml's
       # [dist.dependencies.apt]; that list came from sola-raylib's own
-      # working CI, see CLAUDE.md's Releases section).
+      # working CI, see CLAUDE.md's Releases section). The `check` job
+      # installs the same list.
       - name: Install raylib build dependencies
         run: >
           sudo apt-get update && sudo apt-get install -y
@@ -49,19 +56,49 @@ jobs:
           toolchain: "1.99.0"
 
       # Dependencies only: the workspace's own crates are rebuilt on every
-      # run anyway, so they are left out of the saved cache. Keyed on the
-      # lockfile, the manifests, the toolchain and the CARGO_* variables
-      # above; a PR saves a copy of its own only when one of those differs
-      # from master's.
+      # run anyway, so they are left out of the saved cache. rust-cache
+      # keys on the lockfile, the manifests, the toolchain, the CARGO_*
+      # variables above and the job, and a run that finds its exact key
+      # saves nothing - so the key carries this file's hash too, or a step
+      # that builds something new would rebuild it on every run until
+      # Cargo.lock next changed. Each job keeps its own entry; master's
+      # pushes warm both, and a PR saves a copy of its own only when one of
+      # those inputs differs from master's.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ hashFiles('.github/workflows/ci.yml') }}
 
-      - uses: extractions/setup-just@v4
-
-      # The whole `cargo test --lib` suite: pathfind/shell-sweep/tile-seam/
-      # weapon-queue units, the seeded-replay determinism guard, and the
-      # static map linter with its supported-map gate.
       - name: cargo test
         run: cargo test --lib
+
+  check:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_OPT_LEVEL: "1"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v7
+
+      # The `test` job's list: `cargo check` runs raylib-sys's build
+      # script, which builds raylib.
+      - name: Install raylib build dependencies
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libasound2-dev libudev-dev libx11-dev libxcursor-dev
+          libxinerama-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+
+      # Keyed as in `test`, so a new step's dependencies land in the cache
+      # on master's next push.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ hashFiles('.github/workflows/ci.yml') }}
+
+      - uses: extractions/setup-just@v4
 
       # Every workspace member's library and bins with default features, as
       # a version tag's cargo-dist build compiles them: `cargo test --lib`
@@ -71,9 +108,9 @@ jobs:
       - name: cargo check --workspace
         run: cargo check --workspace
 
-      # Budgeted probe sweeps over every fixture map - headless, no display
-      # needed. The justfile recipe holds the ceilings and the policy for
-      # re-baselining them.
+      # Budgeted probe sweeps over every fixture map. The justfile recipe
+      # holds the ceilings and the policy for re-baselining them, and builds
+      # the probe headless (no raylib), as it plays.
       - name: probe fixture sweeps
         run: just probe-fixtures
 
@@ -93,27 +130,19 @@ jobs:
           cargo-features: --features dev-tools
 
   # Builds the room server image on every push to master, pushing nothing,
-  # so the Dockerfile's dependency layer is in GitHub's cache (scope
-  # `rooms-server`) where every PR's room server build and every release
-  # tag's deploy can read it. Needs no Tailscale and no registry.
+  # so the Dockerfile's layers are in GitHub's cache (scope `rooms-server`)
+  # where every PR's room server build and every release tag's deploy can
+  # read it - the one job that writes that cache. It builds through the
+  # same action as those two, since a build that differs in any flag
+  # misses the layers (.github/actions/build-rooms). Needs no Tailscale and
+  # no registry.
   rooms-cache:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      # A plain `docker buildx build` is given no Actions runtime token.
-      - name: Expose the Actions cache to buildx
-        uses: crazy-max/ghaction-github-runtime@v3
-
       - name: Build the room server image into the cache
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --cache-from type=gha,scope=rooms-server \
-            --cache-to type=gha,scope=rooms-server,mode=max \
-            --output type=cacheonly \
-            .
+        uses: ./.github/actions/build-rooms
+        with:
+          write-cache: "true"
