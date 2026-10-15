@@ -197,9 +197,6 @@ material = "iron"
 [cells."8,24"]
 kind = "tall_grass"
 
-[cells."34,17"]
-kind = "fence"
-
 [cells."30,3"]
 kind = "fence"
 
@@ -393,7 +390,7 @@ material = "iron"
 [cells."26,3"]
 kind = "fence"
 
-[cells."46,3"]
+[cells."49,3"]
 kind = "wall"
 material = "brick"
 
@@ -737,10 +734,6 @@ kind = "spruce"
 [cells."48,19"]
 kind = "pickup"
 pickup = "health"
-
-[cells."34,3"]
-kind = "wall"
-material = "brick"
 
 [cells."41,3"]
 kind = "fence"
@@ -1118,9 +1111,6 @@ kind = "gate"
 kind = "wall"
 material = "brick"
 
-[cells."35,17"]
-kind = "fence"
-
 [cells."2,7"]
 kind = "water"
 
@@ -1275,7 +1265,7 @@ kind = "fir"
 [cells."3,10"]
 kind = "road"
 
-[cells."46,0"]
+[cells."45,0"]
 kind = "gate"
 
 [cells."31,10"]
@@ -1289,9 +1279,6 @@ kind = "sandbag"
 
 [cells."37,6"]
 kind = "road"
-
-[cells."36,17"]
-kind = "fence"
 
 [cells."38,6"]
 kind = "road"
