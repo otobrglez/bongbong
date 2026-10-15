@@ -98,18 +98,20 @@ probe-waves:
 # clustering 206/177/151 -> 85/60/50, tank-grind 12/7/4 -> 2/1/0, spin
 # 73/70/71 -> 29/17/19, churn 327/307/313 -> 305/305/311, jitter
 # 272/304/277 -> 318/287/304, never-arrived 5/0/0 -> 6/1/0.
-# The probe is built once and the fixtures run side by side, one per core,
-# each into its own log, printed in fixture order once all are done; every
-# fixture runs even after one fails, and the recipe fails if any did. CI
-# runs this recipe (.github/workflows/ci.yml), so these are the only copy
-# of the ceilings. Extra arguments go to every run - a weapon's
-# `--crate <kind>` or an armed `--tuning <file>` (docs/sonic-hammer.md
-# "Probe") - under the same ceilings.
+# The probe is built once, headless (`--no-default-features`: no raylib, as
+# it plays - the sweeps read the same either way), and the fixtures run
+# side by side, one per core, each into its own log, printed in fixture
+# order once all are done; every fixture runs even after one fails, and
+# the recipe fails if any did. CI runs this recipe
+# (.github/workflows/ci.yml), so these are the only copy of the ceilings.
+# Extra arguments go to every run - a weapon's `--crate <kind>` or an armed
+# `--tuning <file>` (docs/sonic-hammer.md "Probe") - under the same
+# ceilings.
 probe-fixtures *args:
     #!/usr/bin/env bash
     set -euo pipefail
     budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=9 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=3 --budget offbox-fire=0 {{args}}"
-    cargo build --bin probe
+    cargo build --bin probe --no-default-features
     probe="${CARGO_TARGET_DIR:-target}/debug/probe"
     logs=$(mktemp -d)
     trap 'rm -rf "$logs"' EXIT

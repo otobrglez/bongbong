@@ -53,11 +53,6 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-        with:
-          driver-opts: network=host
-
       - name: Login to Docker Registry
         run: |
           echo "${{ secrets.DOCKER_REGISTRY_PASSWORD }}" \
@@ -70,27 +65,17 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Building room server image with tag: $TAG"
 
-      # linux/amd64 only: the cluster's nodes are x86_64 and a second
-      # platform would double a build that already compiles rapier.
-      # The build cache is GitHub's (scope `rooms-server`), written by
-      # ci.yml's `rooms-cache` job on master; a tag reads master's entries,
-      # so the Dockerfile's dependency layer comes back rather than being
-      # compiled. Nothing is written back: a tag's entries would be readable
-      # by that tag's re-runs alone. A plain `docker buildx build` is given
-      # no Actions runtime token, so the step before it exposes one.
-      - name: Expose the Actions cache to buildx
-        uses: crazy-max/ghaction-github-runtime@v3
-
+      # The shared build (.github/actions/build-rooms): a tag reads
+      # master's cache, which ci.yml's `rooms-cache` job writes, so the
+      # Dockerfile's dependency layer comes back rather than being
+      # compiled. Nothing is written back: a tag's entries would be
+      # readable by that tag's re-runs alone.
       - name: Build and push
-        run: |
-          docker buildx build \
-            --network host \
-            --platform linux/amd64 \
-            --cache-from type=gha,scope=rooms-server \
-            -t "$IMAGE:latest" \
-            -t "$IMAGE:${{ steps.get-tag.outputs.tag }}" \
-            --push \
-            .
+        uses: ./.github/actions/build-rooms
+        with:
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.get-tag.outputs.tag }}
 
   deploy:
     needs: [ build ]

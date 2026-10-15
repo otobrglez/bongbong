@@ -1,0 +1,85 @@
+# The room server image build shared by ci.yml's `rooms-cache` (master),
+# pr-server.yml (every PR) and deploy-rooms.yml (version tags), so the
+# three build it the same way and keep hitting one another's cache.
+# Sibling to build-web; docs/platforms.md, "Shipping it".
+#
+# **Every flag here is part of the cache key.** buildkit hashes a RUN
+# step's whole ExecOp - its network mode included - into the key, so a
+# build that differs in `--network` (or in the base image digest it pins)
+# misses the layers the others wrote and compiles the dependencies again.
+# That is why the three share this action rather than three copies.
+#
+# The cache is GitHub's Actions cache (scope `rooms-server`): the private
+# registry is reached only through a Tailscale relay, too slow to pull a
+# cache from. Only master writes it (`write-cache`); a PR or a tag reads
+# master's entries and writes none, so the cache holds one copy of the
+# layers instead of one per PR.
+#
+# Logging in to the registry stays with the caller, before this action:
+# the build pushes with the runner's Docker credentials.
+name: Build the room server image
+description: Build ./Dockerfile for linux/amd64 through the shared Actions cache, pushing the given tags or into the cache only
+
+inputs:
+  tags:
+    description: >-
+      Image references to tag and push, one per line. Empty builds into
+      the cache only and pushes nothing.
+    required: false
+    default: ""
+  write-cache:
+    description: >-
+      "true" writes the layers back to the cache (scope `rooms-server`,
+      mode=max). Only master's `rooms-cache` job sets it.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # `network=host` puts buildkit on the runner's network, which with
+    # Tailscale up reaches the private registry. Docker Hub's images
+    # (the `rust` base) come through mirror.gcr.io, Google's mirror of
+    # Docker Hub: it needs no account and serves the same digests, so the
+    # build pins what it would pin from Docker Hub and the cache still
+    # matches. buildkit tries the mirror first and falls back to Docker
+    # Hub on a 404, a 429 or 5xx, or a connection error - Docker Hub's
+    # anonymous pull quota is shared with every other job on the runner's
+    # address and has failed every build for minutes at a time.
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+      with:
+        driver-opts: network=host
+        buildkitd-config-inline: |
+          [registry."docker.io"]
+            mirrors = ["mirror.gcr.io"]
+
+    # A plain `docker buildx build` is given no Actions runtime token,
+    # and without it `type=gha` silently does nothing.
+    - name: Expose the Actions cache to buildx
+      uses: crazy-max/ghaction-github-runtime@v3
+
+    # linux/amd64 only: the cluster's nodes are x86_64 and a second
+    # platform would double a build that already compiles rapier.
+    - name: Build
+      shell: bash
+      env:
+        TAGS: ${{ inputs.tags }}
+        WRITE_CACHE: ${{ inputs.write-cache }}
+      run: |
+        args=(--network host --platform linux/amd64 --cache-from "type=gha,scope=rooms-server")
+        if [ "$WRITE_CACHE" = true ]; then
+          args+=(--cache-to "type=gha,scope=rooms-server,mode=max")
+        fi
+        pushing=false
+        while read -r tag; do
+          [ -z "$tag" ] && continue
+          args+=(-t "$tag")
+          pushing=true
+        done <<< "$TAGS"
+        if [ "$pushing" = true ]; then
+          args+=(--push)
+        else
+          args+=(--output type=cacheonly)
+        fi
+        docker buildx build "${args[@]}" .

@@ -132,9 +132,15 @@ the wasm client and the image ship together - a client and server that disagree 
 cargo-chef stages - the dependencies a layer of their own, rebuilt only when a manifest or the
 lockfile changes - then copied onto `gcr.io/distroless/cc-debian12`, ~53 MB. In CI the layers are
 kept in GitHub's Actions cache (scope `rooms-server`): ci.yml's `rooms-cache` job writes it on every
-push to master, the PR and release builds read it, and `crazy-max/ghaction-github-runtime` gives the
-plain `docker buildx build` step the token it needs (without it `type=gha` silently does nothing);
-the registry is reached only through a Tailscale relay, too slow to pull a cache from; headlessness
+push to master, and the PR and release builds read it and write nothing. All three build through
+one composite action, `.github/actions/build-rooms`, because every flag is part of a RUN step's
+cache key - a build that differs in `--network` alone misses every layer the others wrote. It pulls Docker Hub's images through `mirror.gcr.io` (same digests, no account;
+buildkit falls back to Docker Hub on a 429 or an error), so Docker Hub's shared anonymous quota no
+longer fails the build, and `crazy-max/ghaction-github-runtime` gives the plain `docker buildx
+build` the token it needs (without it `type=gha` silently does nothing); the registry is reached
+only through a Tailscale relay, too slow to pull a cache from. `pr-caches.yml` deletes a PR's cache
+entries when it closes, since nothing else can read them and the repository's 10 GB is shared with
+master's; headlessness
 comes from `server/Cargo.toml`'s `default-features = false` rather than a build flag, and the build
 fails if `cargo tree` ever finds `sola` in the server's graph. The workload is one Deployment of one
 replica in `bongbong-prod` with `strategy: Recreate` (two replicas would take rooms the other cannot

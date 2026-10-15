@@ -75,8 +75,9 @@ things when forgotten; this is the detail. Update it with the tool.
   half second vetoes stale-start. Recipes: `just probe-sweep` (default map), `just probe-waves`,
   `just probe-fixtures` (every `maps/test/*.toml` at a pinned seed against recorded ceilings -
   deterministic, so an exceedance is a real change; re-baseline consciously after a deliberate
-  AI/map/tuning change, never bump a ceiling to go green; the probe is built once and the fixtures
-  run one per core, each one's output printed in order; CI runs it beside `cargo test --lib`), `just
+  AI/map/tuning change, never bump a ceiling to go green; the probe is built once, headless, and the
+  fixtures run one per core, each one's output printed in order; CI's `check` job runs it after
+  `cargo check --workspace`, beside the `test` job's `cargo test --lib`), `just
   probe-fields` (the field-map AI: the study map, longwater and five 56-wide levels, AFK, 10 rounds
   at seed 1000 against ceilings recorded 2026-10-02 and re-baselined the same day for lanes, for the
   margin's window (jitter=30, hedge-maze) and for the shipped maps' growth by 40 % a side
@@ -135,7 +136,7 @@ things when forgotten; this is the detail. Update it with the tool.
   `a_large_fill_timing` (add `--release` for a phone's order) prints a large RECT's or FILL's cost
   against making the ground again, and `a_load_list_thumbnail_timing` (render feature) the Load
   list's two thumbnail renderers side by side. No rustfmt/clippy config is checked in. Dependencies
-  build at opt-level 3 in the dev profile (`[profile.dev.package."*"]`), and CI's test job builds
+  build at opt-level 3 in the dev profile (`[profile.dev.package."*"]`), and CI's two jobs build
   the dev profile itself at opt-level 1 with line tables only (`CARGO_PROFILE_DEV_*` in ci.yml): the
   game crate compiles about a minute longer and the suite and probe sweeps run several times faster,
   debug assertions and overflow checks still on.
