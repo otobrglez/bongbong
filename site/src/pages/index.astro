@@ -1,4 +1,13 @@
 ---
+// The game page: the game takes the whole first screen, with the page's own
+// controls on it, and the page below it says what the game is, where else
+// it plays and how to hear about new versions (docs/platforms.md, Web).
+import "../styles/site";
+import AppStoreBadge from "../components/AppStoreBadge.astro";
+import Bongs from "../components/Bongs.astro";
+import NewsletterForm from "../components/NewsletterForm.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE } from "../site";
 ---
 
 <html lang="en">
@@ -11,22 +20,19 @@
     <meta name="mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+    <meta name="description" content="A fast, pixelated tank shooter with challenging AI, online co-op and a battlefield builder. Play it in the browser."/>
     <title>BongBong!</title>
     <style lang="scss">
-      $font-size: 10pt;
-      $font-color: #c6c6c6;
+      $font-size: 14px;
 
       html, body {
         margin: 0;
         min-height: 100%;
-        background-color: #151515;
-        color: $font-color;
-        font-family: sans-serif;
+        background-color: var(--ground);
+        color: var(--text);
+        font-family: var(--body-font);
         font-size: $font-size;
-      }
-
-      a {
-        color: #888;
+        line-height: 1.5;
       }
 
       .wrapper {
@@ -42,7 +48,7 @@
         box-sizing: border-box;
         padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 
-        .game, .footer {
+        .game {
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -51,12 +57,17 @@
 
         .game {
           position: relative;
-          /* The strip kept under the stage for the key hints, on a screen
-             tall enough to spare it; a phone on its side gives the stage
-             every pixel, its hints being for keyboards anyway. */
+          /* The strip kept under the stage for the key hints and the way
+             down to the page below, on a screen tall enough to spare it; a
+             phone on its side gives the stage every pixel, and a touch
+             screen has no keys to hint at. */
           --hints: 72px;
 
           @media (max-height: 540px) {
+            --hints: 0px;
+          }
+
+          @media (hover: none) and (pointer: coarse) {
             --hints: 0px;
           }
 
@@ -79,11 +90,14 @@
             height: calc(100dvh - var(--hints) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
           }
 
-          /* The two overlay controls sit together in one row, Full screen
-             first, the subscribe link beside it. With a mouse they keep to
-             the canvas's *bottom-left* corner, away from the HUD's corner
-             clusters along its top (src/hud.rs `corners`). Wherever they
-             are, overlay.ts tells the game, which keeps its off-screen
+          /* The page's controls on the canvas sit together in one line,
+             straight on the field: Full screen, the App Store badge and Get
+             updates, all 40 px tall - the badge's own height, the least
+             Apple allows on screen - and 10 px apart, a quarter of that,
+             the badge's clear space from its neighbours. With a mouse they
+             keep to the canvas's *bottom-left* corner, away from the HUD's
+             corner clusters along its top (src/hud.rs `corners`). Wherever
+             they are, overlay.ts tells the game, which keeps its off-screen
              arrows off them. */
           .overlay-controls {
             position: absolute;
@@ -91,9 +105,32 @@
             bottom: 10px;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             z-index: 2;
             white-space: nowrap;
+          }
+
+          .badge-slot {
+            display: flex;
+          }
+
+          .touch-only {
+            display: none;
+          }
+
+          .fullscreen-toggle {
+            height: 40px;
+            min-height: 0;
+            font-family: var(--pixel-font);
+          }
+
+          .updates {
+            height: 40px;
+            min-height: 0;
+
+            svg {
+              flex: none;
+            }
           }
 
           /* On a touch screen the bottom corners are the thumbs': the left
@@ -101,36 +138,104 @@
              half fires (src/touch.rs), and the thumbs rest about 22 mm in
              and 18 mm up from those corners (`indicators::thumb_rests`).
              The top corners are the HUD's clusters, and between them there
-             is too little room for two labels on a narrow phone - 74
-             points, 69 CSS pixels on an iPhone SE. So the controls take a
-             band of their own along the top, centred, and the game lays
-             its chrome out below it as it does below a safe area: the
-             clusters, the panels and the builder's bar all stand clear of
-             it, and the world shows on either side. Above the turn card,
-             so the way out of immersive mode is always there. */
+             is too little room for labels on a narrow phone - 74 points, 69
+             CSS pixels on an iPhone SE. So the controls take a band of their
+             own along the top, centred, and hold only Full screen, as its
+             glyph, and More, which opens the rest (more-panel.ts); the game
+             lays its chrome out below the band as it does below a safe
+             area: the clusters, the panels and the builder's bar all stand
+             clear of it, and the world shows on either side. Above the turn
+             card, so the way out of immersive mode is always there. */
           @media (hover: none) and (pointer: coarse) {
             .overlay-controls {
               top: 3px;
               bottom: auto;
               left: 50%;
               transform: translateX(-50%);
+              gap: 6px;
+              padding: 3px;
+              background: rgba(21, 21, 21, 0.88);
               z-index: 4;
+            }
+
+            .pointer-only {
+              display: none;
+            }
+
+            .touch-only {
+              display: inline-flex;
+            }
+
+            .fullscreen-toggle {
+              min-width: 44px;
+              height: 34px;
+              padding: 0 10px;
+
+              :global(.label) {
+                display: none;
+              }
+            }
+
+            .more-toggle {
+              min-height: 34px;
+              padding: 0 12px;
+              font-size: 12px;
             }
           }
 
-          .subscribe-link {
-            padding: 3px 8px;
-            border-radius: 3px;
-            background: rgba(46, 46, 46, 0.75);
-            color: #ddd;
-            text-decoration: none;
-            font-size: $font-size;
+          /* The rest of the page's ways off the canvas on a touch screen,
+             under the band: the App Store, Get updates, the sections below
+             the game, Support and Privacy (more-panel.ts). */
+          .more-panel {
+            position: absolute;
+            top: 46px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 5;
+            width: min(460px, calc(100% - 24px));
+            max-height: calc(100% - 58px);
+            overflow-y: auto;
+            box-sizing: border-box;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: var(--ground);
+            border: 2px solid #3a3a3a;
+            border-radius: 8px;
 
-            &:hover, &:focus-visible {
-              color: #fff;
-              background: rgba(46, 46, 46, 0.95);
-              text-decoration: underline;
+            &[hidden] {
+              display: none;
             }
+          }
+
+          .more-app {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--panel-line);
+
+            > div {
+              flex: 1;
+              display: flex;
+              flex-direction: column;
+              gap: 2px;
+              font-size: 13px;
+              line-height: 1.4;
+              color: var(--text-dim);
+            }
+
+            .pixel {
+              font-size: 14px;
+              color: #ffffff;
+            }
+          }
+
+          .more-links {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
           }
 
           /* Covers exactly the canvas's own box, the stage, so the panel
@@ -165,6 +270,7 @@
 
           .loading-title {
             margin: 0;
+            font-family: var(--pixel-font);
             font-size: calc($font-size * 1.6);
             letter-spacing: 0.08em;
           }
@@ -224,8 +330,11 @@
              millimetres across. The card asks for the phone to be turned
              and covers only the stage; the round runs on behind it and the
              window keeps following the box, so turning the phone shows the
-             game at once. A tablet held upright is wide enough to play and
-             a desktop window is the player's to size: neither gets it. */
+             game at once. It is also the page's front door on a phone: the
+             App Store, Get updates and the way down to the rest, so the
+             band above it keeps only Full screen. A tablet held upright is
+             wide enough to play and a desktop window is the player's to
+             size: neither gets it. */
           .turn {
             display: none;
           }
@@ -237,28 +346,72 @@
               z-index: 3;
               display: flex;
               flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              gap: 14px;
-              margin: 0;
-              padding: 0 24px;
+              overflow-y: auto;
               /* The page's own background and its light text, so the card
                  reads as the page rather than a coloured panel. */
-              background: #151515;
-              color: #ddd;
-              font-size: calc($font-size * 1.4);
+              background: var(--ground);
+              color: #dddddd;
               text-align: center;
             }
 
+            .more-toggle {
+              display: none;
+            }
+          }
+
+          .turn-field {
+            display: block;
+            flex: none;
+            width: 100%;
+            /* A taller phone shows more of the field, not a longer gap. */
+            height: clamp(120px, 30dvh, 280px);
+            object-fit: cover;
+            border-bottom: 2px solid var(--panel-line);
+          }
+
+          .turn-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 24px 24px 28px;
+
             /* A phone on its side, drawn rather than an emoji, so every
                browser shows the same one. */
-            .turn::before {
+            &::before {
               content: "";
               width: 54px;
               height: 30px;
-              border: 3px solid #fff;
+              border: 3px solid #ffffff;
               border-radius: 6px;
             }
+          }
+
+          .turn-title {
+            margin: 0;
+            font-size: 18px;
+            line-height: 1.35;
+            color: #ffffff;
+          }
+
+          .turn-note {
+            margin: 0;
+            color: var(--text-dim);
+          }
+
+          .turn-or {
+            margin: 4px 0 -6px;
+            font-size: 12px;
+            color: #6e6e76;
+          }
+
+          .turn-links {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
           }
 
           canvas {
@@ -318,7 +471,7 @@
             box-sizing: border-box;
             padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
             justify-content: center;
-            background: #151515;
+            background: var(--ground);
 
             .stage {
               height: 100%;
@@ -329,39 +482,270 @@
             }
           }
 
-          .fullscreen-toggle {
-            padding: 3px 9px;
-            border-radius: 3px;
-            border: 0;
-            background: rgba(46, 46, 46, 0.75);
-            color: #ddd;
-            font-family: sans-serif;
-            font-size: $font-size;
-            cursor: pointer;
-
-            &:hover, &:focus-visible {
-              color: #fff;
-              background: rgba(46, 46, 46, 0.95);
-            }
-          }
-
+          /* The key hints and, under them, the way down to the page below
+             the game: the canvas takes the wheel and the arrow keys, so the
+             link is how a mouse finds it. None on a touch screen, which has
+             no keys and the More panel. */
           .instructions {
+            box-sizing: border-box;
+            height: var(--hints);
+            padding: 10px 12px 0;
             text-align: center;
-            font-size: $font-size;
-            padding: 8px 12px;
-            margin-top: 10px !important;
+            font-size: 13px;
+
+            @media (hover: none) and (pointer: coarse) {
+              display: none;
+            }
 
             p {
-              margin: 0.3em 0;
+              margin: 0;
+            }
+          }
+
+          .keys {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 4px 28px;
+          }
+
+          .more-cue {
+            margin-top: 8px !important;
+
+            a {
+              font-family: var(--pixel-font);
+              font-size: 12px;
+              color: var(--text-dim);
+              text-decoration: none;
+
+              &:hover {
+                color: #ffffff;
+              }
             }
           }
         }
+      }
 
-        .footer {
-          p {
-            margin: 0.3em 0;
-          }
+      /* Below the game: what it is, where else it plays, and the
+         newsletter. */
+      .more {
+        width: 100%;
+        max-width: 1200px;
+        box-sizing: border-box;
+        padding: 0 24px;
+
+        @media (max-width: 600px) {
+          padding: 0 16px;
         }
+      }
+
+      .section {
+        padding-top: 72px;
+        scroll-margin-top: 8px;
+
+        h2 {
+          margin: 0;
+          font-family: var(--pixel-font);
+          font-weight: 400;
+          font-size: clamp(26px, 5vw, 36px);
+          line-height: 1.15;
+          color: var(--text-strong);
+        }
+
+        h3 {
+          margin: 0 0 4px;
+          font-family: var(--pixel-font);
+          font-weight: 400;
+          font-size: 16px;
+          line-height: 1.3;
+          color: var(--text-strong);
+        }
+      }
+
+      .lead {
+        max-width: 620px;
+        margin: 10px 0 28px;
+        color: var(--text-dim);
+        font-size: 15px;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+      }
+
+      .card {
+        overflow: hidden;
+        background: var(--panel);
+        border: 1px solid var(--panel-line);
+        border-radius: 10px;
+
+        img {
+          display: block;
+          width: 100%;
+          height: auto;
+          aspect-ratio: 2;
+          object-fit: cover;
+        }
+
+        div {
+          padding: 16px 18px 20px;
+        }
+
+        p {
+          margin: 0;
+          color: var(--text-dim);
+        }
+      }
+
+      .take {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+      }
+
+      /* No card round the iPhone: the device is the picture, standing on
+         the page's ground. */
+      .ios {
+        flex: 1 1 520px;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+
+        h3 {
+          font-size: 20px;
+        }
+
+        p {
+          margin: 0;
+          color: var(--text-dim);
+        }
+      }
+
+      /* The game on Apple's own iPhone bezel (tools/web/gen_site_art.py
+         `--iphone`), shown whole as Apple's marketing guidelines ask - never
+         cropped, tilted or shadowed - and smoothly scaled: it is a
+         photograph of a phone, not pixel art. */
+      .iphone {
+        display: block;
+        width: 100%;
+        max-width: 560px;
+        height: auto;
+      }
+
+      .ios-text {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+
+        .btn {
+          white-space: nowrap;
+        }
+      }
+
+      .soon {
+        color: var(--accent) !important;
+        font-family: var(--pixel-font);
+        font-size: 13px;
+      }
+
+      .downloads {
+        flex: 1 1 420px;
+        min-width: 0;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        align-content: start;
+      }
+
+      .download {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        min-height: 72px;
+        box-sizing: border-box;
+        padding: 10px 14px;
+        background: var(--panel);
+        border: 1px solid var(--panel-line);
+        border-radius: 10px;
+        text-decoration: none;
+
+        > span {
+          display: flex;
+          flex-direction: column;
+          line-height: 1.3;
+        }
+
+        .pixel {
+          color: var(--text-strong);
+        }
+
+        .file {
+          font-size: 13px;
+          color: var(--text-dim);
+        }
+
+        &:hover {
+          border-color: #4a4a4a;
+        }
+      }
+
+      .releases {
+        grid-column: 1 / -1;
+        margin: 4px 2px 0;
+        text-align: center;
+        font-size: 13px;
+        color: var(--text-dim);
+
+        a {
+          color: var(--link);
+        }
+      }
+
+      .news {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 28px 48px;
+        padding: 36px 36px 0;
+        background: var(--grass-panel);
+        border: 1px solid var(--grass-line);
+        border-radius: 12px;
+
+        @media (max-width: 600px) {
+          padding: 24px 20px 0;
+        }
+
+        h2 {
+          font-size: clamp(22px, 4vw, 32px);
+        }
+
+        p {
+          margin: 10px 0 0;
+          color: var(--grass-text);
+        }
+      }
+
+      .news-text {
+        flex: 1 1 380px;
+        min-width: 0;
+      }
+
+      .news-form {
+        flex: 1 1 340px;
+        min-width: 0;
+      }
+
+      .news-bongs {
+        flex: 1 1 100%;
+      }
+
+      .back {
+        margin: 0 0 40px;
+        padding-bottom: env(safe-area-inset-bottom);
       }
 
       /* Runtime tuning panel (docs/runtime-tuning-design.md). Only shown
@@ -382,7 +766,7 @@
         summary {
           cursor: pointer;
           padding: 8px 0;
-          font-family: sans-serif;
+          font-family: var(--body-font);
           font-size: $font-size;
           user-select: none;
 
@@ -562,15 +946,43 @@
 </head>
 <body>
 <div class="wrapper">
-    <div class="game">
+    <div class="game" id="game">
         <div class="stage">
             <canvas id="canvas" tabindex="-1"></canvas>
             <div class="overlay-controls">
-                <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
-                        title="Play full screen" data-i18n="fullscreen" data-i18n-title="fullscreenTitle">&#9974; Full screen
+                <button class="btn fullscreen-toggle" id="fullscreen-toggle" type="button"
+                        title="Play full screen" data-i18n="fullscreen" data-i18n-title="fullscreenTitle"><span
+                        class="glyph" aria-hidden="true">&#9974;</span> <span class="label">Full screen</span></button>
+                {SHOW_APP_STORE && <span class="pointer-only badge-slot"><AppStoreBadge inline/></span>}
+                <a class="btn btn-accent updates pointer-only" href="#updates" data-leave-game>
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+                         aria-hidden="true">
+                        <rect x="1.5" y="3.5" width="13" height="9"></rect>
+                        <path d="M1.5 4.5 8 9l6.5-4.5"></path>
+                    </svg>
+                    <span data-i18n="updates">Get updates</span>
+                </a>
+                <button class="btn more-toggle touch-only" id="more-toggle" type="button" aria-expanded="false"
+                        aria-controls="more-panel" data-i18n="moreButton">≡ More
                 </button>
-                <a class="subscribe-link" href="/subscribe" data-i18n="subscribe">Subscribe for updates.</a>
             </div>
+            <nav class="more-panel" id="more-panel" aria-label="BongBong" hidden>
+                {SHOW_APP_STORE && (
+                    <div class="more-app">
+                        <div>
+                            <span class="pixel" data-i18n="appBetter">Better as an app</span>
+                            <span data-i18n="appBetterNote">Full screen, no browser bars, plays offline.</span>
+                        </div>
+                        <AppStoreBadge/>
+                    </div>
+                )}
+                <div class="more-links">
+                    <a class="btn btn-accent" href="#updates" data-leave-game data-i18n="updates">Get updates</a>
+                    <a class="btn" href="#more" data-leave-game data-i18n="moreAbout">More about BongBong</a>
+                    <a class="btn" href="/support" data-i18n="support">Support</a>
+                    <a class="btn" href="/privacy" data-i18n="privacy">Privacy</a>
+                </div>
+            </nav>
             <div class="loading" id="loading" role="status" aria-live="polite">
                 <p class="loading-title" data-i18n="loading">Loading&hellip;</p>
                 <div class="loading-track">
@@ -578,15 +990,29 @@
                 </div>
                 <p class="loading-note" id="loading-note" data-i18n="fetching">Fetching the game</p>
             </div>
-            <p class="turn" data-i18n="turn">Turn your phone sideways to play.</p>
+            <div class="turn">
+                <img class="px turn-field" src="/art/turn-default.webp" alt="" width="400" height="170"/>
+                <div class="turn-body">
+                    <p class="pixel turn-title" data-i18n="turn">Turn your phone sideways to play.</p>
+                    <p class="turn-note" data-i18n="turnNote">The round is already running.</p>
+                    {SHOW_APP_STORE && <p class="pixel turn-or" data-i18n="or">or</p>}
+                    {SHOW_APP_STORE && <AppStoreBadge/>}
+                    <div class="turn-links">
+                        <a class="btn btn-accent" href="#updates" data-leave-game data-i18n="updates">Get updates</a>
+                        <a class="btn" href="#more" data-leave-game><span data-i18n="more">More</span> ▼</a>
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="instructions">
             <!-- The words are src/scripts/strings.ts's, in the language the
                  game will speak; the English here is what a page with no
                  script shows. -->
-            <p data-i18n="keysOne">Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
-            <p data-i18n="keysTwo">Two players: Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> +
-                <kbd>Left Shift</kbd> for player 2.</p>
+            <p class="keys">
+                <span data-i18n="keysOne"><kbd>←↑↓→</kbd> drive · <kbd>Space</kbd> fire · <kbd>R</kbd> restart</span>
+                <span data-i18n="keysTwo">Player 2: <kbd>WASD</kbd> + <kbd>Left Shift</kbd></span>
+            </p>
+            <p class="more-cue"><a href="#more">▼ <span data-i18n="moreAbout">More about BongBong</span></a></p>
         </div>
         <details class="tuning" id="tuning" hidden>
             <summary>Tuning <span class="badge">dev build</span></summary>
@@ -614,11 +1040,87 @@
             <div class="scroll" id="tun-body"></div>
         </details>
     </div>
-    <div class="footer">
-        <div>
-            <p data-i18n="feedback">Feedback and suggestions are welcome via <a href="https://github.com/otobrglez">@otobrglez</a>. </p>
-        </div>
-    </div>
+
+    <main class="more" id="more">
+        <section class="section">
+            <h2 data-i18n="inTitle">What's in it</h2>
+            <p class="lead" data-i18n="inLead">Twelve tanks, seven bongs and a battlefield that burns, smokes and falls
+                apart around you.</p>
+            <div class="cards">
+                <article class="card">
+                    <img class="px" src="/art/field-default.webp" alt="" width="400" height="200" loading="lazy"/>
+                    <div>
+                        <h3 data-i18n="campaign">Campaign and free play</h3>
+                        <p data-i18n="campaignText">Level by level, or any map with as many enemies as you dare.</p>
+                    </div>
+                </article>
+                <article class="card">
+                    <img class="px" src="/art/field-oasis.webp" alt="" width="400" height="200" loading="lazy"/>
+                    <div>
+                        <h3 data-i18n="build">Build your world</h3>
+                        <p data-i18n="buildText">Paint walls, water and woods, then press play on what you made.</p>
+                    </div>
+                </article>
+                <article class="card">
+                    <img class="px" src="/art/field-archipelago.webp" alt="" width="400" height="200" loading="lazy"/>
+                    <div>
+                        <h3 data-i18n="coop">Online co-op</h3>
+                        <p data-i18n="coopText">Host a room, share its code, and fight side by side, up to eight
+                            tanks.</p>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2 data-i18n="takeTitle">Take it with you</h2>
+            <p class="lead" data-i18n="takeLead">The same game on every screen. The browser is just the quickest way
+                in.</p>
+            <div class="take">
+                <article class="ios">
+                    <img class="iphone" src="/art/iphone.webp" alt="BongBong running on an iPhone 18 Pro"
+                         data-i18n-alt="iphoneAlt" width="1120" height="548" loading="lazy"/>
+                    <div class="ios-text">
+                        <h3 data-i18n="ios">iPhone and iPad</h3>
+                        <p data-i18n="iosText">Left thumb steers, right thumb fires. Plays offline.</p>
+                        {SHOW_APP_STORE
+                            ? <a class="btn" href={APP_STORE_URL}><span data-i18n="iosLink">Download from the App
+                                Store</span> <span aria-hidden="true">›</span></a>
+                            : <p class="soon" data-i18n="iosSoon">Coming soon to the App Store.</p>}
+                    </div>
+                </article>
+                <div class="downloads">
+                    {DOWNLOADS.map((d) => (
+                        <a class="download" href={d.href}>
+                            <img class="px" src={`/art/${d.sprite}.png`} alt="" width="52" height="52"/>
+                            <span><span class="pixel">{d.platform}</span><span class="file">{d.file}</span></span>
+                        </a>
+                    ))}
+                    <p class="releases"><span data-i18n="latest">Latest release</span> · <a href={CHANGELOG_URL}
+                                                                                            data-i18n="whatsNew">What's
+                        new</a> · <a href={RELEASES_URL} data-i18n="allReleases">All releases</a></p>
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="updates">
+            <div class="news">
+                <div class="news-text">
+                    <h2 data-i18n="newsTitle">Get a dispatch when a new version ships</h2>
+                    <p data-i18n="newsLead">New tanks, new maps, new ways to blow things up.</p>
+                </div>
+                <div class="news-form">
+                    <NewsletterForm id="home"/>
+                </div>
+                <div class="news-bongs">
+                    <Bongs/>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <SiteFooter/>
+    <p class="back"><a class="btn" href="#game" data-i18n="backToGame">▲ Back to the game</a></p>
 </div>
 <script src="../scripts/main.ts"></script>
 <script is:inline defer src="/game/bongbong.js"></script>

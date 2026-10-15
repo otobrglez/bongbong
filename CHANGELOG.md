@@ -4,6 +4,45 @@ What changed in each release of bongbong, newest first. Each entry is also
 that release's notes on GitHub, above the downloads. The 0.0.x builds before
 0.1.0 are in the git history.
 
+## 0.2.10 - 2026-10-15
+
+The frog is gone: each side now fights for one of seven bongs. A battlefield
+keeps burning long after the fight moves on, air support crates call in a
+helicopter or a jet, and BUILD now pauses your round instead of leaving it.
+
+### New
+- Seven bongs replace the frog. Yours is Bong Spike, Bong Oggle or Bong Gloop; in a Hunt round the enemy's is Bong Blip, Puff, Capi or Fuzz. Every map picks its two, and the builder's MAP panel has YOUR BONG and FOE BONG to choose them (#163)
+- A hurt bong hops to a bong health pack nearby and takes it herself, healing to full. Your own tanks parked beside her no longer keep her off it (#172)
+- Air support crates, placed with the builder's PICKUP tools: after a 15 s countdown a helicopter flies in and fires seeker missiles at the enemies on your screen, or a jet makes one strafing pass and drops two bombs. Enemy guns and towers can shoot the helicopter down (#150)
+- The battlefield keeps burning. Wrecks smoulder for minutes with smoke you can read a kill's age from, burnt ground glows with embers, ruins and charred stumps smoke, and a battle haze builds over a long fight and drifts with the wind. Rain, snow and sandstorms each act on the remains, and fires light the night (#149, #153)
+
+### Changed
+- BUILD opens the builder at once and pauses the round behind it; BACK (or Escape) returns to the same moment. Edits made in between are put away, and UNDO in the next BUILD brings them back. PLAY still starts a new round on the edited map (#168)
+- The builder now looks like the round: the same walls, ground, grass, tanks and sky, with its controls on the HUD's corner plates, a DAY switch for editing at night, and a quick swap between modes instead of a cut. Every dialog uses one dark panel (#169)
+- The builder's PICKUP list is grouped under SUPPLIES, WEAPONS, SPECIALS and AIR SUPPORT, and the eraser button is now a crisp drawn eraser (#173, #174)
+- Starting over on the same map glides the camera from your wreck to the new start instead of zooming out and back in, and the end screen dissolves into the next round instead of fading through black. PROTECT and HUNT on the HUD now show the bong they mean (#170)
+- A shell that hits iron now usually bursts on it; about one shot in twenty still ricochets straight back (#151)
+- The gravity well reaches a little further and pulls a little harder to escape, and headlights reach further at night (#154)
+- Enemies drive round crates they have no use for and leave them for you. When two want the same crate only the nearer goes for it, and one that cannot reach a crate gives up on it after a few seconds (#152, #160)
+- Enemies sidestep the tank they are about to drive into instead of the one behind them, so packs pile up, grind and ram you far less (#161)
+
+### Fixed
+- In Boot Camp, a shell fired at a closed training door bursts on it instead of bouncing back at your tank (#151)
+- Enemies no longer dance on the spot between chasing you and a crate, shuttle back and forth past a turning they need, or keep driving into their own pack after they stop firing (#157, #162, #164)
+
+### Online
+- Tall grass flattened by a sonic hammer or a rod strike stops hiding tanks on every player's screen for as long as it does in the room, and a player who joins meanwhile sees it lying flat (#156)
+- Grass a blast sets alight shows as burnt on every screen at the same moment as in the room (#152)
+- Smoke, air support and the new bongs all reach co-op rooms. Players and the room server need this version to play together (#149, #150, #163, #172)
+
+### Platforms
+- Web: bongbong.io has a page below the game with what's in it, the downloads and a newsletter form, plus new Privacy and Support pages. Typing into a field on the page no longer drives your tank (#175)
+
+### Behind the scenes
+- Pull request checks run faster: CI is split into two jobs and the room server build reuses its cache (#171)
+- The online round's and the network rig's tests run on a hand-wound clock, so a busy machine no longer fails them (#158, #159)
+- Builds move to Rust 1.99.0, and every download drops an unused image (#165, #167)
+
 ## 0.2.9 - 2026-10-11
 
 Walls now break where you hit them, fire spreads on the wind, woods are

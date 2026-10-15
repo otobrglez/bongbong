@@ -32,6 +32,13 @@ inputs:
       `just build-web-dev` vs `just build-web`).
     required: false
     default: ""
+  preview:
+    description: >-
+      "true" for a PR preview: the Astro build gets PUBLIC_BB_PREVIEW=1, and
+      the page shows what production holds back until it is out (the App
+      Store badge, site/src/site.ts). Production deploys leave it "false".
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -108,4 +115,6 @@ runs:
     - name: Build Astro site
       shell: bash
       working-directory: site
+      env:
+        PUBLIC_BB_PREVIEW: ${{ inputs.preview == 'true' && '1' || '' }}
       run: yarn build
