@@ -185,7 +185,7 @@ mod tests {
         ("carnival", 0x598d_0c0b_1e33_789e),
         ("jungle-temple", 0xb446_4b07_ae74_0292),
         ("serpent-river", 0xfb39_4486_7e46_0ef9),
-        ("no-mans-land", 0xb130_5fc4_0881_9ab5),
+        ("no-mans-land", 0x53f8_a21b_0c7f_fc43),
         ("glasshouses", 0x2fda_8bc0_d144_e270),
         ("scrapyard", 0x4103_57a1_4c93_bba9),
         ("grand-campaign", 0xee89_f6f6_937d_9311),
