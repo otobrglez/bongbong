@@ -1,0 +1,150 @@
+---
+// A page of words beside the game (privacy, support, the newsletter): the
+// name and the way back to the game along the top, a strip of a shipped map
+// under it (site/public/art/, tools/web/gen_site_art.py), the page's own
+// column, and the footer every page shares. English only: the game page's
+// words follow the browser's language (src/scripts/strings.ts), these are
+// prose and have one.
+import "../styles/site";
+import SiteFooter from "../components/SiteFooter.astro";
+
+interface Props {
+  title: string;
+  description: string;
+  /** The map strip under the header: `band-<name>.webp` in public/art/. */
+  band: "archipelago" | "oasis";
+  current?: "privacy" | "support";
+  /** Apple's trademark line in the footer (SiteFooter). */
+  credit?: boolean;
+}
+
+const { title, description, band, current, credit = false } = Astro.props;
+---
+
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+    <link rel="icon" href="/favicon.ico"/>
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <meta name="description" content={description}/>
+    <title>{title} - BongBong!</title>
+</head>
+<body>
+<header class="top">
+    <a class="name" href="/">
+        <img class="px" src="/art/tank-p1.png" alt="" width="52" height="52"/>
+        <span class="pixel">BongBong!</span>
+    </a>
+    <a class="btn btn-accent" href="/">▶ Back to the game</a>
+</header>
+<div class="band">
+    <img class="px" src={`/art/band-${band}.webp`} alt=""/>
+</div>
+<main>
+    <slot/>
+</main>
+<SiteFooter current={current} credit={credit}/>
+</body>
+</html>
+
+<style lang="scss">
+  :global(html), :global(body) {
+    margin: 0;
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--body-font);
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 16px;
+    min-height: 56px;
+    box-sizing: border-box;
+    padding: 8px 16px;
+    border-bottom: 2px solid var(--panel-line);
+  }
+
+  .name {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    color: #ffffff;
+    text-decoration: none;
+    font-size: 20px;
+
+    .pixel {
+      font-weight: 700;
+    }
+  }
+
+  .band {
+    height: 160px;
+    overflow: hidden;
+    border-bottom: 2px solid var(--panel-line);
+
+    img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+  }
+
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 56px 20px 24px;
+    box-sizing: content-box;
+  }
+
+  main :global(h1) {
+    margin: 0;
+    font-family: var(--pixel-font);
+    font-weight: 700;
+    font-size: clamp(32px, 7vw, 44px);
+    line-height: 1.1;
+    color: #ffffff;
+  }
+
+  main :global(h2) {
+    margin: 36px 0 8px;
+    font-family: var(--pixel-font);
+    font-weight: 400;
+    font-size: 20px;
+    line-height: 1.3;
+    color: #ffffff;
+  }
+
+  main :global(p) {
+    margin: 0 0 12px;
+  }
+
+  main :global(ul) {
+    margin: 0 0 12px;
+    padding-left: 22px;
+  }
+
+  main :global(li) {
+    margin: 4px 0;
+  }
+
+  main :global(a) {
+    color: var(--link);
+
+    &:hover {
+      color: #ffffff;
+    }
+  }
+
+  :global(.site-footer) {
+    border-top: 1px solid var(--panel-line);
+    margin-top: 40px;
+  }
+</style>

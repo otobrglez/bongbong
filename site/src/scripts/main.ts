@@ -11,6 +11,8 @@ import { installMotion } from "./motion";
 import { initTuningPanel } from "./tuning-panel";
 import { installFullscreenToggle } from "./fullscreen";
 import { installOverlay } from "./overlay";
+import { installMorePanel } from "./more-panel";
+import { installNewsletter } from "./newsletter";
 import { applyStrings } from "./strings";
 
 // The page's own words first, in the language the game will pick from the
@@ -36,6 +38,8 @@ installModule(canvas, loading, (module) => {
 });
 installInputShims(canvas);
 installFullscreenToggle();
+installMorePanel();
+installNewsletter();
 // After the labels and the full-screen button are in, so the box it
 // publishes is the one on screen.
 installOverlay();

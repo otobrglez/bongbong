@@ -5,7 +5,26 @@
  *  layout, that scroll becomes visible and fights the tank's movement. */
 const GAME_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"]);
 
+/** Whether `target` takes typing: the newsletter's email box, the tuning
+ *  panel's fields. */
+function editable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+}
+
 export function installInputShims(canvas: HTMLCanvasElement | null): void {
+  // A key typed into one of the page's own fields is the field's, never the
+  // game's. Emscripten's GLFW listens on the window in the capture phase
+  // (its `glfwInit`, when the runtime starts) and would drive the tank, fire
+  // on Space, restart on R and swallow Backspace and Tab; the shims below
+  // would keep the arrows from moving the caret. This listener is on the
+  // same window and phase and is added first - this module runs before the
+  // deferred glue - so stopping the event here keeps every later listener
+  // from seeing it, while the field still takes the key.
+  for (const type of ["keydown", "keypress", "keyup"]) {
+    window.addEventListener(type, (e) => { if (editable(e.target)) e.stopImmediatePropagation(); }, true);
+  }
+
   // Right button is the builder's eraser, never the browser's menu.
   canvas?.addEventListener("contextmenu", (e) => e.preventDefault());
 

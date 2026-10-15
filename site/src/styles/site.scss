@@ -1,0 +1,92 @@
+// The site's colours and the pieces more than one page draws. The page is
+// dark, like the game: the ground is the HUD's bar fill (src/hud.rs
+// `BAR_FILL`), the accent its BUILD amber and the links its ONLINE cyan.
+// Silkscreen is the label face, close to raylib's built-in font the game
+// writes in; IBM Plex Sans carries anything longer than a label.
+
+:root {
+  --ground: #151515;
+  --panel: #1c1c1c;
+  --panel-line: #262626;
+  --raised: #1f1f1f;
+  --raised-line: #333333;
+  --text: #c6c6c6;
+  --text-strong: #f2f2f2;
+  --text-dim: #9a9aa2;
+  --accent: #ffc850;
+  --on-accent: #151515;
+  --link: #78dcff;
+  --grass-panel: #1b2118;
+  --grass-line: #2a3424;
+  --grass-text: #b9c9ae;
+  --grass-input: #11160f;
+  --pixel-font: "Silkscreen", ui-monospace, monospace;
+  --body-font: "IBM Plex Sans", system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid #3a3a3a;
+  border-bottom-width: 3px;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--text-strong);
+  font-family: var(--pixel-font);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+// A sprite or a map crop at the game's own pixels, scaled whole.
+.px {
+  image-rendering: pixelated;
+}
+
+.pixel {
+  font-family: var(--pixel-font);
+  font-weight: 400;
+}
+
+// A button or a link drawn as one: at least 44 px, the size a finger
+// needs.
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 0 16px;
+  border: 1px solid var(--raised-line);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text-strong);
+  font-family: var(--pixel-font);
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+
+  &:hover, &:focus-visible {
+    border-color: #4a4a4a;
+    color: #ffffff;
+  }
+}
+
+// Two classes, so a page's own link colour never wins over it.
+.btn.btn-accent {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+
+  &:hover, &:focus-visible {
+    border-color: #ffd97f;
+    background: #ffd97f;
+    color: var(--on-accent);
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}

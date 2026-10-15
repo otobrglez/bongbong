@@ -1,0 +1,40 @@
+---
+// The seven bongs in a row, standing on a line: the newsletter's company,
+// at 1.3 times their 48 px sprite. Where seven do not fit on one line they
+// stand four over three, both rows centred, rather than six and one.
+// Decoration only - hidden from screen readers.
+const BONGS = ["capi", "blip", "fuzz", "gloop", "oggle", "puff", "spike"];
+---
+
+<div class="bongs" aria-hidden="true">
+    <div class="row">
+        {BONGS.map((b) => <img class="px" src={`/art/bong-${b}.png`} alt="" width="62" height="62"/>)}
+    </div>
+</div>
+
+<style>
+  .bongs {
+    padding: 10px 0 6px;
+    border-top: 1px solid var(--grass-line);
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px clamp(10px, 3vw, 28px);
+  }
+
+  img {
+    width: 62px;
+    height: 62px;
+  }
+
+  @media (max-width: 760px) {
+    .row {
+      max-width: calc(4 * 62px + 3 * 12px);
+      margin: 0 auto;
+      column-gap: 12px;
+    }
+  }
+</style>
