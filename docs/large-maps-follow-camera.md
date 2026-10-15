@@ -369,13 +369,23 @@ local round use the same code, and the dev server reports it.
   the map does not shake your screen, and switchable off (Apple's "make
   motion optional", Xbox accessibility guideline 117).
 - **Cuts, not pans**, for a teleport through a portal, a seat re-entering
-  through a gate (decision 7 of the co-op PRD) and a restart; a pan across
-  half the map is disorienting at this pace.
+  through a gate (decision 7 of the co-op PRD) and another round coming on
+  screen (another map, a room's round); a pan across half the map is
+  disorienting while the fight runs.
+- **A restart glides** (BB-142). A round that starts over on the map
+  already on screen - a loss's countdown, PLAY AGAIN, R - opens held still
+  behind its banner, so the view glides from where it stood (the wreck) to
+  the new start over `camera_restart_glide_seconds` (1 s, about half the
+  banner), smoothstep-eased, onto the follow view as it stands each frame;
+  zooming out to the whole map again after every death read as being
+  thrown out of the game. Reduced motion cuts instead.
 - **Spectate while wrecked.** In a wave round a wrecked seat waits for the
   next wave: the camera follows the nearest live teammate and an arrow
   marks the gate the seat will come through.
-- **An establishing shot** at round start: the whole map for about a
-  second (the bong, the gates), then a cut or a fast zoom to the tank.
+- **An establishing shot** at the start of a map's first round on screen
+  (a level opened, another map, PLAY HERE): the whole map for about a
+  second (the bong, the gates), then a cut or a fast zoom to the tank. A
+  restart on the same map glides instead (above).
 - **Couch play** (desktop only, two seats on one screen): one shared
   view while both tanks' sight boxes fit in it, then a dynamic (Voronoi)
   split along the line between them, each half following its seat at the

@@ -2443,10 +2443,13 @@ pub fn run(args: Args) {
             Some(frame) => {
                 // The round on screen: a room's replica or the local round
                 // (which the lobby and the dialogs stand over, still), on
-                // which map.
+                // which map. Another round on screen cuts, and its first
+                // round plays the establishing shot; a round that starts
+                // over on the same map glides to its start instead.
                 let scene = (session.mode() == Driver::Online, game.map.name.clone(), field);
                 if followed_in.as_ref() != Some(&scene) {
                     follow.cut();
+                    establish.new_scene();
                     followed_in = Some(scene);
                 }
                 follow.observe_events(game);

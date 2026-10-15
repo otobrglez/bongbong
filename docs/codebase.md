@@ -1849,8 +1849,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   critically damped `spring` (`camera_spring_seconds`) with velocity feed-forward toward a goal
   eased into the field over `camera_edge_ease_px`, then hard rules: the sight box stays on screen
   (`Shot::boxes_in`), then the field, a short axis centred. It cuts on a followed seat's
-  `Teleported`/`TankEntered`, on `RoundStarted` or a frame counter going back (`observe_events`,
-  after every step), on a jump, on a far hand-over and on `Follow::cut`.
+  `Teleported`/`TankEntered` (`observe_events`, after every step), on a jump, on a far hand-over and
+  on `Follow::cut` (`app.rs`: another round on screen - another map, a room's replica or back). A
+  restart - `RoundStarted` or a frame counter going back - cuts the tracker to the new start while
+  `update` glides the picture there from the last frame's centre (`Glide`, smoothstep over
+  `camera_restart_glide_seconds`, `Shot::glide` its progress); a cut asked for alongside, a split
+  screen, no seat or `FollowRules::current` under reduced motion (glide 0) cut instead.
   `CameraReport`/`FollowReport` are what `app.rs` hands the dev server. **The couch split**:
   `Shot::split: Option<Split>`, one `Tracker` per half - a Voronoi split along the bisector of the
   tanks as the halves show them (`Split::at`/`normal` in view pixels, `apart`, `in_second`); each
@@ -1858,8 +1862,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`split_aims`/`entry`/`holds`), so neither half jumps; the split closes once the pair fits and the
   halves meet (`MERGE_PX`/`MERGE_SPEED`), chasing the shared centre with no dead zone or edge ease;
   a seat going down hands its half on without a cut; `FollowReport::second` is the second half's
-  camera. Tests: 23 in `follow::tests` (dead zone, lead cap, the box under a slow spring, the spring
-  at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, spectating, the couch).
+  camera. Tests: 24 in `follow::tests` (dead zone, lead cap, the box under a slow spring, the spring
+  at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, the restart glide, spectating, the couch).
 - `establish.rs` (docs/large-maps-follow-camera.md §6) — the establishing shot: a local round on a
   field map whose view shows part of it, opening behind its mission banner, on a field no more than
   `MAX_TEXELS` (4096) a side (and on a phone or a tablet no more than `EMBEDDED_MAX_AREA`, 2048 x
@@ -1868,14 +1872,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   steer or a shot ends both. `Establish::update` runs on `Game::intro_timer`, so a lockstep replays
   it; `Mapping`/`between` is the zoom, a homothety about the one point both ends share, and
   `zoom_split` zooms a couch pair that opens apart into its split. No shot without an intro, in a
-  room's round, or on an arena.
+  room's round, or on an arena, and none on a round starting over on the map already on screen:
+  `Establish::replay` is set once a round on the screen's map has run a frame and cleared by
+  `new_scene` (`app.rs`, with `Follow::cut`), so a restart opens on the follow camera's glide.
 - `motion.rs` (docs/large-maps-follow-camera.md §6) — the one motion switch: the `reduce_motion` row
   (camera group: 0 follows the platform, 1 full motion, 2 reduced) resolved by `reduced()` against
   the platform's answer, which `app::run` reads once at startup (`set_platform`): iOS's
   `UIAccessibilityIsReduceMotionEnabled` (`app::ios::reduce_motion`) and the page's
   `window.bbMotion` (`page_string`, `from_page`); Android, macOS, Linux and Windows give none, which
-  is full motion. Reduced motion means no camera shake, no kill ripple bending the whole screen and
-  an establishing shot that cuts instead of zooming; the follow camera, the split, the arrows and
+  is full motion. Reduced motion means no camera shake, no kill ripple bending the whole screen, an
+  establishing shot that cuts instead of zooming and a restart that cuts instead of gliding; the follow camera, the split, the arrows and
   every effect of the round stay. Tests use `reduced_by`, never the global; `status.camera.motion`
   reports it.
 - `margin.rs` (docs/large-maps-follow-camera.md §13 item 7) — an arena's margins, headless:
@@ -2402,7 +2408,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `status.camera.focus` can be `split`, with `status.camera.split` carrying `line`, `window_line`,
   `apart` and each half's `seat`/`rect`/`offset`/`cut`/`in_view` (a `click` past the divider lands
   in the second half's world); `status.camera.view` is `establishing` during the establishing shot,
-  with `establishing.phase`/`progress`; `status.camera.motion` reports the motion switch. `play`
+  with `establishing.phase`/`progress`; `status.camera.glide` is a restart's glide progress (null
+  with none); `status.camera.motion` reports the motion switch. `play`
   does what `restart` does afterwards, so the step/screenshot loop carries over. `terrain` is the
   tiles-and-fire counterpart of `snapshot`. The capture (`after_render`) is `render`-only; a
   headless server arms a `screenshot` and never answers it. A history ring keeps 3600 frames of
