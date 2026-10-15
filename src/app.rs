@@ -1533,6 +1533,10 @@ pub fn run(args: Args) {
     // them draws every sky without them (`weather::plain`), so the night
     // stays dark there too; the round plays the same either way.
     let mut weather_fx = crate::render::weather::WeatherFx::load(&mut rl, &thread);
+    // The screen a round ended on, kept and dissolved into the next round
+    // (`render::dissolve`). A driver that cannot compile its shader cuts
+    // from one round to the next instead.
+    let mut dissolve = crate::render::dissolve::Dissolve::load(&mut rl, &thread);
     // The world an arena shows past its field in the window's margins
     // (`margin.rs`): made for each round's floor and kept.
     let mut margin_fx = crate::render::margin::MarginFx::default();
@@ -2216,6 +2220,9 @@ pub fn run(args: Args) {
             touch.update(&ui_touch_points, crate::Rect::new(0.0, 0.0, 0.0, 0.0), steer_right, dt);
             clock.reset();
             carried = Input::default();
+            // A round played from here starts from the builder, never from
+            // an end screen kept before it.
+            dissolve.forget();
             // The builder shows its canvas through its own camera.
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             if let Some(dev) = &mut dev {
@@ -2738,6 +2745,7 @@ pub fn run(args: Args) {
                     }),
                     _ => None,
                 },
+                dissolve: Some(&mut dissolve),
             },
             &Textures {
                 tanks: &tanks_texture,

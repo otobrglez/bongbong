@@ -88,7 +88,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   frame's steps `Session::note_outcome` and `take_progress` hand a won level to `save_progress` and
   `Session::follow_countdown` takes the way a level's end screen counted down to, and in Play mode a
   press on a level's end screen (`press_result`) and Enter (`enter_result`) come after the dialogs
-  and before the corners' buttons. The level select comes before everything while it is up (a
+  and before the corners' buttons. **Between local rounds nothing goes black**: `tick_curtain` (after
+  `follow_countdown`) notes whether the frame's screen is kept (`keeps_picture`: a decided round, or
+  one behind the level select), the end screen's words lift out over its last
+  `round_verdict_lift_seconds` (`verdict_lift`, `take_way` hurrying the clock to it, the dim
+  staying), and a round started from a kept screen dissolves in from it (`dissolve`):
+  `render/dissolve.rs` keeps the screen in a framebuffer-sized texture (`Effects::dissolve`, drawn
+  before `begin_drawing` through a camera at the window's scale) and drops it block by block through
+  `static/dissolve.fs` over everything; a round started mid-play (R) or from the builder cuts in. The level select comes before everything while it is up (a
   `level_select::SelectInput` from the pointer, the arrows, Enter and Esc/Tab, every press claimed
   from the touch scheme); Esc opens it in play mode, as the bar's level button does. **The field is
   the map's, the window is anyone's** (docs/fullscreen-resolution-research.md,

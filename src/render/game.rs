@@ -195,6 +195,10 @@ pub struct Effects<'a> {
     /// A couch's split screen (`follow::Split`): the second half, put on
     /// the window past the divider after the first; `None` draws one view.
     pub split: Option<SplitLayer<'a>>,
+    /// The screen kept for the dissolve into the next round and its shader
+    /// (`render::dissolve`, `PlayChrome::keep_screen`/`dissolve`); `None`
+    /// keeps nothing and cuts.
+    pub dissolve: Option<&'a mut crate::render::dissolve::Dissolve>,
 }
 
 /// The second half of a couch's split screen, as a frame draws it
@@ -537,34 +541,78 @@ impl Game {
             }
             _ => None,
         };
-        let mut d = rl.begin_drawing(thread);
-        if camera.follows() {
-            crate::render::view::present_world(&mut d, composite, camera, view, layout, backdrop);
-        } else {
-            crate::render::view::present_into(&mut d, composite, view, backdrop, margins.as_ref());
-        }
-        // A split screen's second half over the first, past the divider,
-        // and the divider over both.
-        match &split {
-            Some(SplitLayer::Follow { camera: second, composite: world, at, normal, apart, .. }) if camera.follows() => {
-                crate::render::view::present_half(&mut d, world, second, view, layout, *at, *normal);
-                crate::render::view::draw_divider(&mut d, view, layout, *at, *normal, *apart, DIVIDER);
-            }
-            Some(SplitLayer::Zoom { view: second, at, normal, alpha, apart }) if !camera.follows() => {
-                crate::render::view::present_zoom_half(&mut d, composite, second, *at, *normal, backdrop);
-                crate::render::view::draw_zoom_divider(&mut d, view.window, *at, *normal, second.scale, *alpha, *apart, DIVIDER);
-            }
-            _ => {}
-        }
         let base = crate::render::view::onto_window(
             Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale },
             frame.units,
         );
+        // This frame's screen, kept for the dissolve into the next round
+        // (`render::dissolve`): the picture the window gets below, drawn
+        // into the kept texture first. raylib scales the window's direct
+        // draws onto its framebuffer; the texture's go through a camera at
+        // the same scale, and the chrome's cameras carry it already.
+        match (chrome.keep_screen, effects.dissolve.as_deref_mut()) {
+            (true, Some(dissolve)) => {
+                let size = ((view.window.0 * frame.units).round() as i32, (view.window.1 * frame.units).round() as i32);
+                if let Some(target) = dissolve.keep(rl, thread, size) {
+                    let onto = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.units };
+                    rl.draw_texture_mode(thread, target, |mut t| {
+                        t.draw_mode2D(onto, |mut t, _| present_frame(&mut t, composite, camera, view, layout, backdrop, margins.as_ref(), &split));
+                        self.draw_chrome(&mut t, &text, &hud, chrome, &frame, layout, camera, indicators, bubble, minimap.as_ref(), textures, touch, fx_live, base);
+                    });
+                }
+            }
+            // Neither kept nor dissolving: what is kept is not the screen
+            // a new round starts from any more.
+            (false, Some(dissolve)) if chrome.dissolve.is_none() => dissolve.forget(),
+            _ => {}
+        }
+        let mut d = rl.begin_drawing(thread);
+        present_frame(&mut d, composite, camera, view, layout, backdrop, margins.as_ref(), &split);
         let chrome_stage = crate::frame_stages::stage("chrome");
         self.draw_chrome(&mut d, &text, &hud, chrome, &frame, layout, camera, indicators, bubble, minimap.as_ref(), textures, touch, fx_live, base);
         drop(chrome_stage);
+        // The screen the last round ended on, dissolving into this one
+        // over everything, block by block - both under the same dim, so
+        // the brightness holds.
+        if let (Some(p), Some(dissolve)) = (chrome.dissolve, effects.dissolve.as_deref_mut()) {
+            let eased = p * p * (3.0 - 2.0 * p);
+            let block = tuning().round_dissolve_block_pt * ui.scale * frame.units;
+            dissolve.draw(&mut d, eased, block, view.window);
+        }
         let _swap = crate::frame_stages::stage("swap");
         drop(d);
+    }
+}
+
+/// The world on a frame - `present_world` for a followed view,
+/// `present_into` otherwise - and a split screen's second half past the
+/// divider, with the divider over both.
+#[allow(clippy::too_many_arguments)]
+fn present_frame(
+    d: &mut impl RaylibDraw,
+    composite: &RenderTexture2D,
+    camera: &Camera,
+    view: &View,
+    layout: &Layout,
+    backdrop: Color,
+    margins: Option<&crate::render::view::Margins>,
+    split: &Option<SplitLayer>,
+) {
+    if camera.follows() {
+        crate::render::view::present_world(d, composite, camera, view, layout, backdrop);
+    } else {
+        crate::render::view::present_into(d, composite, view, backdrop, margins);
+    }
+    match split {
+        Some(SplitLayer::Follow { camera: second, composite: world, at, normal, apart, .. }) if camera.follows() => {
+            crate::render::view::present_half(d, world, second, view, layout, *at, *normal);
+            crate::render::view::draw_divider(d, view, layout, *at, *normal, *apart, DIVIDER);
+        }
+        Some(SplitLayer::Zoom { view: second, at, normal, alpha, apart }) if !camera.follows() => {
+            crate::render::view::present_zoom_half(d, composite, second, *at, *normal, backdrop);
+            crate::render::view::draw_zoom_divider(d, view.window, *at, *normal, second.scale, *alpha, *apart, DIVIDER);
+        }
+        _ => {}
     }
 }
 
@@ -1158,16 +1206,22 @@ impl Game {
             if let Some((title, color, sub)) = c.banner.as_ref().filter(|_| c.verdict > 0.0) {
                 // Eased in after the finale: the dim deepens, the title
                 // settles from a little above its row, everything fades up.
+                // Ahead of the way the screen takes, the words lift out -
+                // the title rising - and the dim stays, the next round's
+                // banner's own (`PlayChrome::verdict_lift`).
                 let v = c.verdict;
                 let eased = 1.0 - (1.0 - v) * (1.0 - v) * (1.0 - v);
-                let fade = |col: Color| Color::new(col.r, col.g, col.b, (col.a as f32 * eased).round() as u8);
-                let drop = ((1.0 - eased) * -16.0).round() as i32;
+                let l = chrome.verdict_lift.clamp(0.0, 1.0);
+                let lifted = l * l * (3.0 - 2.0 * l);
+                let shown = eased * (1.0 - lifted);
+                let fade = |col: Color| Color::new(col.r, col.g, col.b, (col.a as f32 * shown).round() as u8);
+                let drop = ((1.0 - eased) * -16.0 - lifted * 12.0).round() as i32;
                 d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, (120.0 * eased).round() as u8));
                 match &chrome.result {
                     Some(view) => {
                         let rows = crate::hud::result_layout(area, view);
                         draw_banner(&mut d, area, title, RESULT_TITLE_SIZE, rows.title_y as i32 + drop, fade(*color));
-                        draw_result(&mut d, area, view, sub, eased);
+                        draw_result(&mut d, area, view, sub, shown);
                     }
                     None => {
                         let size = banner_size(title, RESULT_TITLE_SIZE, area);
@@ -1248,12 +1302,6 @@ impl Game {
         // on the glass whatever scale the world is drawn at.
         if let Some((touch, steer_right)) = touch {
             d.draw_mode2D(ui_camera, |mut d, _| touch.draw(&mut d, steer_right, ui.hints));
-        }
-
-        // The fade through black between rounds, over everything.
-        if chrome.curtain > 0.0 {
-            let black = Color::new(0, 0, 0, (255.0 * chrome.curtain.clamp(0.0, 1.0)).round() as u8);
-            d.draw_mode2D(ui_camera, |mut d, _| d.draw_rectangle(0, 0, screen_w, screen_h, black));
         }
     }
 }

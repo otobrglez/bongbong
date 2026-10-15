@@ -399,11 +399,17 @@ tunables! {
         /// motion; reduced motion has none.
         round_slowmo_scale: f32 = 0.5 in 0.1 ..= 1.0;
         round_slowmo_seconds: f32 = 0.5 in 0.0 ..= 2.0;
-        /// The fade through black to another level, out and in, each this
-        /// many seconds.
-        level_fade_seconds: f32 = 0.4 in 0.0 ..= 2.0;
-        /// The fade through black playing the same map again, out and in.
-        retry_fade_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// The end screen's title, numbers and countdown lift out over its
+        /// last this many seconds before it takes a way - by itself or
+        /// pressed - while its dim stays, so the next round dissolves in
+        /// under the one dim (`Session::verdict_lift`).
+        round_verdict_lift_seconds: f32 = 0.3 in 0.0 ..= 1.0;
+        /// The screen the round ended on dissolves into the next round's
+        /// over this long, block by block through the 4x4 Bayer pattern
+        /// (`render::dissolve`). 0 cuts; reduced motion cuts.
+        round_dissolve_seconds: f32 = 0.5 in 0.0 ..= 2.0;
+        /// The side of one of the dissolve's blocks, UI points.
+        round_dissolve_block_pt: f32 = 6.0 in 1.0 ..= 24.0;
     }
 
     group mission {

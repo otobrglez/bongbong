@@ -378,7 +378,9 @@ local round use the same code, and the dev server reports it.
   the new start over `camera_restart_glide_seconds` (1 s, about half the
   banner), smoothstep-eased, onto the follow view as it stands each frame;
   zooming out to the whole map again after every death read as being
-  thrown out of the game. Reduced motion cuts instead.
+  thrown out of the game. The end screen dissolves into the new round as
+  the glide begins (BB-146, docs/effects.md), so the whole of it is seen.
+  Reduced motion cuts instead.
 - **Spectate while wrecked.** In a wave round a wrecked seat waits for the
   next wave: the camera follows the nearest live teammate and an arrow
   marks the gate the seat will come through.

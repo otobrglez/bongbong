@@ -1591,9 +1591,16 @@ pub struct PlayChrome {
     /// Air support is called or in the air for a seat the blocks show
     /// (`air_support_up`): a lamp row under each block with its box.
     pub air_support: bool,
-    /// How dark the fade through black between rounds is, 0 to 1
-    /// (`Session::curtain`), drawn over everything else.
-    pub curtain: f32,
+    /// How far the end screen's title, numbers and countdown have lifted
+    /// out ahead of the way it takes, 0 to 1 (`Session::verdict_lift`);
+    /// its dim stays.
+    pub verdict_lift: f32,
+    /// Keep this frame's screen for the dissolve into the next round
+    /// (`Session::keeps_picture`, `render::dissolve`).
+    pub keep_screen: bool,
+    /// How far the kept screen has dissolved into the round just started,
+    /// 0 to 1, while it does (`Session::dissolve`); drawn over everything.
+    pub dissolve: Option<f32>,
 }
 
 /// A special's prompt (`PlayChrome::prompt`) for the first of `seats` -
