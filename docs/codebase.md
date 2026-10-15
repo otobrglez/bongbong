@@ -2066,8 +2066,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   longer than the room is wide runs on into a second row, the cells shrinking to the room's height
   but never under 44 pt, the categories flowing along the rows where even that is too tall) -
   never shrinking a button. `PopupLayout`: the tray's lists and palette rise from it into
-  `over_tray()` (`tray_list`, `tray_palette`), or hang down the whole room on a window too short
-  for their columns there; FILE's menu and the MAP and CHECK panels hang from their button under
+  `over_tray()` (`tray_tools`, `tray_list`, `tray_palette`), or hang down the whole room on a window
+  too short for their columns there - a category's list is a `ToolList` (a row per tool, and over
+  PICKUP's its `PickupGroup`s' headings: `headed_list`'s three columns where they fit, plain rows
+  where not), and the palette's rows are `Shelf`s (a category each, PICKUP a group each where those
+  fit the room); FILE's menu and the MAP and CHECK panels hang from their button under
   the top-right plate, and the Load list, the STAMPS list and the Save prompt are centred in the
   room - a long list running into a second column and the CHECK panel, the Load list and the
   STAMPS list (at most `LOAD_VISIBLE_ROWS`) turning pages by a pager row and the wheel where their

@@ -243,8 +243,9 @@ word (its arrow stays), then the clear flag folds into CHECK, which turns
 the flag's green once the map is cleared. Along the bottom, where the six
 category buttons, BRUSH and the eraser would take more than `TRAY_MOST`
 (three quarters) of the area's width - a phone's - the six and BRUSH fold
-into one `TOOLS` button whose palette holds every category and the brush's
-row, which leaves a phone's canvas its bottom edge. Every button keeps its
+into one `TOOLS` button whose palette holds every category - PICKUP's
+groups a row each where they fit - and the brush's row, which leaves a
+phone's canvas its bottom edge. Every button keeps its
 full size, 44 pt both ways on a touch screen (`hud::UI_TOUCH_PT`).
 
 **What stands round the plates.** The status line is a plate of its own
@@ -266,10 +267,11 @@ Categories and their tools, in list order:
 | PROP | sandbag, barrel, oil drum, fuel drum, fence, tree, pine |
 | GROUND | road, water, tall grass, oil trail, gate |
 | ACTOR | p1 start, p2 start, bong, enemy bong |
-| PICKUP | health, ammo, laser, minigun, plasma, speed-up, shield, flamethrower, bong pack |
+| PICKUP | in four groups (`editor::PickupGroup`): SUPPLIES - ammo, health, shield, heat shield, speed-up, bong pack, tower pack; WEAPONS - laser, minigun, plasma, missiles, flamethrower, grenades; SPECIALS - sonic hammer, EMP burst, gauss rail, FPV swarm, rod from god, gravity well; AIR SUPPORT - chopper, jet |
 
 Each category remembers its current tool for the session; the initial tool
-is the first in each list, and the active brush at entry is `WALL / brick`.
+is the first in each list - PICKUP's is AMMO, so its button shows a crate of
+supplies rather than a heal - and the active brush at entry is `WALL / brick`.
 
 Every button on the plates - and on the select tool's strip, and the Save
 prompt's SAVE - is framed as play's corner buttons are
@@ -324,6 +326,16 @@ docs/large-maps-follow-camera.md section 9).
   32 px icon with 8 pt inset, the name in 18 pt, the current tool
   highlighted; a list too long for its room runs on in a second column,
   its rows shortening where the room is short, never under 44 pt.
+- PICKUP's list stands its 21 crates in their groups' columns
+  (`chrome::tray_tools`, `headed_list`): SUPPLIES; WEAPONS over AIR
+  SUPPORT; SPECIALS - each group under its heading, in the accent over a
+  rule as the MAP panel heads its groups (`LIST_HEADING_H` 28 pt, 8 pt
+  between two groups of a column). Three columns of 200 pt, nine rows at
+  most; where the room is too short for them even at 44 pt rows the list
+  falls back to plain rows, still group by group. The folded palette gives
+  each group a row of its own under its short name (`pickup-group-*-short`:
+  AIR), and keeps PICKUP one row where those rows would not fit the room
+  (`chrome::Shelf`).
 - Every list, panel and prompt stands on the chrome's one dark panel
   (`render::hud::draw_panel`: a near-opaque fill, corners 8 pt round, a
   4 pt drop shadow and a thin dark edge) - the one play's questions, the

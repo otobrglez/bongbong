@@ -236,6 +236,14 @@ category-ground = TLA
 category-plant = RASTJE
 category-actor = FIGURA
 category-pickup = BONUS
+# The PICKUP list's group headings (the builder's tray); the -short ones
+# name a group in the folded palette's narrow name column.
+pickup-group-supplies = ZALOGE
+pickup-group-weapons = OROŽJE
+pickup-group-specials = POSEBNA OROŽJA
+pickup-group-specials-short = POSEBNA
+pickup-group-air = ZRAČNA PODPORA
+pickup-group-air-short = ZRAK
 
 file-load = NALOŽI...
 file-save = SHRANI
