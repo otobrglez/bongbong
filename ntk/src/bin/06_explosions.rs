@@ -88,7 +88,6 @@ fn main() {
     // whichever its map picks.
     let bongs: Vec<bongbong::render::bong::BongTextures> =
         bongbong::bong::BongKind::ALL.into_iter().map(|kind| bongbong::render::bong::BongTextures::load(&mut rl, &thread, kind)).collect();
-    let eraser = load(&mut rl, "static/ui/eraser.png");
 
     // The three full-screen ripple shaders the renderer resolves in pass 2.
     let ripple = |rl: &mut RaylibHandle, file: &str, speed: f32, width_: f32, strength: f32, duration: f32| {
@@ -237,7 +236,6 @@ fn main() {
                             theme: bongbong::map::Theme::Grass,
                             bong_idle: &bongs[session.builder.map().bong_kind(bongbong::bong::Side::Player).index()].idle,
                             enemy_bong_idle: &bongs[session.builder.map().bong_kind(bongbong::bong::Side::Enemy).index()].idle,
-                            eraser: &eraser,
                             minimap: None,
                             thumbnails: None,
                         },

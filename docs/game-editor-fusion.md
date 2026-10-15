@@ -177,8 +177,8 @@ round as usual and then opens the builder on it.
   the builder, so BACK plays it from its first frame.
 - The builder compiles into every build. The `map-editor` cargo feature is
   removed: `Cargo.toml`, the `#[cfg]`s in `main.rs`/`lib.rs`/`editor.rs`,
-  the justfile/CI flags. `static/ui/eraser.png` loads unconditionally (it is
-  already bundled with `static/`).
+  the justfile/CI flags. The eraser's icon is drawn in code
+  (`editor::render::draw_eraser_icon`), so nothing extra loads.
 
 ## 6. Play mode: the BUILD button
 

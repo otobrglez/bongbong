@@ -78,7 +78,6 @@ pub struct EditorTextures<'a> {
     pub bong_idle: &'a Texture2D,
     /// The same for the enemy's bong, for the ENEMY BONG tool's icon.
     pub enemy_bong_idle: &'a Texture2D,
-    pub eraser: &'a Texture2D,
     /// The canvas map's theme: a desert map's trees are drawn dry
     /// (`Material::is_dry`), as the round will draw them.
     pub theme: Theme,
@@ -1908,17 +1907,50 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
                 d.draw_texture_pro(textures.sheets.towers, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             }
         }
-        Tool::Eraser => {
-            d.draw_texture_pro(
-                textures.eraser,
-                Rectangle::new(0.0, 0.0, textures.eraser.width() as f32, textures.eraser.height() as f32),
-                dest,
-                Vector2::new(0.0, 0.0),
-                0.0,
-                Color::WHITE,
-            );
-        }
+        Tool::Eraser => draw_eraser_icon(d, dest),
         Tool::Select => draw_brush_icon(d, BrushRow::Select, rect, TEXT),
+    }
+}
+
+/// The eraser's icon, a unit a character: a block eraser standing at 45
+/// degrees, its rubber end down in the red an erasing drag is outlined in
+/// (`R`, `ERASE_MARK`) with its side in the palette's RED_DEEP (`d`), the
+/// sleeve white (`W`), its far end STONE_LT (`L`) and its side STONE_DK
+/// (`M`).
+const ERASER_ICON: [&str; 12] = [
+    "........L...",
+    ".......WWL..",
+    "......WWWWL.",
+    ".....WWWWWMM",
+    "....WWWWWMM.",
+    "...RWWWWMM..",
+    "..RRRWWMM...",
+    ".RRRRRMM....",
+    "RRRRRdd.....",
+    ".RRRdd......",
+    "..Rdd.......",
+    "...d........",
+];
+
+/// The eraser's icon (`ERASER_ICON`) in `dest`, centred, a whole number of
+/// pixels a unit so its diagonals stay clean: 2 in the mouse tray's 24 pt.
+fn draw_eraser_icon(d: &mut impl RaylibDraw, dest: Rectangle) {
+    let units = ERASER_ICON.len() as f32;
+    let u = (dest.width.min(dest.height) / units).floor().max(1.0);
+    let x0 = (dest.x + (dest.width - u * units) / 2.0).round();
+    let y0 = (dest.y + (dest.height - u * units) / 2.0).round();
+    for (row, line) in ERASER_ICON.iter().enumerate() {
+        for (col, c) in line.bytes().enumerate() {
+            let color = match c {
+                b'R' => ERASE_MARK,
+                b'd' => Color::new(0x9C, 0x35, 0x27, 255),
+                b'W' => TEXT,
+                b'L' => Color::new(0xC1, 0xC1, 0xC1, 255),
+                b'M' => Color::new(0x7E, 0x7E, 0x7E, 255),
+                _ => continue,
+            };
+            d.draw_rectangle_rec(Rectangle::new(x0 + col as f32 * u, y0 + row as f32 * u, u, u), color);
+        }
     }
 }
 
@@ -2584,6 +2616,22 @@ fn draw_anchor(d: &mut impl RaylibDraw, rect: Rectangle, anchor: Anchor, color: 
                 d.draw_rectangle_lines_ex(square, 2.0, color);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod eraser_icon_tests {
+    use super::*;
+
+    /// The eraser's grid is square and holds only the colours its painter
+    /// knows, its rubber end the lowest and leftmost of it.
+    #[test]
+    fn the_eraser_icon_is_a_square_of_known_colours() {
+        let n = ERASER_ICON.len();
+        assert!(ERASER_ICON.iter().all(|row| row.len() == n && row.bytes().all(|c| b".RdWLM".contains(&c))));
+        let first = |c: u8| ERASER_ICON.iter().enumerate().find_map(|(y, row)| row.bytes().position(|b| b == c).map(|x| (x, y)));
+        let (rubber, sleeve) = (first(b'R').expect("a rubber end"), first(b'W').expect("a sleeve"));
+        assert!(rubber.0 < sleeve.0 && rubber.1 > sleeve.1, "the rubber end is down and left of the sleeve");
     }
 }
 

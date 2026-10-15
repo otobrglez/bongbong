@@ -3,8 +3,8 @@
 Status: implemented, except the in-game entry point (see "Entering the
 editor" below) - that, and the editor's fusion into the game as a Build
 mode, is specified in docs/game-editor-fusion.md. `map.rs` (format), `battlefield::spawn_from_map`,
-the `simulation::Game::init`/`update` wiring (walls/road/bong/pickup slots),
-`src/editor/` (`MapEditor`) and `static/ui/eraser.png` are all in place.
+the `simulation::Game::init`/`update` wiring (walls/road/bong/pickup slots)
+and `src/editor/` (`MapEditor`) are all in place.
 The editor is no longer a standalone `--editor` driver behind a Cargo
 feature: it is the game's Build mode (`src/mode.rs`, `src/editor/`),
 compiled into every build, entered from play's `BUILD` button and left
@@ -254,9 +254,12 @@ Loaded once alongside the other textures, only when the editor is
 compiled/entered (see "Dev-only gating" below) so the normal game binary
 doesn't pay for a texture it never draws.
 
-*Status: the builder now ships in every build, so `eraser.png` loads
-unconditionally with the rest of `static/` (docs/game-editor-fusion.md
-section 5).*
+*Status: superseded. The craftpix icon read as "close" rather than
+"erase" and sat outside the palette, so the eraser is drawn in code now
+(`editor::render::ERASER_ICON`, `draw_eraser_icon`): a block eraser at 45
+degrees on a 12-unit grid, its rubber end in the red an erasing drag is
+outlined in, a whole number of pixels a unit (2 in the mouse tray's 24 pt).
+`static/ui/` and its SOURCE.md are gone (BB-147).*
 
 ### Road & autotiling
 

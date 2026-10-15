@@ -1515,9 +1515,6 @@ pub fn run(args: Args) {
         .into_iter()
         .map(|kind| crate::render::bong::BongTextures::load(&mut rl, &thread, kind))
         .collect();
-    let eraser_texture = rl
-        .load_texture(&thread, "static/ui/eraser.png")
-        .expect("failed loading eraser texture");
 
     let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread);
     // The plasma orb and flame jet shaders. A driver that cannot compile
@@ -2278,7 +2275,6 @@ pub fn run(args: Args) {
                     // The bongs the canvas map picks, for their tools' icons.
                     bong_idle: &bong_textures[session.builder.map().bong_kind(crate::bong::Side::Player).index()].idle,
                     enemy_bong_idle: &bong_textures[session.builder.map().bong_kind(crate::bong::Side::Enemy).index()].idle,
-                    eraser: &eraser_texture,
                     minimap,
                     thumbnails: Some(&builder_thumbnails),
                 },
