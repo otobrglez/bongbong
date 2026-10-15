@@ -48,9 +48,12 @@ CROPS = [
 
 TANK_CELL = 40
 TURRET_COL = 20
-# Sheet rows: the first chassis of each team block (src/lib.rs
-# `TANK_ROWS_PER_TEAM`), the enemy first, then players one to four.
-TANKS = [("enemy", 0), ("p1", 12), ("p2", 24), ("p3", 36), ("p4", 48)]
+TANK_ROWS_PER_TEAM = 12  # src/lib.rs
+# The chassis the app's icon draws (tools/ios/gen_app_icon.py's default
+# --row), so the page's tanks are the logo's, in each team's colours: the
+# enemy block first, then players one to four.
+LOGO_CHASSIS = 1
+TANKS = [(name, block * TANK_ROWS_PER_TEAM + LOGO_CHASSIS) for block, name in enumerate(["enemy", "p1", "p2", "p3", "p4"])]
 
 BONG_CELL = 48
 BONGS = ["blip", "capi", "fuzz", "gloop", "oggle", "puff", "spike"]
