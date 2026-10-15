@@ -286,7 +286,7 @@ fn main() {
             &view,
             &Camera::whole((width, height)),
             bongbong::math::Color::WHITE,
-            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None, indicators: None, bubble: None, minimap: None, margins: None, split: None },
+            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None, indicators: None, bubble: None, minimap: None, margins: None, split: None, dissolve: None },
             &textures,
             &layout_play,
             &PlayChrome::default(),
