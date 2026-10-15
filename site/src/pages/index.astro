@@ -609,8 +609,7 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
         flex: 1 1 520px;
         min-width: 0;
         display: flex;
-        flex-wrap: wrap;
-        align-items: center;
+        flex-direction: column;
         gap: 24px;
         box-sizing: border-box;
         padding: 24px;
@@ -628,25 +627,19 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
         }
       }
 
-      .phone {
-        flex: 1 1 240px;
-        height: 170px;
-        overflow: hidden;
-        border: 10px solid #050505;
-        border-radius: 26px;
-        background: #050505;
-
-        img {
-          display: block;
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          object-position: 15% 50%;
-        }
+      /* The game on Apple's own iPhone bezel (tools/web/gen_site_art.py
+         `--iphone`), shown whole as Apple's marketing guidelines ask - never
+         cropped, tilted or shadowed - and smoothly scaled: it is a
+         photograph of a phone, not pixel art. */
+      .iphone {
+        display: block;
+        width: 100%;
+        max-width: 560px;
+        height: auto;
+        margin: 0 auto;
       }
 
       .ios-text {
-        flex: 1 1 250px;
         display: flex;
         flex-direction: column;
         align-items: flex-start;
@@ -1088,8 +1081,8 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
                 in.</p>
             <div class="take">
                 <article class="ios">
-                    <div class="phone"><img class="px" src="/art/field-oasis.webp" alt="" width="400" height="200"
-                                            loading="lazy"/></div>
+                    <img class="iphone" src="/art/iphone.webp" alt="BongBong running on an iPhone 18 Pro"
+                         data-i18n-alt="iphoneAlt" width="1120" height="548" loading="lazy"/>
                     <div class="ios-text">
                         <h3 data-i18n="ios">iPhone and iPad</h3>
                         <p data-i18n="iosText">Left thumb steers, right thumb fires. Plays offline.</p>

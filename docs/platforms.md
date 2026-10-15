@@ -214,7 +214,10 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   The fonts are Silkscreen for labels and IBM Plex Sans for prose, self-hosted from the
   `@fontsource` packages (Latin and Latin Extended); the map crops and sprites in
   `site/public/art/` come from `tools/web/gen_site_art.py` (mapshot's CPU renderer, then crops) -
-  regenerate them, never edit them by hand.
+  regenerate them, never edit them by hand. `iphone.webp` is a simulator screenshot of the game set
+  into Apple's landscape bezel of the newest iPhone (`--iphone BEZEL SCREEN`; the bezel comes from
+  developer.apple.com/design/resources under Apple's Design Resources license and stays out of the
+  repo), shown whole and unaltered as Apple's marketing guidelines ask; the credit line names it.
 - **The page's JavaScript lives in `site/src/scripts/`** (entry `main.ts`; `runtime.ts` defines
   `window.Module`, `loading-panel.ts`, `input.ts`, `fullscreen.ts`, `more-panel.ts`, `newsletter.ts`,
   `tuning-panel.ts`, `strings.ts` - the page's own words in each shipped language, picked by the

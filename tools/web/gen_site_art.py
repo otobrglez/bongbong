@@ -12,6 +12,15 @@ the art or one of these maps changes.
 
     nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
         --run "python3 tools/web/gen_site_art.py [--mapshot target/release/mapshot]"
+
+With `--iphone BEZEL SCREEN` it also writes iphone.webp, the "Take it with
+you" picture: a simulator screenshot of the game (`just run-ios-sim` with
+BONGBONG_IOS_DEVICE on the newest iPhone, then `just ios-screenshot`) set into
+Apple's product bezel for that iPhone, landscape (Bezel-iPhone-<N>.dmg from
+developer.apple.com/design/resources, under Apple's Design Resources license;
+the bezel itself never goes in the repo). Apple's marketing guidelines want
+the latest model and the bezel as provided - only scaled, never cropped,
+tilted or shadowed - with the app on its screen as it runs.
 """
 
 import argparse
@@ -20,7 +29,7 @@ import subprocess
 import sys
 import tempfile
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(ROOT, "site", "public", "art")
@@ -65,11 +74,41 @@ def save(image, name, ext):
     print(os.path.relpath(path, ROOT), image.size)
 
 
+IPHONE_WIDTH = 1120  # twice the widest the page shows it, for a 2x screen
+
+
+def iphone(bezel_path, screen_path):
+    """The screenshot in the bezel's transparent screen, which is found by
+    filling from the bezel's centre and clips the screenshot to its rounded
+    corners, then scaled to `IPHONE_WIDTH`."""
+    bezel = Image.open(bezel_path).convert("RGBA")
+    opening = bezel.getchannel("A").point(lambda v: 255 if v < 8 else 0)
+    ImageDraw.floodfill(opening, (bezel.width // 2, bezel.height // 2), 128)
+    opening = opening.point(lambda v: 255 if v == 128 else 0)
+    box = opening.getbbox()
+    screen = Image.open(screen_path).convert("RGBA")
+    size = (box[2] - box[0], box[3] - box[1])
+    if screen.size != size:
+        sys.exit(f"the screenshot is {screen.size[0]}x{screen.size[1]}, the bezel's screen {size[0]}x{size[1]}")
+    picture = Image.new("RGBA", bezel.size)
+    picture.paste(screen, box[:2], opening.crop(box))
+    picture.alpha_composite(bezel)
+    height = round(picture.height * IPHONE_WIDTH / picture.width)
+    picture = picture.resize((IPHONE_WIDTH, height), Image.LANCZOS)
+    path = os.path.join(OUT, "iphone.webp")
+    picture.save(path, "WEBP", quality=90, method=6)
+    print(os.path.relpath(path, ROOT), picture.size)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--mapshot", help="a built mapshot binary (default: cargo run --release --bin mapshot)")
+    parser.add_argument("--iphone", nargs=2, metavar=("BEZEL", "SCREEN"),
+                        help="also write iphone.webp: the landscape bezel PNG and a simulator screenshot")
     args = parser.parse_args()
     os.makedirs(OUT, exist_ok=True)
+    if args.iphone:
+        iphone(*args.iphone)
 
     with tempfile.TemporaryDirectory() as shots:
         fields = render_maps(args.mapshot, shots)

@@ -55,6 +55,7 @@ type Strings = {
   takeTitle: string;
   takeLead: string;
   ios: string;
+  iphoneAlt: string;
   iosText: string;
   iosLink: string;
   iosSoon: string;
@@ -110,6 +111,7 @@ const EN: Strings = {
   takeTitle: "Take it with you",
   takeLead: "The same game on every screen. The browser is just the quickest way in.",
   ios: "iPhone and iPad",
+  iphoneAlt: "BongBong running on an iPhone 18 Pro",
   iosText: "Left thumb steers, right thumb fires. Plays offline.",
   iosLink: "Download from the App Store",
   iosSoon: "Coming soon to the App Store.",
@@ -162,6 +164,7 @@ const SL: Strings = {
   takeTitle: "Vzemi jo s seboj",
   takeLead: "Ista igra na vsakem zaslonu. Brskalnik je le najhitrejša pot do nje.",
   ios: "iPhone in iPad",
+  iphoneAlt: "BongBong na iPhonu 18 Pro",
   iosText: "Levi palec vozi, desni strelja. Deluje tudi brez povezave.",
   iosLink: "Prenesi iz trgovine App Store",
   iosSoon: "Kmalu v trgovini App Store.",

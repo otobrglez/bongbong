@@ -1,7 +1,8 @@
 ---
 // The foot of every page: the name, and the ways to the rest of the site
-// and to its maker. `credit` adds Apple's trademark line, which Apple's
-// badge guidelines want once on the site, where its legal notices are.
+// and to its maker. `credit` adds Apple's trademark line for the marks the
+// site shows (the badge, the iPhone bezel, the names), which Apple's
+// marketing guidelines want once on the site, where its legal notices are.
 import { CHANGELOG_URL, CONTACT_EMAIL, SOURCE_URL } from "../site";
 
 interface Props {
@@ -25,7 +26,7 @@ const { current, credit = false } = Astro.props;
         <a href={SOURCE_URL} data-i18n="source">Source</a>
         <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
     </nav>
-    {credit && <p class="credit">Apple and the Apple logo are trademarks of Apple Inc., registered in the U.S. and other countries.</p>}
+    {credit && <p class="credit">Apple, the Apple logo, iPhone, iPad and App Store are trademarks of Apple Inc., registered in the U.S. and other countries.</p>}
 </footer>
 
 <style lang="scss">
