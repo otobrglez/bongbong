@@ -98,7 +98,9 @@ the other over BONG_HOP_SECONDS, exactly as long as `hop.png` plays, and
 `Game::update` copies that same position into the physics body every frame
 so the bong stays collidable throughout the leap instead of just at the
 start/end. The clip's own lift and shadow carry the arc; the position moves
-along the ground.
+along the ground. The same clip carries every hop the bong makes: the evasive
+leap, the training bong's walk, and a hurt bong's hops to a bong health pack
+(`Game::bong_pack_hop`, docs/bong-health-pack-prd.md section 11).
 
 ## Facing
 

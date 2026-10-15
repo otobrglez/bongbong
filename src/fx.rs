@@ -169,12 +169,22 @@ impl Flash {
 pub struct CrateOpen {
     pub(crate) kind: crate::pickup::PickupKind,
     pub(crate) at: Position,
-    /// The owner slot of the tank that took it, whose hull the symbol
-    /// flies into; `None` for a crate a blast or fire broke.
-    pub(crate) slot: Option<usize>,
+    /// Who took it, whose hull or body the symbol flies into.
+    pub(crate) taker: Taker,
     /// It was a broken crate's contents lying loose: no crate left to split.
     pub(crate) spilled: bool,
     pub(crate) age: f32,
+}
+
+/// Who took a crate (`CrateOpen::taker`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Taker {
+    /// Nobody: a blast or fire broke it.
+    Broken,
+    /// The tank in this owner slot.
+    Tank(usize),
+    /// The bong of this side, a bong health pack it took itself.
+    Bong(crate::bong::Side),
 }
 
 pub struct Particle {
@@ -648,11 +658,15 @@ impl Fx {
                 match *e {
                     Event::RoundStarted { .. } => self.clear(),
                     Event::PickupCollected { slot, kind, x, y, spilled } => {
-                        self.start_open(CrateOpen { kind, at: Position::new(x, y), slot: Some(slot), spilled, age: 0.0 });
+                        self.start_open(CrateOpen { kind, at: Position::new(x, y), taker: Taker::Tank(slot), spilled, age: 0.0 });
+                    }
+                    Event::BongTookPack { side, x, y } => {
+                        let kind = crate::pickup::PickupKind::BongHealth;
+                        self.start_open(CrateOpen { kind, at: Position::new(x, y), taker: Taker::Bong(side), spilled: false, age: 0.0 });
                     }
                     Event::CrateBroken { kind, x, y, .. } => {
                         let at = Position::new(x, y);
-                        self.start_open(CrateOpen { kind, at, slot: None, spilled: false, age: 0.0 });
+                        self.start_open(CrateOpen { kind, at, taker: Taker::Broken, spilled: false, age: 0.0 });
                         if let Some(ramp) = crate::pyro::dust_of(Material::Wood) {
                             let tints = [ramp[1], ramp[2]];
                             self.burst(at, ParticleKind::Dust, self.count(6), 50.0, &tints);

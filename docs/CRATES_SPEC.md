@@ -146,7 +146,9 @@ tests).
   it, and a ring goes round that tank. Started by `Event::PickupCollected`
   (which carries the crate's position) on the particle layer's clock
   (`fx::CrateOpen`) and painted over the tanks in the glowing pass, since
-  the hull that takes a crate is over it the frame it does.
+  the hull that takes a crate is over it the frame it does. A bong taking a
+  bong pack itself plays the same, the symbol dropping into the bong
+  (`Event::BongTookPack`, `fx::Taker::Bong`).
 - **Glint**: the idle, the sheet's four glint frames now and then.
 
 Knobs (the `crates` tuning group): `crate_drop_seconds`,

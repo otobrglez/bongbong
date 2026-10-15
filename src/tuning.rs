@@ -1816,6 +1816,15 @@ tunables! {
         /// How hurt the bong has to be before that bonus rolls at all, as a
         /// fraction of its max health.
         bong_pack_bonus_below: f32 = 0.75 in 0.0 ..= 1.0;
+        /// How far (px, centre to centre) a hurt bong goes for a bong health
+        /// pack itself, hopping to it while no tile stands on the line
+        /// between (`Game::bong_pack_hop`). About three hops; 0 turns the
+        /// fetching off, and a pack the bong touches while hurt is still
+        /// taken.
+        bong_pack_seek_range: f32 = 192.0 in 0.0 ..= 1000.0;
+        /// How hurt a bong has to be before it goes for a pack, as a
+        /// fraction of its max health.
+        bong_pack_seek_below: f32 = 0.75 in 0.0 ..= 1.0;
     }
 
     group crates {

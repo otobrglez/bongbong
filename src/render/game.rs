@@ -1324,6 +1324,11 @@ impl Game {
         self.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot).map(|t| t.position)
     }
 
+    /// Where the `side` bong stands: where a pack it took flies to.
+    fn bong_of_side(&self, side: crate::bong::Side) -> Option<Position> {
+        self.world.query::<&crate::bong::Bong>().iter().find(|b| b.side == side).map(|b| b.position)
+    }
+
     /// Every hit's flash (`fx::Flash`), inside an additive blend: the hull
     /// or the tile it landed on drawn again over itself, which doubles its
     /// light - the white-hot frames of a hit. A tile is found under the
@@ -1977,12 +1982,15 @@ impl Game {
                 .filter(|o| !culled(cull, o.at))
                 .filter_map(|o| {
                     use crate::crate_fx::Opening;
-                    let how = match o.slot {
+                    let toward = match o.taker {
+                        crate::fx::Taker::Broken => None,
+                        crate::fx::Taker::Tank(slot) => Some(self.tank_of_slot(slot).unwrap_or(o.at)),
+                        crate::fx::Taker::Bong(side) => Some(self.bong_of_side(side).unwrap_or(o.at)),
+                    };
+                    let how = match toward {
                         None => Opening::Broken,
-                        Some(slot) => {
-                            let toward = self.tank_of_slot(slot).unwrap_or(o.at);
-                            if o.spilled { Opening::Spilled { toward } } else { Opening::Taken { toward } }
-                        }
+                        Some(toward) if o.spilled => Opening::Spilled { toward },
+                        Some(toward) => Opening::Taken { toward },
                     };
                     crate::crate_fx::open(o.age, o.at, how, o.kind.ink(), &t).map(|open| (*o, open))
                 })
