@@ -1,0 +1,87 @@
+---
+// What the game, the room server and this site send and keep - the page
+// App Store Connect's Privacy Policy URL points at. Keep it to what the code
+// does: the progress store (src/levels.rs, src/mapstore.rs), the device
+// token and nickname (site/src/scripts/room.ts, src/net/client.rs), the
+// room server's log lines (server/src/room.rs) and the newsletter form
+// (site/src/site.ts). A change to any of them changes this page and its
+// date.
+import Page from "../layouts/Page.astro";
+import { CONTACT_EMAIL } from "../site";
+---
+
+<Page title="Privacy" description="What BongBong sends, what it keeps, and where." band="archipelago" current="privacy" credit>
+    <h1>Privacy</h1>
+    <p class="updated">Last updated 15 October 2026</p>
+
+    <div class="short">
+        <p class="pixel label">The short version</p>
+        <p>BongBong has no accounts, no ads, no analytics and no tracking. Your progress and the maps you build stay on
+            your device. Playing online sends the room server only what it needs to run the round.</p>
+    </div>
+
+    <h2>On your device</h2>
+    <p>The levels you have cleared and the maps you build are saved where you play: in the app's own storage on iPhone,
+        iPad, Android, macOS, Windows and Linux, and in your browser's storage on bongbong.io. They are never
+        uploaded.</p>
+    <p>On bongbong.io the browser also keeps a random id it makes up on your first visit, and one for each tab, so
+        that reloading the page during an online round puts you back in your own seat. They are sent only when you
+        play online.</p>
+
+    <h2>Playing online</h2>
+    <p>When you host or join a co-op room, the room server at rooms.bongbong.io receives what it needs to run the
+        round for everyone in it:</p>
+    <ul>
+        <li>your nickname, which is an anonymous <span class="pixel nick">Player #XXXXXX</span> made from the random
+            id above, unless you start the desktop game with a nickname of your own;
+        </li>
+        <li>that random id, so a dropped connection gets your seat back;</li>
+        <li>the room code;</li>
+        <li>your tank's controls while the round runs.</li>
+    </ul>
+    <p>The server keeps the round in memory and lets it go when the room closes. Its log notes each room it opens,
+        with the room's code and map, and each player who joins or leaves it, with their nickname. Like any server, it
+        sees your IP address while you are connected.</p>
+
+    <h2>Updates by email</h2>
+    <p>If you subscribe, your email address goes to Kit, which keeps it to send you a note when a new version ships.
+        Every email has an unsubscribe link. Nothing of Kit's loads with the game: your browser talks to Kit only when
+        you press Subscribe. <a href="https://kit.com/privacy">Kit's privacy policy</a></p>
+
+    <h2>This website</h2>
+    <p>bongbong.io is served by Cloudflare, which sees your IP address and browser in order to deliver the page. The
+        page sets no cookies of its own and loads nothing from other sites: the game, its pictures and its fonts all
+        come from bongbong.io.</p>
+
+    <h2>Questions</h2>
+    <p>BongBong is made by Oto Brglez. Write to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. If anything
+        here changes, this page changes with it, and so does its date.</p>
+</Page>
+
+<style lang="scss">
+  .updated {
+    margin: 8px 0 32px;
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+
+  .short {
+    padding: 20px 22px 8px;
+    margin-bottom: 8px;
+    background: var(--grass-panel);
+    border: 1px solid var(--grass-line);
+    border-radius: 8px;
+    color: #e4eedd;
+  }
+
+  .label {
+    margin: 0 0 4px;
+    font-size: 13px;
+    color: #8fd07a;
+  }
+
+  .nick {
+    font-size: 14px;
+    color: var(--text-strong);
+  }
+</style>

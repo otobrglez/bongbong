@@ -1,0 +1,149 @@
+---
+// How to reach the game's maker and what to send - the page App Store
+// Connect's Support URL points at - with the controls and the platforms,
+// which is what most questions are about. The controls are the game's
+// (src/touch.rs, the key hints on the game page), the lobby's words its
+// buttons' (lang/en.ftl `lobby-host`, `lobby-join`).
+import Page from "../layouts/Page.astro";
+import { APP_STORE_URL, CONTACT_EMAIL, DOWNLOADS, ISSUES_URL, SHOW_APP_STORE } from "../site";
+---
+
+<Page title="Support" description="Get help with BongBong, report a bug, and find it on every platform." band="oasis" current="support">
+    <h1>Support</h1>
+    <p class="lead">Something broke, or something could be better? Say so.</p>
+
+    <div class="contacts">
+        <a class="contact" href={`mailto:${CONTACT_EMAIL}`}>
+            <img class="px" src="/art/bong-capi.png" alt="" width="48" height="48"/>
+            <span><span class="pixel">Email</span><span class="where">{CONTACT_EMAIL}</span></span>
+        </a>
+        <a class="contact" href={ISSUES_URL}>
+            <img class="px" src="/art/bong-oggle.png" alt="" width="48" height="48"/>
+            <span><span class="pixel">Report a bug</span><span class="where">GitHub issues</span></span>
+        </a>
+    </div>
+
+    <h2>What helps in a report</h2>
+    <ul>
+        <li>the version number the game shows on screen;</li>
+        <li>your device, and your browser if you play on bongbong.io;</li>
+        <li>what you did, what you expected, and what happened instead;</li>
+        <li>the room code, if you were playing online;</li>
+        <li>a screenshot, if you can take one.</li>
+    </ul>
+
+    <h2>Controls</h2>
+    <div class="controls">
+        <div class="box">
+            <span class="pixel kind">Keyboard</span>
+            <span><kbd>←↑↓→</kbd> drive · <kbd>Space</kbd> fire · <kbd>R</kbd> restart</span>
+            <span>Player 2: <kbd>WASD</kbd> + <kbd>Left Shift</kbd></span>
+        </div>
+        <div class="box">
+            <span class="pixel kind">Touch</span>
+            <span>Hold the phone sideways. Your left thumb steers wherever it lands; your right thumb fires.</span>
+        </div>
+    </div>
+
+    <h2>Playing together online</h2>
+    <p>Press HOST A ROOM on one device and share the room code it shows. On every other device, press JOIN A ROOM and
+        type the code. Up to eight tanks fit in a room.</p>
+
+    <h2>Where to play</h2>
+    <div class="platforms">
+        <div class="platform"><span>Any browser</span><a href="/">bongbong.io</a></div>
+        <div class="platform"><span>iPhone &amp; iPad</span>
+            {SHOW_APP_STORE ? <a href={APP_STORE_URL}>App Store</a> : <span class="soon">Coming soon to the App Store</span>}
+        </div>
+        {DOWNLOADS.map((d) => <div class="platform"><span>{d.platform}</span><a href={d.href}>{d.file}</a></div>)}
+    </div>
+</Page>
+
+<style lang="scss">
+  .lead {
+    margin: 8px 0 28px;
+    color: var(--text-dim);
+  }
+
+  .contacts, .controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+  }
+
+  .contact {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 16px 18px;
+    background: var(--panel);
+    border: 1px solid #2e2e2e;
+    border-radius: 8px;
+    text-decoration: none;
+
+    > span {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.4;
+    }
+
+    .pixel {
+      font-size: 15px;
+      color: #ffffff;
+    }
+
+    .where {
+      font-size: 14px;
+      color: var(--link);
+    }
+
+    &:hover {
+      border-color: #4a4a4a;
+    }
+  }
+
+  .box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 18px;
+    background: var(--panel);
+    border: 1px solid #2e2e2e;
+    border-radius: 8px;
+    font-size: 15px;
+  }
+
+  .kind {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .platforms {
+    border: 1px solid #2e2e2e;
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 15px;
+  }
+
+  .platform {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    min-height: 48px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--panel-line);
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    > span:first-child {
+      color: #ffffff;
+    }
+  }
+
+  .soon {
+    color: var(--text-dim);
+  }
+</style>
