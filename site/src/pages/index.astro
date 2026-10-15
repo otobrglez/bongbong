@@ -605,17 +605,14 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
         gap: 20px;
       }
 
+      /* No card round the iPhone: the device is the picture, standing on
+         the page's ground. */
       .ios {
         flex: 1 1 520px;
         min-width: 0;
         display: flex;
         flex-direction: column;
         gap: 24px;
-        box-sizing: border-box;
-        padding: 24px;
-        background: var(--panel);
-        border: 1px solid var(--panel-line);
-        border-radius: 10px;
 
         h3 {
           font-size: 20px;
@@ -636,7 +633,6 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
         width: 100%;
         max-width: 560px;
         height: auto;
-        margin: 0 auto;
       }
 
       .ios-text {
