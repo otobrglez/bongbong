@@ -676,7 +676,7 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
         display: flex;
         gap: 12px;
         align-items: center;
-        min-height: 64px;
+        min-height: 72px;
         box-sizing: border-box;
         padding: 10px 14px;
         background: var(--panel);
@@ -1102,7 +1102,7 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
                 <div class="downloads">
                     {DOWNLOADS.map((d) => (
                         <a class="download" href={d.href}>
-                            <img class="px" src={`/art/${d.sprite}.png`} alt="" width="40" height="40"/>
+                            <img class="px" src={`/art/${d.sprite}.png`} alt="" width="52" height="52"/>
                             <span><span class="pixel">{d.platform}</span><span class="file">{d.file}</span></span>
                         </a>
                     ))}
