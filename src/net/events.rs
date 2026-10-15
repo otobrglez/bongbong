@@ -162,7 +162,8 @@ pub enum WireEvent {
     ShieldBroken { slot: u16, x: i16, y: i16 },
     ShellsCollided { x: i16, y: i16 },
     BongBite { side: Side, slot: u16, damage: f32, killed: bool },
-    BongHealed { side: Side, slot: u16, amount: f32, x: i16, y: i16 },
+    BongHealed { side: Side, slot: Option<u16>, amount: f32, x: i16, y: i16 },
+    BongTookPack { side: Side, x: i16, y: i16 },
     WaveStarted { wave: u16, size: u16, tier: Tier },
     TankEntered { slot: u16 },
     WreckRemoved { slot: u16 },
@@ -376,8 +377,9 @@ impl WireEvent {
                 WireEvent::BongBite { side, slot: slot_u16(slot), damage, killed }
             }
             Event::BongHealed { side, slot, amount, x, y } => {
-                WireEvent::BongHealed { side, slot: slot_u16(slot), amount, x: q(x), y: q(y) }
+                WireEvent::BongHealed { side, slot: slot.map(slot_u16), amount, x: q(x), y: q(y) }
             }
+            Event::BongTookPack { side, x, y } => WireEvent::BongTookPack { side, x: q(x), y: q(y) },
             Event::WaveStarted { wave, size, tier } => {
                 WireEvent::WaveStarted { wave: count_u16(wave), size: count_u16(size), tier }
             }
@@ -623,8 +625,9 @@ impl WireEvent {
                 Event::BongBite { side, slot: slot as usize, damage, killed }
             }
             WireEvent::BongHealed { side, slot, amount, x, y } => {
-                Event::BongHealed { side, slot: slot as usize, amount, x: d(x), y: d(y) }
+                Event::BongHealed { side, slot: slot.map(usize::from), amount, x: d(x), y: d(y) }
             }
+            WireEvent::BongTookPack { side, x, y } => Event::BongTookPack { side, x: d(x), y: d(y) },
             WireEvent::WaveStarted { wave, size, tier } => {
                 Event::WaveStarted { wave: wave as u32, size: size as u32, tier }
             }
@@ -836,7 +839,8 @@ mod tests {
             Event::ShieldBroken { slot: 2, x: 8.0, y: 9.0 },
             Event::ShellsCollided { x: 500.0, y: 250.0 },
             Event::BongBite { side: Side::Enemy, slot: 4, damage: 30.0, killed: true },
-            Event::BongHealed { side: Side::Player, slot: 0, amount: 40.0, x: 544.0, y: 272.0 },
+            Event::BongHealed { side: Side::Player, slot: Some(0), amount: 40.0, x: 544.0, y: 272.0 },
+            Event::BongTookPack { side: Side::Enemy, x: 112.0, y: 64.0 },
             Event::WaveStarted { wave: 3, size: 6, tier: Tier::Heavy },
             Event::TankEntered { slot: 9 },
             Event::Rerolled { slot: 9, x: 96.0, y: 64.0 },
@@ -936,7 +940,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 83, "one sample per Event variant");
+        assert_eq!(seen.len(), 84, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

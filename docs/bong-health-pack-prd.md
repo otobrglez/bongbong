@@ -16,6 +16,7 @@ Contents
 8. Knobs
 9. Tests
 10. Non-goals and as built
+11. The bong fetches a pack itself (BB-52)
 
 ## 1. Why
 
@@ -183,7 +184,8 @@ Non-goals:
 - **No AI seek tier.** Enemies collect a pack by driving over it, never by
   wanting it - no `act_seek_*` leaf and no behaviour-tree registration. Same
   stance the flamethrower took. Making enemies fetch packs for their bong in
-  Hunt is a real idea, and a separate one.
+  Hunt is a real idea, and a separate one. A hurt bong fetching a pack
+  itself came later: section 11.
 - **No carry or charge state**, no partial heal, no auto-apply-later, no HUD
   slot.
 - **No revive.**
@@ -221,3 +223,62 @@ As built, the deltas from the text above:
 - Editor spellings: tool name `bong_health`, dropdown label `bong pack`,
   cursor/bar short label `bong+`. `TOOLS` is 29, the dev server's PICKUP
   category 9.
+
+## 11. The bong fetches a pack itself (BB-52)
+
+Agreed with the author 2026-10-15. A pack only ever helped the bong when a
+tank brought it; a wounded bong standing a few hops from one sat and waited.
+Now it goes for it.
+
+**Who and when.** Either side's bong - the players' in every round, the
+enemy's in Hunt - goes for a pack once it is below `bong_pack_seek_below`
+(0.75) of its max health. A scratch does not send it off.
+
+**Which pack.** The nearest bong pack within `bong_pack_seek_range` (192 px,
+about three hops) of it, centre to centre, with no tile on the straight line
+between (`Terrain::first_solid_along`: every tile counts, sandbags and fences
+too). Ties go to the smaller x, then y. Packs are neutral on the ground, as in
+section 2: a Hunt round's enemy bong fetches whatever lies near it.
+
+**How it goes.** `Game::bong_pack_hop`, a reflex in `bong_reflexes` after the
+rod zone's escape and before the shy from a tank: a hop straight at the pack,
+a normal hop's length at most (`Bong::hop_distance`), cut to three quarters,
+a half, a quarter of that until the bong fits where it lands inside
+`bong_hop_bounds_margin`. On the hop's usual cooldown, so a fetch is a few
+hops over a few seconds; a stunned, penned or pulled bong does not hop at all,
+and the training bong on its walk keeps walking.
+
+**Against the shy.** A tank of the side the bong bites (`Side::bites`) inside
+its avoid range still sends it hopping away - survival first. Its own side's
+tanks do not: a player parked beside the bong no longer keeps it from a pack
+the player could see it needed.
+
+**Taking it.** `bongs_take_packs`, at the end of the tanks' collection in
+`pickup_phase`: a bong that is alive and not whole takes the nearest pack it
+touches, by the tanks' own test (`Pickup::in_reach` against
+`BONG_COLLIDER_HALF_EXTENT`, grown by `pickup_collect_pad_px`). That is the
+section 3 rule with the bong as the collector - left alone only while whole -
+so a bong also takes a pack it merely lands on while fleeing, threshold or
+not. Tanks go first: a tank and a bong touching one pack on the same frame
+leave it to the tank.
+
+**Events.** `Event::BongTookPack { side, x, y }` at the pack plays the crate
+opening with the symbol dropping into the bong (`fx::Taker::Bong`);
+`BongHealed` follows as before with `slot: None`, so the green burst and the
+training bong's line need nothing new. Both are on the wire;
+`PROTOCOL_VERSION` 33.
+
+**Determinism.** Neither half draws RNG, and a bong that fetches skips that
+frame's shy, which would have drawn the hop's jitter: a round shifts its
+stream only from the first frame a hurt bong goes for a pack instead of
+shying. A round with no pack in a hurt bong's range is byte-identical to
+before. No probe fixture has a bong pack; `just probe-fixtures` and the
+pinned seat streams were unchanged.
+
+**Tests** (`mechanics_tests`): `a_hurt_bong_hops_to_a_pack_nearby_and_heals_itself`,
+`a_scratched_bong_stays_put_beside_a_pack`,
+`a_hurt_bong_ignores_a_pack_out_of_range_or_behind_a_wall`,
+`a_stunned_bong_does_not_go_for_a_pack`,
+`a_friendly_tank_close_by_does_not_stop_a_bong_fetching_a_pack`,
+`the_enemy_bong_fetches_a_pack_but_shies_from_a_seat_first`,
+`fetching_a_pack_draws_no_rng`.

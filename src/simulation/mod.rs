@@ -624,11 +624,16 @@ pub enum Event {
     ShellsCollided { x: f32, y: f32 },
     /// The `side` bong bit the tank in `slot`.
     BongBite { side: Side, slot: usize, damage: f32, killed: bool },
-    /// The tank in `slot` collected a bong health pack and healed the
-    /// `side` bong by `amount`, at the bong's own position (`x`, `y`) -
-    /// which is nowhere near the pickup, so `fx.rs` needs the coordinates
-    /// rather than deriving them from the collector.
-    BongHealed { side: Side, slot: usize, amount: f32, x: f32, y: f32 },
+    /// A bong health pack healed the `side` bong by `amount`, at the bong's
+    /// own position (`x`, `y`) - which is generally nowhere near the
+    /// pickup, so `fx.rs` needs the coordinates rather than deriving them
+    /// from the collector. `slot` is the tank that took the pack; `None`
+    /// when the bong took it itself (`BongTookPack`).
+    BongHealed { side: Side, slot: Option<usize>, amount: f32, x: f32, y: f32 },
+    /// The `side` bong took the bong health pack at (`x`, `y`) itself -
+    /// where its opening plays, the symbol flying into the bong
+    /// (`fx::CrateOpen`).
+    BongTookPack { side: Side, x: f32, y: f32 },
     /// The wave scheduler called wave `wave` (1-based): `size` tanks of
     /// `tier` queued to roll in.
     WaveStarted { wave: u32, size: u32, tier: crate::level::Tier },
@@ -3217,7 +3222,8 @@ impl Game {
     /// single nearest live *hostile* tank within its attack range (never the
     /// killing blow on a player - it is a hazard, not a fair fight) and,
     /// independently, hops away from the nearest tank of any side within its
-    /// wider avoid range. Each on its own cooldown.
+    /// wider avoid range - or, hurt, toward a bong health pack nearby
+    /// (`bong_pack_hop`). Each on its own cooldown.
     fn bong_phase(&mut self, f: &mut Frame) {
         for bong_entity in [self.bong, self.enemy_bong].into_iter().flatten() {
             self.bong_reflexes(f, bong_entity);
@@ -3290,6 +3296,18 @@ impl Game {
                 return;
             }
         }
+        // A hurt bong goes for a bong health pack a few hops away
+        // (`bong_pack_hop`) rather than shy from its own side's tanks; a
+        // tank of the side it bites, close enough to shy from, still wins.
+        let foe_close = nearest_foe.is_some_and(|(_, _, dist, _)| dist <= avoid_range);
+        if can_hop
+            && !walking
+            && !foe_close
+            && let Some(to) = self.bong_pack_hop(f, bong_entity)
+        {
+            with_bong_mut(&self.world, bong_entity, |fr| fr.start_hop(to));
+            return;
+        }
         if can_hop
             && !walking
             && let Some((_, tank_pos, dist, _)) = nearest_any
@@ -3300,6 +3318,48 @@ impl Game {
                 with_bong_mut(&self.world, bong_entity, |fr| fr.start_hop(new_pos));
             }
         }
+    }
+
+    /// Where a hurt bong hops next on its way to a bong health pack, if it
+    /// goes for one (docs/bong-health-pack-prd.md section 11): below
+    /// `bong_pack_seek_below` of its max health, it picks the nearest pack
+    /// within `bong_pack_seek_range` with no tile on the line to it. The hop
+    /// is straight at the pack, a normal hop's length at most, cut shorter
+    /// in steps until the bong fits where it lands inside the field's
+    /// margin; `None` when it wants no pack, sees none, or cannot land on
+    /// the way. Draws no RNG, so a round whose bong never goes for a pack
+    /// draws the stream it drew before bongs fetched them.
+    fn bong_pack_hop(&self, f: &Frame, bong_entity: Entity) -> Option<Position> {
+        const STEPS: [f32; 4] = [1.0, 0.75, 0.5, 0.25];
+        let t = tuning();
+        let (pos, wants, reach) = with_bong(&self.world, bong_entity, |fr| {
+            (fr.position, !fr.is_dead() && fr.health_fraction() < t.bong_pack_seek_below, fr.hop_distance())
+        });
+        if !wants || t.bong_pack_seek_range <= 0.0 {
+            return None;
+        }
+        let pack = self
+            .world
+            .query::<&Pickup>()
+            .iter()
+            .filter(|p| p.kind == PickupKind::BongHealth)
+            .map(Pickup::at)
+            .filter(|&at| at.distance_to(pos) <= t.bong_pack_seek_range && f.terrain.first_solid_along(pos, at).is_none())
+            .min_by(|a, b| {
+                a.distance_to(pos).total_cmp(&b.distance_to(pos)).then(a.x.total_cmp(&b.x)).then(a.y.total_cmp(&b.y))
+            })?;
+        let dist = pos.distance_to(pack);
+        if dist < 0.5 {
+            return None;
+        }
+        let margin = t.bong_hop_bounds_margin;
+        STEPS
+            .iter()
+            .map(|s| dist.min(reach) * s / dist)
+            .map(|k| Position::new(pos.x + (pack.x - pos.x) * k, pos.y + (pack.y - pos.y) * k))
+            .find(|c| {
+                c.x >= margin && c.x <= f.width - margin && c.y >= margin && c.y <= f.height - margin && f.terrain.bong_fits(*c)
+            })
     }
 
     /// Pickups: any live tank whose hull box, grown by
@@ -3497,13 +3557,14 @@ impl Game {
                         (f.side, f.health - before, f.position)
                     });
                     if amount > 0.0 {
-                        f.events.push(Event::BongHealed { side, slot, amount, x: pos.x, y: pos.y });
+                        f.events.push(Event::BongHealed { side, slot: Some(slot), amount, x: pos.x, y: pos.y });
                     }
                 }
             }
             f.events.push(Event::PickupCollected { slot, kind, x: at.x, y: at.y, spilled });
             self.world.despawn(pickup_entity).ok();
         }
+        self.bongs_take_packs(f, pad);
 
         if slot_backed_count(&self.world, &self.map_pickup_slots) < self.map_pickup_slots.len() {
             self.pickup_respawn_timer -= f.dt;
@@ -3526,6 +3587,42 @@ impl Game {
             }
         } else {
             self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
+        }
+    }
+
+    /// A hurt bong takes a bong health pack it touches itself - the one it
+    /// hopped to (`bong_pack_hop`) or one it landed on fleeing - by the
+    /// tanks' geometry (`Pickup::in_reach`, its own collider box grown by
+    /// `pad`). The same rule as a tank's: left alone while the bong is
+    /// whole. The player's bong first, then the enemy's, each after the
+    /// tanks, so a tank and a bong touching one pack on the same frame
+    /// leave it to the tank.
+    fn bongs_take_packs(&mut self, f: &mut Frame, pad: f32) {
+        let half = Position::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
+        for bong in [self.bong, self.enemy_bong].into_iter().flatten() {
+            let (side, center, hurt) =
+                with_bong(&self.world, bong, |fr| (fr.side, fr.position, !fr.is_dead() && !fr.at_full_health()));
+            if !hurt {
+                continue;
+            }
+            let pack = self
+                .world
+                .query::<(Entity, &Pickup)>()
+                .iter()
+                .filter(|(_, p)| p.kind == PickupKind::BongHealth && p.in_reach(center, half, pad))
+                .map(|(e, p)| (e, p.at()))
+                .min_by(|a, b| a.1.distance_to(center).total_cmp(&b.1.distance_to(center)));
+            let Some((pack, at)) = pack else { continue };
+            let (amount, pos) = with_bong_mut(&self.world, bong, |fr| {
+                let before = fr.health;
+                fr.heal(fr.max_health * tuning().bong_pack_heal_fraction);
+                (fr.health - before, fr.position)
+            });
+            if amount > 0.0 {
+                f.events.push(Event::BongHealed { side, slot: None, amount, x: pos.x, y: pos.y });
+            }
+            f.events.push(Event::BongTookPack { side, x: at.x, y: at.y });
+            self.world.despawn(pack).ok();
         }
     }
 
@@ -9810,6 +9907,147 @@ cells."4,4" = { kind = "enemy_bong" }
         // with nothing to heal, and wasted.
         assert_eq!(packs_on_field(&game), 0);
         assert!(!game.events().iter().any(|e| matches!(e, Event::BongHealed { .. })));
+    }
+
+    /// A sandbox for a bong fetching a pack: the players' bong at (30, 20)
+    /// (the enemy's in a Hunt round), the player far off at (10, 10), no
+    /// enemies, and `extra` cells - the pack, a wall.
+    fn fetch_map(hunt: bool, extra: &str) -> String {
+        let bong = if hunt {
+            "mission.kind = \"hunt\"\ncells.\"4,30\" = { kind = \"bong\" }\ncells.\"30,20\" = { kind = \"enemy_bong\" }\n"
+        } else {
+            "cells.\"30,20\" = { kind = \"bong\" }\n"
+        };
+        format!("version = 1\ntanks = 0\ncells.\"10,10\" = {{ kind = \"start\" }}\n{bong}{extra}")
+    }
+
+    const PACK_RIGHT: &str = "cells.\"33,20\" = { kind = \"pickup\", pickup = \"bong_health\" }\n";
+
+    /// Step `frames` frames, true when some frame's events held one `hit`
+    /// matches.
+    fn steps_seeing(game: &mut Game, frames: usize, hit: impl Fn(&Event) -> bool) -> bool {
+        let mut seen = false;
+        for _ in 0..frames {
+            step(game, Input::default());
+            seen |= game.events().iter().any(&hit);
+        }
+        seen
+    }
+
+    /// The promise: a bong hurt below `bong_pack_seek_below` hops to a pack
+    /// within `bong_pack_seek_range` and takes it itself, healed by it as
+    /// a tank's delivery would heal it.
+    #[test]
+    fn a_hurt_bong_hops_to_a_pack_nearby_and_heals_itself() {
+        let mut game = game_on(&fetch_map(false, PACK_RIGHT), 0, Some(0));
+        let bong = game.bong.expect("a Protect round has a bong");
+        hurt_bong(&game, bong, 25.0);
+        let took = steps_seeing(&mut game, 300, |e| matches!(e, Event::BongTookPack { side: Side::Player, .. }));
+        assert!(took, "the bong never took the pack");
+        assert_eq!(packs_on_field(&game), 0);
+        assert_eq!(bong_health(&game, bong), tuning().bong_max_health);
+    }
+
+    /// Only a bong hurt below the threshold goes for a pack: a scratched
+    /// one stays put, though it would take a pack it touched.
+    #[test]
+    fn a_scratched_bong_stays_put_beside_a_pack() {
+        let mut game = game_on(&fetch_map(false, PACK_RIGHT), 0, Some(0));
+        let bong = game.bong.expect("a Protect round has a bong");
+        let max = tuning().bong_max_health;
+        hurt_bong(&game, bong, max * (1.0 - tuning().bong_pack_seek_below) * 0.5);
+        let start = with_bong(&game.world, bong, |fr| fr.position);
+        steps_seeing(&mut game, 300, |_| false);
+        assert_eq!(with_bong(&game.world, bong, |fr| fr.position), start);
+        assert_eq!(packs_on_field(&game), 1);
+    }
+
+    /// A pack beyond `bong_pack_seek_range`, or behind a tile, is not
+    /// gone for.
+    #[test]
+    fn a_hurt_bong_ignores_a_pack_out_of_range_or_behind_a_wall() {
+        let far = "cells.\"40,20\" = { kind = \"pickup\", pickup = \"bong_health\" }\n";
+        let walled = "cells.\"34,20\" = { kind = \"pickup\", pickup = \"bong_health\" }\n\
+                      cells.\"32,20\" = { kind = \"wall\", material = \"iron\" }\n";
+        assert!(10.0 * OBSTACLE_GRID_SIZE > tuning().bong_pack_seek_range, "the far pack is out of range");
+        for extra in [far, walled] {
+            let mut game = game_on(&fetch_map(false, extra), 0, Some(0));
+            let bong = game.bong.expect("a Protect round has a bong");
+            hurt_bong(&game, bong, 25.0);
+            let start = with_bong(&game.world, bong, |fr| fr.position);
+            steps_seeing(&mut game, 300, |_| false);
+            assert_eq!(with_bong(&game.world, bong, |fr| fr.position), start, "{extra}");
+            assert_eq!(packs_on_field(&game), 1, "{extra}");
+        }
+    }
+
+    /// A stunned bong (docs/sonic-hammer.md) does not hop, to a pack or
+    /// anywhere.
+    #[test]
+    fn a_stunned_bong_does_not_go_for_a_pack() {
+        let mut game = game_on(&fetch_map(false, PACK_RIGHT), 0, Some(0));
+        let bong = game.bong.expect("a Protect round has a bong");
+        hurt_bong(&game, bong, 25.0);
+        with_bong_mut(&game.world, bong, |fr| fr.stun(10.0));
+        let start = with_bong(&game.world, bong, |fr| fr.position);
+        steps_seeing(&mut game, 120, |_| false);
+        assert_eq!(with_bong(&game.world, bong, |fr| fr.position), start);
+        assert_eq!(packs_on_field(&game), 1);
+    }
+
+    /// Its own side's tank parked inside the bong's personal space does
+    /// not keep it from a pack: the fetch wins over shying from a friend.
+    #[test]
+    fn a_friendly_tank_close_by_does_not_stop_a_bong_fetching_a_pack() {
+        let mut game = game_on(&fetch_map(false, PACK_RIGHT), 0, Some(0));
+        let bong = game.bong.expect("a Protect round has a bong");
+        hurt_bong(&game, bong, 25.0);
+        game.debug_teleport(0, map::cell_to_world(27, 20), None).expect("the player exists");
+        let reach = with_bong(&game.world, bong, |fr| fr.avoid_range());
+        assert!(3.0 * OBSTACLE_GRID_SIZE <= reach, "the player is inside the avoid range");
+        let took = steps_seeing(&mut game, 300, |e| matches!(e, Event::BongTookPack { .. }));
+        assert!(took, "the bong shied from its own tank instead of fetching");
+        assert_eq!(bong_health(&game, bong), tuning().bong_max_health);
+    }
+
+    /// Hunt: the enemy's bong fetches a pack too, and a seat - a tank of
+    /// the side it bites - inside its personal space makes it shy away
+    /// rather than fetch.
+    #[test]
+    fn the_enemy_bong_fetches_a_pack_but_shies_from_a_seat_first() {
+        let up = "cells.\"30,17\" = { kind = \"pickup\", pickup = \"bong_health\" }\n";
+        let mut game = game_on(&fetch_map(true, up), 0, Some(0));
+        let bong = game.enemy_bong.expect("Hunt has an enemy bong");
+        hurt_bong(&game, bong, 25.0);
+        game.debug_teleport(0, map::cell_to_world(27, 20), None).expect("the player exists");
+        step(&mut game, Input::default());
+        let (start, end) = with_bong(&game.world, bong, |fr| (fr.hop_start, fr.hop_end));
+        assert!(end.x > start.x + 10.0, "the bong hopped away from the seat: {start:?} -> {end:?}");
+
+        let mut game = game_on(&fetch_map(true, up), 0, Some(0));
+        let bong = game.enemy_bong.expect("Hunt has an enemy bong");
+        hurt_bong(&game, bong, 25.0);
+        let took = steps_seeing(&mut game, 300, |e| matches!(e, Event::BongTookPack { side: Side::Enemy, .. }));
+        assert!(took, "the enemy bong never took the pack");
+        assert_eq!(bong_health(&game, bong), tuning().bong_max_health);
+    }
+
+    /// Fetching draws no RNG: a hurt bong hopping to a pack and taking it
+    /// leaves the round's stream where a pristine bong beside the same
+    /// pack leaves it.
+    #[test]
+    fn fetching_a_pack_draws_no_rng() {
+        let run = |hurt: bool| {
+            let mut game = game_on(&fetch_map(false, PACK_RIGHT), 0, Some(0));
+            if hurt {
+                hurt_bong(&game, game.bong.expect("a bong"), 25.0);
+            }
+            let took = steps_seeing(&mut game, 300, |e| matches!(e, Event::BongTookPack { .. }));
+            assert_eq!(took, hurt);
+            game.rng.clone().expect("rng parked between frames")
+        };
+        let (mut fetched, mut stayed) = (run(true), run(false));
+        assert_eq!(fetched.random::<u64>(), stayed.random::<u64>());
     }
 
     /// The bonus drop: a hurt bong can put a pack beside a respawning

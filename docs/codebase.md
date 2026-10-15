@@ -1022,7 +1022,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   mirrored. **A bong only bites the other side**; the
   evasive hop shies from any tank (`combat::bong_hop_target`, a box test via `Terrain::bong_fits`).
   `damage`/`heal` are the only health paths and no-op once dead; healing comes only from the bong
-  health pack.
+  health pack, which a tank delivers or a hurt bong fetches itself: below `bong_pack_seek_below`
+  it hops straight at the nearest pack within `bong_pack_seek_range` with no tile on the line
+  (`Game::bong_pack_hop`, no RNG), unless a tank of the side it bites is inside its avoid range,
+  and takes any pack it touches while not whole (`bongs_take_packs`, after the tanks;
+  `Event::BongTookPack`, `BongHealed` with no `slot`). docs/bong-health-pack-prd.md §11.
 - `pickup.rs` — kinds Health, Ammo, Laser, Minigun, Plasma, Missiles, SpeedUp, Shield, Flamethrower,
   BongHealth, TowerPack, HeatShield (player-only; `heat_shield_timer` keeps every kind of heat off,
   docs/volcano.md), Grenades (player-only, `grenade.rs`), SonicHammer (`sonic.rs`), Emp
@@ -1037,7 +1041,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   is young, the idle glint, the damaged and charred columns, a spilled pickup as its bare symbol
   from `static/pickup_glyphs.png` - `draw_glyph`, which the HUD's readouts draw too); no body,
   collected the moment a hull's box grown by `pickup_collect_pad_px` touches the pickup's square
-  (`Pickup::in_reach`, a box test so the front and the corners collect like the side), fixed map
+  (`Pickup::in_reach`, a box test so the front and the corners collect like the side; a hurt bong
+  takes a bong pack by the same test against its collider box), fixed map
   slots. **Enemies only collect what they would use** (a weapon crate while on shells, or of the
   weapon carried while short of its carry limit, so one never trades away a stocked weapon;
   `Tank::wants_pickup`, the same predicate `ai::build`'s seek tiers call - collection must never
@@ -1596,7 +1601,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   as spray, ice chips, exhaust - the `drive_*` knobs; `Kick` and `Foam` lie on the ground and draw in
   the lit field (`render::fx::draw_ground`, called from `paint_field_lit`). `fx_max_particles`,
   `fx_density` (halved on embedded builds). It keeps the **crate openings** (`CrateOpen`, from
-  `Event::PickupCollected` and `CrateBroken`, composed by `crate_fx::open` and drawn over the tanks)
+  `Event::PickupCollected`, `BongTookPack` and `CrateBroken` - `Taker` says whose hull or body the
+  symbol flies into -, composed by `crate_fx::open` and drawn over the tanks)
   and the **hits** (`Impact`, `ImpactKind`): a shell, bullet or plasma bolt seen in its impact
   frames (by id, `watch_impacts`, so a replica starts the same bursts), a `LaserBeam`'s end, a
   ricochet, a deflection, a tesla strike, a glob's splash, a tile's dust when a shot hits it
