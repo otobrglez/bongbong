@@ -56,7 +56,7 @@ use crate::math::{Rectangle, Vec2};
 use crate::view::{ScaleCap, View};
 use crate::{Layout, EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, HUD_BAR_HEIGHT};
 
-use super::{BrushRow, Category, FieldKind, MapField, MapTab, PanelButton};
+use super::{BrushRow, Category, FieldKind, MapField, MapTab, PanelButton, PickupGroup, Tool};
 
 /// The text size of every word on a button of the plates - UNDO, REDO, FILE,
 /// MAP, FIT, CHECK, PLAY HERE, PLAY - and of the clear flag's par, the
@@ -792,8 +792,9 @@ pub struct Chrome {
 /// Where the open popup's panel and rows stand.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PopupLayout {
-    /// A category's tool list, a row per tool.
-    Dropdown(Category, Rows),
+    /// A category's tool list, a row per tool - the pickups' in their
+    /// groups' headed columns where those fit (`tray_tools`).
+    Dropdown(Category, ToolList),
     /// BRUSH's list, a row per `BrushRow`.
     Brush(Rows),
     /// The folded bar's palette of every category and the brush's row.
@@ -813,7 +814,8 @@ impl PopupLayout {
     /// The popup's panel: a press inside it is the popup's.
     pub fn panel(&self) -> Rectangle {
         match self {
-            PopupLayout::Dropdown(_, rows) | PopupLayout::Brush(rows) | PopupLayout::File(rows) => rows.panel,
+            PopupLayout::Dropdown(_, list) => list.panel,
+            PopupLayout::Brush(rows) | PopupLayout::File(rows) => rows.panel,
             PopupLayout::Palette(palette) => palette.panel,
             PopupLayout::Load(list) | PopupLayout::Stamps(list) => list.rows.panel,
             PopupLayout::Save(panel) => *panel,
@@ -900,16 +902,18 @@ pub fn hanging_list(anchor: Rectangle, room: Rectangle, n: usize, w: f32) -> Row
     Rows { panel: Rectangle::new(slide(anchor.x, width, room), hang_y(anchor, room, height), width, height), per_column, row_w: w, row_h: h }
 }
 
-/// The palette the folded TOOLS button opens: a row per category - its
+/// The palette the folded TOOLS button opens: a row per `Shelf` - its
 /// name, then a cell per tool - and under them the brush's row, a cell per
-/// `BrushRow`, hanging from the button. A category with more tools than the
+/// `BrushRow`, hanging from the button. A shelf with more tools than the
 /// room is wide for runs on into a second row under its first, so the
 /// palette never leaves the room's width; where its rows would not fit the
 /// room's height the cells shrink to fit, never under a finger's
-/// `UI_TOUCH_PT`, and where even that is too tall the categories *flow*:
+/// `UI_TOUCH_PT`, and where even that is too tall the shelves *flow*:
 /// one after another along the rows, each name followed by its tools,
 /// running on into the next row wherever a row ends - a phone's palette,
-/// as few rows as the tools can take.
+/// as few rows as the tools can take. Either way PICKUP's groups take a
+/// shelf each where they fit, and PICKUP one shelf whole where their names
+/// would make the palette too tall for the room.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub panel: Rectangle,
@@ -917,78 +921,148 @@ pub struct Palette {
     per_row: usize,
     /// A cell's side: `PALETTE_CELL`, less where the room is short.
     cell: f32,
-    /// How the categories are laid down.
+    /// How the shelves are laid down.
     pack: Pack,
+    /// Whether PICKUP's groups stand on shelves of their own.
+    split: bool,
 }
 
-/// The cells a category's name takes in a flowing palette: a name is
+/// A row of the folded palette: a category's tools after its name, PICKUP's
+/// split into a row per `PickupGroup` after the group's short name, as the
+/// list from the tray heads them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shelf {
+    Category(Category),
+    Pickups(PickupGroup),
+}
+
+/// The most shelves a palette holds: every category's but PICKUP's, and a
+/// group's each.
+const SHELVES: usize = Category::ALL.len() - 1 + PickupGroup::ALL.len();
+
+impl Shelf {
+    /// Every shelf top to bottom: the categories in `Category::ALL`'s
+    /// order, PICKUP's place taken by its groups in `PickupGroup::ALL`'s
+    /// where they are `split`.
+    pub fn all(split: bool) -> Vec<Shelf> {
+        Category::ALL
+            .into_iter()
+            .flat_map(|category| match category {
+                Category::Pickup if split => PickupGroup::ALL.map(Shelf::Pickups).to_vec(),
+                _ => vec![Shelf::Category(category)],
+            })
+            .collect()
+    }
+
+    /// The category its tools are from.
+    pub fn category(self) -> Category {
+        match self {
+            Shelf::Category(category) => category,
+            Shelf::Pickups(_) => Category::Pickup,
+        }
+    }
+
+    /// Its name in the palette's name column.
+    pub fn label(self) -> String {
+        match self {
+            Shelf::Category(category) => category.label(),
+            Shelf::Pickups(group) => group.short_label(),
+        }
+    }
+
+    /// Whether `tool` stands on it.
+    pub fn holds(self, tool: Tool) -> bool {
+        match self {
+            Shelf::Category(category) => tool.category() == Some(category),
+            Shelf::Pickups(group) => tool.pickup_group() == Some(group),
+        }
+    }
+
+    /// Its tools as places in its category's `tools`: the first, and how
+    /// many - a group's crates stand together there (`TOOLS`).
+    fn span(self) -> (usize, usize) {
+        let tools = || self.category().tools();
+        (tools().position(|t| self.holds(t)).unwrap_or(0), tools().filter(|&t| self.holds(t)).count())
+    }
+}
+
+/// The cells a shelf's name takes in a flowing palette: a name is
 /// `PALETTE_LABEL_W` wide, and a cell never under `UI_TOUCH_PT`.
 const NAME_CELLS: usize = 2;
 
-/// The two ways the palette lays its categories down.
+/// The two ways the palette lays its shelves down.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Pack {
-    /// A category to a row (or rows): its name in the left column, its
-    /// tools after it. `rows[k]` is category `k`'s first row.
-    Stacked { rows: [usize; 6], total: usize },
-    /// One run of cells, `width` to a row: category `k`'s name starts
+    /// A shelf to a row (or rows): its name in the left column, its tools
+    /// after it. `rows[k]` is shelf `k`'s first row.
+    Stacked { rows: [usize; SHELVES], total: usize },
+    /// One run of cells, `width` to a row: shelf `k`'s name starts
     /// `starts[k]` cells into the run and its tools follow.
-    Flow { width: usize, starts: [usize; 6], total: usize },
+    Flow { width: usize, starts: [usize; SHELVES], total: usize },
 }
 
 impl Palette {
     /// The palette hanging from `anchor` in `room`, as wide as its longest
-    /// row needs and the room allows.
+    /// row needs and the room allows: stacked where that fits the room,
+    /// else flowing - each with PICKUP's groups split where that fits,
+    /// else PICKUP whole; a flow of PICKUP whole is the last resort.
     pub fn of(anchor: Rectangle, room: Rectangle) -> Palette {
-        let most = Category::ALL.iter().map(|c| c.tools().count()).max().unwrap_or(1).max(BrushRow::ALL.len());
-        let fits = (((room.width - PALETTE_LABEL_W) / PALETTE_CELL).floor().max(1.0) as usize).max(BrushRow::ALL.len());
-        let per_row = most.min(fits);
-        let size = |rows: usize| PALETTE_CELL.min((room.height / (rows + 1) as f32).floor()).max(crate::hud::UI_TOUCH_PT);
-        let (rows, total) = Self::stack(per_row);
-        let cell = size(total);
-        if (total + 1) as f32 * cell <= room.height + 1e-3 {
-            let w = PALETTE_LABEL_W + per_row as f32 * cell;
-            let h = (total + 1) as f32 * cell;
-            let pack = Pack::Stacked { rows, total };
-            return Palette { panel: Rectangle::new(slide(anchor.x, w, room), hang_y(anchor, room, h), w, h), per_row, cell, pack };
-        }
-        let cell = crate::hud::UI_TOUCH_PT;
-        let width = ((room.width / cell).floor() as usize).max(NAME_CELLS + BrushRow::ALL.len());
-        let (starts, total) = Self::flow(width);
-        let w = width as f32 * cell;
-        let h = (total + 1) as f32 * cell;
-        let pack = Pack::Flow { width, starts, total };
-        Palette { panel: Rectangle::new(slide(anchor.x, w, room), hang_y(anchor, room, h), w, h), per_row, cell, pack }
+        let hang = |w: f32, h: f32| Rectangle::new(slide(anchor.x, w, room), hang_y(anchor, room, h), w, h);
+        let stacked = |split: bool| {
+            let most = Shelf::all(split).iter().map(|s| s.span().1).max().unwrap_or(1).max(BrushRow::ALL.len());
+            let fits = (((room.width - PALETTE_LABEL_W) / PALETTE_CELL).floor().max(1.0) as usize).max(BrushRow::ALL.len());
+            let per_row = most.min(fits);
+            let (rows, total) = Self::stack(per_row, split);
+            let cell = PALETTE_CELL.min((room.height / (total + 1) as f32).floor()).max(crate::hud::UI_TOUCH_PT);
+            let (w, h) = (PALETTE_LABEL_W + per_row as f32 * cell, (total + 1) as f32 * cell);
+            (h <= room.height + 1e-3).then(|| Palette { panel: hang(w, h), per_row, cell, pack: Pack::Stacked { rows, total }, split })
+        };
+        let flowing = |split: bool| {
+            let cell = crate::hud::UI_TOUCH_PT;
+            let width = ((room.width / cell).floor() as usize).max(NAME_CELLS + BrushRow::ALL.len());
+            let (starts, total) = Self::flow(width, split);
+            let (w, h) = (width as f32 * cell, (total + 1) as f32 * cell);
+            Palette { panel: hang(w, h), per_row: width, cell, pack: Pack::Flow { width, starts, total }, split }
+        };
+        stacked(true)
+            .or_else(|| stacked(false))
+            .or_else(|| Some(flowing(true)).filter(|p| p.panel.height <= room.height + 1e-3))
+            .unwrap_or_else(|| flowing(false))
     }
 
-    /// Each category on rows of its own, `per_row` tools to a row: the
-    /// first row of each and the rows they all take.
-    fn stack(per_row: usize) -> ([usize; 6], usize) {
-        let mut rows = [0; 6];
+    /// The palette's shelves, top to bottom.
+    pub fn shelves(&self) -> Vec<Shelf> {
+        Shelf::all(self.split)
+    }
+
+    /// Each shelf on rows of its own, `per_row` tools to a row: the first
+    /// row of each and the rows they all take.
+    fn stack(per_row: usize, split: bool) -> ([usize; SHELVES], usize) {
+        let mut rows = [0; SHELVES];
         let mut total = 0;
-        for (k, category) in Category::ALL.iter().enumerate() {
+        for (k, shelf) in Shelf::all(split).iter().enumerate() {
             rows[k] = total;
-            total += category.tools().count().max(1).div_ceil(per_row.max(1));
+            total += shelf.span().1.max(1).div_ceil(per_row.max(1));
         }
         (rows, total)
     }
 
-    /// The categories as one run of cells `width` to a row - a name never
+    /// The shelves as one run of cells `width` to a row - a name never
     /// split from its first tool - and the rows the run takes.
-    fn flow(width: usize) -> ([usize; 6], usize) {
-        let mut starts = [0; 6];
+    fn flow(width: usize, split: bool) -> ([usize; SHELVES], usize) {
+        let mut starts = [0; SHELVES];
         let mut at = 0;
-        for (k, category) in Category::ALL.iter().enumerate() {
+        for (k, shelf) in Shelf::all(split).iter().enumerate() {
             if at % width + NAME_CELLS + 1 > width {
                 at = at.div_ceil(width) * width;
             }
             starts[k] = at;
-            at += NAME_CELLS + category.tools().count();
+            at += NAME_CELLS + shelf.span().1;
         }
         (starts, at.div_ceil(width))
     }
 
-    /// Row `index`: the categories', then the brush's.
+    /// Row `index`: the shelves', then the brush's.
     fn row_at(&self, index: usize) -> Rectangle {
         Rectangle::new(self.panel.x, self.panel.y + index as f32 * self.cell, self.panel.width, self.cell)
     }
@@ -999,23 +1073,38 @@ impl Palette {
         Rectangle::new(row.x + (n % width) as f32 * self.cell, row.y, self.cell, self.cell)
     }
 
-    fn index(category: Category) -> usize {
-        Category::ALL.iter().position(|&c| c == category).expect("every category is in ALL")
+    /// The shelf's place top to bottom (the first where the palette has no
+    /// such shelf).
+    fn index(&self, shelf: Shelf) -> usize {
+        self.shelves().iter().position(|&s| s == shelf).unwrap_or(0)
     }
 
-    /// The category's first row.
-    pub fn row(&self, category: Category) -> Rectangle {
-        let k = Self::index(category);
+    /// Where the category's `i`th tool stands: its shelf's place in
+    /// `shelves` and its own place on that shelf.
+    fn place(&self, category: Category, i: usize) -> (usize, usize) {
+        self.shelves()
+            .iter()
+            .enumerate()
+            .find_map(|(k, shelf)| {
+                let (first, n) = shelf.span();
+                (shelf.category() == category && (first..first + n).contains(&i)).then_some((k, i - first))
+            })
+            .unwrap_or((0, i))
+    }
+
+    /// The shelf's first row.
+    pub fn row(&self, shelf: Shelf) -> Rectangle {
+        let k = self.index(shelf);
         match self.pack {
             Pack::Stacked { rows, .. } => self.row_at(rows[k]),
             Pack::Flow { width, starts, .. } => self.row_at(starts[k] / width),
         }
     }
 
-    /// The category's name: in the left column of its first row, or where
-    /// its run starts in a flowing palette.
-    pub fn label(&self, category: Category) -> Rectangle {
-        let k = Self::index(category);
+    /// The shelf's name: in the left column of its first row, or where its
+    /// run starts in a flowing palette.
+    pub fn label(&self, shelf: Shelf) -> Rectangle {
+        let k = self.index(shelf);
         match self.pack {
             Pack::Stacked { rows, .. } => {
                 let row = self.row_at(rows[k]);
@@ -1028,10 +1117,10 @@ impl Palette {
         }
     }
 
-    /// The category's `i`th tool's cell, running on into the next row
-    /// where a row ends.
+    /// The category's `i`th tool's cell on its shelf, running on into the
+    /// next row where a row ends.
     pub fn cell(&self, category: Category, i: usize) -> Rectangle {
-        let k = Self::index(category);
+        let (k, i) = self.place(category, i);
         match self.pack {
             Pack::Stacked { rows, .. } => {
                 let per_row = self.per_row.max(1);
@@ -1042,7 +1131,7 @@ impl Palette {
         }
     }
 
-    /// The brush's row, under the categories'.
+    /// The brush's row, under the shelves'.
     pub fn brush_row(&self) -> Rectangle {
         match self.pack {
             Pack::Stacked { total, .. } | Pack::Flow { total, .. } => self.row_at(total),
@@ -1565,6 +1654,96 @@ pub fn tray_list(anchor: Rectangle, frame: &BuilderFrame, n: usize) -> Rows {
     if within(rows.panel, over) { rows } else { menu_list(anchor, frame.room(), n) }
 }
 
+/// A category's list from its tray button (`MapEditor::chrome`): a row per
+/// tool, the painter's and every hit test's, and over the pickups' rows
+/// their groups' headings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolList {
+    pub panel: Rectangle,
+    /// Each tool's row, in `Category::tools` order.
+    pub rows: Vec<Rectangle>,
+    /// Each group's heading line over its first row; none for plain rows.
+    pub headings: Vec<(PickupGroup, Rectangle)>,
+}
+
+/// A group's heading line in the PICKUP list: its name at
+/// `MAP_HEADING_SIZE` over a rule, as the MAP panel heads its groups.
+pub const LIST_HEADING_H: f32 = 28.0;
+
+/// The room down a column of the PICKUP list between one group's last row
+/// and the next group's heading.
+pub const LIST_GROUP_GAP: f32 = 8.0;
+
+/// A category's list from its tray button: the pickups in their groups'
+/// headed columns (`headed_list`) - risen into the room over the tray, or
+/// down the whole room where they would not fit there - and any other
+/// category's as `tray_list` lays it, as are the pickups' where the
+/// columns fit nowhere (a short window's: plain rows, still in their
+/// groups' order).
+pub fn tray_tools(anchor: Rectangle, frame: &BuilderFrame, category: Category) -> ToolList {
+    if category == Category::Pickup {
+        if let Some(list) = headed_list(anchor, frame.over_tray()).or_else(|| headed_list(anchor, frame.room())) {
+            return list;
+        }
+    }
+    let n = category.tools().count();
+    let rows = tray_list(anchor, frame, n);
+    ToolList { panel: rows.panel, rows: (0..n).map(|i| rows.row(i)).collect(), headings: Vec::new() }
+}
+
+/// The PICKUP list in `PickupGroup::COLUMNS`: a column `EDITOR_DROPDOWN_W`
+/// wide a column of groups, each group its heading (`LIST_HEADING_H`) over
+/// its crates' rows, `LIST_GROUP_GAP` between two groups of a column. The
+/// rows are `EDITOR_DROPDOWN_ROW_H`, shortened where the room is short -
+/// never under a finger's `UI_TOUCH_PT`; `None` where even then the
+/// columns would leave the room. Slid to stay in the room.
+pub fn headed_list(anchor: Rectangle, room: Rectangle) -> Option<ToolList> {
+    // A column's heights but its rows', and its rows.
+    let column = |groups: &[PickupGroup]| {
+        let fixed = groups.len() as f32 * LIST_HEADING_H + groups.len().saturating_sub(1) as f32 * LIST_GROUP_GAP;
+        (fixed, groups.iter().map(|g| g.tools().count()).sum::<usize>().max(1))
+    };
+    let row_h = PickupGroup::COLUMNS
+        .iter()
+        .map(|groups| {
+            let (fixed, n) = column(groups);
+            ((room.height - fixed) / n as f32).floor()
+        })
+        .fold(EDITOR_DROPDOWN_ROW_H, f32::min);
+    let w = PickupGroup::COLUMNS.len() as f32 * EDITOR_DROPDOWN_W;
+    if row_h < crate::hud::UI_TOUCH_PT || w > room.width + 1e-3 {
+        return None;
+    }
+    let h = PickupGroup::COLUMNS
+        .iter()
+        .map(|groups| {
+            let (fixed, n) = column(groups);
+            fixed + n as f32 * row_h
+        })
+        .fold(0.0, f32::max);
+    let panel = Rectangle::new(slide(anchor.x, w, room), hang_y(anchor, room, h), w, h);
+    let mut placed = Vec::new();
+    let mut headings = Vec::new();
+    for (c, groups) in PickupGroup::COLUMNS.iter().enumerate() {
+        let x = panel.x + c as f32 * EDITOR_DROPDOWN_W;
+        let mut y = panel.y;
+        for &group in groups.iter() {
+            headings.push((group, Rectangle::new(x, y, EDITOR_DROPDOWN_W, LIST_HEADING_H)));
+            y += LIST_HEADING_H;
+            for tool in group.tools() {
+                placed.push((tool, Rectangle::new(x, y, EDITOR_DROPDOWN_W, row_h)));
+                y += row_h;
+            }
+            y += LIST_GROUP_GAP;
+        }
+    }
+    let rows = Category::Pickup
+        .tools()
+        .map(|tool| placed.iter().find(|(t, _)| *t == tool).map(|(_, r)| *r).expect("every pickup stands in a column's group"))
+        .collect();
+    Some(ToolList { panel, rows, headings })
+}
+
 /// The palette from the tray's TOOLS: risen into the room over the tray,
 /// or hanging down the whole room where it would not fit there.
 pub fn tray_palette(anchor: Rectangle, frame: &BuilderFrame) -> Palette {
@@ -1851,6 +2030,60 @@ mod chrome_tests {
         }
     }
 
+    /// `TOOLS` holds each pickup group's crates together, in
+    /// `PickupGroup::ALL`'s order with AMMO first - the palette's shelves
+    /// read them so (`Shelf::span`) - and every group stands in one of the
+    /// list's columns.
+    #[test]
+    fn the_pickups_stand_together_by_group() {
+        let order: Vec<PickupGroup> = Category::Pickup.tools().map(|t| t.pickup_group().expect("a pickup has a group")).collect();
+        let want: Vec<PickupGroup> = PickupGroup::ALL.iter().flat_map(|&g| std::iter::repeat_n(g, g.tools().count())).collect();
+        assert_eq!(order, want);
+        assert!(PickupGroup::ALL.iter().all(|g| g.tools().count() > 0));
+        assert_eq!(Category::Pickup.tools().next(), Some(Tool::Pickup(crate::pickup::PickupKind::Ammo)));
+        let mut columns: Vec<PickupGroup> = PickupGroup::COLUMNS.iter().flat_map(|c| c.iter().copied()).collect();
+        columns.sort_by_key(|g| PickupGroup::ALL.iter().position(|a| a == g));
+        assert_eq!(columns, PickupGroup::ALL);
+        for shelf in Shelf::all(true) {
+            let (first, n) = shelf.span();
+            let on: Vec<Tool> = shelf.category().tools().skip(first).take(n).collect();
+            assert!(on.iter().all(|&t| shelf.holds(t)) && n == shelf.category().tools().filter(|&t| shelf.holds(t)).count(), "{shelf:?}");
+        }
+    }
+
+    /// The PICKUP list stands its crates in their groups' headed columns
+    /// wherever those fit the room - each crate down its own group's
+    /// column under its heading, in list order - and falls back to plain
+    /// rows only where they fit nowhere; a desktop's and a tablet's always
+    /// fit.
+    #[test]
+    fn the_pickups_stand_under_their_groups_headings() {
+        for ui in frames() {
+            let frame = BuilderFrame::new(ui, (1088.0, 544.0), MapClass::Arena, None);
+            let bar = frame.bar();
+            if bar.category(Category::Pickup).is_none() {
+                continue;
+            }
+            let anchor = bar.tools_anchor(Category::Pickup);
+            let list = tray_tools(anchor, &frame, Category::Pickup);
+            if list.headings.is_empty() {
+                assert!(headed_list(anchor, frame.room()).is_none(), "{ui:?}: plain rows where the columns fit");
+                assert!(frame.ui.area.h < 600.0, "{ui:?}: a window this tall heads the pickups");
+                continue;
+            }
+            assert_eq!(list.headings.len(), PickupGroup::ALL.len(), "{ui:?}");
+            for (group, heading) in &list.headings {
+                let mut above = *heading;
+                for tool in group.tools() {
+                    let row = list.rows[Category::Pickup.tools().position(|t| t == tool).expect("a pickup")];
+                    assert_eq!(row.x, heading.x, "{ui:?}: {tool:?} stands in {group:?}'s column");
+                    assert!((row.y - (above.y + above.height)).abs() < 1e-3, "{ui:?}: {tool:?} follows on under {group:?}'s heading");
+                    above = row;
+                }
+            }
+        }
+    }
+
     /// Every popup fits its room on every window, with its rows a
     /// finger's height and pages where the room is short: the top's - the
     /// FILE menu, the MAP panel, the CHECK panel, the Load and STAMPS
@@ -1871,15 +2104,23 @@ mod chrome_tests {
             // A list from the tray rises against it where it fits over it,
             // else hangs down the whole room.
             for category in Category::ALL.into_iter().filter(|&c| bar.category(c).is_some()) {
-                let n = category.tools().count();
-                let list = tray_list(bar.tools_anchor(category), &frame, n);
+                let list = tray_tools(bar.tools_anchor(category), &frame, category);
                 check("a list", list.panel);
                 if inside(list.panel, tray) {
                     assert!((list.panel.y + list.panel.height - (tray.y + tray.height)).abs() < 1e-3, "{ui:?}: a list rises from the tray");
                 }
-                for i in 0..n {
-                    check("a list row", list.row(i));
-                    assert!(list.row(i).height >= UI_TOUCH_PT);
+                assert_eq!(list.rows.len(), category.tools().count());
+                for row in &list.rows {
+                    check("a list row", *row);
+                    assert!(row.height >= UI_TOUCH_PT);
+                }
+                // Its rows and headings apart.
+                let lines: Vec<Rectangle> = list.rows.iter().copied().chain(list.headings.iter().map(|(_, r)| *r)).collect();
+                for (i, a) in lines.iter().enumerate() {
+                    check("a list line", *a);
+                    for b in &lines[i + 1..] {
+                        assert!(!overlap(*a, *b), "{ui:?}: {category:?}'s {a:?} overlaps {b:?}");
+                    }
                 }
             }
             let palette = tray_palette(bar.tools_anchor(Category::Wall), &frame);
@@ -1901,8 +2142,10 @@ mod chrome_tests {
             // included.
             let mut placed: Vec<(String, Rectangle)> = vec![("the brush's name".into(), palette.brush_label())];
             placed.extend((0..BrushRow::ALL.len()).map(|i| (format!("brush cell {i}"), palette.brush_cell(i))));
+            for shelf in palette.shelves() {
+                placed.push((format!("{shelf:?}'s name"), palette.label(shelf)));
+            }
             for category in Category::ALL {
-                placed.push((format!("{category:?}'s name"), palette.label(category)));
                 placed.extend((0..category.tools().count()).map(|i| (format!("{category:?} {i}"), palette.cell(category, i))));
             }
             for (i, (what, a)) in placed.iter().enumerate() {

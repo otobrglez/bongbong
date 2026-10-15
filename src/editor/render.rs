@@ -1070,7 +1070,7 @@ impl MapEditor {
     /// The open popup, in UI points, its hints naming `hints`' input.
     fn draw_popup(&self, d: &mut impl RaylibDraw, chrome: &Chrome, textures: &EditorTextures, hints: Hints) {
         match (&self.popup, &chrome.popup) {
-            (Some(Popup::Dropdown(category)), Some(PopupLayout::Dropdown(_, rows))) => self.draw_dropdown(d, rows, textures, *category),
+            (Some(Popup::Dropdown(category)), Some(PopupLayout::Dropdown(_, list))) => self.draw_dropdown(d, list, textures, *category),
             (Some(Popup::Brush), Some(PopupLayout::Brush(rows))) => self.draw_brush_list(d, rows),
             (Some(Popup::Stamps { scroll }), Some(PopupLayout::Stamps(list))) => self.draw_stamps_list(d, list, *scroll, hints),
             (Some(Popup::Palette), Some(PopupLayout::Palette(palette))) => self.draw_palette(d, palette, textures),
@@ -1151,12 +1151,17 @@ impl MapEditor {
         }
     }
 
-    /// A category's tool list below its button: one row per tool, the
-    /// current one highlighted.
-    fn draw_dropdown(&self, d: &mut impl RaylibDraw, rows: &chrome::Rows, textures: &EditorTextures, category: Category) {
-        draw_panel(d, rows.panel);
-        for (i, tool) in category.tools().enumerate() {
-            let row = rows.row(i);
+    /// A category's tool list over its button: one row per tool, the
+    /// current one highlighted, and the pickups' groups' headings in the
+    /// accent over a rule, as the MAP panel heads its groups.
+    fn draw_dropdown(&self, d: &mut impl RaylibDraw, list: &chrome::ToolList, textures: &EditorTextures, category: Category) {
+        draw_panel(d, list.panel);
+        for (group, rect) in &list.headings {
+            let y = rect.y + (rect.height - MAP_HEADING_SIZE as f32) / 2.0 - 2.0;
+            d.draw_text(&group.label(), (rect.x + 10.0) as i32, y as i32, MAP_HEADING_SIZE, BUILD_ACCENT);
+            d.draw_rectangle_rec(Rectangle::new(rect.x + 8.0, rect.y + rect.height - 3.0, rect.width - 16.0, 1.0), Color::new(255, 255, 255, 40));
+        }
+        for (tool, &row) in category.tools().zip(&list.rows) {
             if tool == self.current_tool(category) {
                 let inset = Rectangle::new(row.x + 4.0, row.y + 2.0, row.width - 8.0, row.height - 4.0);
                 d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
@@ -1174,10 +1179,11 @@ impl MapEditor {
         }
     }
 
-    /// The palette the folded TOOLS button opens: a row per category, its
-    /// name in the accent while the brush is one of its tools, then a cell
-    /// per tool - the category's current tool lit, the brush outlined - and
-    /// the brush's row under them as BRUSH's list draws it.
+    /// The palette the folded TOOLS button opens: a row per shelf (a
+    /// category, or one of the pickups' groups), its name in the accent
+    /// while the brush is one of its tools, then a cell per tool - the
+    /// category's current tool lit, the brush outlined - and the brush's
+    /// row under them as BRUSH's list draws it.
     fn draw_palette(&self, d: &mut impl RaylibDraw, palette: &chrome::Palette, textures: &EditorTextures) {
         draw_panel(d, palette.panel);
         let label = palette.brush_label();
@@ -1196,11 +1202,14 @@ impl MapEditor {
                 d.draw_rectangle_lines_ex(Rectangle::new(cell.x + 2.0, cell.y + 2.0, cell.width - 4.0, cell.height - 4.0), 2.0, BUILD_ACCENT);
             }
         }
-        for category in Category::ALL {
-            let label = palette.label(category);
-            let color = if self.active_category() == Some(category) { BUILD_ACCENT } else { DIM };
+        for shelf in palette.shelves() {
+            let label = palette.label(shelf);
+            let category = shelf.category();
+            let lit = self.active_category() == Some(category) && shelf.holds(self.current_tool(category));
             let y = (label.y + (label.height - UI_SMALL_TEXT as f32) / 2.0) as i32;
-            d.draw_text(&category.label(), label.x as i32 + 8, y, UI_SMALL_TEXT, color);
+            d.draw_text(&shelf.label(), label.x as i32 + 8, y, UI_SMALL_TEXT, if lit { BUILD_ACCENT } else { DIM });
+        }
+        for category in Category::ALL {
             for (i, tool) in category.tools().enumerate() {
                 let cell = palette.cell(category, i);
                 if tool == self.current_tool(category) {

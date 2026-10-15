@@ -298,7 +298,8 @@ fn cell_label(obj: &CellObject) -> String {
 /// volcano and the lamp post sit with the ground, which leaves PROP room
 /// for the six tower tools inside the eleven rows a dropdown fits, and the
 /// range board stands with the actors, the thing on the field there to be
-/// shot at.
+/// shot at. The pickups stand group by group in `PickupGroup::ALL`'s
+/// order, AMMO first, as their list's headed columns show them.
 pub const TOOLS: [Tool; 69] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
@@ -346,18 +347,18 @@ pub const TOOLS: [Tool; 69] = [
     Tool::Bong,
     Tool::EnemyBong,
     Tool::Prop(Material::Target),
-    Tool::Pickup(PickupKind::Health),
     Tool::Pickup(PickupKind::Ammo),
+    Tool::Pickup(PickupKind::Health),
+    Tool::Pickup(PickupKind::Shield),
+    Tool::Pickup(PickupKind::HeatShield),
+    Tool::Pickup(PickupKind::SpeedUp),
+    Tool::Pickup(PickupKind::BongHealth),
+    Tool::Pickup(PickupKind::TowerPack),
     Tool::Pickup(PickupKind::Laser),
     Tool::Pickup(PickupKind::Minigun),
     Tool::Pickup(PickupKind::Plasma),
     Tool::Pickup(PickupKind::Missiles),
-    Tool::Pickup(PickupKind::SpeedUp),
-    Tool::Pickup(PickupKind::Shield),
     Tool::Pickup(PickupKind::Flamethrower),
-    Tool::Pickup(PickupKind::BongHealth),
-    Tool::Pickup(PickupKind::TowerPack),
-    Tool::Pickup(PickupKind::HeatShield),
     Tool::Pickup(PickupKind::Grenades),
     Tool::Pickup(PickupKind::SonicHammer),
     Tool::Pickup(PickupKind::Emp),
@@ -453,6 +454,36 @@ impl Tool {
 
     pub fn parse(name: &str) -> Option<Tool> {
         TOOLS.iter().copied().find(|t| t.name() == name)
+    }
+
+    /// The PICKUP list's group a crate stands in (`None` for any other
+    /// tool).
+    pub fn pickup_group(self) -> Option<PickupGroup> {
+        let Tool::Pickup(kind) = self else {
+            return None;
+        };
+        Some(match kind {
+            PickupKind::Ammo
+            | PickupKind::Health
+            | PickupKind::Shield
+            | PickupKind::HeatShield
+            | PickupKind::SpeedUp
+            | PickupKind::BongHealth
+            | PickupKind::TowerPack => PickupGroup::Supplies,
+            PickupKind::Laser
+            | PickupKind::Minigun
+            | PickupKind::Plasma
+            | PickupKind::Missiles
+            | PickupKind::Flamethrower
+            | PickupKind::Grenades => PickupGroup::Weapons,
+            PickupKind::SonicHammer
+            | PickupKind::Emp
+            | PickupKind::GaussRail
+            | PickupKind::FpvSwarm
+            | PickupKind::RodFromGod
+            | PickupKind::GravityWell => PickupGroup::Specials,
+            PickupKind::AirHeli | PickupKind::AirJet => PickupGroup::Air,
+        })
     }
 
     /// The category this tool sits in (`None` for the eraser and the
@@ -562,6 +593,70 @@ impl Category {
     /// The category's tools, in list order.
     pub fn tools(self) -> impl Iterator<Item = Tool> {
         TOOLS.iter().copied().filter(move |t| t.category() == Some(self))
+    }
+}
+
+/// The groups the PICKUP list stands its crates in, each under its own
+/// heading (`chrome::headed_list`) and on its own row of the folded
+/// palette (`chrome::Shelf`), by what a crate does in a round. `TOOLS`
+/// holds each group's crates together, in `ALL`'s order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickupGroup {
+    /// Ammo, health, the shields, speed, and the bong's and the towers'
+    /// repairs: what keeps a tank going.
+    Supplies,
+    /// The main gun's swaps and the grenades.
+    Weapons,
+    /// The special weapons (docs/sonic-hammer.md and its five siblings).
+    Specials,
+    /// The air-support calls (docs/air-support.md).
+    Air,
+}
+
+impl PickupGroup {
+    pub const ALL: [PickupGroup; 4] = [PickupGroup::Supplies, PickupGroup::Weapons, PickupGroup::Specials, PickupGroup::Air];
+
+    /// The list's columns left to right, each its groups top to bottom:
+    /// SUPPLIES; WEAPONS over AIR SUPPORT; SPECIALS.
+    pub const COLUMNS: [&'static [PickupGroup]; 3] =
+        [&[PickupGroup::Supplies], &[PickupGroup::Weapons, PickupGroup::Air], &[PickupGroup::Specials]];
+
+    /// As the catalogue spells it (`pickup-group-<name>`).
+    pub fn name(self) -> &'static str {
+        match self {
+            PickupGroup::Supplies => "supplies",
+            PickupGroup::Weapons => "weapons",
+            PickupGroup::Specials => "specials",
+            PickupGroup::Air => "air",
+        }
+    }
+
+    /// The group's heading in the language on screen.
+    pub fn label(self) -> String {
+        crate::text::text().get(self.label_key())
+    }
+
+    /// The message that names the group.
+    pub fn label_key(self) -> crate::text::Key {
+        match self {
+            PickupGroup::Supplies => crate::text::keys::PICKUP_GROUP_SUPPLIES,
+            PickupGroup::Weapons => crate::text::keys::PICKUP_GROUP_WEAPONS,
+            PickupGroup::Specials => crate::text::keys::PICKUP_GROUP_SPECIALS,
+            PickupGroup::Air => crate::text::keys::PICKUP_GROUP_AIR,
+        }
+    }
+
+    /// The group's name where a word is the room, the folded palette's
+    /// name column: the catalogue's `pickup-group-<name>-short` where the
+    /// language has one, else its heading.
+    pub fn short_label(self) -> String {
+        let t = crate::text::text();
+        t.message(&format!("pickup-group-{}-short", self.name()), &[]).unwrap_or_else(|| self.label())
+    }
+
+    /// The group's crates, in list order.
+    pub fn tools(self) -> impl Iterator<Item = Tool> {
+        Category::Pickup.tools().filter(move |t| t.pickup_group() == Some(self))
     }
 }
 
@@ -1096,7 +1191,7 @@ impl MapEditor {
             Tool::Road,
             Tool::Prop(Material::Tree),
             Tool::Start,
-            Tool::Pickup(PickupKind::Health),
+            Tool::Pickup(PickupKind::Ammo),
         ];
         let area = map.field_size();
         let mut editor = MapEditor {
@@ -3267,7 +3362,7 @@ impl MapEditor {
         let room = frame.room();
         // The tray's popups rise from it into the room over it.
         let popup = self.popup.as_ref().map(|popup| match popup {
-            Popup::Dropdown(category) => PopupLayout::Dropdown(*category, chrome::tray_list(bar.tools_anchor(*category), frame, category.tools().count())),
+            Popup::Dropdown(category) => PopupLayout::Dropdown(*category, chrome::tray_tools(bar.tools_anchor(*category), frame, *category)),
             Popup::Brush => PopupLayout::Brush(chrome::tray_list(bar.brush.unwrap_or_else(|| bar.tools_anchor(Category::Wall)), frame, BrushRow::ALL.len())),
             Popup::Palette => PopupLayout::Palette(chrome::tray_palette(bar.tools_anchor(Category::Wall), frame)),
             Popup::Settings { tab } => PopupLayout::Settings(MapPanel::of(bar.map, room, *tab, self.settings().spawn == SpawnKind::Waves)),
@@ -3313,9 +3408,9 @@ impl MapEditor {
             }
         };
         match (&self.popup, &chrome.popup) {
-            (Some(Popup::Dropdown(category)), Some(PopupLayout::Dropdown(_, rows))) => {
-                for (i, tool) in category.tools().enumerate() {
-                    out.push((format!("tool_{}", tool.name()), rows.row(i)));
+            (Some(Popup::Dropdown(category)), Some(PopupLayout::Dropdown(_, list))) => {
+                for (tool, row) in category.tools().zip(&list.rows) {
+                    out.push((format!("tool_{}", tool.name()), *row));
                 }
             }
             (Some(Popup::Brush), Some(PopupLayout::Brush(rows))) => {
@@ -4161,7 +4256,7 @@ impl MapEditor {
                     break;
                 }
             }
-            (Popup::Dropdown(category), Some(PopupLayout::Dropdown(_, rows))) => {
+            (Popup::Dropdown(category), Some(PopupLayout::Dropdown(_, list))) => {
                 let Some(pointer) = pointer.filter(|_| pressed) else {
                     self.popup = Some(Popup::Dropdown(category));
                     return;
@@ -4169,7 +4264,7 @@ impl MapEditor {
                 // A pick or a press elsewhere: either way the list closes
                 // and the press goes no further.
                 if input.pressed {
-                    let picked = category.tools().enumerate().find(|&(i, _)| rows.row(i).contains(pointer)).map(|(_, tool)| tool);
+                    let picked = category.tools().zip(&list.rows).find(|(_, row)| row.contains(pointer)).map(|(tool, _)| tool);
                     if let Some(tool) = picked {
                         self.select_tool(tool);
                     }
@@ -5514,6 +5609,33 @@ mod editor_tests {
         assert!(ed.map().cells.is_empty(), "the dismissing press painted through the palette");
         click(&mut ed, &frame, p);
         assert_eq!(ed.map().cell(30, 15), Some(&CellObject::for_tower(TowerKind::Tesla, Side::Player)));
+    }
+
+    /// The PICKUP button starts on AMMO, and its list stands the crates
+    /// under their groups' headings: a crate's row picks it, and a press on
+    /// a heading closes the list and paints nothing.
+    #[test]
+    fn the_pickup_list_picks_from_its_groups() {
+        let ui = UiFrame::new((1366.0, 768.0), 1.0, 1.0, Insets::default(), false);
+        let frame = BuilderFrame::new(ui, (W, H), MapClass::Arena, None);
+        let mut ed = MapEditor::new(MapFile::new());
+        assert_eq!(ed.current_tool(Category::Pickup), Tool::Pickup(PickupKind::Ammo));
+        press_named(&mut ed, &frame, "list_pickup");
+        assert_eq!(ed.open_menu(), Some("pickup"));
+        let Some(PopupLayout::Dropdown(_, list)) = ed.chrome(&frame).popup else {
+            panic!("the PICKUP list is open");
+        };
+        assert_eq!(list.headings.iter().map(|(g, _)| *g).collect::<Vec<_>>(), [PickupGroup::Supplies, PickupGroup::Weapons, PickupGroup::Air, PickupGroup::Specials]);
+        press_named(&mut ed, &frame, "tool_gravity_well");
+        assert_eq!(ed.tool(), Tool::Pickup(PickupKind::GravityWell));
+        assert_eq!(ed.current_tool(Category::Pickup), Tool::Pickup(PickupKind::GravityWell));
+        assert_eq!(ed.open_menu(), None);
+        press_named(&mut ed, &frame, "list_pickup");
+        let (_, heading) = list.headings[1];
+        click(&mut ed, &frame, center(frame.ui.rect_to_window(heading)));
+        assert_eq!(ed.open_menu(), None);
+        assert_eq!(ed.tool(), Tool::Pickup(PickupKind::GravityWell), "a heading picks nothing");
+        assert!(ed.map().cells.is_empty(), "the press on a heading painted through the list");
     }
 
     #[test]

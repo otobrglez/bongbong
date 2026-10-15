@@ -338,6 +338,13 @@ category-ground = GROUND
 category-plant = PLANT
 category-actor = ACTOR
 category-pickup = PICKUP
+# The PICKUP list's group headings (the builder's tray); the -short ones
+# name a group in the folded palette's narrow name column.
+pickup-group-supplies = SUPPLIES
+pickup-group-weapons = WEAPONS
+pickup-group-specials = SPECIALS
+pickup-group-air = AIR SUPPORT
+pickup-group-air-short = AIR
 
 # The FILE menu's rows, 18 px in a 200 px menu; file-save is the Save
 # prompt's button too, 12 pt in 60 pt.

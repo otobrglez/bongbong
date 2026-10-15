@@ -216,6 +216,10 @@ keys! {
     CATEGORY_PLANT = "category-plant";
     CATEGORY_ACTOR = "category-actor";
     CATEGORY_PICKUP = "category-pickup";
+    PICKUP_GROUP_SUPPLIES = "pickup-group-supplies";
+    PICKUP_GROUP_WEAPONS = "pickup-group-weapons";
+    PICKUP_GROUP_SPECIALS = "pickup-group-specials";
+    PICKUP_GROUP_AIR = "pickup-group-air";
     FILE_LOAD = "file-load";
     FILE_SAVE = "file-save";
     FILE_SAVE_AS = "file-save-as";
@@ -777,6 +781,15 @@ mod text_tests {
         ids
     }
 
+    /// Whether `id` is a pickup group's short name for the palette
+    /// (`PickupGroup::short_label`), which a language gives only where its
+    /// heading is too wide there.
+    fn short_group(id: &str) -> bool {
+        id.strip_prefix("pickup-group-")
+            .and_then(|rest| rest.strip_suffix("-short"))
+            .is_some_and(|name| crate::editor::PickupGroup::ALL.iter().any(|g| g.name() == name))
+    }
+
     /// Every key constant names a message in English, every English
     /// message is a key constant or a member of a dynamic family, and no
     /// two constants share an id.
@@ -788,7 +801,7 @@ mod text_tests {
         }
         let dynamic = dynamic_ids();
         for id in &english {
-            let known = keys::ALL.iter().any(|k| k.0 == id) || dynamic.contains(id) || id.starts_with("tool-short-");
+            let known = keys::ALL.iter().any(|k| k.0 == id) || dynamic.contains(id) || id.starts_with("tool-short-") || short_group(id);
             assert!(known, "lang/en.ftl's {id} has no key constant and is in no dynamic family");
         }
         for id in &dynamic {
@@ -818,7 +831,7 @@ mod text_tests {
                 // A level's English title is levels.toml's, so only the
                 // other languages carry `level-<map>`.
                 let level_title = id.strip_prefix("level-").is_some_and(|map| levels.position(map).is_some());
-                assert!(english.contains(id) || short_tool || level_title, "lang/{tag}.ftl has {id}, which English has not");
+                assert!(english.contains(id) || short_tool || short_group(id) || level_title, "lang/{tag}.ftl has {id}, which English has not");
             }
             let missing: Vec<&String> = english.iter().filter(|id| !ids.contains(id)).collect();
             if !missing.is_empty() {
@@ -1052,6 +1065,12 @@ mod text_tests {
         for category in crate::editor::Category::ALL {
             out.push((category.label_key(), UI_SMALL_TEXT, crate::editor::chrome::PALETTE_LABEL_W as i32 - 12, vec![]));
         }
+        // The PICKUP list's group headings, inside their column
+        // (`chrome::headed_list`); the palette's short names are measured
+        // with the tools'.
+        for group in crate::editor::PickupGroup::ALL {
+            out.push((group.label_key(), crate::editor::chrome::MAP_HEADING_SIZE, crate::EDITOR_DROPDOWN_W as i32 - 20, vec![]));
+        }
         // The brush's row of the palette, named beside its cells like a
         // category's; BRUSH's list's rows, 18 pt after the icon like a
         // tool's (`tool-select` is measured with the tools).
@@ -1150,6 +1169,16 @@ mod text_tests {
                 let short = catalogue.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or(long);
                 if width(&short, HUD_LABEL_SIZE) > 60 {
                     over.push(format!("{tag}: short tool name {short:?} is longer than a word or two"));
+                }
+            }
+            // A pickup group's name in the folded palette's name column,
+            // its short one where the language has one.
+            for group in crate::editor::PickupGroup::ALL {
+                let short = catalogue
+                    .message(&format!("pickup-group-{}-short", group.name()), &[])
+                    .unwrap_or_else(|| catalogue.get(group.label_key()));
+                if width(&short, UI_SMALL_TEXT) > crate::editor::chrome::PALETTE_LABEL_W as i32 - 12 {
+                    over.push(format!("{tag}: pickup group {short:?} overflows the palette's name column"));
                 }
             }
             // The weapon slot's `WPN OFFLINE` (docs/emp-burst.md), split at
