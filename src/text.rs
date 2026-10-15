@@ -886,6 +886,7 @@ mod text_tests {
         let content = (LOBBY_W - 2.0 * LOBBY_MARGIN) as i32;
         let area = crate::hud::UiFrame::plain((crate::hud::UI_MIN_W, crate::hud::UI_MIN_H)).area;
         let seat_state_px = (crate::lobby::seats_rect(area).width - LOBBY_KICK_W - LOBBY_SEAT_STATE_X) as i32 - 4;
+        let mission_bong = 2 * crate::hud::MISSION_BONG_GAP + crate::hud::MISSION_BONG_SRC.width as i32;
         let mut out = vec![
             button(keys::BUTTON_BUILD, MODE_BUTTON_W),
             button(keys::BUTTON_PLAY, MODE_BUTTON_W),
@@ -901,9 +902,9 @@ mod text_tests {
             dialog_button(keys::LEAVE_CONFIRM),
             dialog_button(keys::LEAVE_STAY),
             // The right cluster's title shares its slot with " 12/12" in
-            // a wave round.
-            (keys::MISSION_PROTECT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
-            (keys::MISSION_HUNT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
+            // a wave round, and PROTECT and HUNT with their bong as well.
+            (keys::MISSION_PROTECT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - mission_bong - width("12/12", HUD_TEXT_SIZE), vec![]),
+            (keys::MISSION_HUNT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - mission_bong - width("12/12", HUD_TEXT_SIZE), vec![]),
             (keys::MISSION_DESTROY, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::MISSION_TRAINING, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - width(" 12/12", HUD_TEXT_SIZE), vec![]),
             (keys::LOBBY_TITLE_START, 22, content, vec![]),

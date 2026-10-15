@@ -1665,8 +1665,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `WeaponSlot::of` -, the speed and shield gauges - each readout beside the symbol of the crate that
   fills it, `pickup_glyphs.png`, dim while it is empty; a couch's player 2 block beside or under
   it), the right cluster the level button (`LEVEL N`, `LEVEL_BUTTON_W`, opens the level select) or
-  the free-play mission word with the wave count, the enemies and the bong gauge under the bong
-  pack's symbol, then the `CornerButton`s (`BUILD` or, online, `LEAVE` - `Session::leave_online`,
+  the free-play mission word - PROTECT and HUNT followed by the bong they name playing its idle
+  loop (`HudModel::mission_bong`: the player's or the enemy's kind, `MISSION_BONG_SRC`'s cut of the
+  sheet at its own scale), DESTROY and TRAINING by none - with the wave count, the enemies and the
+  bong gauge under the bong pack's symbol, then the `CornerButton`s (`BUILD` or, online, `LEAVE` - `Session::leave_online`,
   the way out with no keyboard -, left of the mode button a local round's pause icon -
   `CornerButton::Pause`, the P key's `Input::pause_pressed`, two bars or a play triangle by
   `PlayChrome::paused` -, players or `RESTART` on a keyboard-less build, `ONLINE` where

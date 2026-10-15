@@ -5,11 +5,12 @@
 
 use sola_raylib::prelude::*;
 
+use crate::bong::{BongAnim, BongKind};
 use crate::hud::{
     banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_pickup, Corners, Fade, Hints,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
-    HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, ONLINE_COLOR, RESULT_LINE_SIZE,
-    RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, UI_SMALL_TEXT,
+    HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, MISSION_BONG_GAP, MISSION_BONG_SRC, ONLINE_COLOR,
+    RESULT_LINE_SIZE, RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, UI_SMALL_TEXT,
 };
 use crate::math::{Color, Rectangle};
 use crate::pickup::PickupKind;
@@ -17,7 +18,7 @@ use crate::text::{keys, text, width, Key};
 use crate::render::game::Textures;
 use crate::simulation::PlayerCount;
 use crate::tank::{team_color, HealthRamp, TEAM_COLORS};
-use crate::{Rect, MAX_DAMAGE, MAX_SEATS, PICKUP_GLYPH_CELL};
+use crate::{Rect, BONG_TEXTURE_SIZE, MAX_DAMAGE, MAX_SEATS, PICKUP_GLYPH_CELL};
 
 const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
 const SHIELD_COLOR: Color = Color::new(170, 120, 255, 255);
@@ -366,9 +367,9 @@ const HEAT_SHIELD_COLOR: Color = crate::pyro::FIRE[3];
 
 /// The right cluster's first row in `info`: the level button and the wave
 /// count beside it on a level (`level` is its number and whether the level
-/// select it opens is up), else the mission word with its count; the enemy
-/// count with the ones still to come; the bong's gauge under the bong pack's
-/// symbol.
+/// select it opens is up), else the mission word, the bong it names playing
+/// its idle loop, and the count; the enemy count with the ones still to
+/// come; the bong's gauge under the bong pack's symbol.
 fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: Option<(usize, bool)>, textures: &Textures, a: f32) {
     let (x, y, h) = (info.x.round() as i32, info.y.round() as i32, info.height.round() as i32);
     let text_y = y + (h - HUD_TEXT_SIZE) / 2;
@@ -380,7 +381,27 @@ fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: 
                 d.draw_text(&format!("{index}/{total}"), wx, text_y, HUD_TEXT_SIZE, faded(TEXT, a));
             }
         }
-        None => d.draw_text(&model.title, x, text_y, HUD_TEXT_SIZE, faded(TEXT, a)),
+        None => {
+            let wave = model.wave.map(|(index, total)| format!("{index}/{total}"));
+            match model.mission_bong {
+                Some((kind, frame)) => {
+                    d.draw_text(&model.title, x, text_y, HUD_TEXT_SIZE, faded(TEXT, a));
+                    let bx = x + width(&model.title, HUD_TEXT_SIZE) + MISSION_BONG_GAP;
+                    draw_mission_bong(d, textures, kind, frame, bx, y + (h - MISSION_BONG_SRC.height as i32) / 2, a);
+                    if let Some(wave) = wave {
+                        let wx = bx + MISSION_BONG_SRC.width as i32 + MISSION_BONG_GAP;
+                        d.draw_text(&wave, wx, text_y, HUD_TEXT_SIZE, faded(TEXT, a));
+                    }
+                }
+                None => {
+                    let title = match wave {
+                        Some(wave) => format!("{} {wave}", model.title),
+                        None => model.title.clone(),
+                    };
+                    d.draw_text(&title, x, text_y, HUD_TEXT_SIZE, faded(TEXT, a));
+                }
+            }
+        }
     }
     // A tank glyph stands for "enemies": the count next to a tank reads.
     draw_tank_glyph(d, x + I_ENEMIES, y + (h - TANK_GLYPH_H) / 2, faded(DIM, a));
@@ -389,6 +410,17 @@ fn draw_info(d: &mut impl RaylibDraw, info: Rectangle, model: &HudModel, level: 
         d.draw_text(&format!("+{}", model.enemies_pending), x + I_PENDING, text_y, HUD_TEXT_SIZE, faded(DIM, a));
     }
     draw_symbol_gauge(d, textures, PickupKind::BongHealth, x + I_BONG, y, h, model.bong.unwrap_or(0.0), BONG_COLOR, model.bong.is_some(), a);
+}
+
+/// The bong after the mission word, its top-left at (`x`, `y`): frame
+/// `frame` of `kind`'s idle loop, cut to `MISSION_BONG_SRC` and drawn at
+/// the sheet's own scale, facing right as the art is drawn.
+fn draw_mission_bong(d: &mut impl RaylibDraw, textures: &Textures, kind: BongKind, frame: i32, x: i32, y: i32, a: f32) {
+    let s = MISSION_BONG_SRC;
+    let src = Rectangle::new(frame as f32 * BONG_TEXTURE_SIZE + s.x, s.y, s.width, s.height);
+    let dest = Rectangle::new(x as f32, y as f32, s.width, s.height);
+    let sheet = textures.bongs[kind.index()].clip(BongAnim::Idle);
+    d.draw_texture_pro(sheet, src, dest, Vector2::new(0.0, 0.0), 0.0, faded(Color::WHITE, a));
 }
 
 /// A crate's symbol in a row from `y`, `h` tall, at `x`: lit while its
@@ -759,12 +791,16 @@ mod corner_tests {
     }
 
     /// The right cluster's first row: the widest mission word with its
-    /// wave count, or the level button with the widest count beside it,
-    /// ends before the enemy count, which ends before the bong's gauge.
+    /// bong and wave count, or the level button with the widest count
+    /// beside it, ends before the enemy count, which ends before the bong's
+    /// gauge.
     #[test]
     fn the_info_slots_fit_the_row_without_overlapping() {
         assert_eq!(I_TITLE_W, INFO_TITLE_W as i32, "the title's budget is the slot `text_tests` measures");
         assert!(width("DESTROY 12/12", HUD_TEXT_SIZE) <= I_TITLE_W && I_TITLE_W <= I_ENEMIES);
+        let bong = MISSION_BONG_GAP + MISSION_BONG_SRC.width as i32 + MISSION_BONG_GAP;
+        assert!(width("PROTECT", HUD_TEXT_SIZE) + bong + width("12/12", HUD_TEXT_SIZE) <= I_TITLE_W, "the bong pushes the count out of the slot");
+        assert!(MISSION_BONG_SRC.height <= ROW_H, "the bong stands inside the row");
         assert!(LEVEL_BUTTON_W as i32 + LEVEL_WAVE_GAP + width("12/12", HUD_TEXT_SIZE) <= I_ENEMIES, "the wave count runs into the enemies");
         assert!(I_ENEMIES + TANK_GLYPH_W <= I_ENEMY_COUNT);
         assert!(I_ENEMY_COUNT + width("88", HUD_TEXT_SIZE) + 4 <= I_PENDING, "two digits of enemies run into the +N");
