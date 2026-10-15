@@ -21,6 +21,17 @@
 
 import { t } from "./strings";
 
+/** Leave real full screen or immersive mode, whichever is on; set by
+ *  `installFullscreenToggle`. */
+let leave: () => void = () => {};
+
+/** Take the game out of full screen, for a link that leaves it for the
+ *  page below (more-panel.ts): in either mode the `.game` box is all that
+ *  shows. */
+export function leaveFullscreen(): void {
+  leave();
+}
+
 export function installFullscreenToggle(): void {
   const game = document.querySelector<HTMLElement>(".game");
   const canvas = document.getElementById("canvas");
@@ -58,16 +69,20 @@ export function installFullscreenToggle(): void {
     }
   }
 
+  leave = () => {
+    if (real() && exit) {
+      try { void exit.call(document); } catch { /* already out */ }
+    }
+    game.classList.remove("immersive");
+    label();
+  };
+
   button.addEventListener("click", (e) => {
     // Never let the toggle double as a game tap.
     e.preventDefault();
     e.stopPropagation();
     if (active()) {
-      if (real() && exit) {
-        try { void exit.call(document); } catch { /* already out */ }
-      }
-      game.classList.remove("immersive");
-      label();
+      leave();
     } else {
       enter();
     }

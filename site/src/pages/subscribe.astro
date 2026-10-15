@@ -1,94 +1,43 @@
 ---
+// The newsletter on a page of its own, for links that still point here;
+// the game page carries the same form below the game (index.astro
+// `#updates`).
+import Page from "../layouts/Page.astro";
+import NewsletterForm from "../components/NewsletterForm.astro";
+import Bongs from "../components/Bongs.astro";
 ---
 
-<html lang="en">
-<head>
-    <meta charset="utf-8"/>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
-    <link rel="icon" href="/favicon.ico"/>
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>Subscribe for updates - BongBong!</title>
-    <style lang="scss">
-      $font-size: 10pt;
-      $font-color: #c6c6c6;
-
-      html, body {
-        margin: 0;
-        min-height: 100%;
-        background-color: #151515;
-        color: $font-color;
-        font-family: sans-serif;
-        font-size: $font-size;
-      }
-
-      a {
-        color: #888;
-      }
-
-      .wrapper {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        width: 100%;
-        min-height: 100vh;
-        padding: 40px 12px;
-        box-sizing: border-box;
-      }
-
-      .newsletter {
-        text-align: center;
-        font-size: $font-size;
-        width: 800px;
-        max-width: calc(100vw - 24px);
-
-        h1 {
-          font-size: 1.6em;
-          font-weight: normal;
-          color: #fff;
-          margin: 0 0 0.4em;
-        }
-
-        p {
-          margin: 0.3em 0;
-        }
-
-        .back {
-          margin-top: 24px;
-        }
-
-        :global(.formkit-input), :global(.formkit-submit) {
-          font-size: $font-size !important;
-          color: #fff !important;
-          background-color: #333333 !important;
-          border: none;
-        }
-
-        :global(div[data-style=clean]) {
-          padding-top: 10px !important;
-        }
-
-        :global(.formkit-form) {
-          margin: 0 auto !important;
-          padding-top: 3px !important;
-        }
-
-        :global(.formkit-powered-by-convertkit-container) {
-          display: none !important;
-        }
-      }
-    </style>
-</head>
-<body>
-
-<div class="wrapper">
-    <div class="newsletter">
-        <h1>Subscribe for updates</h1>
-        <p>Get notified about new releases and updates to BongBong!</p>
-        <script is:inline async data-uid="d4592cd03e" src="https://bong.kit.com/d4592cd03e/index.js"></script>
-        <p class="back"><a href="/">&larr; Back to the game</a></p>
+<Page title="Subscribe for updates" description="Get an email when a new version of BongBong ships." band="oasis">
+    <h1>Get updates</h1>
+    <div class="panel">
+        <h2>Get a dispatch when a new version ships</h2>
+        <p class="lead">New tanks, new maps, new ways to blow things up.</p>
+        <NewsletterForm id="subscribe"/>
+        <Bongs/>
     </div>
-</div>
+</Page>
 
-</body>
-</html>
+<script src="../scripts/subscribe.ts"></script>
+
+<style lang="scss">
+  .panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 28px;
+    padding: 24px 24px 0;
+    background: var(--grass-panel);
+    border: 1px solid var(--grass-line);
+    border-radius: 12px;
+
+    h2 {
+      margin: 0;
+      font-size: 22px;
+    }
+  }
+
+  .lead {
+    margin: 0;
+    color: var(--grass-text);
+  }
+</style>

@@ -1,0 +1,29 @@
+---
+// Apple's "Download on the App Store" badge as Apple publishes it
+// (public/app-store-badge.svg, from developer.apple.com/app-store/marketing/
+// guidelines - unmodified, which the guidelines require): the black badge,
+// its grey border part of the artwork, 40 px tall - the least Apple allows
+// on screen - with a quarter of its height clear all round, which the
+// padding keeps. One per page, and only where `SHOW_APP_STORE` says the
+// product page exists.
+import { APP_STORE_URL } from "../site";
+---
+
+<a class="app-store-badge" href={APP_STORE_URL}>
+    <img src="/app-store-badge.svg" alt="Download on the App Store" data-i18n-alt="badgeAlt" width="120" height="40"/>
+</a>
+
+<style>
+  .app-store-badge {
+    display: inline-block;
+    flex: none;
+    padding: 10px;
+    line-height: 0;
+  }
+
+  .app-store-badge img {
+    display: block;
+    width: 119.664px;
+    height: 40px;
+  }
+</style>

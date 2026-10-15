@@ -1,5 +1,6 @@
-// Where the page's own controls (Full screen, Subscribe) stand over the
-// canvas, published for the game (src/hud.rs `PageOverlay`, read once a
+// Where the page's own controls (Full screen, the App Store badge and Get
+// updates; on a touch screen Full screen and More) stand over the canvas,
+// published for the game (src/hud.rs `PageOverlay`, read once a
 // frame by src/app/web.rs): `window.bbOverlay` is `top x y width height`
 // in CSS pixels from the canvas's corner.
 //

@@ -1,0 +1,79 @@
+---
+// The foot of every page: the name, and the ways to the rest of the site
+// and to its maker. `credit` adds Apple's trademark line, which Apple's
+// badge guidelines want once on the site, where its legal notices are.
+import { CHANGELOG_URL, CONTACT_EMAIL, SOURCE_URL } from "../site";
+
+interface Props {
+  /** Which page this is, so its own link is marked. */
+  current?: "privacy" | "support";
+  credit?: boolean;
+}
+
+const { current, credit = false } = Astro.props;
+---
+
+<footer class="site-footer">
+    <a class="name" href="/">
+        <img class="px" src="/art/tank-p1.png" alt="" width="40" height="40"/>
+        <span class="pixel">BongBong!</span>
+    </a>
+    <nav aria-label="Site">
+        <a href="/support" aria-current={current === "support" ? "page" : undefined} data-i18n="support">Support</a>
+        <a href="/privacy" aria-current={current === "privacy" ? "page" : undefined} data-i18n="privacy">Privacy</a>
+        <a href={CHANGELOG_URL} data-i18n="whatsNew">What's new</a>
+        <a href={SOURCE_URL} data-i18n="source">Source</a>
+        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
+    </nav>
+    {credit && <p class="credit">Apple and the Apple logo are trademarks of Apple Inc., registered in the U.S. and other countries.</p>}
+</footer>
+
+<style lang="scss">
+  .site-footer {
+    max-width: 1200px;
+    margin: 0 auto;
+    box-sizing: border-box;
+    padding: 48px 24px 40px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 32px;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .name {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    color: var(--text-strong);
+    text-decoration: none;
+    font-size: 18px;
+  }
+
+  nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 22px;
+    font-size: 14px;
+
+    a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      color: var(--text);
+      text-decoration: none;
+
+      &:hover, &[aria-current="page"] {
+        color: #ffffff;
+        text-decoration: underline;
+      }
+    }
+  }
+
+  .credit {
+    flex: 1 1 100%;
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+</style>

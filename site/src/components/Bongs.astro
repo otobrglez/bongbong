@@ -1,0 +1,24 @@
+---
+// The seven bongs in a row, standing on a line: the newsletter's company.
+// Decoration only - hidden from screen readers.
+const BONGS = ["capi", "blip", "fuzz", "gloop", "oggle", "puff", "spike"];
+---
+
+<div class="bongs" aria-hidden="true">
+    {BONGS.map((b) => <img class="px" src={`/art/bong-${b}.png`} alt="" width="48" height="48"/>)}
+</div>
+
+<style>
+  .bongs {
+    display: flex;
+    justify-content: center;
+    gap: clamp(4px, 3vw, 28px);
+    padding: 10px 0 6px;
+    border-top: 1px solid var(--grass-line);
+  }
+
+  img {
+    width: clamp(36px, 10vw, 48px);
+    height: auto;
+  }
+</style>

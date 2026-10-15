@@ -575,11 +575,14 @@ does that the text above does not say, or says differently:
   rows); `UNDO`/`REDO` and `PING`/`MS` are left as they are. The editor's
   `FILE` reads `MENI` and its `MAP` button `IGRA`.
 - **The site's own strings** (phase 3) are `site/src/scripts/strings.ts`:
-  the dozen words around the canvas in English and Slovenian, picked by
-  the game's own rule (`?lang=`, then `navigator.languages`) and written
-  into `data-i18n` elements before the runtime starts, with `<html lang>`
-  and the title set to match. The tuning panel stays English: it is the
-  developer's. The subscribe page is untouched.
+  the words around and below the canvas in English and Slovenian, picked
+  by the game's own rule (`?lang=`, then `navigator.languages`) and written
+  into `data-i18n` elements (and `data-i18n-title`, `-alt`, `-label`
+  attributes) before the runtime starts, with `<html lang>` and the title
+  set to match. The tuning panel stays English: it is the developer's. The
+  privacy, support and subscribe pages are prose and English
+  (`site/src/layouts/Page.astro`, docs/platforms.md "The pages around the
+  game").
 - **iOS declares its languages** (`CFBundleLocalizations`), so Settings
   offers a per-app language that `SDL_GetPreferredLocales` reads first.
 

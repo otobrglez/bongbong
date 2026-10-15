@@ -547,6 +547,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@fontsource/ibm-plex-sans@npm:5.3.0":
+  version: 5.3.0
+  resolution: "@fontsource/ibm-plex-sans@npm:5.3.0"
+  checksum: 10c0/8e4c7a849e8167c8de1905282a62ff312a4266e364e3c436fa6d89d650bbb30b3386157ae31af3783e00f85fa64fd7e26bee7ca232db7d22fdc082f6b531edb5
+  languageName: node
+  linkType: hard
+
+"@fontsource/silkscreen@npm:5.3.0":
+  version: 5.3.0
+  resolution: "@fontsource/silkscreen@npm:5.3.0"
+  checksum: 10c0/b8ceea2b37c1f69c367deb9316d1e0043680f620bc61bef4c3a68068a42302ee2da876b8f456814283fef4d6575fa67a3346a24fe364c9cd922eb560f230887f
+  languageName: node
+  linkType: hard
+
 "@img/colour@npm:^1.1.0":
   version: 1.1.0
   resolution: "@img/colour@npm:1.1.0"
@@ -2778,6 +2792,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "site@workspace:."
   dependencies:
+    "@fontsource/ibm-plex-sans": "npm:5.3.0"
+    "@fontsource/silkscreen": "npm:5.3.0"
     astro: "npm:7.3.5"
     sass: "npm:^1.105.0"
   languageName: unknown

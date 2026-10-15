@@ -1,0 +1,86 @@
+---
+// The newsletter's sign-up: a plain HTML form posting to the Kit form, so
+// it works with no script at all (Kit then shows its own confirmation
+// page). `newsletter.ts` submits it in place instead, so a visitor on the
+// game page does not leave the round to subscribe.
+import { KIT_FORM_ACTION } from "../site";
+
+interface Props {
+  /** Makes the field's id unique on the page. */
+  id: string;
+}
+
+const { id } = Astro.props;
+const field = `${id}-email`;
+---
+
+<form class="newsletter" action={KIT_FORM_ACTION} method="post" data-newsletter>
+    <label class="pixel" for={field} data-i18n="email">Email</label>
+    <div class="row">
+        <input id={field} name="email_address" type="email" required autocomplete="email" inputmode="email"
+               placeholder="you@example.com"/>
+        <button class="btn btn-accent" type="submit" data-i18n="subscribeButton">Subscribe</button>
+    </div>
+    <p class="status" role="status" aria-live="polite" hidden></p>
+    <p class="fine"><span data-i18n="kitNote">Sent with Kit. Unsubscribe from any email.</span>{" "}<a href="/privacy"
+                                                                                               data-i18n="privacy">Privacy</a>
+    </p>
+</form>
+
+<style lang="scss">
+  .newsletter {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  label {
+    font-size: 12px;
+    color: #cfe0c4;
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  input {
+    flex: 1 1 220px;
+    min-width: 0;
+    height: 48px;
+    box-sizing: border-box;
+    padding: 0 14px;
+    border: 1px solid #3c4a33;
+    border-radius: 6px;
+    background: var(--grass-input);
+    color: var(--text-strong);
+    font: inherit;
+    /* Under 16 px Safari on iPhone zooms the page in on a tap. */
+    font-size: 16px;
+
+    &::placeholder {
+      color: #8a9a80;
+    }
+  }
+
+  .btn {
+    min-height: 48px;
+    font-size: 14px;
+  }
+
+  .status {
+    margin: 0;
+    color: var(--text-strong);
+  }
+
+  .fine {
+    margin: 0;
+    font-size: 12px;
+    color: #9fb294;
+
+    a {
+      color: inherit;
+    }
+  }
+</style>
