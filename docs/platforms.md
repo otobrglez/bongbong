@@ -207,8 +207,8 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   until then the product page does not exist and the pages say "coming soon"), and always in a PR
   preview, whose build gets `PUBLIC_BB_PREVIEW=1` from `.github/actions/build-web`'s `preview`
   input. The badge (`AppStoreBadge.astro`, `public/app-store-badge.svg`) is Apple's artwork
-  unmodified, black, 40 px tall with a quarter of its height clear all round on a solid ground, one
-  visible per page (Apple's marketing guidelines; Apple's credit line is in the privacy page's
+  unmodified, black, 40 px tall with a quarter of its height clear of its neighbours, one visible
+  per page (Apple's marketing guidelines; Apple's credit line is in the privacy page's
   footer). The newsletter form is a plain POST to the Kit form (`newsletter.ts` submits it in place
   with `fetch`, which Kit's endpoint allows from any origin), so no Kit script loads with the page.
   The fonts are Silkscreen for labels and IBM Plex Sans for prose, self-hosted from the
@@ -268,7 +268,7 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   strip a thumb does not reach in a landscape grip - and the game keeps its chrome below it as below
   a safe area (the band is the `UiFrame`'s top inset, so the builder's plates stand under it too,
   its canvas running under the band to the window's edge as play's field does); with a mouse they -
-  Full screen, the App Store badge and Get updates, on a plate of the page's ground - keep to the
+  Full screen, the App Store badge and Get updates, 40 px tall in one line on the field - keep to the
   bottom-left and take no band, and the off-screen arrows keep off their rectangle wherever it is. A
   link from the game to the page below it (`data-leave-game`) leaves full screen first, because the
   canvas takes every swipe and a phone on its side has no other way down.

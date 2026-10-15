@@ -90,12 +90,13 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
             height: calc(100dvh - var(--hints) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
           }
 
-          /* The page's controls on the canvas sit together in one row:
-             Full screen, the App Store badge and Get updates. With a mouse
-             they keep to the canvas's *bottom-left* corner, away from the
-             HUD's corner clusters along its top (src/hud.rs `corners`), on
-             a plate of the page's ground - the badge's clear space may hold
-             no picture (Apple's guidelines), and the field is one. Wherever
+          /* The page's controls on the canvas sit together in one line,
+             straight on the field: Full screen, the App Store badge and Get
+             updates, all 40 px tall - the badge's own height, the least
+             Apple allows on screen - and 10 px apart, a quarter of that,
+             the badge's clear space from its neighbours. With a mouse they
+             keep to the canvas's *bottom-left* corner, away from the HUD's
+             corner clusters along its top (src/hud.rs `corners`). Wherever
              they are, overlay.ts tells the game, which keeps its off-screen
              arrows off them. */
           .overlay-controls {
@@ -104,12 +105,13 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
             bottom: 10px;
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 8px;
-            border-radius: 8px;
-            background: var(--ground);
+            gap: 10px;
             z-index: 2;
             white-space: nowrap;
+          }
+
+          .badge-slot {
+            display: flex;
           }
 
           .touch-only {
@@ -117,12 +119,14 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
           }
 
           .fullscreen-toggle {
-            min-height: 40px;
+            height: 40px;
+            min-height: 0;
             font-family: var(--pixel-font);
           }
 
           .updates {
-            min-height: 40px;
+            height: 40px;
+            min-height: 0;
 
             svg {
               flex: none;
@@ -164,7 +168,7 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
 
             .fullscreen-toggle {
               min-width: 44px;
-              min-height: 34px;
+              height: 34px;
               padding: 0 10px;
 
               :global(.label) {
@@ -959,7 +963,7 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
                 <button class="btn fullscreen-toggle" id="fullscreen-toggle" type="button"
                         title="Play full screen" data-i18n="fullscreen" data-i18n-title="fullscreenTitle"><span
                         class="glyph" aria-hidden="true">&#9974;</span> <span class="label">Full screen</span></button>
-                {SHOW_APP_STORE && <span class="pointer-only"><AppStoreBadge/></span>}
+                {SHOW_APP_STORE && <span class="pointer-only badge-slot"><AppStoreBadge inline/></span>}
                 <a class="btn btn-accent updates pointer-only" href="#updates" data-leave-game>
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
                          aria-hidden="true">

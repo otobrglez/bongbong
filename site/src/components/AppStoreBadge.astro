@@ -4,12 +4,20 @@
 // guidelines - unmodified, which the guidelines require): the black badge,
 // its grey border part of the artwork, 40 px tall - the least Apple allows
 // on screen - with a quarter of its height clear all round, which the
-// padding keeps. One per page, and only where `SHOW_APP_STORE` says the
-// product page exists.
+// padding keeps. `inline` drops the padding for a row that spaces its own
+// items (the button row on the game): the badge is then exactly as tall as
+// the buttons beside it, and the row's gap keeps them clear of it. One per
+// page, and only where `SHOW_APP_STORE` says the product page exists.
 import { APP_STORE_URL } from "../site";
+
+interface Props {
+  inline?: boolean;
+}
+
+const { inline = false } = Astro.props;
 ---
 
-<a class="app-store-badge" href={APP_STORE_URL}>
+<a class:list={["app-store-badge", { inline }]} href={APP_STORE_URL}>
     <img src="/app-store-badge.svg" alt="Download on the App Store" data-i18n-alt="badgeAlt" width="120" height="40"/>
 </a>
 
@@ -19,6 +27,10 @@ import { APP_STORE_URL } from "../site";
     flex: none;
     padding: 10px;
     line-height: 0;
+  }
+
+  .app-store-badge.inline {
+    padding: 0;
   }
 
   .app-store-badge img {
