@@ -399,11 +399,17 @@ tunables! {
         /// motion; reduced motion has none.
         round_slowmo_scale: f32 = 0.5 in 0.1 ..= 1.0;
         round_slowmo_seconds: f32 = 0.5 in 0.0 ..= 2.0;
-        /// The fade through black to another level, out and in, each this
-        /// many seconds.
-        level_fade_seconds: f32 = 0.4 in 0.0 ..= 2.0;
-        /// The fade through black playing the same map again, out and in.
-        retry_fade_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// The end screen's title, numbers and countdown lift out over its
+        /// last this many seconds before it takes a way - by itself or
+        /// pressed - while its dim stays, so the next round dissolves in
+        /// under the one dim (`Session::verdict_lift`).
+        round_verdict_lift_seconds: f32 = 0.3 in 0.0 ..= 1.0;
+        /// The screen the round ended on dissolves into the next round's
+        /// over this long, block by block through the 4x4 Bayer pattern
+        /// (`render::dissolve`). 0 cuts; reduced motion cuts.
+        round_dissolve_seconds: f32 = 0.5 in 0.0 ..= 2.0;
+        /// The side of one of the dissolve's blocks, UI points.
+        round_dissolve_block_pt: f32 = 6.0 in 1.0 ..= 24.0;
     }
 
     group mission {
@@ -3121,9 +3127,10 @@ tunables! {
         /// browser's `prefers-reduced-motion`; Android, macOS, Linux and
         /// Windows say nothing, which is full motion -, 1 is full motion
         /// and 2 reduced. Reduced motion has no camera shake, no ripple
-        /// bending the whole screen and no zoom at a round's opening (the
-        /// establishing shot cuts to the tank); the follow camera, the
-        /// arrows and every effect of the fight itself stay.
+        /// bending the whole screen, no zoom at a round's opening (the
+        /// establishing shot cuts to the tank) and no glide when a round
+        /// starts over (the view cuts to the new start); the follow
+        /// camera, the arrows and every effect of the fight itself stay.
         reduce_motion: i32 = 0 in 0 ..= 2;
         /// The follow camera on a field map (`follow.rs`,
         /// docs/large-maps-follow-camera.md section 6): how far the seat
@@ -3174,6 +3181,12 @@ tunables! {
         /// the hold first - and any steer or shot ends both at once, so it
         /// never costs a moment of play.
         camera_establish_zoom_seconds: f32 = 0.45 in 0.0 ..= 3.0;
+        /// A round that starts over on the map already on screen - a
+        /// loss's countdown, PLAY AGAIN, R - opens on no establishing shot:
+        /// the view glides from where it stood, the wreck, to the new
+        /// start over this many seconds, eased in and out, while the
+        /// banner holds the round still. 0, or reduced motion, cuts there.
+        camera_restart_glide_seconds: f32 = 1.0 in 0.0 ..= 5.0;
     }
 
     group builder {

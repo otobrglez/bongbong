@@ -88,7 +88,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   frame's steps `Session::note_outcome` and `take_progress` hand a won level to `save_progress` and
   `Session::follow_countdown` takes the way a level's end screen counted down to, and in Play mode a
   press on a level's end screen (`press_result`) and Enter (`enter_result`) come after the dialogs
-  and before the corners' buttons. The level select comes before everything while it is up (a
+  and before the corners' buttons. **Between local rounds nothing goes black**: `tick_curtain` (after
+  `follow_countdown`) notes whether the frame's screen is kept (`keeps_picture`: a decided round, or
+  one behind the level select), the end screen's words lift out over its last
+  `round_verdict_lift_seconds` (`verdict_lift`, `take_way` hurrying the clock to it, the dim
+  staying), and a round started from a kept screen dissolves in from it (`dissolve`):
+  `render/dissolve.rs` keeps the screen in a framebuffer-sized texture (`Effects::dissolve`, drawn
+  before `begin_drawing` through a camera at the window's scale) and drops it block by block through
+  `static/dissolve.fs` over everything; a round started mid-play (R) or from the builder cuts in. The level select comes before everything while it is up (a
   `level_select::SelectInput` from the pointer, the arrows, Enter and Esc/Tab, every press claimed
   from the touch scheme); Esc opens it in play mode, as the bar's level button does. **The field is
   the map's, the window is anyone's** (docs/fullscreen-resolution-research.md,
@@ -1665,8 +1672,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `WeaponSlot::of` -, the speed and shield gauges - each readout beside the symbol of the crate that
   fills it, `pickup_glyphs.png`, dim while it is empty; a couch's player 2 block beside or under
   it), the right cluster the level button (`LEVEL N`, `LEVEL_BUTTON_W`, opens the level select) or
-  the free-play mission word with the wave count, the enemies and the bong gauge under the bong
-  pack's symbol, then the `CornerButton`s (`BUILD` or, online, `LEAVE` - `Session::leave_online`,
+  the free-play mission word - PROTECT and HUNT followed by the bong they name playing its idle
+  loop (`HudModel::mission_bong`: the player's or the enemy's kind, `MISSION_BONG_SRC`'s cut of the
+  sheet at its own scale), DESTROY and TRAINING by none - with the wave count, the enemies and the
+  bong gauge under the bong pack's symbol, then the `CornerButton`s (`BUILD` or, online, `LEAVE` - `Session::leave_online`,
   the way out with no keyboard -, left of the mode button a local round's pause icon -
   `CornerButton::Pause`, the P key's `Input::pause_pressed`, two bars or a play triangle by
   `PlayChrome::paused` -, players or `RESTART` on a keyboard-less build, `ONLINE` where
@@ -1849,8 +1858,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   critically damped `spring` (`camera_spring_seconds`) with velocity feed-forward toward a goal
   eased into the field over `camera_edge_ease_px`, then hard rules: the sight box stays on screen
   (`Shot::boxes_in`), then the field, a short axis centred. It cuts on a followed seat's
-  `Teleported`/`TankEntered`, on `RoundStarted` or a frame counter going back (`observe_events`,
-  after every step), on a jump, on a far hand-over and on `Follow::cut`.
+  `Teleported`/`TankEntered` (`observe_events`, after every step), on a jump, on a far hand-over and
+  on `Follow::cut` (`app.rs`: another round on screen - another map, a room's replica or back). A
+  restart - `RoundStarted` or a frame counter going back - cuts the tracker to the new start while
+  `update` glides the picture there from the last frame's centre (`Glide`, smoothstep over
+  `camera_restart_glide_seconds`, `Shot::glide` its progress); a cut asked for alongside, a split
+  screen, no seat or `FollowRules::current` under reduced motion (glide 0) cut instead.
   `CameraReport`/`FollowReport` are what `app.rs` hands the dev server. **The couch split**:
   `Shot::split: Option<Split>`, one `Tracker` per half - a Voronoi split along the bisector of the
   tanks as the halves show them (`Split::at`/`normal` in view pixels, `apart`, `in_second`); each
@@ -1858,8 +1871,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`split_aims`/`entry`/`holds`), so neither half jumps; the split closes once the pair fits and the
   halves meet (`MERGE_PX`/`MERGE_SPEED`), chasing the shared centre with no dead zone or edge ease;
   a seat going down hands its half on without a cut; `FollowReport::second` is the second half's
-  camera. Tests: 23 in `follow::tests` (dead zone, lead cap, the box under a slow spring, the spring
-  at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, spectating, the couch).
+  camera. Tests: 24 in `follow::tests` (dead zone, lead cap, the box under a slow spring, the spring
+  at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, the restart glide, spectating, the couch).
 - `establish.rs` (docs/large-maps-follow-camera.md §6) — the establishing shot: a local round on a
   field map whose view shows part of it, opening behind its mission banner, on a field no more than
   `MAX_TEXELS` (4096) a side (and on a phone or a tablet no more than `EMBEDDED_MAX_AREA`, 2048 x
@@ -1868,14 +1881,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   steer or a shot ends both. `Establish::update` runs on `Game::intro_timer`, so a lockstep replays
   it; `Mapping`/`between` is the zoom, a homothety about the one point both ends share, and
   `zoom_split` zooms a couch pair that opens apart into its split. No shot without an intro, in a
-  room's round, or on an arena.
+  room's round, or on an arena, and none on a round starting over on the map already on screen:
+  `Establish::replay` is set once a round on the screen's map has run a frame and cleared by
+  `new_scene` (`app.rs`, with `Follow::cut`), so a restart opens on the follow camera's glide.
 - `motion.rs` (docs/large-maps-follow-camera.md §6) — the one motion switch: the `reduce_motion` row
   (camera group: 0 follows the platform, 1 full motion, 2 reduced) resolved by `reduced()` against
   the platform's answer, which `app::run` reads once at startup (`set_platform`): iOS's
   `UIAccessibilityIsReduceMotionEnabled` (`app::ios::reduce_motion`) and the page's
   `window.bbMotion` (`page_string`, `from_page`); Android, macOS, Linux and Windows give none, which
-  is full motion. Reduced motion means no camera shake, no kill ripple bending the whole screen and
-  an establishing shot that cuts instead of zooming; the follow camera, the split, the arrows and
+  is full motion. Reduced motion means no camera shake, no kill ripple bending the whole screen, an
+  establishing shot that cuts instead of zooming and a restart that cuts instead of gliding; the follow camera, the split, the arrows and
   every effect of the round stay. Tests use `reduced_by`, never the global; `status.camera.motion`
   reports it.
 - `margin.rs` (docs/large-maps-follow-camera.md §13 item 7) — an arena's margins, headless:
@@ -2402,7 +2417,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `status.camera.focus` can be `split`, with `status.camera.split` carrying `line`, `window_line`,
   `apart` and each half's `seat`/`rect`/`offset`/`cut`/`in_view` (a `click` past the divider lands
   in the second half's world); `status.camera.view` is `establishing` during the establishing shot,
-  with `establishing.phase`/`progress`; `status.camera.motion` reports the motion switch. `play`
+  with `establishing.phase`/`progress`; `status.camera.glide` is a restart's glide progress (null
+  with none); `status.camera.motion` reports the motion switch. `play`
   does what `restart` does afterwards, so the step/screenshot loop carries over. `terrain` is the
   tiles-and-fire counterpart of `snapshot`. The capture (`after_render`) is `render`-only; a
   headless server arms a `screenshot` and never answers it. A history ring keeps 3600 frames of

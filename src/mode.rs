@@ -188,24 +188,30 @@ pub struct Session {
     /// on the first frame of the win; a round seen playing again lets the
     /// next win be put.
     clear_noted: bool,
-    /// The fade through black between local rounds, the way an end screen
-    /// takes, and the real time since the round was decided (`Curtain`).
+    /// The passage between local rounds - the end screen's verdict lifting
+    /// out, the way it takes, the dissolve into the next round - and the
+    /// real time since the round was decided (`Curtain`).
     curtain: Curtain,
 }
 
-/// The fade through black between local rounds and the end's slowed
-/// picture, headless (`Session::tick_curtain`, `curtain`, `time_scale`). The
-/// fade out is read off the end screen's own clock - its last
-/// `level_fade_seconds` or `retry_fade_seconds` - so it lands black on the
-/// frame the next round starts; the fade in runs on real time from there.
+/// The passage between local rounds and the end's slowed picture,
+/// headless (`Session::tick_curtain`, `verdict_lift`, `keeps_picture`,
+/// `dissolve`, `time_scale`). The verdict's lift is read off the end
+/// screen's own clock - its last `round_verdict_lift_seconds` - so it is
+/// gone on the frame the next round starts, under a dim that stays; the
+/// dissolve into that round runs on real time from there, over the screen
+/// the old round was kept on (`render::dissolve`). Nothing goes black.
 #[derive(Clone, Copy, Debug, Default)]
 struct Curtain {
     /// The way a press on the end screen chose, taken when its clock runs
-    /// out behind the fade out (`press_result`, `enter_result`).
+    /// out behind the verdict's lift (`press_result`, `enter_result`).
     pending: Option<Pending>,
-    /// The fade in's seconds left, and its length.
-    fade_in: f32,
-    fade_in_of: f32,
+    /// The dissolve's seconds left, and its length.
+    dissolve: f32,
+    dissolve_of: f32,
+    /// The screen was kept on the last frame (`keeps_picture`, as
+    /// `tick_curtain` left it): a round started now dissolves in from it.
+    kept: bool,
     /// The local round's frame last frame: a round that starts over by
     /// itself (free play, the R key) is seen by its frame going back.
     last_frame: u64,
@@ -313,7 +319,7 @@ impl Session {
         self.level_select = None;
         let (width, height) = self.game.map.field_size();
         self.game.init(width, height);
-        self.open_curtain(crate::tuning::tuning().level_fade_seconds);
+        self.start_dissolve();
         Ok(())
     }
 
@@ -325,7 +331,7 @@ impl Session {
             self.players_dialog = false;
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
-            self.open_curtain(crate::tuning::tuning().retry_fade_seconds);
+            self.start_dissolve();
         }
     }
 
@@ -585,38 +591,38 @@ impl Session {
         self.game.since_end().is_some_and(|s| s >= beats.finale + beats.fade * 0.5)
     }
 
-    /// Take the end screen's `way` behind the fade out: its clock runs
-    /// down to the fade's length and `follow_countdown` takes the way when
-    /// it is out.
+    /// Take the end screen's `way` behind the verdict's lift: its clock
+    /// runs down to the lift's length and `follow_countdown` takes the way
+    /// when it is out.
     fn take_way(&mut self, way: Pending) {
-        let t = crate::tuning::tuning();
-        let fade = match way {
-            Pending::NextLevel => t.level_fade_seconds,
-            Pending::PlayAgain => t.retry_fade_seconds,
-        };
         self.curtain.pending = Some(way);
-        self.game.hurry_end(fade);
+        self.game.hurry_end(crate::tuning::tuning().round_verdict_lift_seconds);
     }
 
-    /// Start the fade in onto a round just started, `seconds` long.
-    fn open_curtain(&mut self, seconds: f32) {
+    /// Start the dissolve into a round just started, from the screen kept
+    /// on the frame before; a round started from anything else - the
+    /// builder, a round still being played - cuts in.
+    fn start_dissolve(&mut self) {
+        let seconds = if self.curtain.kept { crate::tuning::tuning().round_dissolve_seconds } else { 0.0 };
         self.curtain.pending = None;
-        self.curtain.fade_in = seconds;
-        self.curtain.fade_in_of = seconds;
+        self.curtain.dissolve = seconds;
+        self.curtain.dissolve_of = seconds;
         self.curtain.last_frame = self.game.frame();
     }
 
-    /// One frame of the curtain, `dt` real seconds: the fade in runs down,
-    /// a local round that started over by itself (free play's end, the R
-    /// key) fades in, and the time since the round was decided counts.
-    /// `app.rs` calls it once a frame, after `follow_countdown`.
+    /// One frame of the curtain, `dt` real seconds: the dissolve runs
+    /// down, a local round that started over by itself (free play's end,
+    /// the R key) dissolves in, whether this frame's screen is kept is
+    /// noted, and the time since the round was decided counts. `app.rs`
+    /// calls it once a frame, after `follow_countdown`.
     pub fn tick_curtain(&mut self, dt: f32) {
         let frame = self.game.frame();
-        if self.driver == Driver::Play && frame < self.curtain.last_frame && self.curtain.fade_in <= 0.0 {
-            self.open_curtain(crate::tuning::tuning().retry_fade_seconds);
+        if self.driver == Driver::Play && frame < self.curtain.last_frame && self.curtain.dissolve <= 0.0 {
+            self.start_dissolve();
         }
         self.curtain.last_frame = frame;
-        self.curtain.fade_in = (self.curtain.fade_in - dt).max(0.0);
+        self.curtain.dissolve = (self.curtain.dissolve - dt).max(0.0);
+        self.curtain.kept = self.keeps_picture();
         self.curtain.since_end = match (self.game.outcome(), self.curtain.since_end) {
             (Outcome::Playing, _) => None,
             (_, since) if !self.playing() => since,
@@ -624,38 +630,43 @@ impl Session {
         };
     }
 
-    /// How dark the curtain is, 0 to 1, over a local round in play mode:
-    /// the fade out over the end screen's last seconds where it is about
-    /// to take a way by itself or was told to, the fade in after.
-    pub fn curtain(&self) -> f32 {
-        if self.driver != Driver::Play {
+    /// How far the end screen's title, numbers and countdown have lifted
+    /// out, 0 to 1, over a local round in play mode: over the screen's last
+    /// `round_verdict_lift_seconds` where it is about to take a way by
+    /// itself or was told to. Its dim stays, under the next round's banner.
+    pub fn verdict_lift(&self) -> f32 {
+        if self.driver != Driver::Play || self.game.outcome() == Outcome::Playing {
             return 0.0;
         }
-        let fade_in = if self.curtain.fade_in_of > 0.0 { self.curtain.fade_in / self.curtain.fade_in_of } else { 0.0 };
-        let t = crate::tuning::tuning();
-        let way = self.curtain.pending.or_else(|| {
-            if self.game.outcome() == Outcome::Playing {
-                return None;
-            }
-            if !self.game.hold_end_screen {
-                // Free play restarts itself on the same map.
-                return Some(Pending::PlayAgain);
-            }
-            match self.result_view().and_then(|view| view.buttons) {
-                Some(ResultButtons { countdown: Some(_), next: Some(_) }) => Some(Pending::NextLevel),
-                Some(ResultButtons { countdown: Some(_), next: None }) => Some(Pending::PlayAgain),
-                _ => None,
-            }
-        });
-        let fade_out = way.map_or(0.0, |way| {
-            let seconds = match way {
-                Pending::NextLevel => t.level_fade_seconds,
-                Pending::PlayAgain => t.retry_fade_seconds,
-            };
-            let left = self.game.restart_countdown();
-            if seconds > 0.0 && left < seconds { 1.0 - left / seconds } else { 0.0 }
-        });
-        fade_out.max(fade_in).clamp(0.0, 1.0)
+        // Free play restarts itself on the same map; a level's screen
+        // takes the way it counts down to.
+        let takes_way = self.curtain.pending.is_some()
+            || !self.game.hold_end_screen
+            || matches!(self.result_view().and_then(|view| view.buttons), Some(ResultButtons { countdown: Some(_), .. }));
+        let seconds = crate::tuning::tuning().round_verdict_lift_seconds;
+        let left = self.game.restart_countdown();
+        if takes_way && seconds > 0.0 && left < seconds { (1.0 - left / seconds).clamp(0.0, 1.0) } else { 0.0 }
+    }
+
+    /// Whether this frame's screen is kept for the dissolve into the next
+    /// round (`render::dissolve`): a local round in play mode that is
+    /// decided, or that stands behind the level select - the screens a new
+    /// round starts from. A round started over mid-play (the R key) has
+    /// nothing kept and cuts in, as every round does under reduced motion.
+    pub fn keeps_picture(&self) -> bool {
+        self.driver == Driver::Play
+            && (self.game.outcome() != Outcome::Playing || self.level_select.is_some())
+            && crate::tuning::tuning().round_dissolve_seconds > 0.0
+            && !crate::motion::reduced()
+    }
+
+    /// How far the kept screen has dissolved into the round just started,
+    /// 0 to 1, while it does; `None` once it is done, outside play mode and
+    /// under reduced motion.
+    pub fn dissolve(&self) -> Option<f32> {
+        let c = &self.curtain;
+        (self.driver == Driver::Play && c.dissolve > 0.0 && c.dissolve_of > 0.0 && !crate::motion::reduced())
+            .then(|| 1.0 - c.dissolve / c.dissolve_of)
     }
 
     /// The share of real time the local round runs at: held for
@@ -1264,7 +1275,9 @@ impl Session {
                     Some(LevelBanner { number: campaign.levels.number(i), count: campaign.levels.last_number(), title: level.title() })
                 }),
                 result: self.result_view(),
-                curtain: self.curtain(),
+                verdict_lift: self.verdict_lift(),
+                keep_screen: self.keeps_picture(),
+                dissolve: self.dissolve(),
                 level_button: self.level_button(),
                 levels: self.level_select.as_ref().zip(self.campaign.as_ref()).map(|(select, campaign)| select.view(campaign, self.level())),
                 minimap: (self.driver == Driver::Play).then(|| self.minimap_slot()).flatten(),
@@ -2291,13 +2304,65 @@ mod session_tests {
         }
     }
 
-    /// Step through the fade out a press on the end screen runs before it
-    /// takes its way.
-    fn through_fade(s: &mut Session) {
-        let t = crate::tuning::tuning();
-        for _ in 0..(t.level_fade_seconds.max(t.retry_fade_seconds) * 60.0).ceil() as usize + 2 {
+    /// Step through the verdict's lift a press on the end screen runs
+    /// before it takes its way.
+    fn through_lift(s: &mut Session) {
+        for _ in 0..(crate::tuning::tuning().round_verdict_lift_seconds * 60.0).ceil() as usize + 2 {
             step(s);
         }
+    }
+
+    /// Free play's end screen is kept, its verdict lifts out over its last
+    /// moment while the dim stays, and the round it starts by itself
+    /// dissolves in from the kept screen and runs out on its own.
+    #[test]
+    fn free_play_dissolves_from_its_end_screen_into_the_next_round() {
+        let mut s = session();
+        step(&mut s);
+        assert!(!s.keeps_picture(), "a round being played keeps nothing");
+        finish(&mut s, false);
+        assert!(s.keeps_picture(), "the end screen is kept");
+        assert_eq!(s.verdict_lift(), 0.0, "the verdict stands");
+        let mut lift = 0.0;
+        for _ in 0..end_frames(&s) + 5 {
+            step(&mut s);
+            if s.game.outcome() == Outcome::Playing {
+                break;
+            }
+            lift = s.verdict_lift();
+        }
+        assert_eq!(s.game.outcome(), Outcome::Playing, "free play started over by itself");
+        assert!(lift > 0.9, "the verdict had lifted out: {lift}");
+        let p = s.dissolve().expect("the new round dissolves in");
+        assert!(p < 0.1, "from its start: {p}");
+        for _ in 0..(crate::tuning::tuning().round_dissolve_seconds * 60.0).ceil() as usize + 1 {
+            step(&mut s);
+        }
+        assert_eq!(s.dissolve(), None, "the dissolve runs out");
+        assert!(!s.keeps_picture());
+    }
+
+    /// A round started over mid-play (the R key) and one started from the
+    /// builder have no end screen kept behind them: they cut in.
+    #[test]
+    fn a_round_started_from_play_or_the_builder_cuts_in() {
+        let mut s = session();
+        for _ in 0..10 {
+            step(&mut s);
+        }
+        let (w, h) = s.game.map.field_size();
+        s.game.update(crate::simulation::Input { restart_pressed: true, ..Default::default() }, crate::PHYSICS_FIXED_DT, w, h);
+        s.tick_curtain(crate::PHYSICS_FIXED_DT);
+        assert!(s.game.frame() < 10, "the round started over");
+        assert_eq!(s.dissolve(), None, "R mid-round cuts");
+
+        s.press_build();
+        s.answer_dialog(true);
+        step(&mut s);
+        s.play();
+        step(&mut s);
+        assert_eq!(s.mode(), Driver::Play);
+        assert_eq!(s.dissolve(), None, "PLAY from the builder cuts");
     }
 
     /// Wreck the round's enemy (`win`) or player 1 (`!win`) and step
@@ -2390,8 +2455,8 @@ mod session_tests {
         assert_eq!((s.level(), s.game.outcome()), (Some(1), Outcome::Won), "the campaign's end waits");
         let rects = result_rects(&s).expect("the buttons");
         assert!(s.press_result(centre(rects.next.expect("the way on")), area()));
-        assert!(s.curtain() < 1.0, "the fade out runs first");
-        through_fade(&mut s);
+        assert!(s.verdict_lift() < 1.0, "the verdict lifts out first");
+        through_lift(&mut s);
         assert_eq!(s.level(), Some(0), "round to the first");
 
         // A press in the finale goes to the verdict; then Enter does not
@@ -2401,7 +2466,7 @@ mod session_tests {
         assert!(!s.game.in_finale());
         to_verdict_from_skip(&mut s);
         assert!(s.enter_result());
-        through_fade(&mut s);
+        through_lift(&mut s);
         assert_eq!((s.level(), s.game.outcome()), (Some(1), Outcome::Playing));
     }
 
@@ -2446,12 +2511,14 @@ mod session_tests {
         finish(&mut s, false);
         to_verdict(&mut s);
         assert!(s.press_result(centre(result_rects(&s).expect("the button").again), area()));
-        through_fade(&mut s);
+        assert!(s.dissolve().is_none() && s.verdict_lift() < 1.0, "the verdict lifts out first");
+        through_lift(&mut s);
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing));
+        assert!(s.dissolve().is_some(), "PLAY AGAIN dissolves in from the end screen");
         finish(&mut s, false);
         to_verdict(&mut s);
         assert!(s.enter_result());
-        through_fade(&mut s);
+        through_lift(&mut s);
         assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing));
     }
 

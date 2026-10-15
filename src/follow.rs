@@ -59,10 +59,19 @@
 //!     map is shorter, the map is centred.
 //!   - **Cuts, not pans**, when the followed seat goes through a portal
 //!     (`Event::Teleported`) or comes in through a gate
-//!     (`Event::TankEntered`), when a round starts, when the view hands
-//!     over to a seat more than a screen away, and when the seat moved
-//!     further in a frame than it could drive - a pan across half the map
-//!     is disorienting at this pace.
+//!     (`Event::TankEntered`), when the round on screen changes
+//!     (`Follow::cut`), when the view hands over to a seat more than a
+//!     screen away, and when the seat moved further in a frame than it
+//!     could drive - a pan across half the map is disorienting at this
+//!     pace while the fight runs.
+//!   - **A restart glides.** A round that starts over on the map on screen
+//!     (`Event::RoundStarted`, a frame counter that went back) opens with
+//!     the round held still behind its banner, so the view glides from
+//!     where it stood - the wreck - to the new start over
+//!     `camera_restart_glide_seconds`, eased in and out, onto the follow
+//!     view as it stands each frame; the establishing shot plays only on a
+//!     map's first round on screen (`establish.rs`). Reduced motion, a cut
+//!     asked for at the same time and a split screen cut instead.
 
 use crate::framing::{Framing, Seating, SightBox};
 use crate::math::{Rectangle, Vec2};
@@ -95,12 +104,17 @@ pub struct FollowRules {
     /// `camera_edge_ease_px`: how far from the field's edge the view's
     /// goal starts easing into it.
     pub edge_ease_px: f32,
+    /// `camera_restart_glide_seconds`: how long the view glides from where
+    /// it stood to a round's new start when the round starts over; 0 cuts.
+    pub restart_glide_seconds: f32,
 }
 
 impl FollowRules {
-    /// The rules in the tuning table this frame.
+    /// The rules in the tuning table this frame, under the motion switch:
+    /// reduced motion cuts where a restart would glide (`motion.rs`).
     pub fn current() -> FollowRules {
-        FollowRules::of(&tuning())
+        let rules = FollowRules::of(&tuning());
+        if crate::motion::reduced() { FollowRules { restart_glide_seconds: 0.0, ..rules } } else { rules }
     }
 
     /// The rules in `t`.
@@ -113,6 +127,7 @@ impl FollowRules {
             spring_seconds: t.camera_spring_seconds,
             spectate_delay_seconds: t.camera_spectate_delay_seconds,
             edge_ease_px: t.camera_edge_ease_px,
+            restart_glide_seconds: t.camera_restart_glide_seconds,
         }
     }
 }
@@ -263,6 +278,9 @@ pub struct Shot {
     pub lead: Vec2,
     /// Whether the view cut to this frame rather than moving to it.
     pub cut: bool,
+    /// How far a restart's glide has come, eased, 0 where the view stood
+    /// to 1 on the follow view; `None` with no glide.
+    pub glide: Option<f32>,
     /// The couch's split screen while the view is two (`ShotKind::Split`):
     /// this shot is then the first half's, seat 0's, and `split` holds the
     /// second half's and the line between them. `None` for one view.
@@ -538,9 +556,16 @@ pub struct Follow {
     out_for: f32,
     /// Cuts the round's events asked for: seats (a bit each) that went
     /// through a portal or came in through a gate, or everything, for a
-    /// round that started.
+    /// round on screen that changed (`cut`).
     cut_seats: u32,
     cut_all: bool,
+    /// Whether the round started over since the last frame: the view
+    /// glides to its new start (`Glide`).
+    restarted: bool,
+    /// A restart's glide under way.
+    glide: Option<Glide>,
+    /// Where the last frame's view stood: the centre a glide leaves.
+    shown: Option<Vec2>,
     /// The last simulation frame whose events were read.
     seen_frame: Option<u64>,
 }
@@ -560,12 +585,12 @@ impl Follow {
             return;
         }
         if self.seen_frame.is_some_and(|seen| frame < seen) {
-            self.cut_all = true;
+            self.restarted = true;
         }
         self.seen_frame = Some(frame);
         for event in events {
             match *event {
-                Event::RoundStarted { .. } => self.cut_all = true,
+                Event::RoundStarted { .. } => self.restarted = true,
                 Event::Teleported { slot, .. } | Event::TankEntered { slot } if slot < seats.min(MAX_SEATS) => {
                     self.cut_seats |= 1 << slot;
                 }
@@ -584,6 +609,41 @@ impl Follow {
     /// that ran no step, so the view stands still with the round.
     pub fn update(&mut self, seats: &Seats, dt: f32, stage: &Stage, rules: &FollowRules) -> Shot {
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        // A restart cuts the follow view to the round's new start, and the
+        // picture glides there from where the view stood - unless a cut was
+        // asked for too, which also ends a glide under way.
+        let restarted = std::mem::take(&mut self.restarted);
+        if self.cut_all {
+            self.glide = None;
+        } else if restarted {
+            self.glide = self.shown.filter(|_| rules.restart_glide_seconds > 0.0).map(|from| Glide { from, elapsed: 0.0 });
+        } else if let Some(glide) = &mut self.glide {
+            glide.elapsed += dt;
+        }
+        self.cut_all |= restarted;
+        let mut shot = self.track(seats, dt, stage, rules);
+        if let Some(glide) = self.glide {
+            let q = if rules.restart_glide_seconds > 0.0 { ease(glide.elapsed / rules.restart_glide_seconds) } else { 1.0 };
+            if q >= 1.0 || shot.split.is_some() || shot.kind == ShotKind::Nobody {
+                self.glide = None;
+            } else {
+                let at = glide.from + (shot.center - glide.from) * q;
+                let center = Vec2::new(keep_in_field(at.x, stage.visible.0, stage.field.0).0, keep_in_field(at.y, stage.visible.1, stage.field.1).0);
+                shot = Shot {
+                    corner: Vec2::new(center.x - stage.visible.0 / 2.0, center.y - stage.visible.1 / 2.0),
+                    center,
+                    cut: false,
+                    glide: Some(q),
+                    ..shot
+                };
+            }
+        }
+        self.shown = Some(shot.center);
+        shot
+    }
+
+    /// The follow view this frame, before a restart's glide.
+    fn track(&mut self, seats: &Seats, dt: f32, stage: &Stage, rules: &FollowRules) -> Shot {
         let Some(target) = self.choose(seats, dt, stage, rules) else {
             return self.hold(stage);
         };
@@ -700,6 +760,7 @@ impl Follow {
             keeps,
             lead: self.view.lead,
             cut,
+            glide: None,
             split,
         }
     }
@@ -757,9 +818,27 @@ impl Follow {
             keeps: [None, None],
             lead: Vec2::new(0.0, 0.0),
             cut: false,
+            glide: None,
             split: None,
         }
     }
+}
+
+/// A restart's glide: the picture moving from where the view stood to the
+/// follow view on the round's new start (`Follow::update`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Glide {
+    /// The view's centre the frame before the restart, world px.
+    from: Vec2,
+    /// Seconds of the round since the restart.
+    elapsed: f32,
+}
+
+/// `p` from 0 to 1 eased in and out (smoothstep): a glide leaves the wreck
+/// gently and settles onto the new start the same way.
+fn ease(p: f32) -> f32 {
+    let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 1.0 };
+    p * p * (3.0 - 2.0 * p)
 }
 
 /// Where the two halves of a couch pair's split screen centre, before the
@@ -1081,6 +1160,7 @@ mod follow_tests {
             "camera_spring_seconds",
             "camera_spectate_delay_seconds",
             "camera_edge_ease_px",
+            "camera_restart_glide_seconds",
         ] {
             assert_eq!(Tuning::meta(name).map(|m| m.group), Some("camera"), "{name}");
         }
@@ -1372,7 +1452,8 @@ mod follow_tests {
     #[test]
     fn a_portal_a_gate_and_a_new_round_cut() {
         let s = open_stage();
-        let r = rules();
+        // With no glide, a round starting over cuts too.
+        let r = FollowRules { restart_glide_seconds: 0.0, ..rules() };
         let mut f = Follow::default();
         let mut t = tank(0, 400.0, 384.0);
         f.note(1, &[], 1);
@@ -1405,6 +1486,62 @@ mod follow_tests {
         // Moving further than a tank can drive in the time is a cut too.
         t.position.y += 200.0;
         assert!(f.update(&one(t), DT, &s, &r).cut);
+    }
+
+    #[test]
+    fn a_round_starting_over_glides_from_the_wreck_to_the_new_start() {
+        let s = open_stage();
+        let r = rules();
+        let mut f = Follow::default();
+        let wreck = tank(0, 3000.0, 1500.0);
+        f.note(1, &[], 1);
+        f.update(&one(wreck), DT, &s, &r);
+        let mut stood = Vec2::new(0.0, 0.0);
+        for frame in 2..120 {
+            f.note(frame, &[], 1);
+            stood = f.update(&one(wreck), DT, &s, &r).center;
+        }
+        // The round starts over with the seat 1900 px away: the first frame
+        // still shows the wreck, then the view moves on every frame, never
+        // by more than a smoothstep's top pace, and lands on the follow view
+        // in `camera_restart_glide_seconds`.
+        let start = tank(0, 1200.0, 900.0);
+        f.note(0, &[Event::RoundStarted { seed: 1, enemies: 0, mission: Default::default(), spawn: Default::default() }], 1);
+        let first = f.update(&one(start), DT, &s, &r);
+        assert!(!first.cut && first.glide == Some(0.0) && first.center == stood, "{first:?}");
+        let mut fresh = Follow::default();
+        let landing = fresh.update(&one(start), DT, &s, &r).center;
+        let span = (landing - stood).length();
+        let (mut last, mut frames) = (first.center, 1);
+        loop {
+            f.note(frames, &[], 1);
+            let shot = f.update(&one(start), DT, &s, &r);
+            let step = (shot.center - last).length();
+            assert!(!shot.cut, "frame {frames}");
+            assert!(step <= 1.5 * span * DT / r.restart_glide_seconds + 1e-2, "frame {frames}: {step}");
+            last = shot.center;
+            frames += 1;
+            if shot.glide.is_none() {
+                assert!((shot.center - landing).length() < 1e-3, "{shot:?} {landing:?}");
+                break;
+            }
+            assert!(step > 0.0, "frame {frames}");
+            assert!(frames < 200, "the glide ends");
+        }
+        assert!(((frames - 1) as f32 * DT - r.restart_glide_seconds).abs() <= 2.0 * DT, "{frames} frames");
+        // A frame that runs no step holds the glide where it is.
+        f.note(0, &[], 1);
+        f.update(&one(wreck), DT, &s, &r);
+        f.note(1, &[], 1);
+        let moving = f.update(&one(wreck), DT, &s, &r);
+        let held = f.update(&one(wreck), 0.0, &s, &r);
+        assert!(moving.glide.is_some_and(|q| q > 0.0) && (held.center, held.glide) == (moving.center, moving.glide), "{held:?}");
+        // A cut asked for with the restart - another map, a room's round -
+        // cuts.
+        f.note(0, &[], 1);
+        f.cut();
+        let shot = f.update(&one(wreck), DT, &s, &r);
+        assert!(shot.cut && shot.glide.is_none(), "{shot:?}");
     }
 
     #[test]

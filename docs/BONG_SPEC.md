@@ -76,7 +76,11 @@ margin between frames — `col * 48` finds any frame directly, same shape as
 | `explosion.png` | 27 (`BONG_EXPLOSION_FRAMES`) | 30 (`BONG_EXPLOSION_FPS`) | 0.9 s | no — plays once on the knock-out, holds on the last frame forever after |
 
 The generator's `CLIPS` table and `lib.rs`'s constants must agree; change
-both. `BONG_TEXTURE_SIZE = 48.0` is the cell size for all five;
+both. The HUD draws the idle loop beside PROTECT and HUNT cut to
+`hud::MISSION_BONG_SRC` (x 11..37, y 12..36 of the cell, where every
+kind's idle frames stand, feet on y 35); a redrawn idle that leaves that
+box is clipped there - measure it and widen the cut (and its
+`text_tests` budget) with it. `BONG_TEXTURE_SIZE = 48.0` is the cell size for all five;
 `Bong::anim` (`src/bong.rs`) picks which file and frame to draw each frame,
 in priority order: Explosion > Hop > Attack > Hurt > Idle.
 

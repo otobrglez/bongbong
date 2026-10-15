@@ -8,7 +8,11 @@
 //! or a sight of the fight: the shot fits inside the banner, and the frame
 //! a steer or a shot ends the banner ends the shot with it. A round with no
 //! banner - the dev server's `restart {intro: false}`, a room's round - has
-//! no shot, and an arena, shown whole already, never plays one.
+//! no shot, and an arena, shown whole already, never plays one. It plays
+//! on a map's first round on screen only: a round that starts over on the
+//! map already shown - a loss's countdown, PLAY AGAIN, R - opens on no
+//! shot, and the follow camera glides from the wreck to the new start
+//! instead (`follow.rs`).
 //!
 //! Presentation only and headless, the `follow.rs` pattern: it reads the
 //! round and never writes it, and `app.rs` draws what it says. Two layers,
@@ -167,6 +171,10 @@ pub struct Establish {
     total: Option<f32>,
     /// What the last frame showed.
     last: Option<Phase>,
+    /// Whether a round has run on the map on screen (`new_scene` clears
+    /// it): a new round then is that map's round starting over, which
+    /// opens on no shot.
+    replay: bool,
 }
 
 impl Establish {
@@ -175,9 +183,9 @@ impl Establish {
     /// for `intro_left` more seconds (`Game::intro_timer`), on a screen that
     /// plays a shot when `wanted` says so (`wanted`). A new round - another
     /// seed, a frame counter that went back, or a round at its frame 0 -
-    /// arms the shot when it opens behind a banner, and the shot is over
-    /// for that round the frame the banner is: run out, or ended by a seat
-    /// steering or firing.
+    /// arms the shot when it opens behind a banner and is the first round
+    /// to run on the map on screen, and the shot is over for that round the
+    /// frame the banner is: run out, or ended by a seat steering or firing.
     pub fn update(&mut self, seed: u64, frame: u64, intro_left: f32, wanted: bool, rules: &EstablishRules, reduced: bool) -> Phase {
         let new_round = match self.round {
             Some((s, f)) => s != seed || frame < f || frame == 0,
@@ -185,7 +193,10 @@ impl Establish {
         };
         self.round = Some((seed, frame));
         if new_round {
-            self.total = (wanted && intro_left > 0.0 && rules.plays()).then_some(intro_left);
+            self.total = (wanted && !self.replay && intro_left > 0.0 && rules.plays()).then_some(intro_left);
+        }
+        if frame > 0 {
+            self.replay = true;
         }
         let phase = match self.total {
             Some(total) if wanted && intro_left > 0.0 => phase_at(total - intro_left, total, rules, reduced),
@@ -202,6 +213,13 @@ impl Establish {
     /// targets are made for (`app.rs`'s `Presentation`).
     pub fn showing(&self) -> bool {
         self.last.is_some_and(Phase::showing)
+    }
+
+    /// The screen moved to another map's round - another map, a room's
+    /// replica or back, the builder's: the next round to open on it plays
+    /// the shot again.
+    pub fn new_scene(&mut self) {
+        self.replay = false;
     }
 }
 
@@ -394,11 +412,40 @@ mod establish_tests {
         assert_eq!(e.update(3, 1, 2.0, true, &rules(), false), Phase::Whole);
         assert_eq!(e.update(3, 2, 0.0, true, &rules(), false), Phase::Follow);
         assert_eq!(e.update(3, 3, 1.5, true, &rules(), false), Phase::Follow);
-        // A new round - another seed, or the frame counter gone back - plays
-        // it again.
-        assert_eq!(e.update(4, 4, 2.0, true, &rules(), false), Phase::Whole);
-        e.update(4, 5, 0.0, true, &rules(), false);
-        assert_eq!(e.update(4, 1, 2.0, true, &rules(), false), Phase::Whole, "a restart on a pinned seed");
+        // A new round on another map plays it again.
+        e.new_scene();
+        assert_eq!(e.update(4, 0, 2.0, true, &rules(), false), Phase::Whole);
+    }
+
+    #[test]
+    fn a_round_starting_over_on_the_map_on_screen_opens_on_no_shot() {
+        let r = rules();
+        let mut e = Establish::default();
+        // The map's first round: a round that sits at its frame 0 for a few
+        // drawn frames still opens on the whole map.
+        assert_eq!(e.update(7, 0, 2.0, true, &r, false), Phase::Whole);
+        assert_eq!(e.update(7, 0, 2.0, true, &r, false), Phase::Whole);
+        assert_eq!(e.update(7, 1, 2.0 - DT, true, &r, false), Phase::Whole);
+        e.update(7, 200, 0.0, true, &r, false);
+        // Starting over on it - another seed, the frame counter gone back,
+        // a pinned seed's frame 0 - the follow view, which glides there
+        // (`follow.rs`).
+        assert_eq!(e.update(8, 0, 2.0, true, &r, false), Phase::Follow, "another seed");
+        assert_eq!(e.update(8, 1, 2.0 - DT, true, &r, false), Phase::Follow);
+        e.update(8, 300, 0.0, true, &r, false);
+        assert_eq!(e.update(8, 2, 2.0, true, &r, false), Phase::Follow, "a restart on a pinned seed");
+        assert!(!e.showing());
+        // Another map on screen, or back from the builder: its first round
+        // plays the shot again.
+        e.new_scene();
+        assert_eq!(e.update(9, 0, 2.0, true, &r, false), Phase::Whole);
+        let mut left = 2.0;
+        let mut frames = 0;
+        while e.update(9, frames + 1, left, true, &r, false).showing() {
+            frames += 1;
+            left -= DT;
+        }
+        assert!((frames as f32 * DT - (r.hold_seconds + r.zoom_seconds)).abs() <= 2.0 * DT, "the whole shot: {frames} frames");
     }
 
     #[test]

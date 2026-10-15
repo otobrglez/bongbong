@@ -38,6 +38,8 @@
 //! couch round keeps the one- and two-block layouts and only goes compact
 //! from three.
 
+use crate::bong::{BongKind, Side};
+use crate::level::Mission;
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::simulation::{with_bong, with_tank, Game, RollIn, RoundStats};
@@ -369,11 +371,16 @@ pub fn other_seats(seats: usize, local: usize) -> Vec<usize> {
 /// `HudModel::gather`, so the draw pass never queries the world.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HudModel {
-    /// `PROTECT`, or `PROTECT 2/5` in a wave round.
+    /// The mission word, `PROTECT`.
     pub title: String,
+    /// The bong the mission word names and the frame of its idle loop
+    /// showing: the player's after PROTECT, the enemy's after HUNT, on the
+    /// round's clock so it keeps time with the one on the field. `None`
+    /// after DESTROY and in a training round.
+    pub mission_bong: Option<(BongKind, i32)>,
     /// The wave called and how many the round has, in a wave round: what
-    /// stands beside the level button when that takes the mission word's
-    /// place.
+    /// stands after the mission word, `PROTECT 2/5`, or beside the level
+    /// button when that takes the word's place.
     pub wave: Option<(u32, u32)>,
     /// Live enemies, and the ones still to roll in (shown as a dim `+N`).
     pub enemies_alive: usize,
@@ -415,12 +422,16 @@ impl HudModel {
         // The mission as one word, in the language on screen; the data
         // name (`Mission::name`) is never shown. A training round says so
         // whatever its mission.
-        let mission = if game.map.training.is_some() { crate::text::keys::MISSION_TRAINING } else { crate::text::mission_title(game.mission) };
-        let mut title = crate::text::text().get(mission);
+        let training = game.map.training.is_some();
+        let mission = if training { crate::text::keys::MISSION_TRAINING } else { crate::text::mission_title(game.mission) };
+        let title = crate::text::text().get(mission);
+        let side = match game.mission {
+            Mission::Protect => Some(Side::Player),
+            Mission::Hunt => Some(Side::Enemy),
+            Mission::Destroy => None,
+        };
+        let mission_bong = side.filter(|_| !training).map(|side| (game.map.bong_kind(side), crate::bong::idle_frame(game.time)));
         let wave = game.wave_status();
-        if let Some(w) = &wave {
-            title.push_str(&format!(" {}/{}", w.index, w.total));
-        }
         // Live enemies: the ones standing on the field. A wave tank still
         // rolling in is outside it and counts as pending instead - which
         // is what `RollIn` marks, rather than the `Ai` it has not been
@@ -442,7 +453,7 @@ impl HudModel {
             .or(game.enemy_bong)
             .map(|e| with_bong(&game.world, e, |f| f.health_fraction()));
         let wave = wave.map(|w| (w.index, w.total));
-        HudModel { title, wave, enemies_alive, enemies_pending, layout, local, second, others, bong }
+        HudModel { title, mission_bong, wave, enemies_alive, enemies_pending, layout, local, second, others, bong }
     }
 }
 
@@ -823,6 +834,13 @@ pub const INFO_W: f32 = 304.0;
 /// included: the budget `text_tests` measures every language's mission
 /// word against.
 pub const INFO_TITLE_W: f32 = 160.0;
+/// The bong that stands after PROTECT and HUNT, before the wave count
+/// (`HudModel::mission_bong`): the cut of its 48 px idle cell that every
+/// kind's 24 frames stand inside (x 11..37, y 12..36, the feet on y 35),
+/// drawn at the sheet's own scale.
+pub const MISSION_BONG_SRC: Rectangle = Rectangle::new(11.0, 12.0, 26.0, 24.0);
+/// The gap either side of that bong.
+pub const MISSION_BONG_GAP: i32 = 4;
 /// The buttons' row: `ONLINE`, the players (or RESTART), the pause button
 /// and the mode button, right to left from its right end.
 pub const BUTTONS_W: f32 = ONLINE_BUTTON_W + PLAYERS_BUTTON_GAP + PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN;
@@ -1573,9 +1591,16 @@ pub struct PlayChrome {
     /// Air support is called or in the air for a seat the blocks show
     /// (`air_support_up`): a lamp row under each block with its box.
     pub air_support: bool,
-    /// How dark the fade through black between rounds is, 0 to 1
-    /// (`Session::curtain`), drawn over everything else.
-    pub curtain: f32,
+    /// How far the end screen's title, numbers and countdown have lifted
+    /// out ahead of the way it takes, 0 to 1 (`Session::verdict_lift`);
+    /// its dim stays.
+    pub verdict_lift: f32,
+    /// Keep this frame's screen for the dissolve into the next round
+    /// (`Session::keeps_picture`, `render::dissolve`).
+    pub keep_screen: bool,
+    /// How far the kept screen has dissolved into the round just started,
+    /// 0 to 1, while it does (`Session::dissolve`); drawn over everything.
+    pub dissolve: Option<f32>,
 }
 
 /// A special's prompt (`PlayChrome::prompt`) for the first of `seats` -
@@ -1909,6 +1934,35 @@ mod hud_tests {
         assert_eq!(couch.layout, HudLayout::Compact);
         assert_eq!(couch.local.weapon.count, 3);
         assert_eq!(couch.others.iter().map(|s| s.seat).collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    /// PROTECT names the player's bong and HUNT the enemy's, each the kind
+    /// the map picked, playing the idle loop on the round's clock; DESTROY
+    /// and a training round name none. The wave count is its own value, not
+    /// part of the word.
+    #[test]
+    fn the_mission_word_names_its_bong() {
+        use crate::bong::BongKind;
+        let mut game = round(1);
+        game.map.bong = Some(BongKind::Oggle);
+        game.map.enemy_bong = Some(BongKind::Capi);
+        game.time = 0.5;
+        let frame = crate::bong::idle_frame(0.5);
+        assert!(frame > 0, "half a second into the loop");
+        game.mission = Mission::Protect;
+        assert_eq!(HudModel::gather(&game, None).mission_bong, Some((BongKind::Oggle, frame)));
+        game.mission = Mission::Hunt;
+        assert_eq!(HudModel::gather(&game, None).mission_bong, Some((BongKind::Capi, frame)));
+        game.mission = Mission::Destroy;
+        assert_eq!(HudModel::gather(&game, None).mission_bong, None);
+        // A map that names no bong shows the side's default.
+        game.mission = Mission::Hunt;
+        game.map.enemy_bong = None;
+        assert_eq!(HudModel::gather(&game, None).mission_bong, Some((BongKind::Blip, frame)));
+        game.map.training = Some(crate::training::Training::default());
+        assert_eq!(HudModel::gather(&game, None).mission_bong, None, "a training round says TRAINING");
+        let model = HudModel::gather(&round(1), None);
+        assert!(!model.title.contains('/'), "the word alone: {}", model.title);
     }
 
     /// The lamp row is there only while it holds something: in a day round,

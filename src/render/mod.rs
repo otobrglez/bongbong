@@ -21,6 +21,7 @@ pub mod bubble;
 pub mod bullet;
 pub mod canvas;
 pub mod decal;
+pub mod dissolve;
 pub mod fish;
 pub mod bong;
 pub mod fx;

@@ -510,9 +510,14 @@ impl Bong {
             let frame = (elapsed * BONG_HURT_FPS) as i32;
             return (BongAnim::Hurt, frame.clamp(0, BONG_HURT_FRAMES - 1));
         }
-        let frame = (t.max(0.0) * BONG_IDLE_FPS) as i32 % BONG_IDLE_FRAMES;
-        (BongAnim::Idle, frame)
+        (BongAnim::Idle, idle_frame(t))
     }
+}
+
+/// The idle loop's frame at clock `t`: what a bong at rest shows, and the
+/// HUD's bong beside the mission word (`hud::HudModel::mission_bong`).
+pub fn idle_frame(t: f32) -> i32 {
+    (t.max(0.0) * BONG_IDLE_FPS) as i32 % BONG_IDLE_FRAMES
 }
 
 
