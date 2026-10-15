@@ -521,9 +521,9 @@ random ones do — no special-casing needed there.
 ### Entering the editor (`--editor [path]`, or in-game via a hamburger button)
 
 *Status: superseded by docs/game-editor-fusion.md sections 5 and 6. The
-in-game entry is the play bar's `BUILD` button (or `Tab`) through the
-"Leave this round?" dialog, owned by `mode::Session`; `--editor` still
-works and means "start in Build". Nothing is seeded from live entities -
+in-game entry is the play bar's `BUILD` button (or `Tab`), which pauses
+the round for the builder's `BACK` to come back to (`mode::Session`);
+`--editor` still works and means "start in Build". Nothing is seeded from live entities -
 the builder edits `Game::map`, the authored map.*
 
 Two entry points into the same `MapEditor` driver:

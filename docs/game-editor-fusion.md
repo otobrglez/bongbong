@@ -1,6 +1,6 @@
 # PRD: the map builder inside the game
 
-Status: requirements, 2026-09-10; implemented the same day (the code is the reference where the two differ). Supersedes the build-mode half of
+Status: requirements, 2026-09-10; implemented the same day (the code is the reference where the two differ). BB-140 (2026-10-13) changed the way between the modes: BUILD pauses the round instead of asking to leave it, and the bar's BACK comes back to it (sections 1, 2, 5, 6, 7 and 11). Supersedes the build-mode half of
 docs/hud-and-builder-layout-design.md (variant A, whose play half is
 implemented) and the "Entering the editor" section of
 docs/map-editor-design.md. Nothing here is implemented yet; the seams the
@@ -17,10 +17,11 @@ bar is small on a phone and what would fix it), docs/maps-to-levels.md
 
 The map editor stops being a separate `--editor` program and becomes a
 **mode of the game**. In play mode the HUD bar ends in a `BUILD` button.
-Pressing it freezes the round and asks whether to leave it; on yes, the bar
-becomes the builder's toolbar and the field becomes the map canvas, showing
-the *authored* map the round was built from. `PLAY` at the same right-end
-slot starts a fresh round on the edited map. The builder ships to every
+Pressing it pauses the round - nothing is asked, nothing is lost - and the
+bar becomes the builder's toolbar and the field becomes the map canvas,
+showing the *authored* map the round was built from. `BACK` at the bar's
+left end comes back to the paused round where it stood; `PLAY` at the same
+right-end slot as `BUILD` starts a fresh round on the edited map. The builder ships to every
 player, on desktop and on the web, mouse and touch alike. Edits live in
 memory for this pass; saving comes later. The dev server and the `bbmcp`
 MCP adapter learn the builder too, so an agent can enter it, edit, play
@@ -35,7 +36,7 @@ not re-argued below.
 | --- | --- |
 | Audience | Players too: release and web builds, not dev-only. |
 | "Only the current map can be modified" | Edit the *authored* map (`Game::map`, the TOML the round was built from). No file switching: no New, no Load. |
-| Return to play | PLAY always starts a fresh round on the edited map; confirming BUILD abandons the round for good. |
+| Return to play | BACK comes back to the round BUILD paused, where it stood, the edits made since put away as one undo step; PLAY starts a fresh round on the edited map. (Until BB-140 a "Leave this round?" dialog asked first and BUILD gave the round up for good.) |
 | Toolbar | Category dropdowns per the layout doc (WALL / PROP / GROUND / ACTOR / PICKUP), each button showing its current tool. |
 | Persistence | **Native**: Load and Save to `maps/*.toml` for everyone. **Web**: Load from the maps shipped inside the binary, edits kept in memory and lost on reload (localStorage is a later step, section 12). |
 | Touch | A first-class target. |
@@ -47,8 +48,7 @@ not re-argued below.
 | Validation before PLAY | None; `Game::init`'s fallbacks handle an incomplete map. |
 
 Assumptions made while writing, listed again in section 15 so they can be
-reversed cheaply: the leave dialog is skipped on the end screen; PLAY keeps
-`--seed`'s meaning. The app starts in play mode; `--editor` initialises the
+reversed cheaply: PLAY keeps `--seed`'s meaning. The app starts in play mode; `--editor` initialises the
 round as usual and then opens the builder on it.
 
 ## 3. Goals
@@ -97,9 +97,10 @@ round as usual and then opens the builder on it.
 ## 5. The two modes
 
 ```
-             BUILD (bar / Tab) -> "Leave this round?" -> Leave
+             BUILD (bar / Tab): the round pauses behind the builder
    Play  ----------------------------------------------------->  Build
    round  <-----------------------------------------------------  canvas
+             BACK (bar / Esc): the same round, edits put away
              PLAY (bar / Tab): game.map = builder.map; game.init()
 ```
 
@@ -115,39 +116,42 @@ round as usual and then opens the builder on it.
   replaces it is the dev server's `restart` with a `map`/`map_toml`, which
   sets both the game's and the builder's map (and the baseline). No
   conversion from live entities, ever.
-- **Build -> Play** clones the builder's map into `game.map` and calls
-  `Game::init` for the field size. It is the dev server's `restart {map_toml}`
-  path without the TOML. Every PLAY is a new round: new spawn rolls unless
-  `--seed` pinned them, mission banner as on any restart. There is no
-  "resume": confirming BUILD gave the round up.
+- **Build -> Play by PLAY** clones the builder's map into `game.map` and
+  calls `Game::init` for the field size. It is the dev server's `restart
+  {map_toml}` path without the TOML. Every PLAY is a new round: new spawn
+  rolls unless `--seed` pinned them, mission banner as on any restart. It is
+  the one thing that gives the paused round up.
+- **Build -> Play by BACK** (`Session::back`) comes back to the round BUILD
+  paused, exactly where it stood: the same frame, the end screen if it was
+  one, nothing re-rolled. The round runs on its own map, so the canvas goes
+  back to that map too: the edits made since BUILD are put away as one
+  undo step (`MapEditor::put_away`, the baseline as it was then coming
+  back with it) that the next BUILD's UNDO takes back, and a line under the
+  left cluster says so for `ui_put_away_seconds`. Nothing is lost, so
+  nothing asks. BACK dims where there is no round to go back to: after
+  FILE's "switch to the original?" was answered yes for the map the round
+  is on, which ends that round as it would in play.
 - `--editor` keeps working and means "start in Build": the game is
-  initialised as usual (so PLAY has everything it needs) and the driver
-  starts on the builder. The leave dialog never shows on that path because
-  no round is in progress.
+  initialised as usual (so PLAY has everything it needs) and paused behind
+  the builder, so BACK plays it from its first frame.
 - The builder compiles into every build. The `map-editor` cargo feature is
   removed: `Cargo.toml`, the `#[cfg]`s in `main.rs`/`lib.rs`/`editor.rs`,
   the justfile/CI flags. `static/ui/eraser.png` loads unconditionally (it is
   already bundled with `static/`).
 
-## 6. Play mode: the BUILD button and the leave dialog
+## 6. Play mode: the BUILD button
 
 - The play bar gains `BUILD` at its right end, the slot the layout doc
   reserved (x 1200..1272 of 1280, full bar height). Drawn by `hud.rs` in the
   bar's style: 18 px text, an outline, the builder's amber accent.
-- A click or tap on it, or `Tab`, opens the **leave dialog**. The round is
-  frozen by construction: while the dialog is open the driver does not call
-  `Game::update` (and the dev server's `advance` is skipped), so no
-  simulation pause flag is touched. The field is drawn as it was, dimmed
-  like the PAUSED overlay (`Color(0,0,0,120)`), the bar unchanged.
-- Dialog: a centred panel over the field, `Leave this round?` and one line
-  `Your progress is lost. The map is kept.`, two buttons `LEAVE ROUND` and
-  `KEEP PLAYING`, each at least 48 px tall and 160 px wide, 16 px apart.
-  `Esc`, `Tab` again or a tap outside the panel mean keep playing; `Enter`
-  means leave. Taps on the field while the dialog is open are consumed
-  (never an order).
-- The dialog is skipped on the end screen: there is no round to lose, so
-  `BUILD` switches at once. In every other state, paused and intro
-  included, it asks.
+- A click or tap on it, or `Tab`, enters the builder at once, mid-round, on
+  the end screen, paused and in the intro alike. The round is paused by
+  construction: outside play mode the driver does not call `Game::update`
+  (and the dev server's `advance` is skipped), so no simulation pause flag
+  is touched, and a round paused for an hour comes back bit for bit. With
+  the players dialog or the level select up, the press closes that instead.
+- Coming back is the builder's `BACK` (section 5): the round resumes at
+  once, with no "get ready" beat, as after the pause button.
 - Release builds, web included, have the button. The dev overlay label and
   the version line stay where they are.
 
@@ -164,7 +168,7 @@ inside the bar.
 
 | Slot | x | Width | Contents |
 | --- | --- | --- | --- |
-| Mode | 8 | 56 | `BUILD` in the amber accent, so the mode is never in doubt. |
+| Back | 8 | 76 | `BACK`: a left-pointing arrow and the word, the arrow alone where the bar is short of room; dim with no round to go back to, an amber dot while the canvas differs from the paused round's map. Back at one end, PLAY at the other. (The amber `BUILD` label stood here until BB-140.) |
 | Name | 72 | 160 | The map's display name (`MapFile::name`: `default` for the embedded map, `untitled` for none) plus ` *` while edited since load. |
 | Categories | 240 | 6 x 100 | `WALL`, `PROP`, `GROUND`, `PLANT` (the trees and bushes, docs/BUSHES_SPEC.md §4), `ACTOR`, `PICKUP`. Each button shows its category's *current* tool as its 32 px icon, full-bleed, with the tool's name in 10 px to the right and a caret. Click or tap the icon: select that tool. Click or tap the caret or name: open the list. Mouse wheel over the button: cycle inside the category. The active category is outlined in the accent, like the live weapon slot in play. |
 | Erase | 748 | 40 | The eraser tool: a plain brush that clears cells. Outlined while active. |
@@ -230,8 +234,8 @@ bar (`editor::chrome::Strip`; docs/large-maps-follow-camera.md section 9).
   200 px wide**: the 32 px icon with 8 px inset, the name in 18 px, the
   current tool highlighted. A list never exceeds 7 rows (PICKUP), 336 px,
   well inside the field.
-- One popup at a time: opening any dropdown, the settings panel or the
-  leave dialog closes the others.
+- One popup at a time: opening any dropdown or the settings panel closes
+  the others.
 - Closes on pick, `Esc`, or a press anywhere else. **That press is
   consumed**: it neither places a cell nor selects another tool, so a tap
   to dismiss a menu on a phone cannot paint through it.
@@ -419,8 +423,9 @@ mode transitions can be unit-tested headlessly through
 
 | Tool | Parameters | Does |
 | --- | --- | --- |
-| `mode` | none | Reports `mode` (`play`/`build`), whether the leave dialog is open, the builder's `dirty` flag, map name, active tool and category, which popup is open. Cheap; `status` carries the same `mode` field. |
-| `build` | `answer?: "leave" \| "stay"` | Presses BUILD: opens the leave dialog when a round is in progress, switches at once on the end screen. With `answer`, answers an open dialog instead. Replies like `mode`. |
+| `mode` | none | Reports `mode` (`play`/`build`), `back` (`{puts_away}` in build mode with a round to go back to, else null), the builder's `dirty` flag, map name, active tool and category, which popup is open. Cheap; `status` carries the same `mode` and `back` fields. |
+| `build` | none | Presses BUILD: enters the builder at once, the round paused behind it. Replies like `mode`. |
+| `back` | none | Presses BACK in Build: the paused round comes back where it stood, edits since BUILD put away as one undo step. A no-op in Play and with no round to go back to. Replies like `mode`. |
 | `play` | `intro?: bool` | Presses PLAY from Build: the edited map becomes the round's map and a fresh round starts, frozen in lockstep like `restart` (so `step` counts play frames; `resume` for real time). Replies with `status`. Fails in Play mode. |
 | `builder_tool` | `tool?: name`, `shape?: "pen" \| "rect" \| "fill" \| "scatter"` | Selects a brush by name - every `editor::TOOLS` name (`brick`, `iron`, `wood`, `glass`, `sandbag`, `barrel`, `oil_drum`, `fuel_drum`, `fence`, `tesla`, `tesla_enemy`, `gun_tower`, `gun_tower_enemy`, `bio_slush`, `bio_slush_enemy`, `road`, `water`, `tall_grass`, `bush`, `berry_bush`, `juniper`, `fern`, `autumn_bush`, `reeds`, `tree`, `pine`, `spruce`, `scots`, `fir`, `birch`, `willow`, `palm`, `snag`, `forest`, `oil_trail`, `gate`, `portal`, `start`, `start2`, `bong`, `enemy_bong`, `health`, `ammo`, `laser`, `minigun`, `plasma`, `missiles`, `speedup`, `shield`, `flamethrower`, `bong_health`, `tower_pack`), `eraser` or `select` (the select tool) - through the category's own selection path, so the category button updates; `shape` is how it paints (BRUSH's list, docs/large-maps-follow-camera.md section 9). Without either, lists the categories with their current tool and the active one, and the shape. |
 | `builder_paint` | `cells: [[col,row], ...]`, `tool?: name`, `shape?`, `button?: "left" \| "right"` | One **stroke**: presses on the first cell and drags through the rest, so the toggle-erase rule, singleton moves and the one-undo-step-per-stroke rule all apply exactly as for a mouse - with `rect` the first and last cells are the rectangle's corners, with `fill` only the first counts, with `scatter` every cell's footprint is laid. `button: right` erases. Replies with each cell's object before and after, the undo depth and the status line's `message` (a fill refused for its size). |
@@ -489,11 +494,11 @@ carries over unchanged once `play` has run; a seed given to an earlier
 
 | Where | Change |
 | --- | --- |
-| `mode.rs` (new) | `Session { driver: Driver, game: Game, builder: MapEditor, dialog: Option<LeaveDialog> }` with the transitions as methods: `press_build`, `answer_dialog`, `play`, `replace_map` (what `restart {map_toml}` calls). Both the window and the dev server go through these, so a tool and a click are the same path. No `RaylibHandle` in this file. |
+| `mode.rs` (new) | `Session { driver: Driver, game: Game, builder: MapEditor, .. }` with the transitions as methods: `press_build`, `back`, `play`, `replace_map` (what `restart {map_toml}` calls). Both the window and the dev server go through these, so a tool and a click are the same path. No `RaylibHandle` in this file. |
 | `main.rs` | Gathers a `BuilderInput` (mouse/touch press, drag, wheel, `Tab`/`Esc`/`Enter`/Ctrl+Z/Ctrl+Y, typed text) in Build mode the way it gathers `simulation::Input` in Play, hands it to `Session`, and renders whichever mode is live. The `--editor` branch collapses into "start in Build". Feature `#[cfg]`s go. |
 | `Cargo.toml`, `justfile`, `.github/` | Remove `map-editor`; the builder is unconditional. `dev-tools` gates only the dev `SAVE`. |
-| `hud.rs` | `draw_bar` draws `BUILD` at the right-end slot and reports its rect (`hud::build_button_rect(panel)`) for hit-testing; the leave dialog's drawing (`draw_leave_dialog`) and its button rects live here so play-mode chrome stays in one file. |
-| `game.rs::render` | Takes an optional overlay to draw last, after the bar (the leave dialog), since `render` owns `begin_drawing`. The dim reuses the PAUSED rectangle. |
+| `hud.rs` | `draw_bar` draws `BUILD` at the right-end slot and reports its rect (`hud::build_button_rect(panel)`) for hit-testing, so play-mode chrome stays in one file. |
+| `game.rs::render` | Draws the play chrome last, after the bar, since `render` owns `begin_drawing`. |
 | `editor.rs` | The palette, the hamburger-era `Close`, `New`, `Load` and the yellow debug line go. New: `Category` with a current tool each, dropdown state, the toggle-erase rule in `place`, an `UndoStack` of `Vec<(cell, before, after)>` steps plus settings steps, the settings panel, `EditorAction::Play`. **`update` takes a `BuilderInput` instead of reading raylib**, so the builder is drivable headlessly; hit-testing of the bar moves to slot constants in `hud.rs`'s style. `MapEditor::new` takes the baseline map and keeps a copy for RESET/dirty. Direct entry points for the tools: `select_tool(name)`, `stroke(cells, button)`, `undo/redo(n)`, `set_settings(patch)`, `load(map)`, `map_diff()`. |
 | `map.rs` | Nothing: `MapFile` already derives `Clone`, and the settings panel edits existing fields. |
 | `lib.rs` | The `EDITOR_PALETTE_*` constants become dropdown/panel constants; `Layout` unchanged. |
@@ -544,7 +549,8 @@ pick a tool from a dropdown -> paint and toggle-erase a few cells -> undo
 
 ## 15. Open questions
 
-1. Skip the leave dialog on the end screen (assumed yes)?
+1. Skip the leave dialog on the end screen? Settled by BB-140: there is no
+   leave dialog; BUILD pauses the round everywhere and BACK comes back.
 2. `Tab` as the mode key; is a second control wanted on the web page's
    overlay, next to Full screen?
 3. Should PLAY from the builder also clear `--seed` so a player always gets

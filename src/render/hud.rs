@@ -7,7 +7,7 @@ use sola_raylib::prelude::*;
 
 use crate::bong::{BongAnim, BongKind};
 use crate::hud::{
-    banner_size, clock_text, leave_dialog_rects, players_dialog_rects, result_layout, weapon_pickup, Corners, Fade, Hints,
+    banner_size, clock_text, players_dialog_rects, result_layout, weapon_pickup, Corners, Fade, Hints,
     HudModel, NextLevel, PlayChrome, PlayerHud, ResultButtons, ResultView, SeatHud, BUILD_COLOR, DIALOG_W, DIM,
     HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LINE_H, MISSION_BONG_GAP, MISSION_BONG_SRC, ONLINE_COLOR,
     RESULT_LINE_SIZE, RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, UI_SMALL_TEXT,
@@ -631,7 +631,7 @@ fn draw_faded_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, colo
 /// Draw the players dialog over the (already dimmed) window: the live
 /// count's button highlighted, the other in the action colour, and its
 /// line naming the controls of the input `hints` says is in use. In UI
-/// points, centred in the chrome's `area`, like `draw_leave_dialog`.
+/// points: call inside the UI camera, centred in the chrome's `area`.
 pub fn draw_players_dialog(d: &mut impl RaylibDraw, area: Rect, players: PlayerCount, hints: Hints) {
     let t = text();
     let r = players_dialog_rects(area);
@@ -642,18 +642,8 @@ pub fn draw_players_dialog(d: &mut impl RaylibDraw, area: Rect, players: PlayerC
     draw_dialog_button(d, r.two, &t.get(keys::PLAYERS_TWO), if one_live { BUILD_COLOR } else { TEXT }, (!one_live).then_some(live_fill).flatten());
 }
 
-/// Draw the leave-round dialog over the (already dimmed) window. In UI
-/// points: call inside the UI camera, centred in the chrome's `area`.
-pub fn draw_leave_dialog(d: &mut impl RaylibDraw, area: Rect) {
-    let t = text();
-    let r = leave_dialog_rects(area);
-    draw_dialog_panel(d, r.panel, &t.get(keys::LEAVE_TITLE), &t.get(keys::LEAVE_SUB));
-    draw_dialog_button(d, r.leave, &t.get(keys::LEAVE_CONFIRM), BUILD_COLOR, None);
-    draw_dialog_button(d, r.stay, &t.get(keys::LEAVE_STAY), TEXT, None);
-}
-
 /// Draw a question about a kept map (`mapstore::Question`) over a dim of
-/// the whole `screen`, in UI points like `draw_leave_dialog`: its title and
+/// the whole `screen`, in UI points like `draw_players_dialog`: its title and
 /// line naming the map, the answer it asks for on the left. Play's chrome
 /// and the builder's both call it, over everything else they draw.
 pub fn draw_question(d: &mut impl RaylibDraw, screen: Rect, area: Rect, question: &crate::mapstore::Question) {

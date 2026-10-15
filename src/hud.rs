@@ -917,8 +917,9 @@ impl CornerShape {
                 build: chrome.build_button,
                 leave: chrome.leave_button,
                 pause: chrome.pause_button,
-                // The build stamp always; an online round's status over it.
-                lines: 1 + usize::from(chrome.status.is_some()) + usize::from(chrome.prompt.is_some()),
+                // The build stamp always; an online round's status, a
+                // prompt and BACK's note over it.
+                lines: 1 + usize::from(chrome.status.is_some()) + usize::from(chrome.prompt.is_some()) + usize::from(chrome.note.is_some()),
                 minimap: chrome.minimap,
                 lanterns: chrome.lanterns,
                 heat_shield: chrome.heat_shield,
@@ -1254,16 +1255,6 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
 /// The lamp row's button: the lantern, its count and its word.
 pub const LAMP_BUTTON_W: f32 = 150.0;
 
-/// The leave-round dialog's geometry, in UI points: the panel and its two
-/// buttons (`LEAVE ROUND`, `KEEP PLAYING`), each at least 48 points tall
-/// and 160 wide so a finger cannot miss.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LeaveDialogRects {
-    pub panel: Rectangle,
-    pub leave: Rectangle,
-    pub stay: Rectangle,
-}
-
 pub const DIALOG_W: f32 = 440.0;
 pub const DIALOG_H: f32 = 170.0;
 pub const DIALOG_BUTTON_W: f32 = 176.0;
@@ -1280,8 +1271,9 @@ pub fn centred_in(area: Rect, w: f32, h: f32) -> Rectangle {
 }
 
 /// A `DIALOG_W` x `DIALOG_H` panel centred in `area` (UI points) with two
-/// buttons on a row 16 points up from its bottom, 16 apart: (panel, left,
-/// right). Both dialogs.
+/// buttons on a row 16 points up from its bottom, 16 apart, each at least
+/// 48 points tall and 160 wide so a finger cannot miss: (panel, left,
+/// right). The players dialog's.
 fn two_button_dialog(area: Rect) -> (Rectangle, Rectangle, Rectangle) {
     let panel = centred_in(area, DIALOG_W, DIALOG_H);
     let (x, y) = (panel.x, panel.y);
@@ -1323,15 +1315,8 @@ pub fn question_rects(area: Rect) -> QuestionRects {
     }
 }
 
-/// The leave dialog centred in the chrome's `area` (UI points): the one
-/// geometry its painter and every hit test read.
-pub fn leave_dialog_rects(area: Rect) -> LeaveDialogRects {
-    let (panel, leave, stay) = two_button_dialog(area);
-    LeaveDialogRects { panel, leave, stay }
-}
-
 /// The players dialog's geometry (UI points): the panel and its `1
-/// PLAYER` / `2 PLAYERS` buttons, the leave dialog's shape.
+/// PLAYER` / `2 PLAYERS` buttons (`two_button_dialog`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayersDialogRects {
     pub panel: Rectangle,
@@ -1339,7 +1324,8 @@ pub struct PlayersDialogRects {
     pub two: Rectangle,
 }
 
-/// The players dialog centred in the chrome's `area` (UI points).
+/// The players dialog centred in the chrome's `area` (UI points): the one
+/// geometry its painter and every hit test read.
 pub fn players_dialog_rects(area: Rect) -> PlayersDialogRects {
     let (panel, one, two) = two_button_dialog(area);
     PlayersDialogRects { panel, one, two }
@@ -1545,7 +1531,6 @@ pub struct PlayChrome {
     /// cluster shows. `None` in a couch round, where the first block is
     /// player 1's and the couch layouts apply.
     pub seat: Option<u8>,
-    pub leave_dialog: bool,
     pub players_dialog: bool,
     /// A question about a kept map, over everything but the level select
     /// (`mode::Session::question`).
@@ -1559,6 +1544,10 @@ pub struct PlayChrome {
     /// reticle"), the first line under the left cluster while this
     /// window's seat holds one (`special_prompt`).
     pub prompt: Option<crate::text::Key>,
+    /// The line BACK from the builder leaves under the left cluster for a
+    /// few seconds when it put edits away (`mode::Session::back`), in the
+    /// builder's amber.
+    pub note: Option<crate::text::Key>,
     /// The lobby over a dimmed field (`lobby.rs`), in place of the round
     /// this window is not playing.
     pub lobby: Option<crate::lobby::LobbyView>,
@@ -2504,14 +2493,15 @@ mod hud_tests {
         ]
     }
 
-    /// Both dialogs, centred in every area: finger-sized buttons in
-    /// points, inside their panel and apart, the panel inside the area.
+    /// The players dialog and the map question, centred in every area:
+    /// finger-sized buttons in points, inside their panel and apart, the
+    /// panel inside the area.
     #[test]
-    fn both_dialogs_have_finger_sized_buttons_inside_the_area() {
+    fn the_dialogs_have_finger_sized_buttons_inside_the_area() {
         for area in areas() {
-            let l = leave_dialog_rects(area);
             let p = players_dialog_rects(area);
-            for (panel, left, right) in [(l.panel, l.leave, l.stay), (p.panel, p.one, p.two)] {
+            let q = question_rects(area);
+            for (panel, left, right) in [(p.panel, p.one, p.two), (q.panel, q.yes, q.no)] {
                 for b in [left, right] {
                     assert!(b.width >= 160.0 && b.height >= 48.0 && b.height >= UI_TOUCH_PT);
                     assert!(b.x >= panel.x && b.x + b.width <= panel.x + panel.width);
@@ -2708,8 +2698,8 @@ mod hud_tests {
             }
             clear("the lobby", crate::lobby::panel_rect(ui.area));
             clear("the level select", crate::level_select::panel_rect(ui.area));
-            clear("the leave dialog", leave_dialog_rects(ui.area).panel);
             clear("the players dialog", players_dialog_rects(ui.area).panel);
+            clear("a map question", question_rects(ui.area).panel);
             // The end screen at its tallest: a won level of a co-op round,
             // from its title down to its row of buttons.
             let won = ResultView { stats: RoundStats::default(), seats: 2, buttons: Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels: 14 }), countdown: None }) };

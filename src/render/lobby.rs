@@ -39,7 +39,7 @@ const CODE_TEXT_SIZE: i32 = 34;
 
 /// Draw the whole screen over the window: the dim over all of it, the
 /// panel centred in the chrome's area. In UI points: call inside the UI
-/// camera, as `draw_leave_dialog` is called.
+/// camera, as `draw_players_dialog` is called.
 pub fn draw_lobby<D: RaylibDraw, S: Sheets>(d: &mut D, ui: &UiFrame, view: &LobbyView, sheets: &S) {
     let (screen, area) = (ui.screen, ui.area);
     d.draw_rectangle(0, 0, screen.w.ceil() as i32, screen.h.ceil() as i32, WINDOW_DIM);

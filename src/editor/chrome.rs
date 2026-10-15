@@ -16,14 +16,17 @@
 //! `bb_ui_json` read.
 //!
 //! **The bar is laid out from the safe area's width** in points. With the
-//! room - a desktop window, a tablet - it is one row: BUILD, the map's
-//! name, the six category buttons and the BRUSH button (the brush's
-//! shape, the select tool and the stamps), the eraser, UNDO, REDO, FILE,
-//! MAP, FIT, CHECK and the clear flag from the left, PLAY HERE and PLAY at
-//! the right end. Where it has less, the BUILD label goes first, then the
-//! name (the status line names the map instead), and then the six
-//! category buttons and BRUSH fold into one TOOLS button that opens a
-//! palette of every category with the brush's row under them, so every
+//! room - a desktop window, a tablet - it is one row: BACK (the way back to
+//! the round BUILD paused), the map's name, the six category buttons and
+//! the BRUSH button (the brush's shape, the select tool and the stamps),
+//! the eraser, UNDO, REDO, FILE, MAP, FIT, CHECK and the clear flag from
+//! the left, PLAY HERE and PLAY at the right end - back at one end, go at
+//! the other. Where it has less, the name goes first (the status line
+//! names the map instead), then BACK's word (its arrow stays), then the
+//! clear flag folds into CHECK (which opens the same panel and turns green
+//! once the map is cleared), and then the six category buttons and BRUSH
+//! fold into one TOOLS button that opens a palette of every category with
+//! the brush's row under them - which may give the flag back -, so every
 //! button stays reachable at its full size - 44 points on both sides on a
 //! touch screen (`hud::UI_TOUCH_PT`) - rather than shrinking. A UI frame is
 //! never narrower than `hud::UI_MIN_W` points (`UiFrame::new` shrinks the
@@ -219,6 +222,23 @@ const fn slot(w: f32, gap: f32) -> Slot {
 /// its box in every language (`label_room`; `chrome_tests`, `text_tests`).
 pub const HERE_W: f32 = 92.0;
 
+/// BACK's width where it carries its word: the arrow in a caret's room
+/// (`back_arrow_at`), then the word in every language (`label_room` with
+/// the caret's room; `chrome_tests`, `text_tests`).
+pub const BACK_WORD_W: f32 = 76.0;
+
+/// BACK's arrow's size in points: a left-pointing triangle of 2 pt
+/// blocks.
+pub const BACK_ARROW: (f32, f32) = (6.0, 10.0);
+
+/// Where BACK's arrow stands in `bx`: at the box's left end, centred in a
+/// caret's room (`CARET_W`), where its word follows; else centred in the
+/// box.
+pub fn back_arrow_at(bx: Rectangle, word: bool) -> Vec2 {
+    let x = if word { bx.x + BOX_EDGE + BOX_PAD + (CARET_W - BACK_ARROW.0) / 2.0 } else { bx.x + (bx.width - BACK_ARROW.0) / 2.0 };
+    Vec2::new(x.floor(), (bx.y + (bx.height - BACK_ARROW.1) / 2.0).floor())
+}
+
 /// Every element's slot, for a mouse or a touch screen. The mouse's are a
 /// desktop bar's, a point a pixel, at the HUD's scale - a 40-point bar of
 /// 32-point boxes, as a play corner's plate holds its buttons; a touch
@@ -229,8 +249,10 @@ pub const HERE_W: f32 = 92.0;
 /// at `hud::UI_MIN_W`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Metrics {
-    /// `BUILD`, the mode, in the builder's amber.
-    label: Slot,
+    /// BACK as its arrow alone, and with its word after the arrow where
+    /// the bar has the room; both keep the same gap.
+    back: Slot,
+    back_word: Slot,
     /// The map's name and its edited mark.
     name: Slot,
     /// A category button: its icon half and its list half.
@@ -258,7 +280,8 @@ struct Metrics {
 }
 
 const MOUSE: Metrics = Metrics {
-    label: slot(64.0, 0.0),
+    back: slot(44.0, 4.0),
+    back_word: slot(BACK_WORD_W, 4.0),
     name: slot(152.0, 8.0),
     category_icon: 36.0,
     category_list: 20.0,
@@ -279,7 +302,8 @@ const MOUSE: Metrics = Metrics {
 };
 
 const TOUCH: Metrics = Metrics {
-    label: slot(64.0, 0.0),
+    back: slot(44.0, 4.0),
+    back_word: slot(BACK_WORD_W, 4.0),
     name: slot(152.0, 8.0),
     category_icon: 44.0,
     category_list: 44.0,
@@ -331,8 +355,11 @@ pub enum BarTools {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bar {
     pub strip: Rectangle,
-    /// The BUILD label, where the bar has the room.
-    pub label: Option<Rectangle>,
+    /// BACK, at the left end: the round BUILD paused, back where it stood
+    /// (`mode::Session::back`).
+    pub back: Rectangle,
+    /// BACK carries its word after the arrow - where the bar has the room.
+    pub back_word: bool,
     /// The map's name, where the bar has the room.
     pub name: Option<Rectangle>,
     pub tools: BarTools,
@@ -346,7 +373,9 @@ pub struct Bar {
     pub map: Rectangle,
     pub fit: Rectangle,
     pub check: Rectangle,
-    pub clear: Rectangle,
+    /// The clear flag after CHECK; `None` where the bar folds it into
+    /// CHECK, which then shows a cleared map in the flag's green.
+    pub clear: Option<Rectangle>,
     pub here: Rectangle,
     pub play: Rectangle,
     /// Laid out for a touch screen.
@@ -376,6 +405,8 @@ pub enum BarButton {
     Play,
     /// PLAY from the middle of the view.
     PlayHere,
+    /// BACK to the round BUILD paused.
+    Back,
 }
 
 impl Bar {
@@ -387,10 +418,11 @@ impl Bar {
     }
 
     /// The bar laid out in `ui` (see the module docs): PLAY at the safe
-    /// area's right end with PLAY HERE before it; from the left the buttons
-    /// in a row, the five category buttons and BRUSH folded into TOOLS
-    /// where the row would not reach PLAY HERE with them, then the map's
-    /// name and the BUILD label in what room is left, each only whole.
+    /// area's right end with PLAY HERE before it; from the left BACK and
+    /// the buttons in a row - the clear flag folded into CHECK, then the
+    /// five category buttons and BRUSH folded into TOOLS, where the row
+    /// would not reach PLAY HERE with them -, then BACK's word and the
+    /// map's name in what room is left.
     pub fn of(ui: &UiFrame) -> Bar {
         let m = metrics(ui.touch);
         let strip = Self::strip_of(ui);
@@ -401,14 +433,22 @@ impl Bar {
 
         let play = at(right - m.play, m.play);
         let here = at(play.x - m.here.gap - m.here.w, m.here.w);
-        // The row from the eraser to the clear flag, whatever comes first.
-        let after: f32 = [m.erase, m.undo, m.redo, m.file, m.map, m.fit, m.check, m.clear].iter().map(|s| s.w + s.gap).sum();
         let room = here.x - m.right_gap - left;
+        // BACK's arrow and the row from the eraser to CHECK, whatever comes
+        // first; the clear flag after it where it stands on its own.
+        let row: f32 = [m.back, m.erase, m.undo, m.redo, m.file, m.map, m.fit, m.check].iter().map(|s| s.w + s.gap).sum();
+        let flag_w = m.clear.w + m.clear.gap;
         let categories = Category::ALL.len() as f32 * (m.category_icon + m.category_list) + m.categories_gap + m.brush.w + m.brush.gap;
-        let folded = categories + after > room;
-        let tools_w = if folded { m.folded.w + m.folded.gap } else { categories };
-        let spare = room - tools_w - after;
-        let label = spare >= m.label.w + m.label.gap + m.name.w + m.name.gap;
+        let folded_w = m.folded.w + m.folded.gap;
+        let width = |folded: bool, flag: bool| row + if folded { folded_w } else { categories } + if flag { flag_w } else { 0.0 };
+        let (folded, flag) =
+            [(false, true), (false, false), (true, true), (true, false)].into_iter().find(|&(folded, flag)| width(folded, flag) <= room).unwrap_or((true, false));
+        let mut spare = room - width(folded, flag);
+        let word = m.back_word.w - m.back.w;
+        let back_word = spare >= word;
+        if back_word {
+            spare -= word;
+        }
         let name_w = if spare >= m.name.w + m.name.gap {
             Some(m.name.w)
         } else if spare >= NAME_MIN_W + m.name.gap {
@@ -417,12 +457,9 @@ impl Bar {
             None
         };
 
-        let mut x = left;
-        let label = label.then(|| {
-            let r = at(x, m.label.w);
-            x += m.label.w + m.label.gap;
-            r
-        });
+        let back_w = if back_word { m.back_word.w } else { m.back.w };
+        let back = at(left, back_w);
+        let mut x = left + back_w + m.back.gap;
         let name = name_w.map(|w| {
             let r = at(x, w);
             x += w + m.name.gap;
@@ -447,9 +484,9 @@ impl Bar {
             x += s.w + s.gap;
             r
         };
-        let (erase, undo, redo, file, map, fit, check, clear) =
-            (next(m.erase), next(m.undo), next(m.redo), next(m.file), next(m.map), next(m.fit), next(m.check), next(m.clear));
-        Bar { strip, label, name, tools, brush, erase, undo, redo, file, map, fit, check, clear, here, play, touch: ui.touch }
+        let (erase, undo, redo, file, map, fit, check) = (next(m.erase), next(m.undo), next(m.redo), next(m.file), next(m.map), next(m.fit), next(m.check));
+        let clear = flag.then(|| next(m.clear));
+        Bar { strip, back, back_word, name, tools, brush, erase, undo, redo, file, map, fit, check, clear, here, play, touch: ui.touch }
     }
 
     /// The category button of `category`, while the five are in the bar.
@@ -471,7 +508,7 @@ impl Bar {
 
     /// Every press target with what it is, in the order a press is tested.
     pub fn buttons(&self) -> Vec<(BarButton, Rectangle)> {
-        let mut out = vec![(BarButton::Play, self.play), (BarButton::File, self.file)];
+        let mut out = vec![(BarButton::Play, self.play), (BarButton::Back, self.back), (BarButton::File, self.file)];
         match &self.tools {
             BarTools::Categories(buttons) => {
                 for (category, b) in Category::ALL.into_iter().zip(buttons) {
@@ -489,9 +526,9 @@ impl Bar {
             (BarButton::Map, self.map),
             (BarButton::Fit, self.fit),
             (BarButton::Check, self.check),
-            (BarButton::Check, self.clear),
             (BarButton::PlayHere, self.here),
         ]);
+        out.extend(self.clear.map(|r| (BarButton::Check, r)));
         out
     }
 
@@ -514,8 +551,8 @@ impl Bar {
         let mut out: Vec<(String, Rectangle)> = vec![
             ("play".into(), self.play),
             ("play_here".into(), self.here),
+            ("back".into(), self.back),
             ("check".into(), self.check),
-            ("clear".into(), self.clear),
             ("fit".into(), self.fit),
             ("map".into(), self.map),
             ("file".into(), self.file),
@@ -533,6 +570,7 @@ impl Bar {
             BarTools::Folded(r) => out.push(("tools".into(), *r)),
         }
         out.extend(self.brush.map(|r| ("brush".to_string(), r)));
+        out.extend(self.clear.map(|r| ("clear".to_string(), r)));
         out
     }
 }
@@ -1529,7 +1567,6 @@ mod chrome_tests {
             assert!(bar.strip.y >= safe(&ui).y - 1e-3, "{ui:?}: the bar under the safe area's top");
             let buttons = bar.buttons();
             let mut rects: Vec<Rectangle> = buttons.iter().map(|(_, r)| *r).collect();
-            rects.extend(bar.label);
             rects.extend(bar.name);
             for r in &rects {
                 assert!(inside(*r, Rectangle::new(ui.area.x, bar.strip.y, ui.area.w, bar.strip.height)), "{ui:?}: {r:?} leaves the bar");
@@ -1548,33 +1585,35 @@ mod chrome_tests {
             }
             assert!((bar.play.x + bar.play.width - (ui.area.x + ui.area.w)).abs() < 1e-3, "PLAY at the right end");
             assert!(bar.here.x + bar.here.width <= bar.play.x);
+            assert!((bar.back.x - ui.area.x).abs() < 1e-3, "{ui:?}: BACK at the left end");
         }
     }
 
-    /// A desktop's window lays the bar's slots out a point a pixel, BRUSH
-    /// after the six categories; short of room the BUILD label goes
-    /// first, then the name narrows and goes, then the categories and
-    /// BRUSH fold rather than shrink a button.
+    /// A desktop's window lays the bar's slots out a point a pixel, BACK
+    /// with its word at the left end and BRUSH after the six categories;
+    /// short of room the name narrows and goes first, then BACK's word,
+    /// then the clear flag folds into CHECK, then the categories and BRUSH
+    /// fold rather than shrink a button - which gives the room back.
     #[test]
     fn a_desktops_bar_keeps_its_slots_and_a_narrow_one_folds() {
         let ui = UiFrame::plain((1366.0, 768.0));
         let bar = Bar::of(&ui);
         assert_eq!(bar.strip, Rectangle::new(0.0, 0.0, 1366.0, 40.0));
-        assert_eq!(bar.label.map(|r| r.x), Some(8.0));
-        assert_eq!(bar.name, Some(Rectangle::new(72.0, 0.0, 152.0, 40.0)));
+        assert_eq!((bar.back, bar.back_word), (Rectangle::new(8.0, 0.0, BACK_WORD_W, 40.0), true));
+        assert_eq!(bar.name, Some(Rectangle::new(88.0, 0.0, 152.0, 40.0)));
         let wall = bar.category(Category::Wall).expect("six category buttons");
-        assert_eq!(wall.rect, Rectangle::new(232.0, 0.0, 56.0, 40.0));
+        assert_eq!(wall.rect, Rectangle::new(248.0, 0.0, 56.0, 40.0));
         assert_eq!(wall.icon.width, 36.0);
         let slots = [
-            (bar.brush.expect("BRUSH beside the six"), 576.0, 56.0),
-            (bar.erase, 640.0, 44.0),
-            (bar.undo, 688.0, 52.0),
-            (bar.redo, 744.0, 52.0),
-            (bar.file, 800.0, 60.0),
-            (bar.map, 864.0, 60.0),
-            (bar.fit, 928.0, 44.0),
-            (bar.check, 976.0, 76.0),
-            (bar.clear, 1054.0, 52.0),
+            (bar.brush.expect("BRUSH beside the six"), 592.0, 56.0),
+            (bar.erase, 656.0, 44.0),
+            (bar.undo, 704.0, 52.0),
+            (bar.redo, 760.0, 52.0),
+            (bar.file, 816.0, 60.0),
+            (bar.map, 880.0, 60.0),
+            (bar.fit, 944.0, 44.0),
+            (bar.check, 992.0, 76.0),
+            (bar.clear.expect("the flag beside CHECK"), 1070.0, 52.0),
             (bar.here, 1190.0, HERE_W),
             (bar.play, 1286.0, 72.0),
         ];
@@ -1584,28 +1623,31 @@ mod chrome_tests {
         // Wider: the same slots from the left, PLAY HERE and PLAY at the
         // right end.
         let wide = Bar::of(&UiFrame::plain((1600.0, 900.0)));
-        assert_eq!((wide.erase.x, wide.clear.x, wide.play.x), (640.0, 1054.0, 1600.0 - 8.0 - 72.0));
-        // A 1280 window: the label gone, the name whole.
+        assert_eq!((wide.erase.x, wide.clear.map(|r| r.x), wide.play.x), (656.0, Some(1070.0), 1600.0 - 8.0 - 72.0));
+        // A 1280 window: the name narrowed, everything else whole.
         let laptop = Bar::of(&UiFrame::plain((1280.0, 720.0)));
-        assert!(laptop.label.is_none() && matches!(laptop.tools, BarTools::Categories(_)), "{laptop:?}");
-        assert_eq!(laptop.name, Some(Rectangle::new(8.0, 0.0, 152.0, 40.0)));
-        // The arena's own window: the label and the name gone (the status
-        // line names the map) and every button whole.
+        assert!(laptop.back_word && laptop.clear.is_some() && matches!(laptop.tools, BarTools::Categories(_)), "{laptop:?}");
+        assert_eq!(laptop.name, Some(Rectangle::new(88.0, 0.0, 132.0, 40.0)));
+        // The arena's own window: the name gone (the status line names the
+        // map) and the flag folded into CHECK, every button whole.
         let arena = Bar::of(&UiFrame::plain((1088.0, 576.0)));
-        assert!(arena.label.is_none() && arena.name.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
-        assert_eq!((arena.erase.x, arena.clear.x, arena.here.x), (416.0, 830.0, 912.0));
+        assert!(arena.name.is_none() && arena.clear.is_none() && matches!(arena.tools, BarTools::Categories(_)), "{arena:?}");
+        assert_eq!((arena.erase.x, arena.check.x, arena.here.x), (496.0, 832.0, 912.0));
         // Narrower: the categories and BRUSH fold into TOOLS, and the room
-        // it frees gives the label back; narrower still, the name goes.
+        // it frees gives the flag, BACK's word and a narrowed name back;
+        // narrower still, BACK is its arrow alone and the flag folds again.
         let narrow = Bar::of(&UiFrame::plain((900.0, 500.0)));
         assert!(narrow.brush.is_none() && matches!(narrow.tools, BarTools::Folded(_)), "{narrow:?}");
-        assert_eq!(narrow.name.map(|r| r.width), Some(152.0));
+        assert!(narrow.back_word && narrow.clear.is_some(), "{narrow:?}");
+        assert_eq!(narrow.name.map(|r| r.width), Some(100.0));
         let narrower = Bar::of(&UiFrame::plain((720.0, 400.0)));
-        assert!(narrower.name.is_none() && matches!(narrower.tools, BarTools::Folded(_)), "{narrower:?}");
-        assert_eq!(narrower.erase.width, 44.0, "folded, not shrunk");
+        assert!(narrower.name.is_none() && !narrower.back_word && narrower.clear.is_none(), "{narrower:?}");
+        assert!(matches!(narrower.tools, BarTools::Folded(_)), "{narrower:?}");
+        assert_eq!((narrower.back.width, narrower.erase.width), (44.0, 44.0), "folded, not shrunk");
     }
 
     /// Every label the bar draws fits its box in every shipped language, at
-    /// the size it is drawn in, on every window: BUILD in its slot, FILE
+    /// the size it is drawn in, on every window: BACK after its arrow, FILE
     /// and MAP beside their carets, every other button's word in its box,
     /// all at one size, and the clear flag's longest par beside the flag;
     /// and every size is at least 11 points.
@@ -1623,10 +1665,13 @@ mod chrome_tests {
                     let label = t.get(key);
                     assert!(width(&label, size) as f32 <= room, "{tag} touch={touch}: {label:?} at {size} is over {room}");
                 };
-                fits(keys::EDITOR_BUILD, crate::hud::HUD_TEXT_SIZE, bar.label.expect("a wide bar has its label").width);
-                // Every word in its button's box, at the one size: FILE and
-                // MAP before their carets.
-                for (key, r) in [(keys::EDITOR_FILE, bar.file), (keys::EDITOR_MAP, bar.map)] {
+                // Every word in its button's box, at the one size: BACK
+                // after its arrow, in a caret's room, and FILE and MAP
+                // before their carets.
+                assert!(bar.back_word, "a wide bar has BACK's word");
+                let arrow = back_arrow_at(button_box(bar.back, touch), true);
+                assert!(arrow.x + BACK_ARROW.0 <= button_box(bar.back, touch).x + BOX_EDGE + BOX_PAD + CARET_W, "the arrow in the caret's room");
+                for (key, r) in [(keys::EDITOR_BACK, bar.back), (keys::EDITOR_FILE, bar.file), (keys::EDITOR_MAP, bar.map)] {
                     fits(key, small, label_room(button_box(r, touch), true));
                 }
                 for (key, r) in [
@@ -1640,7 +1685,8 @@ mod chrome_tests {
                     fits(key, small, label_room(button_box(r, touch), false));
                 }
                 // The readout has no box: the flag, then the par from 16 in.
-                assert!(16.0 + width("59:59", small) as f32 <= bar.clear.width, "touch={touch}: the par overflows its readout");
+                let clear = bar.clear.expect("a wide bar has the flag");
+                assert!(16.0 + width("59:59", small) as f32 <= clear.width, "touch={touch}: the par overflows its readout");
             }
             // The palette's category names in their column.
             for category in Category::ALL {

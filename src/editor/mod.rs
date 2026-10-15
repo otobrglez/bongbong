@@ -767,6 +767,9 @@ pub enum EditorAction {
     /// PLAY HERE was pressed: the same, seat 1 starting at the middle of
     /// the builder's view (`mode::Session::play_here`).
     PlayHere,
+    /// BACK was pressed, or Escape with nothing on the canvas to take
+    /// back: the round BUILD paused, where it stood (`mode::Session::back`).
+    Back,
 }
 
 /// The cells from `from` (excluded) to `to` (included), each sharing an
@@ -884,6 +887,16 @@ struct ClearKey {
     size: Option<(u32, u32)>,
     cells: usize,
     digest: u64,
+}
+
+/// The round BUILD paused (`mode::Session`), which BACK goes back to: its
+/// map, which BACK puts the canvas back to; the canvas's baseline then,
+/// which comes back with it; and the map's cells as `off_round` compares
+/// them, worked out on the first read.
+struct Paused {
+    map: MapFile,
+    baseline: MapFile,
+    index: std::cell::OnceCell<CellIndex>,
 }
 
 pub struct MapEditor {
@@ -1033,6 +1046,11 @@ pub struct MapEditor {
     /// Whether the canvas differs from its baseline (`dirty`): worked out
     /// on the first read after an edit or a move of the baseline.
     dirty: std::cell::Cell<Option<bool>>,
+    /// The round BUILD paused, while there is one to go back to.
+    paused: Option<Box<Paused>>,
+    /// Whether the canvas differs from the paused round's map
+    /// (`off_round`): worked out on the first read after an edit.
+    off_round: std::cell::Cell<Option<bool>>,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -1108,6 +1126,8 @@ impl MapEditor {
             lava: std::cell::RefCell::new(None),
             baseline_index: std::cell::OnceCell::new(),
             dirty: std::cell::Cell::new(None),
+            paused: None,
+            off_round: std::cell::Cell::new(None),
             cli_overrides: CliOverrides::default(),
         };
         editor.note_stamp(stamp);
@@ -1322,6 +1342,67 @@ impl MapEditor {
         dirty
     }
 
+    /// The round BUILD paused, which BACK goes back to: `round` is its map
+    /// (the round's `Game::map`), kept with the canvas's baseline as it
+    /// stands now; `None` where there is no round to go back to
+    /// (`mode::Session`).
+    pub fn set_round(&mut self, round: Option<MapFile>) {
+        self.paused = round.map(|map| Box::new(Paused { map, baseline: self.baseline.clone(), index: std::cell::OnceCell::new() }));
+        self.off_round.set(None);
+    }
+
+    /// There is a round BUILD paused to go back to: BACK can act.
+    pub fn can_go_back(&self) -> bool {
+        self.paused.is_some()
+    }
+
+    /// The canvas differs from the map of the round BUILD paused - its
+    /// name, its cells, its settings or its size -, so BACK will put edits
+    /// away (`put_away`) and its button carries a dot. Compared on the kept
+    /// indexes once per edit, as `dirty` is; false with no round to go
+    /// back to.
+    pub fn off_round(&self) -> bool {
+        let Some(paused) = &self.paused else { return false };
+        if let Some(off) = self.off_round.get() {
+            return off;
+        }
+        let off = self.map.name != paused.map.name
+            || self.map.field_size() != paused.map.field_size()
+            || MapSettings::of(&self.map) != MapSettings::of(&paused.map)
+            || self.cell_index().cells() != paused.index.get_or_init(|| CellIndex::of(&paused.map)).cells();
+        self.off_round.set(Some(off));
+        off
+    }
+
+    /// BACK's edit: the canvas put back to the paused round's map, and its
+    /// baseline to what it was when BUILD paused it, as one undo step - so
+    /// the edits made since are put away, and the next UNDO brings them
+    /// back. The canvas is kept as it then stands (`autosave`). Whether
+    /// there was anything to put away.
+    pub fn put_away(&mut self) -> bool {
+        self.settle();
+        if !self.off_round() {
+            return false;
+        }
+        let Some(paused) = &self.paused else { return false };
+        let mut map = paused.map.clone();
+        let baseline = paused.baseline.clone();
+        // A round's map may carry its cleared stamp; the canvas never does
+        // (`take_stamp`).
+        map.cleared = None;
+        let field = self.map.field_size();
+        self.selection = None;
+        let before = std::mem::replace(&mut self.map, map);
+        self.baseline = baseline;
+        self.baseline_index.take();
+        self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
+        self.map_changed();
+        self.rebuild_ground();
+        self.refit_if_resized(field);
+        self.autosave();
+        true
+    }
+
     /// The canvas's cells as a frame reads them (`CellIndex`), kept across
     /// frames and edits.
     pub fn cell_index(&self) -> &CellIndex {
@@ -1497,6 +1578,7 @@ impl MapEditor {
         self.lint_marked = None;
         self.index.take();
         self.dirty.set(None);
+        self.off_round.set(None);
         if !self.framed {
             self.area = self.map.field_size();
         }
@@ -2263,17 +2345,22 @@ impl MapEditor {
     }
 
     /// Escape on the canvas: a rectangle being drawn or a drag taken back,
-    /// else the paste ghost taken away, else the selection let go.
-    fn escape(&mut self) {
+    /// else the paste ghost taken away, else the selection let go. Whether
+    /// there was anything to take back - a stroke under way counts as one -;
+    /// Escape with nothing is BACK (`update`).
+    fn escape(&mut self) -> bool {
         if self.stroke.as_ref().is_some_and(|s| s.shape == Shape::Rect) {
             self.cancel_stroke();
         } else if self.drag.is_some() {
             self.cancel_drag();
         } else if self.ghost.is_some() {
             self.ghost = None;
-        } else {
+        } else if self.selection.is_some() {
             self.selection = None;
+        } else {
+            return self.stroke.is_some();
         }
+        true
     }
 
     /// Write `clip` with its top-left at `at`, noting each change: every
@@ -2870,7 +2957,7 @@ impl MapEditor {
         self.settle();
     }
 
-    /// Leave the builder - PLAY, PLAY HERE, Tab, a level opening - with
+    /// Leave the builder - PLAY, PLAY HERE, BACK, Tab, a level opening - with
     /// nothing under way to come back to: the open popup closed; a RECT
     /// still being drawn and a drag of the select tool taken back, as
     /// Escape takes them (lifted cells go back where they were); a
@@ -3243,7 +3330,9 @@ impl MapEditor {
             self.update_popup(input, frame);
             return EditorAction::None;
         }
-        self.selection_keys(input, frame);
+        if self.selection_keys(input, frame) && self.can_go_back() {
+            return EditorAction::Back;
+        }
         if self.navigate(input, frame, &rules) {
             return EditorAction::None;
         }
@@ -3339,11 +3428,10 @@ impl MapEditor {
     /// The selection's keys, outside every popup: Escape takes a drag back,
     /// the paste ghost away or the selection off; Ctrl+C, Ctrl+X and Delete
     /// (or Backspace) act on the selection; Ctrl+V pastes the clipboard as
-    /// a ghost under the pointer.
-    fn selection_keys(&mut self, input: &BuilderInput, frame: &BuilderFrame) {
-        if input.escape {
-            self.escape();
-        }
+    /// a ghost under the pointer. Whether Escape was pressed with nothing on
+    /// the canvas to take back.
+    fn selection_keys(&mut self, input: &BuilderInput, frame: &BuilderFrame) -> bool {
+        let unheard = input.escape && !self.escape();
         if input.copy {
             self.copy_selection();
         }
@@ -3357,6 +3445,7 @@ impl MapEditor {
         if (input.delete || input.backspace) && self.active_tool == Tool::Select {
             self.delete_selection();
         }
+        unheard
     }
 
     /// The paste ghost following a hovering mouse: its middle on the cell
@@ -3695,6 +3784,8 @@ impl MapEditor {
         match button {
             BarButton::Play => return EditorAction::Play,
             BarButton::PlayHere => return EditorAction::PlayHere,
+            BarButton::Back if self.can_go_back() => return EditorAction::Back,
+            BarButton::Back => {}
             BarButton::File => self.popup = Some(Popup::File),
             BarButton::CategoryIcon(category) => self.select_tool(self.current_tool(category)),
             BarButton::CategoryMenu(category) => self.popup = Some(Popup::Dropdown(category)),

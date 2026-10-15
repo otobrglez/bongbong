@@ -79,15 +79,12 @@ keys! {
     HUD_ROD_AIM = "hud-rod-aim";
     HUD_ROD_CANCEL = "hud-rod-cancel";
     HUD_WELL_ANCHOR = "hud-well-anchor";
+    HUD_EDITS_PUT_AWAY = "hud-edits-put-away";
     PLAYERS_TITLE = "players-title";
     PLAYERS_KEYS = "players-keys";
     PLAYERS_TOUCH = "players-touch";
     PLAYERS_ONE = "players-one";
     PLAYERS_TWO = "players-two";
-    LEAVE_TITLE = "leave-title";
-    LEAVE_SUB = "leave-sub";
-    LEAVE_CONFIRM = "leave-confirm";
-    LEAVE_STAY = "leave-stay";
     ROUND_WON = "round-won";
     ROUND_LOST = "round-lost";
     ROUND_RESTARTING = "round-restarting";
@@ -194,7 +191,7 @@ keys! {
     REFUSAL_NOT_READY = "refusal-not-ready";
     REFUSAL_SERVER_RESTARTING = "refusal-server-restarting";
     REFUSAL_ROOM_CLOSED = "refusal-room-closed";
-    EDITOR_BUILD = "editor-build";
+    EDITOR_BACK = "editor-back";
     EDITOR_UNDO = "editor-undo";
     EDITOR_REDO = "editor-redo";
     EDITOR_FILE = "editor-file";
@@ -895,12 +892,8 @@ mod text_tests {
             (keys::PLAYERS_TITLE, 28, DIALOG_W as i32 - 32, vec![]),
             (keys::PLAYERS_KEYS, 16, DIALOG_W as i32 - 32, vec![]),
             (keys::PLAYERS_TOUCH, 16, DIALOG_W as i32 - 32, vec![]),
-            (keys::LEAVE_TITLE, 28, DIALOG_W as i32 - 32, vec![]),
-            (keys::LEAVE_SUB, 16, DIALOG_W as i32 - 32, vec![]),
             dialog_button(keys::PLAYERS_ONE),
             dialog_button(keys::PLAYERS_TWO),
-            dialog_button(keys::LEAVE_CONFIRM),
-            dialog_button(keys::LEAVE_STAY),
             // The right cluster's title shares its slot with " 12/12" in
             // a wave round, and PROTECT and HUNT with their bong as well.
             (keys::MISSION_PROTECT, HUD_TEXT_SIZE, INFO_TITLE_W as i32 - mission_bong - width("12/12", HUD_TEXT_SIZE), vec![]),
@@ -945,10 +938,6 @@ mod text_tests {
             lobby_button(keys::LOBBY_REMATCH),
             lobby_button(keys::LOBBY_LEAVE),
             (keys::LOBBY_KICK, HUD_TEXT_SIZE, LOBBY_KICK_W as i32 - 8, vec![]),
-            // The build bar (`editor::Bar`): BUILD in its slot; the
-            // buttons' words are measured below, in a mouse's bar and a
-            // touch screen's.
-            (keys::EDITOR_BUILD, HUD_TEXT_SIZE, 64, vec![]),
             // The CHECK panel (`editor::chrome::LINT_PANEL_W`): its title,
             // 16 pt, left of the three counts; the line under it in the
             // small size across the panel; a clean map's line, 16 pt; FIX
@@ -1033,11 +1022,11 @@ mod text_tests {
             ),
         ];
         // The build bar's buttons - every word inside its drawn box
-        // (`editor::chrome::label_room`), FILE and MAP before their carets,
-        // all at the bar's one size (`editor::chrome::BAR_SMALL_TEXT`), in
-        // a mouse's boxes and a touch screen's; and the five categories'
-        // names beside their row of the palette a narrow bar folds them
-        // into.
+        // (`editor::chrome::label_room`), FILE and MAP before their carets
+        // and BACK after its arrow (the caret's room), all at the bar's one
+        // size (`editor::chrome::BAR_SMALL_TEXT`), in a mouse's boxes and a
+        // touch screen's; and the five categories' names beside their row
+        // of the palette a narrow bar folds them into.
         for touch in [false, true] {
             use crate::editor::chrome::{button_box, label_room};
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), touch);
@@ -1045,6 +1034,7 @@ mod text_tests {
             let size = crate::editor::chrome::BAR_SMALL_TEXT;
             let room = |r: crate::math::Rectangle, caret: bool| label_room(button_box(r, touch), caret) as i32;
             for (key, r, caret) in [
+                (keys::EDITOR_BACK, bar.back, true),
                 (keys::EDITOR_UNDO, bar.undo, false),
                 (keys::EDITOR_REDO, bar.redo, false),
                 (keys::EDITOR_FILE, bar.file, true),
@@ -1172,8 +1162,9 @@ mod text_tests {
             }
             // The rod's and the well's prompts, the first line under the
             // left cluster, on its plate inside the vitals block's
-            // (docs/rod-from-god.md, docs/gravity-well.md).
-            for key in [keys::HUD_ROD_AIM, keys::HUD_ROD_CANCEL, keys::HUD_WELL_ANCHOR] {
+            // (docs/rod-from-god.md, docs/gravity-well.md), and the line
+            // BACK from the builder leaves there.
+            for key in [keys::HUD_ROD_AIM, keys::HUD_ROD_CANCEL, keys::HUD_WELL_ANCHOR, keys::HUD_EDITS_PUT_AWAY] {
                 let words = catalogue.get(key);
                 if width(&words, crate::hud::HUD_STATUS_TEXT_SIZE) as f32 > crate::hud::VITALS_W + 2.0 * crate::hud::PLATE_PAD - 8.0 {
                     over.push(format!("{tag}: rod prompt {words:?} runs out of the block"));

@@ -6,7 +6,7 @@ Purpose of this PRD is to introduce second player to the gameplay. Meaning that 
 
 - In the HUD bar of gameplay there should be some kind of tank/share icon.
 - Visually Between "BONG" indicator and BUILD.
-- There should be some kind "pop-up" screen (visually similar then "Leave this round?")
+- There should be some kind "pop-up" screen (visually similar then the "Leave this round?" dialog BB-140 later removed)
 that will ask if you want to play in different modes.
 
 ## Player modes
@@ -40,7 +40,7 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   PLAY from the builder, the dev server's `restart`), like `--tank`.
   `--players 1|2` starts a session in either; the players button in the
   bar (one or two tiny tank glyphs, left of `BUILD`) opens the "How many
-  players?" dialog, styled like "Leave this round?". Picking the other
+  players?" dialog, a centred two-button panel (`hud::two_button_dialog`). Picking the other
   count restarts the round at once in that mode (a `--seed` stays pinned);
   the current count just closes it. The dialog works on the end screen too.
 - **Keys.** Player 1 is always the arrows + Space, single or two players.

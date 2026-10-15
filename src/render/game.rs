@@ -41,7 +41,7 @@ use crate::render::bullet::{draw_bullet, draw_bullet_light, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
 use crate::render::bong::BongTextures;
-use crate::render::hud::{draw_banner, draw_corners, draw_leave_dialog, draw_players_dialog, draw_result, Line};
+use crate::render::hud::{draw_banner, draw_corners, draw_players_dialog, draw_result, Line};
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
 use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
 use crate::render::portal::draw_portal_glow;
@@ -1161,6 +1161,11 @@ impl Game {
             let color = if key == crate::text::keys::HUD_WELL_ANCHOR { crate::hud::HUD_WELL_COLOR } else { crate::hud::HUD_ROD_COLOR };
             lines.push(Line { text: crate::text::text().get(key), size: HUD_STATUS_TEXT_SIZE, color });
         }
+        // BACK from the builder put edits away: for a few seconds, how to
+        // get them back, in the builder's amber.
+        if let Some(key) = chrome.note {
+            lines.push(Line { text: crate::text::text().get(key), size: HUD_STATUS_TEXT_SIZE, color: BUILD_COLOR });
+        }
         // An online round says where it stands: the room, the seat and how
         // much of the snapshot stream is in hand.
         if let Some(status) = &chrome.status {
@@ -1267,17 +1272,13 @@ impl Game {
                 draw_corners(&mut d, corners, hud, chrome, self.players, textures, fade, &lines, minimap);
             }
 
-            // The leave-round question (docs/game-editor-fusion.md
-            // section 6): the same dim as PAUSED, over the corners too -
-            // nothing behind a question is pressable - and the dialog on
-            // top. The round is frozen by `app.rs` not calling `update`,
-            // so nothing here is simulation state.
-            if chrome.leave_dialog || chrome.players_dialog {
+            // The players question (docs/two-players.md): the same dim as
+            // PAUSED, over the corners too - nothing behind a question is
+            // pressable - and the dialog on top. The round is frozen by
+            // `app.rs` not calling `update`, so nothing here is simulation
+            // state.
+            if chrome.players_dialog {
                 d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
-            }
-            if chrome.leave_dialog {
-                draw_leave_dialog(&mut d, area);
-            } else if chrome.players_dialog {
                 draw_players_dialog(&mut d, area, self.players, ui.hints);
             }
             // The lobby (lobby.rs), with its own dim: the round behind it

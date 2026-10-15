@@ -155,12 +155,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   field's bitmap. Touch goes to `touch.rs` (`--touch-from-mouse` for dev); a press on the field is
   never a play input. `game_loop::run`'s fps is 0 on web (rAF) and 120 native, see docs/platforms.md, Web.
 - `mode.rs` (docs/game-editor-fusion.md §5, docs/online-coop-prd.md §4.5, §4.10) — `Session {
-  driver, game, builder, dialog, players_dialog, online, lobby, rooms, nick, token, campaign,
+  driver, game, builder, players_dialog, online, lobby, rooms, nick, token, campaign,
   level_select }` owns the round, the builder and the seat in a room for the whole session;
   `playing()` (play mode, no dialog, no level select) is the one predicate deciding whether `update`
-  runs - the leave dialog is not a simulation pause, and neither is the lobby or an online round.
-  `press_build` (asks while a round is in progress), `answer_dialog`, `play` (`MapEditor::leave`,
-  then a fresh `init` on the builder's map, seed pinned - there is no resume), `toggle`,
+  runs - the builder is not a simulation pause, and neither is the lobby or an online round.
+  `press_build` (into the builder at once, the round paused behind it - `enter_build` hands the
+  round's map to `MapEditor::set_round`; `--editor` starts there), `back` (BACK, or Escape in the
+  builder with nothing to take back: `MapEditor::leave`, `put_away` - the canvas back to the
+  paused round's map as one undo step - and the round resumes where it stood, `tick_note` counting
+  down the line that says the edits were put away), `play` (`MapEditor::leave`, then a fresh
+  `init` on the builder's map, seed pinned - the one way the paused round is given up), `toggle`,
   `replace_map`, `update_builder`, `play_chrome`, `press_players`/`answer_players` (a new count
   restarts). **`Driver::Lobby`** is the room screen (`lobby.rs`): `press_online` opens it over the
   parked local round, `open_lobby_with` opens it on a round the command line already dialled,
@@ -1692,9 +1696,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   cluster. **Fade** (`Fade::step`, `action_marks`, `WorldOnScreen`, `covered`): a cluster drops to
   `ui_fade_opacity` while a tank, shot or blast drawn in the camera's view lies under it.
   `PlayChrome` is what `Game::render` draws around the field (`hud` says whether the corners are
-  drawn): the buttons, the dialogs, an online round's `status` line, its `countdown_label` (the end
+  drawn): the buttons, the dialogs, the `note` BACK leaves under the left cluster when it put edits
+  away, an online round's `status` line, its `countdown_label` (the end
   screen counts down to the lobby rather than to a restart) and the `lobby::LobbyView`. The dialogs
-  (`leave_dialog_rects`/`players_dialog_rects`), the end screen and a level's banner are centred in
+  (`players_dialog_rects`, `question_rects`), the end screen and a level's banner are centred in
   the chrome's area in points (`centred_in`), their dims over the whole window; banners are
   `banner_size` (never under `BANNER_MIN_SIZE`, 48). The end screen (docs/levels.md):
   `PlayChrome::level` (`LevelBanner`: number, count, title) and `PlayChrome::result` (`ResultView`:
@@ -1966,11 +1971,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   lays the bar along the safe area's top from its width - a mouse's slots at a point a pixel on a
   desktop in a 40 pt bar at the HUD's scale (`HUD_BAR_HEIGHT`, a play corner plate's height, its
   boxes a HUD button's 32), every button 44 pt both ways on a touch screen, hit rects reaching
-  `EDITOR_BAR_HIT_SLACK` above and below - and short of room drops the BUILD label, then the map's
-  name (the status line names it), then folds the five categories and BRUSH into one TOOLS button
-  and its palette (BRUSH's rows its last row; a category longer than the room is wide runs on into a
-  second row, the cells shrinking to the room's height but never under 44 pt), never shrinking a
-  button; `PopupLayout` hangs the popups under the bar, a long list running into a second column and
+  `EDITOR_BAR_HIT_SLACK` above and below - BACK at its left end (the round BUILD paused,
+  `MapEditor::set_round`/`can_go_back`; dim without one, an amber dot while `off_round`), and
+  short of room drops the map's name (the status line names it), then BACK's word (its arrow
+  stays), then folds the clear flag into CHECK (green while cleared), then folds the five categories
+  and BRUSH into one TOOLS button and its palette (BRUSH's rows its last row; a category longer than
+  the room is wide runs on into a second row, the cells shrinking to the room's height but never
+  under 44 pt) - which may give the flag back -, never shrinking a button; `PopupLayout` hangs the popups under the bar, a long list running into a second column and
   the CHECK panel, the Load list and the STAMPS list (at most `LOAD_VISIBLE_ROWS`) turning pages by
   a pager row and the wheel where their rows do not fit; the MAP panel (`MapPanel`, its four groups
   `MapTab` - ROUND, TANKS, FIELD, SKY - of `MapField`s as choices, steppers and sky tiles,

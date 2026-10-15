@@ -1,11 +1,13 @@
 //! The game's three modes and the switch between them
 //! (docs/game-editor-fusion.md, section 5; docs/online-coop-prd.md §4.5):
 //! `Session` owns the `Game`, the `MapEditor` and which driver is live,
-//! plus the "leave this round?" question in between and the "how many
-//! players?" one (docs/two-players.md). Both the window (`app.rs`) and
-//! the dev server go through the methods here, so a tool and a click are
-//! the same path. No `RaylibHandle` anywhere in this file: drawing stays
-//! in `game.rs`, `hud.rs` and `editor.rs`.
+//! plus the "how many players?" question (docs/two-players.md). BUILD
+//! pauses the local round rather than ending it: the builder's BACK comes
+//! back to it where it stood, and only PLAY puts a new round in its
+//! place. Both the window (`app.rs`) and the dev server go through the
+//! methods here, so a tool and a click are the same path. No
+//! `RaylibHandle` anywhere in this file: drawing stays in `game.rs`,
+//! `hud.rs` and `editor.rs`.
 //!
 //! Play runs `Game::update` in process, Build runs the map builder,
 //! Lobby is the room screen (`lobby.rs`) and Online draws a
@@ -107,14 +109,11 @@ pub struct Session {
     pub driver: Driver,
     pub game: Game,
     pub builder: MapEditor,
-    /// The leave-round dialog is open (play mode only). While it is, the
-    /// round is frozen because `advance` is not called - no simulation
-    /// pause flag is touched.
-    pub dialog: bool,
     /// The players dialog (`1 PLAYER` / `2 PLAYERS`) is open, play mode
-    /// only; the round is frozen the same way. Never open together with
-    /// `dialog`. The chosen count itself lives on `Game::players`, which
-    /// every restart keeps, so it is the session's setting.
+    /// only. While it is, the round is frozen because `advance` is not
+    /// called - no simulation pause flag is touched. The chosen count
+    /// itself lives on `Game::players`, which every restart keeps, so it
+    /// is the session's setting.
     pub players_dialog: bool,
     /// The seat in a room and the replica it draws, from the moment the
     /// lobby opens one: the second `Game` of the session, and the only
@@ -192,6 +191,9 @@ pub struct Session {
     /// out, the way it takes, the dissolve into the next round - and the
     /// real time since the round was decided (`Curtain`).
     curtain: Curtain,
+    /// The real seconds left on the line BACK leaves under the left
+    /// cluster when it put edits away (`back`, `tick_note`): 0 shows none.
+    put_away_note: f32,
 }
 
 /// The passage between local rounds and the end's slowed picture,
@@ -255,7 +257,6 @@ impl Session {
             driver: Driver::Play,
             game,
             builder,
-            dialog: false,
             players_dialog: false,
             online: None,
             lobby: None,
@@ -272,6 +273,7 @@ impl Session {
             clear_attempt: None,
             clear_noted: false,
             curtain: Curtain::default(),
+            put_away_note: 0.0,
         }
     }
 
@@ -314,7 +316,6 @@ impl Session {
         self.game.start_override = None;
         self.clear_attempt = None;
         self.sync_level();
-        self.dialog = false;
         self.players_dialog = false;
         self.level_select = None;
         let (width, height) = self.game.map.field_size();
@@ -327,7 +328,6 @@ impl Session {
     /// Play mode only.
     pub fn play_again(&mut self) {
         if self.driver == Driver::Play {
-            self.dialog = false;
             self.players_dialog = false;
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
@@ -489,7 +489,6 @@ impl Session {
         if self.driver != Driver::Play {
             return false;
         }
-        self.dialog = false;
         self.players_dialog = false;
         self.level_select = Some(LevelSelect::open(self.level(), campaign.open_to()));
         true
@@ -698,18 +697,14 @@ impl Session {
     /// Whether `Game::update` should run this frame: play mode with no
     /// question pending.
     pub fn playing(&self) -> bool {
-        self.driver == Driver::Play && !self.dialog && !self.players_dialog && self.level_select.is_none() && self.question.is_none()
+        self.driver == Driver::Play && !self.players_dialog && self.level_select.is_none() && self.question.is_none()
     }
 
-    /// A round the player could still lose by leaving: anything but the
-    /// end screen.
-    pub fn round_in_progress(&self) -> bool {
-        self.game.outcome() == Outcome::Playing
-    }
-
-    /// The `BUILD` button (or `Tab` in play mode): ask when a round is in
-    /// progress, switch at once on the end screen. In build mode this is
-    /// a no-op. Returns the mode afterwards.
+    /// The `BUILD` button (or `Tab` in play mode): into the builder at
+    /// once, the round paused behind it for BACK to come back to - mid-round
+    /// and on the end screen alike. The level select or the players
+    /// question, if one is up, closes instead. In build mode this is a
+    /// no-op. Returns the mode afterwards.
     pub fn press_build(&mut self) -> Driver {
         if self.driver == Driver::Play {
             if self.level_select.take().is_some() {
@@ -717,11 +712,6 @@ impl Session {
             } else if self.players_dialog {
                 // A press anywhere else closes the players question.
                 self.players_dialog = false;
-            } else if self.dialog {
-                // Pressing the button again while asked is "keep playing".
-                self.dialog = false;
-            } else if self.round_in_progress() {
-                self.dialog = true;
             } else {
                 self.enter_build();
             }
@@ -729,24 +719,16 @@ impl Session {
         self.driver
     }
 
-    /// Answer the leave dialog. A no-op when it is not open.
-    pub fn answer_dialog(&mut self, leave: bool) -> Driver {
-        if self.dialog {
-            self.dialog = false;
-            if leave {
-                self.enter_build();
-            }
-        }
-        self.driver
-    }
-
-    /// Into the builder, its camera opening on what the round showed: the
-    /// whole canvas after an arena, the followed view's world after a
-    /// field map - while the canvas is the round's map's size, so the view
-    /// still names the same ground.
-    fn enter_build(&mut self) {
-        self.dialog = false;
+    /// Into the builder, the local round paused behind it - nothing calls
+    /// `Game::update` outside play mode - for BACK to come back to
+    /// (`MapEditor::set_round`), and its camera opening on what the round
+    /// showed: the whole canvas after an arena, the followed view's world
+    /// after a field map - while the canvas is the round's map's size, so
+    /// the view still names the same ground. `--editor` starts here.
+    pub fn enter_build(&mut self) {
         self.players_dialog = false;
+        self.put_away_note = 0.0;
+        self.builder.set_round(Some(self.game.map.clone()));
         self.driver = Driver::Build;
         if let Some(view) = self.play_view
             && self.builder.map().field_size() == self.game.map.field_size()
@@ -756,15 +738,13 @@ impl Session {
     }
 
     /// The players button in the HUD: open the players dialog, or close it
-    /// if it is already up. Play mode only, and a no-op while the leave
-    /// dialog is asking or the level select is up - one question at a
-    /// time. Works on the end screen
+    /// if it is already up. Play mode only, and a no-op while the level
+    /// select is up - one question at a time. Works on the end screen
     /// too (the restart countdown waits). Returns whether it is open. Never
     /// opens where two players are not offered (`TWO_PLAYERS_AVAILABLE`).
     pub fn press_players(&mut self) -> bool {
         if crate::TWO_PLAYERS_AVAILABLE
             && self.driver == Driver::Play
-            && !self.dialog
             && self.level_select.is_none()
             && self.game.map.training.is_none()
         {
@@ -817,7 +797,6 @@ impl Session {
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
             self.driver = Driver::Play;
-            self.dialog = false;
             self.players_dialog = false;
         }
         self.driver
@@ -855,6 +834,34 @@ impl Session {
         self.driver
     }
 
+    /// `BACK` from the builder, or Escape there with nothing on the canvas
+    /// to take back: the round BUILD paused comes back where it stood, at
+    /// once, its map the canvas again - the edits made since are put away
+    /// as one undo step that the next BUILD's UNDO takes back
+    /// (`MapEditor::put_away`), and a line under the left cluster says so
+    /// for `ui_put_away_seconds`. Nothing is lost, so nothing asks. A no-op
+    /// in play mode and where the builder has no round to go back to.
+    pub fn back(&mut self) -> Driver {
+        if self.driver != Driver::Build || !self.builder.can_go_back() {
+            return self.driver;
+        }
+        self.builder.leave();
+        if self.builder.put_away() {
+            self.put_away_note = crate::tuning::tuning().ui_put_away_seconds;
+        }
+        self.driver = Driver::Play;
+        self.driver
+    }
+
+    /// One frame of the line BACK leaves when it put edits away, `dt` real
+    /// seconds: it counts down in play mode only. `app.rs` calls it once a
+    /// frame.
+    pub fn tick_note(&mut self, dt: f32) {
+        if self.driver == Driver::Play {
+            self.put_away_note = (self.put_away_note - dt).max(0.0);
+        }
+    }
+
     /// The `Tab` key: `press_build` in play mode, `play` in build mode -
     /// except while the builder's Save prompt is taking text, when a key
     /// is a character and not a command. Online it is inert: the round
@@ -877,7 +884,6 @@ impl Session {
         if !crate::ONLINE_AVAILABLE || self.driver != Driver::Play {
             return self.driver;
         }
-        self.dialog = false;
         self.players_dialog = false;
         self.level_select = None;
         self.lobby = Some(Lobby::new(self.site.clone(), self.rooms.clone()));
@@ -890,7 +896,6 @@ impl Session {
     /// shows the code and the QR while the room fills up, and hands over
     /// to `Driver::Online` the moment the round begins.
     pub fn open_lobby_with(&mut self, round: AnyRound) {
-        self.dialog = false;
         self.players_dialog = false;
         self.lobby = Some(Lobby::new(self.site.clone(), self.rooms.clone()));
         self.online = Some(round);
@@ -930,7 +935,6 @@ impl Session {
         if !crate::ONLINE_AVAILABLE {
             return;
         }
-        self.dialog = false;
         self.players_dialog = false;
         self.lobby = Some(Lobby::new(self.site.clone(), self.rooms.clone()));
         self.dial(Target::Join(code));
@@ -941,7 +945,6 @@ impl Session {
     /// `open_lobby_with` and the hand-over from the lobby both use. The
     /// local round and the builder are left exactly as they stand.
     pub fn go_online(&mut self, round: AnyRound) {
-        self.dialog = false;
         self.players_dialog = false;
         self.lobby = None;
         self.online = Some(round);
@@ -1086,10 +1089,11 @@ impl Session {
 
     /// One frame of the builder, in build mode, on the window `frame`
     /// describes: `PLAY` starts the round, `PLAY HERE` starts it from the
-    /// middle of the builder's view.
-    pub fn update_builder(&mut self, input: &BuilderInput, frame: &BuilderFrame) {
+    /// middle of the builder's view, `BACK` comes back to the paused one.
+    /// Answers what the builder asked for this frame.
+    pub fn update_builder(&mut self, input: &BuilderInput, frame: &BuilderFrame) -> EditorAction {
         if self.driver != Driver::Build {
-            return;
+            return EditorAction::None;
         }
         // A question takes every press, Enter and Esc while it is up.
         if self.question.is_some() {
@@ -1102,11 +1106,12 @@ impl Session {
             } else if input.escape {
                 self.answer_question(false);
             }
-            return;
+            return EditorAction::None;
         }
         // The CHECK panel lints the canvas the way PLAY would set it up.
         self.builder.lint_setup = crate::maplint::LintSetup::of(&self.game);
-        match self.builder.update(input, frame) {
+        let action = self.builder.update(input, frame);
+        match action {
             EditorAction::None => {}
             EditorAction::Play => {
                 self.play();
@@ -1114,10 +1119,14 @@ impl Session {
             EditorAction::PlayHere => {
                 self.play_here();
             }
+            EditorAction::Back => {
+                self.back();
+            }
         }
         if let Some(question) = self.builder.take_question() {
             self.question = Some(question);
         }
+        action
     }
 
     /// Ask about a modified copy whose original this build ships changed
@@ -1131,7 +1140,6 @@ impl Session {
         }
         for name in [self.game.map.name.clone(), self.builder.map().name.clone()].into_iter().flatten() {
             if self.originals_checked.insert(name.clone()) && store.stale(&name) {
-                self.dialog = false;
                 self.players_dialog = false;
                 self.level_select = None;
                 self.question = Some(Question::OriginalChanged { name });
@@ -1186,6 +1194,12 @@ impl Session {
         if self.builder.map().name.as_deref() == Some(name.as_str()) {
             self.builder.open(original.clone());
             self.builder.set_status(crate::text::text().fmt(crate::text::keys::EDITOR_REVERTED, &[("name", name.as_str().into())]));
+        }
+        // A round paused on the copy is over, as one played on it starts
+        // over below: BACK would put the copy back on the canvas, and so
+        // in the store.
+        if self.driver == Driver::Build && self.game.map.name.as_deref() == Some(name.as_str()) {
+            self.builder.set_round(None);
         }
         if self.driver == Driver::Play && self.game.map.name.as_deref() == Some(name.as_str()) {
             match self.level() {
@@ -1263,11 +1277,11 @@ impl Session {
                 pause_button: true,
                 paused: self.game.paused,
                 seat: None,
-                leave_dialog: self.dialog,
                 players_dialog: self.players_dialog,
                 question: self.question.clone(),
                 status: None,
                 prompt: crate::hud::special_prompt(&self.game, 0..self.game.players.count().min(2) as u8),
+                note: (self.put_away_note > 0.0).then_some(crate::text::keys::HUD_EDITS_PUT_AWAY),
                 lobby: None,
                 countdown_label: None,
                 level: self.level().zip(self.campaign.as_ref()).and_then(|(i, campaign)| {
@@ -1295,13 +1309,13 @@ impl Session {
     }
 
     /// The live buttons of whatever stands over the round and takes a press
-    /// before the corners do - the level select's open tiles and BACK, a
-    /// dialog's two, a level's end screen's, the lobby's - by name, in the
+    /// before the corners do - the level select's open tiles and BACK, the
+    /// players dialog's two, a level's end screen's, the lobby's - by name, in the
     /// UI points of `ui`, from the same geometry the painter and the hit
     /// tests read. What the dev server's `status.ui.screen_buttons` and the
     /// web build's `bb_ui_json` report.
     pub fn screen_buttons(&self, ui: &crate::hud::UiFrame) -> Vec<(String, crate::math::Rectangle)> {
-        use crate::hud::{leave_dialog_rects, players_dialog_rects};
+        use crate::hud::players_dialog_rects;
         use crate::level_select::{back_rect, tile_rect, TileState};
         let chrome = self.play_chrome();
         let mut out = Vec::new();
@@ -1316,9 +1330,6 @@ impl Session {
         } else if chrome.players_dialog {
             let r = players_dialog_rects(ui.area);
             out.extend([("one".to_string(), r.one), ("two".to_string(), r.two)]);
-        } else if chrome.leave_dialog {
-            let r = leave_dialog_rects(ui.area);
-            out.extend([("leave".to_string(), r.leave), ("stay".to_string(), r.stay)]);
         } else if self.driver == Driver::Play
             && let Some(r) = chrome.result.as_ref().and_then(|view| result_layout(ui.area, view).buttons)
         {
@@ -1449,23 +1460,106 @@ mod session_tests {
         Session::new(game)
     }
 
+    /// Step the local round `frames` frames with no input.
+    fn run(s: &mut Session, frames: usize) {
+        for _ in 0..frames {
+            s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        }
+    }
+
+    /// BUILD asks nothing: it goes into the builder at once, mid-round and
+    /// on the end screen alike, and the round waits behind it - `playing()`
+    /// is false, so nothing steps it - for BACK to come back to, where it
+    /// stood: the same frame, the same tanks, the end screen still up.
     #[test]
-    fn build_asks_mid_round_and_switches_at_once_on_the_end_screen() {
+    fn build_pauses_the_round_and_back_comes_back_to_it_where_it_stood() {
         let mut s = session();
-        assert_eq!(s.press_build(), Driver::Play);
-        assert!(s.dialog && !s.playing());
-        assert_eq!(s.answer_dialog(false), Driver::Play);
-        assert!(!s.dialog && s.playing());
-        s.press_build();
-        assert_eq!(s.answer_dialog(true), Driver::Build);
-        assert!(!s.playing());
-        // Back in play on the end screen: no question.
-        s.play();
-        s.game.debug_kill(0).expect("player slot exists");
-        s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
-        assert_ne!(s.game.outcome(), Outcome::Playing);
+        run(&mut s, 30);
+        let (frame, pose) = (s.game.frame(), s.game.seat_pose(0));
         assert_eq!(s.press_build(), Driver::Build);
-        assert!(!s.dialog);
+        assert!(!s.playing() && s.builder.can_go_back() && !s.builder.off_round());
+        assert_eq!(s.back(), Driver::Play);
+        assert!(s.playing());
+        assert_eq!((s.game.frame(), s.game.seat_pose(0)), (frame, pose), "the round moved behind the builder");
+        assert_eq!(s.play_chrome().note, None, "nothing was put away");
+        assert_eq!(s.back(), Driver::Play, "BACK in play mode is a no-op");
+        run(&mut s, 1);
+        assert_eq!(s.game.frame(), frame + 1, "the round runs on");
+        // The end screen: BUILD and BACK come back to it, still decided.
+        s.game.debug_kill(0).expect("player slot exists");
+        run(&mut s, 1);
+        let outcome = s.game.outcome();
+        assert_ne!(outcome, Outcome::Playing);
+        assert_eq!(s.press_build(), Driver::Build);
+        assert_eq!(s.back(), Driver::Play);
+        assert_eq!(s.game.outcome(), outcome);
+    }
+
+    /// Edits made in the builder after BUILD are put away by BACK, not
+    /// lost: the round comes back on its own map, the canvas is that map
+    /// again by one undo step, a line under the left cluster says so for
+    /// `ui_put_away_seconds`, and UNDO in the next BUILD brings the edits
+    /// back - while PLAY would have played them.
+    #[test]
+    fn back_puts_edits_away_as_one_undo_step_that_undo_takes_back() {
+        let mut s = session();
+        run(&mut s, 10);
+        let frame = s.game.frame();
+        let round_map = s.game.map.clone();
+        let cell = (20, 11);
+        assert_eq!(s.press_build(), Driver::Build);
+        s.builder.select_tool(Tool::Wall(Material::Iron));
+        s.builder.stroke(&[cell], false);
+        assert!(s.builder.off_round(), "the canvas differs from the round's map");
+        let depth = s.builder.history().undo_depth();
+        assert_eq!(s.back(), Driver::Play);
+        assert_eq!(s.game.frame(), frame, "the same round, not a new one");
+        assert_eq!(s.game.map.cells, round_map.cells, "the round plays on its own map");
+        assert_eq!(s.builder.map().cells, round_map.cells, "the canvas is the round's map again");
+        assert_eq!(s.builder.history().undo_depth(), depth + 1, "put away as one step");
+        assert_eq!(s.play_chrome().note, Some(crate::text::keys::HUD_EDITS_PUT_AWAY));
+        s.tick_note(crate::tuning::Tuning::DEFAULT.ui_put_away_seconds + 0.1);
+        assert_eq!(s.play_chrome().note, None, "the line goes after its seconds");
+        // The next BUILD: UNDO brings the wall back.
+        s.press_build();
+        assert!(!s.builder.off_round());
+        assert!(s.builder.undo());
+        assert_eq!(s.builder.map().cell(cell.0, cell.1), Some(&CellObject::Wall { material: Material::Iron }));
+        assert!(s.builder.off_round());
+    }
+
+    /// BACK is the bar's left end, and Escape with nothing on the canvas
+    /// to take back presses it: a selection is let go first. A builder with
+    /// no round to go back to leaves both doing nothing.
+    #[test]
+    fn back_is_the_bars_button_and_escape_with_nothing_to_take_back() {
+        use crate::editor::{BuilderFrame, BuilderInput};
+        let mut s = session();
+        s.press_build();
+        let frame = BuilderFrame::headless(s.builder.map().field_size(), s.builder.map().class());
+        let at = |s: &Session, name: &str| {
+            let r = s.builder.named_buttons(&frame).into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no {name}")).1;
+            frame.ui.to_window(crate::math::Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0))
+        };
+        let press = BuilderInput { pointer: Some(at(&s, "back")), pressed: true, held: true, ..Default::default() };
+        assert_eq!(s.update_builder(&press, &frame), EditorAction::Back);
+        assert_eq!(s.mode(), Driver::Play);
+        // Escape lets a selection go, then goes back.
+        s.press_build();
+        s.builder.select_tool(Tool::Select);
+        s.builder.select_cells(crate::editor::CellRect::spanning((2, 2), (4, 4)));
+        let escape = BuilderInput { escape: true, ..Default::default() };
+        s.update_builder(&escape, &frame);
+        assert_eq!(s.mode(), Driver::Build, "Escape let the selection go first");
+        assert!(s.builder.selection().is_none());
+        s.update_builder(&escape, &frame);
+        assert_eq!(s.mode(), Driver::Play);
+        // No round to go back to: BACK and Escape stay in the builder.
+        s.press_build();
+        s.builder.set_round(None);
+        assert_eq!(s.update_builder(&press, &frame), EditorAction::None);
+        s.update_builder(&escape, &frame);
+        assert_eq!((s.mode(), s.back()), (Driver::Build, Driver::Build));
     }
 
     /// BUILD opens the builder's camera on what the round last showed: a
@@ -1475,7 +1569,6 @@ mod session_tests {
         let mut s = session();
         s.play_view = Some(crate::math::Rectangle::new(100.0, 96.0, 400.0, 200.0));
         s.press_build();
-        s.answer_dialog(true);
         assert_eq!(s.mode(), Driver::Build);
         let vp = s.builder.viewport();
         assert!(!s.builder.camera().is_fit());
@@ -1488,7 +1581,6 @@ mod session_tests {
         let (w, h) = s.game.map.field_size();
         s.play_view = Some(crate::math::Rectangle::new(0.0, 0.0, w, h));
         s.press_build();
-        s.answer_dialog(true);
         assert!(s.builder.camera().is_fit());
     }
 
@@ -1496,7 +1588,6 @@ mod session_tests {
     fn play_starts_a_round_on_the_edited_map_and_edits_survive_the_round_trip() {
         let mut s = session();
         s.press_build();
-        s.answer_dialog(true);
         s.builder.select_tool(Tool::Wall(Material::Iron));
         let cell = (20, 11);
         s.builder.stroke(&[cell], false);
@@ -1513,7 +1604,6 @@ mod session_tests {
         assert_eq!(s.game.map.cell(cell.0, cell.1), Some(&CellObject::Wall { material: Material::Iron }));
         // Build again: the canvas is still the edited map, not reseeded.
         s.press_build();
-        s.answer_dialog(true);
         assert!(s.builder.dirty());
         assert_eq!(s.builder.map().cell(cell.0, cell.1), Some(&CellObject::Wall { material: Material::Iron }));
     }
@@ -1525,7 +1615,6 @@ mod session_tests {
         use crate::editor::{BuilderFrame, BuilderInput};
         let mut s = session();
         s.press_build();
-        s.answer_dialog(true);
         let frame = BuilderFrame::headless(s.builder.map().field_size(), s.builder.map().class());
         // A named button's middle, on the window (`named_buttons`).
         let at = |s: &Session, name: &str| {
@@ -1537,7 +1626,6 @@ mod session_tests {
         assert_eq!(s.builder.open_menu(), Some("map"));
         assert_eq!(s.toggle(), Driver::Play);
         s.press_build();
-        s.answer_dialog(true);
         assert_eq!(s.builder.open_menu(), None, "the settings panel stayed open across PLAY");
 
         // The Save-as prompt (FILE > SAVE AS...) takes text: Tab is a
@@ -1572,7 +1660,6 @@ mod session_tests {
             // paint at FIT (`builder_paint_min_cell_mm`).
             let mut s = arena_session();
             s.press_build();
-            s.answer_dialog(true);
             let ui = crate::hud::UiFrame::new((1600.0, 900.0), 1.0, 1.0, crate::hud::Insets::default(), true);
             let frame = BuilderFrame::new(ui, s.builder.map().field_size(), s.builder.map().class(), None);
             let screen = CanvasScreen { device_per_px: frame.view.scale * 2.0, points_per_px: frame.view.scale, coarse: false, ..Default::default() };
@@ -1598,8 +1685,7 @@ mod session_tests {
             assert_eq!(s.toggle(), Driver::Play);
             assert!(s.builder.rect_stroke().is_none(), "the rectangle outlived the builder");
             assert_eq!(s.builder.map().cells, before.cells, "leaving filled the rectangle");
-            s.press_build();
-            assert_eq!(s.answer_dialog(true), Driver::Build);
+            assert_eq!(s.press_build(), Driver::Build);
             let camera = *s.builder.camera();
             let id = if same_id { 0 } else { 1 };
             let at = Vec2::new(middle.x - 200.0, middle.y - 100.0);
@@ -1614,27 +1700,21 @@ mod session_tests {
     }
 
     #[test]
-    fn the_players_dialog_freezes_the_round_and_yields_to_the_leave_dialog() {
+    fn the_players_dialog_freezes_the_round_and_build_closes_it() {
         let mut s = session();
         assert!(s.press_players());
         assert!(s.players_dialog && !s.playing());
         // The BUILD button while it asks just closes it.
         assert_eq!(s.press_build(), Driver::Play);
-        assert!(!s.players_dialog && !s.dialog && s.playing());
+        assert!(!s.players_dialog && s.playing());
         // Pressed again: a toggle.
         assert!(s.press_players());
         assert!(!s.press_players());
         assert!(s.playing());
-        // One question at a time: the leave dialog blocks the players button.
-        s.press_build();
-        assert!(s.dialog);
-        assert!(!s.press_players());
-        assert!(s.dialog && !s.players_dialog);
-        s.answer_dialog(false);
         // In build mode the button does nothing.
         s.press_build();
-        s.answer_dialog(true);
         assert!(!s.press_players());
+        assert!(!s.players_dialog);
     }
 
     #[test]
@@ -1667,7 +1747,6 @@ mod session_tests {
         assert_eq!(s.game.players, PlayerCount::TWO);
         assert!(s.game.seat(1).is_some());
         s.press_build();
-        s.answer_dialog(true);
         s.play();
         assert_eq!(s.game.players, PlayerCount::TWO);
         assert!(s.game.seat(1).is_some());
@@ -1801,7 +1880,6 @@ mod session_tests {
         assert_eq!(s.toggle(), Driver::Lobby);
         s.leave_online();
         s.press_build();
-        s.answer_dialog(true);
         assert_eq!(s.press_online(), Driver::Build, "the lobby is the play bar's button");
     }
 
@@ -1995,7 +2073,6 @@ mod session_tests {
         s.game.update(crate::simulation::Input { restart_pressed: true, ..Default::default() }, crate::PHYSICS_FIXED_DT, W, H);
         assert_eq!(s.game.seat_pose(0).unwrap().position, crate::map::cell_to_world(cell.0, cell.1));
         s.press_build();
-        s.answer_dialog(true);
         s.play();
         assert_eq!(s.game.start_override, None);
         assert_eq!(s.game.seat_pose(0).unwrap().position, crate::map::cell_to_world(3, 8), "PLAY starts on the map's start");
@@ -2083,7 +2160,6 @@ mod session_tests {
         // PLAY from the builder is the level again, its end screen a
         // level's.
         s.press_build();
-        s.answer_dialog(true);
         s.play();
         assert_eq!(s.game.start_override, None);
         assert!(s.game.hold_end_screen);
@@ -2213,7 +2289,6 @@ mod session_tests {
         let won = s.builder.revision();
         s.play();
         s.press_build();
-        s.answer_dialog(true);
         s.builder.stroke(&[(20, 5)], false);
         assert_ne!(s.builder.revision(), won);
         // A tool's restart: the round PLAY started, on its own map.
@@ -2357,7 +2432,6 @@ mod session_tests {
         assert_eq!(s.dissolve(), None, "R mid-round cuts");
 
         s.press_build();
-        s.answer_dialog(true);
         step(&mut s);
         s.play();
         step(&mut s);
@@ -2531,7 +2605,6 @@ mod session_tests {
         let mut edited = s.builder.map().clone();
         edited.set_cell(5, 5, CellObject::Gate);
         s.press_build();
-        s.answer_dialog(true);
         s.builder.load(edited.clone());
         s.play();
         assert_eq!(s.level(), Some(0), "the canvas is still that level by name");

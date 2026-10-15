@@ -34,9 +34,9 @@ use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTe
 use crate::ai::Intent;
 use crate::bong::{BongKind, Side};
 use crate::editor::{
-    Axis, BuilderFrame, BuilderInput, Category, CellChange, CellRect, MapEditor, Shape, Tool, parse_mission, parse_spawn, parse_tank, parse_tier,
+    Axis, BuilderFrame, BuilderInput, Category, CellChange, CellRect, EditorAction, MapEditor, Shape, Tool, parse_mission, parse_spawn, parse_tank, parse_tier,
 };
-use crate::hud::{leave_dialog_rects, players_dialog_rects, CornerButton, CornerShape, Corners, UiFrame};
+use crate::hud::{players_dialog_rects, CornerButton, CornerShape, Corners, UiFrame};
 use crate::map::MapFile;
 use crate::maplint::LintSeverity;
 use crate::mode::{Driver, Session};
@@ -111,7 +111,7 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// part of it that would reach nobody).
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
     "step", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "well_at", "players", "play",
-    "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
+    "build", "back", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
     "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
 ];
 
@@ -386,8 +386,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "build",
-        description: "Press BUILD in play mode: opens the 'Leave this round?' dialog while a round is in progress (the round is frozen until it is answered) and switches to the builder at once on the end screen. `answer: leave` confirms an open dialog and enters build mode; `answer: stay` closes it and keeps playing. A no-op in build mode. Replies like `mode`.",
-        schema: r#"{"type":"object","properties":{"answer":{"type":"string","enum":["leave","stay"],"description":"Answer the open leave dialog instead of pressing the button"}}}"#,
+        description: "Press BUILD in play mode: enters the builder at once, mid-round and on the end screen alike, the round paused behind it for `back` to come back to (only `play` puts a new round in its place). With the level select or the players dialog up it closes that instead. A no-op in build mode. Replies like `mode`, whose `back` is then `{puts_away}`.",
+        schema: r#"{"type":"object","properties":{}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "back",
+        description: "Press BACK in build mode (or Escape there with nothing on the canvas to take back): the round BUILD paused comes back exactly where it stood, at once, still frozen in lockstep if it was. Edits made since BUILD are put away - the canvas goes back to the round's map as one undo step, which `builder_undo` (UNDO in the next BUILD) takes back - and `status.ui`'s left cluster carries a line saying so for `ui_put_away_seconds`. `mode.back.puts_away` says beforehand whether it will. A no-op in play mode and where there is no paused round (`mode.back` null). Replies like `mode`.",
+        schema: r#"{"type":"object","properties":{}}"#,
         read_only: false,
         destructive: false,
     },
@@ -1501,7 +1508,7 @@ impl DevServer {
             "ui": self.ui_json(session, width, height),
             "mode": session.mode().name(),
             "language": crate::text::language(),
-            "dialog_open": session.dialog,
+            "back": back_json(session),
             "players_dialog_open": session.players_dialog,
             "levels_open": session.level_select.is_some(),
             "levels_focus": session.level_select.as_ref().zip(session.campaign.as_ref()).map(|(select, campaign)| campaign.levels.number(select.focus())),
@@ -1893,7 +1900,6 @@ impl DevServer {
             session.replace_map(map);
         }
         session.driver = Driver::Play;
-        session.dialog = false;
         session.players_dialog = false;
         // The field is the map's, which a new map may have just changed.
         let (width, height) = session.game.map.field_size();
@@ -1977,21 +1983,14 @@ impl DevServer {
                     "shipped": crate::text::SHIPPED_LANGS.iter().map(|(tag, _)| *tag).collect::<Vec<_>>(),
                 }))
             }
-            "build" => match params.get("answer") {
-                None | Some(Value::Null) => {
-                    session.press_build();
-                    Ok(mode_json(session))
-                }
-                Some(Value::String(s)) if s == "leave" => {
-                    session.answer_dialog(true);
-                    Ok(mode_json(session))
-                }
-                Some(Value::String(s)) if s == "stay" => {
-                    session.answer_dialog(false);
-                    Ok(mode_json(session))
-                }
-                Some(other) => Err(format!("answer must be leave|stay, got {other}")),
-            },
+            "build" => {
+                session.press_build();
+                Ok(mode_json(session))
+            }
+            "back" => {
+                session.back();
+                Ok(mode_json(session))
+            }
             "players" => match params.get("count") {
                 None | Some(Value::Null) => {
                     session.press_players();
@@ -2223,13 +2222,6 @@ impl DevServer {
                     if session.game.players != before {
                         self.round_started(session);
                     }
-                } else if session.dialog {
-                    let rects = leave_dialog_rects(ui.area);
-                    if rects.leave.contains(p) {
-                        session.answer_dialog(true);
-                    } else if rects.stay.contains(p) || !rects.panel.contains(p) {
-                        session.answer_dialog(false);
-                    }
                 } else if !right && session.press_result_at_once(p, ui.area) {
                     // A level's end screen: PLAY AGAIN or the way on start
                     // a round; LEVELS opens the level select over this one.
@@ -2278,7 +2270,7 @@ impl DevServer {
                     right_held: right,
                     ..BuilderInput::default()
                 };
-                session.update_builder(&press, &frame);
+                let action = session.update_builder(&press, &frame);
                 let mut last = window_point;
                 if let Some(to) = drag_to {
                     // Steps of about `CLICK_DRAG_STEP_PX` on the canvas.
@@ -2292,8 +2284,9 @@ impl DevServer {
                     }
                 }
                 session.update_builder(&BuilderInput { pointer: Some(last), ..BuilderInput::default() }, &frame);
-                // The press may have been PLAY.
-                if session.mode() == Driver::Play {
+                // The press may have been PLAY, a new round; BACK comes
+                // back to the paused one, which carries on as it was.
+                if session.mode() == Driver::Play && action != EditorAction::Back {
                     self.round_started(session);
                 }
             }
@@ -2388,27 +2381,15 @@ impl DevServer {
             }
             Driver::Play => match key {
                 Some("tab") => {
-                    if session.dialog {
-                        session.answer_dialog(false);
-                    } else {
-                        session.press_build();
-                    }
+                    session.press_build();
                 }
-                // Esc answers the leave dialog while it asks, and opens
-                // the level select otherwise.
+                // Esc opens the level select.
                 Some("escape") => {
-                    if session.dialog {
-                        session.answer_dialog(false);
-                    } else {
-                        session.press_levels();
-                    }
+                    session.press_levels();
                 }
-                // The leave dialog's answer while it asks; otherwise a
-                // level's end screen takes it, as `app.rs` does.
+                // A level's end screen takes Enter, as `app.rs` does.
                 Some("enter") => {
-                    if session.dialog {
-                        session.answer_dialog(true);
-                    } else if session.enter_result_at_once() {
+                    if session.enter_result_at_once() {
                         self.round_started(session);
                     }
                 }
@@ -2708,7 +2689,7 @@ fn mode_json(session: &Session) -> Value {
     let b = &session.builder;
     json!({
         "mode": session.mode().name(),
-        "dialog_open": session.dialog,
+        "back": back_json(session),
         "players_dialog_open": session.players_dialog,
         "levels_open": session.level_select.is_some(),
         "levels_focus": session.level_select.as_ref().zip(session.campaign.as_ref()).map(|(select, campaign)| campaign.levels.number(select.focus())),
@@ -2722,6 +2703,14 @@ fn mode_json(session: &Session) -> Value {
         "redo_depth": b.history().redo_depth(),
         "level": level_json(session),
     })
+}
+
+/// BACK in the builder (`mode::Session::back`): `null` where there is no
+/// paused round to go back to, and in every mode but build; else whether
+/// it would put edits away (`MapEditor::off_round`).
+fn back_json(session: &Session) -> Value {
+    let b = &session.builder;
+    if session.mode() == Driver::Build && b.can_go_back() { json!({ "puts_away": b.off_round() }) } else { Value::Null }
 }
 
 /// Which round every reading tool is describing: the session's own, or
@@ -3856,13 +3845,14 @@ mod tests {
         let (bx, by) = (b["x"].as_f64().unwrap() + 36.0, b["y"].as_f64().unwrap() + 16.0);
         assert!(bx > 1800.0 && by < 60.0, "{b}");
         let m = at(&mut server, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();
-        assert_eq!(m["dialog_open"], true, "{m}");
-        at(&mut server, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert_eq!(m["mode"], "build", "{m}");
+        let m = at(&mut server, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert_eq!(m["mode"], "play", "Escape with nothing to take back is BACK: {m}");
         // A press on the field lands in the world through that camera: the
         // window's middle is the followed seat.
         let m = at(&mut server, &mut s, "click", json!({ "x": 960.0, "y": 540.0 })).unwrap();
         assert_eq!(m["world"], json!({ "x": seat.x, "y": seat.y }), "{m}");
-        assert_eq!(m["dialog_open"], false);
+        assert_eq!(m["mode"], "play");
         // A pin outranks the follow; `reset` gives the view back.
         let pinned = at(&mut server, &mut s, "camera", json!({ "zoom": 2.0 })).unwrap();
         assert_eq!(pinned["view"], "pinned");
@@ -4323,7 +4313,6 @@ mod tests {
         assert_eq!(settings["weather"], "clear", "{settings}");
         assert!(ask(&mut server, &mut game, "builder_settings", json!({ "weather": ["rain", "hail"] })).is_err());
         ask(&mut server, &mut game, "build", json!({})).unwrap();
-        ask(&mut server, &mut game, "build", json!({ "answer": "leave" })).unwrap();
         let err = ask(&mut server, &mut game, "weather", json!({ "name": "rain" })).unwrap_err();
         assert!(err.contains("play"), "{err}");
     }
@@ -4696,35 +4685,27 @@ cells."1,1" = { kind = "wall" }"#;
         json!({ "x": at("x") + at("w") / 2.0, "y": at("y") + at("h") / 2.0 })
     }
 
-    /// BUILD, then confirm the dialog: the builder is live afterwards.
+    /// BUILD: the builder is live afterwards, the round paused behind it.
     fn enter_build(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session) {
-        ask(server, tx, session, "build", json!({})).unwrap();
-        let m = ask(server, tx, session, "build", json!({ "answer": "leave" })).unwrap();
+        let m = ask(server, tx, session, "build", json!({})).unwrap();
         assert_eq!(m["mode"], "build", "{m}");
     }
 
     #[test]
-    fn build_asks_mid_round_and_the_game_only_tools_refuse_in_build_mode() {
+    fn build_enters_at_once_back_comes_back_and_the_game_only_tools_refuse_in_build_mode() {
         let (mut server, tx) = DevServer::headless();
         let mut s = game(31);
         let m = ask(&mut server, &tx, &mut s, "mode", json!({})).unwrap();
         assert_eq!(m["mode"], "play");
-        assert_eq!(m["dialog_open"], false);
+        assert!(m["back"].is_null(), "no BACK in play mode: {m}");
         assert!(m["open_menu"].is_null());
         assert_eq!(m["tool"], "brick");
         assert_eq!(m["category"], "wall");
         assert_eq!(m["map_name"], "untitled", "an inline map has no file stem");
-        // BUILD mid-round asks; the round is frozen meanwhile.
-        let m = ask(&mut server, &tx, &mut s, "build", json!({})).unwrap();
-        assert_eq!(m["mode"], "play", "{m}");
-        assert_eq!(m["dialog_open"], true);
-        assert!(!s.playing());
-        let m = ask(&mut server, &tx, &mut s, "build", json!({ "answer": "stay" })).unwrap();
-        assert_eq!(m["dialog_open"], false);
-        assert!(s.playing());
-        assert!(ask(&mut server, &tx, &mut s, "build", json!({ "answer": "maybe" })).is_err());
-        // Leave: the builder is live and the round tools refuse.
+        // BUILD mid-round asks nothing: the builder is live, the round
+        // waits behind it and the round tools refuse.
         enter_build(&mut server, &tx, &mut s);
+        assert!(!s.playing());
         let err = ask(&mut server, &tx, &mut s, "step", json!({ "frames": 1 })).unwrap_err();
         assert!(err.contains("play"), "{err}");
         for tool in GAME_ONLY_TOOLS {
@@ -4732,7 +4713,7 @@ cells."1,1" = { kind = "wall" }"#;
         }
         let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         assert_eq!(status["mode"], "build", "{status}");
-        assert_eq!(status["dialog_open"], false);
+        assert_eq!(status["back"], json!({ "puts_away": false }), "{status}");
         assert_eq!(status["builder"]["dirty"], false);
         assert_eq!(status["builder"]["tool"], "brick");
         // The tools that must keep working in build mode.
@@ -4748,20 +4729,32 @@ cells."1,1" = { kind = "wall" }"#;
         ] {
             ask(&mut server, &tx, &mut s, tool, params).unwrap_or_else(|e| panic!("{tool} in build mode: {e}"));
         }
-        for tool in ["status", "mode", "screenshot", "overlays", "map_get", "tuning_get", "tuning_set", "tuning_reset", "tuning_schema", "restart", "build", "play", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings", "builder_map", "builder_files", "builder_save", "click", "key"] {
+        for tool in ["status", "mode", "screenshot", "overlays", "map_get", "tuning_get", "tuning_set", "tuning_reset", "tuning_schema", "restart", "build", "back", "play", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings", "builder_map", "builder_files", "builder_save", "click", "key"] {
             assert!(!GAME_ONLY_TOOLS.contains(&tool), "{tool} must not be game-only");
             assert!(TOOLS.iter().any(|t| t.name == tool), "{tool} is advertised");
         }
-        // A second BUILD press in build mode is a no-op, and `build` on the
-        // end screen skips the dialog.
+        // A second BUILD press in build mode is a no-op; `back` comes back
+        // to the round where it stood, a paint since put away first.
         let m = ask(&mut server, &tx, &mut s, "build", json!({})).unwrap();
         assert_eq!(m["mode"], "build");
-        ask(&mut server, &tx, &mut s, "play", json!({})).unwrap();
+        let frame = s.game.frame();
+        ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[3, 3]], "tool": "iron" })).unwrap();
+        let m = ask(&mut server, &tx, &mut s, "mode", json!({})).unwrap();
+        assert_eq!(m["back"], json!({ "puts_away": true }), "{m}");
+        let m = ask(&mut server, &tx, &mut s, "back", json!({})).unwrap();
+        assert_eq!(m["mode"], "play", "{m}");
+        assert!(m["back"].is_null());
+        assert_eq!(s.game.frame(), frame, "the same round");
+        assert_eq!(s.builder.map().cell(3, 3), s.game.map.cell(3, 3), "the paint put away");
+        assert_eq!(ask(&mut server, &tx, &mut s, "back", json!({})).unwrap()["mode"], "play", "a no-op in play mode");
+        // The end screen: `build` and `back` come back to it.
         s.game.debug_kill(0).unwrap();
         s.game.update(Input::default(), PHYSICS_FIXED_DT, W, H);
         let m = ask(&mut server, &tx, &mut s, "build", json!({})).unwrap();
         assert_eq!(m["mode"], "build", "{m}");
-        assert_eq!(m["dialog_open"], false);
+        let m = ask(&mut server, &tx, &mut s, "back", json!({})).unwrap();
+        assert_eq!(m["mode"], "play", "{m}");
+        assert_ne!(s.game.outcome(), crate::simulation::Outcome::Playing);
     }
 
     /// A session holding a seat in a room, plus the authoritative round
@@ -5558,14 +5551,15 @@ cells."1,1" = { kind = "wall" }"#;
     /// the canvas's revision, not cleared until a win in the round its
     /// PLAY started (`attempt`), then cleared with the round clock as its
     /// par; and the bar's flag is a button `click` reaches, which opens
-    /// the CHECK panel.
+    /// the CHECK panel - on a map wide enough that the headless window's
+    /// bar keeps the flag rather than folding it into CHECK.
     #[test]
     fn status_reports_the_clear_check_and_click_reaches_its_flag() {
         let (mut server, tx) = DevServer::headless();
         let mut game = Game::default();
         game.seed_override = Some(3);
         game.show_intro = false;
-        game.map = MapFile::from_toml_str("version = 1\ntanks = 1\ncells.\"3,8\" = { kind = \"start\" }\n").unwrap();
+        game.map = MapFile::from_toml_str("version = 1\nsize = [40, 17]\ntanks = 1\ncells.\"3,8\" = { kind = \"start\" }\n").unwrap();
         let (w, h) = game.map.field_size();
         game.init(w, h);
         let mut s = Session::new(game);
@@ -5749,43 +5743,29 @@ cells."40,30" = { kind = "bong" }
         let (mut server, tx) = DevServer::headless();
         let mut s = game(36);
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
-        // Play's bitmap is the field alone.
-        let layout = Layout::bare(W, H);
         let centre = |r: crate::math::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
-        // A click on BUILD opens the dialog like `build`.
+        // A click on BUILD enters the builder like `build`, and a click on
+        // BACK, where `status.builder.buttons` puts it, comes back.
         let build = corner_button(&mut server, &tx, &mut s, "build");
         let m = ask(&mut server, &tx, &mut s, "click", build).unwrap();
-        assert_eq!(m["dialog_open"], true, "{m}");
-        assert_eq!(m["mode"], "play");
-        // A press outside the dialog keeps playing.
-        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 100.0 })).unwrap();
-        assert_eq!(m["dialog_open"], false);
-        // Tab opens it; Escape closes it; Enter leaves.
+        assert_eq!(m["mode"], "build", "{m}");
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let b = &st["builder"]["buttons"]["back"];
+        let back = json!({ "x": b["x"].as_f64().unwrap() + b["w"].as_f64().unwrap() / 2.0, "y": b["y"].as_f64().unwrap() + b["h"].as_f64().unwrap() / 2.0 });
+        let m = ask(&mut server, &tx, &mut s, "click", back).unwrap();
+        assert_eq!(m["mode"], "play", "{m}");
+        // Tab enters it; Escape there with nothing to take back is BACK.
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
-        assert_eq!(m["dialog_open"], true, "{m}");
+        assert_eq!(m["mode"], "build", "{m}");
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
-        assert_eq!(m["dialog_open"], false);
+        assert_eq!(m["mode"], "play", "{m}");
         assert!(ask(&mut server, &tx, &mut s, "key", json!({ "key": "f1" })).is_err());
         assert!(ask(&mut server, &tx, &mut s, "key", json!({})).is_err());
         // A left click on the field in play mode is not an order; the
         // round is untouched by it.
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 640.0, "y": 32.0 + 400.0 })).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
-        assert_eq!(m["dialog_open"], false);
-        // The dialog's own buttons, where `status.ui.screen_buttons` puts
-        // them - centred on the window, in the UI's points.
-        ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
-        let stay = screen_button(&mut server, &tx, &mut s, "stay");
-        let (ww, wh) = layout.window_size();
-        let rects = leave_dialog_rects(UiFrame::plain((ww as f32, wh as f32)).area);
-        let (sx, sy) = centre(rects.stay);
-        assert_eq!((stay["x"].as_f64(), stay["y"].as_f64()), (Some(sx as f64), Some(sy as f64)), "the rects the painter reads");
-        let m = ask(&mut server, &tx, &mut s, "click", stay).unwrap();
-        assert_eq!(m["dialog_open"], false, "{m}");
-        assert_eq!(m["mode"], "play");
-        ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
-        let leave = screen_button(&mut server, &tx, &mut s, "leave");
-        let m = ask(&mut server, &tx, &mut s, "click", leave).unwrap();
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
         assert_eq!(m["mode"], "build", "{m}");
 
         // Build mode: a click on a field cell paints with the active brush,
