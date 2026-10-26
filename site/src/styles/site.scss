@@ -1,11 +1,11 @@
-// The site's colours and the pieces more than one page draws. The page is
-// dark, like the game: the ground is the HUD's bar fill (src/hud.rs
-// `BAR_FILL`), the accent its BUILD amber and the links its ONLINE cyan.
+// The site's colours and the pieces more than one page draws. The ground is
+// hot pink; the panels stay dark, like the game, the accent the HUD's BUILD
+// amber and the links its ONLINE cyan.
 // Silkscreen is the label face, close to raylib's built-in font the game
 // writes in; IBM Plex Sans carries anything longer than a label.
 
 :root {
-  --ground: #151515;
+  --ground: #ff69b4;
   --panel: #1c1c1c;
   --panel-line: #262626;
   --raised: #1f1f1f;
