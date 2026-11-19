@@ -10,6 +10,12 @@ name: PR Preview
 # worker serving bongbong.io) is never touched — previews only ever own
 # `bongbong-pr-<N>`.
 #
+# **Co-op follows the `coop` label.** A PR without it is built without the
+# `online` feature: the preview has no ONLINE button and reaches no room
+# server, production's included, and pr-server.yml deploys none for it. A
+# PR with the label is built with co-op and its comment links this PR's
+# own room server. The label going on or coming off rebuilds the preview.
+#
 # Requires the same repo secrets as cloudflare-deploy.yml:
 #   CLOUDFLARE_API_TOKEN — account-level Workers Scripts:Edit
 #   CLOUDFLARE_ACCOUNT_ID
@@ -23,19 +29,25 @@ name: PR Preview
 # stacked PRs cannot collide.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
-
-# One group per PR: a new push cancels the superseded build, and a close
-# event cancels any in-flight build so teardown can't race a deploy that
-# would re-create the worker after deletion.
-concurrency:
-  group: pr-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+    types: [opened, synchronize, reopened, labeled, unlabeled, closed]
 
 jobs:
   deploy:
-    if: github.event.action != 'closed'
+    # Of the label events only `coop` rebuilds: it is the one label the
+    # build reads.
+    if: >-
+      github.event.action != 'closed' &&
+      ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+       github.event.label.name == 'coop')
     runs-on: ubuntu-22.04
+    # One group per PR, shared with `teardown` and set on the jobs rather
+    # than the workflow: a new push cancels the superseded build, and a
+    # close cancels any in-flight build so teardown can't race a deploy
+    # that would re-create the worker after deletion - while a run both
+    # jobs sit out (an unrelated label) joins no group and cancels nothing.
+    concurrency:
+      group: pr-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: write
@@ -46,11 +58,14 @@ jobs:
       # runtime tuning panel (docs/runtime-tuning-design.md) is available on
       # the preview, and as a preview, so the page shows what production
       # holds back until it is out (the App Store badge, site/src/site.ts).
-      # Production (cloudflare-deploy.yml) never passes either.
+      # Production (cloudflare-deploy.yml) never passes either. Without
+      # the `coop` label the build leaves the `online` feature out
+      # (`ONLINE_AVAILABLE`, src/lib.rs), which is the whole of co-op's
+      # client half.
       - name: Build web (wasm + Astro site, dev-tools)
         uses: ./.github/actions/build-web
         with:
-          cargo-features: --features dev-tools
+          cargo-features: ${{ contains(github.event.pull_request.labels.*.name, 'coop') && '--features dev-tools' || '--no-default-features --features render,dev-tools' }}
           preview: "true"
 
       - name: Deploy preview worker
@@ -67,18 +82,25 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          COOP: ${{ contains(github.event.pull_request.labels.*.name, 'coop') }}
         with:
           script: |
             const marker = '<!-- bongbong-pr-preview -->';
             const url = process.env.DEPLOYMENT_URL;
             const sha = process.env.HEAD_SHA.slice(0, 7);
             const rooms = `wss://rooms.bongbong.io/pr-${process.env.PR_NUMBER}`;
+            const coop = process.env.COOP === 'true';
             const lines = [marker];
             if (url) {
               lines.push(`🎮 **Play this PR:** ${url}`);
-              lines.push('', `Against this PR's room server: ${url}/?rooms=${rooms}`);
+              if (coop) {
+                lines.push('', `Against this PR's room server: ${url}/?rooms=${rooms}`);
+              }
             } else {
               lines.push('🎮 This PR is deployed as the `bongbong-pr-' + process.env.PR_NUMBER + '` worker; its URL is in the deploy step\'s log.');
+            }
+            if (!coop) {
+              lines.push('', 'Co-op is off in this preview and this PR has no room server. Add the `coop` label to deploy one and rebuild the preview with co-op.');
             }
             lines.push('', `Updated for ${sha}. The preview worker is deleted automatically when this PR closes.`);
             const body = lines.join('\n');
@@ -97,6 +119,9 @@ jobs:
   teardown:
     if: github.event.action == 'closed'
     runs-on: ubuntu-22.04
+    concurrency:
+      group: pr-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       pull-requests: write
     steps:

@@ -113,9 +113,12 @@ pre-existing failure, a follow-up): file it with `linear-file`, don't fold it in
 - Wait for CI (rule 4): `sleep 30; gh pr checks <N> --watch --interval 30`
   as one `run_in_background` command (you are woken when it exits) - the
   sleep because, until the workflows register, it reports no checks and
-  exits 1. Every PR runs `ci.yml`'s `test` and `check`, the web preview, the room
-  server and the Claude review; a `skipping` check (a label-gated build, a
-  close-only job) counts as green.
+  exits 1. Every PR runs `ci.yml`'s `test` and `check`, the web preview and the
+  Claude review; a `skipping` check (a label-gated build such as the room
+  server, which only a PR labelled `coop` deploys, or a close-only job)
+  counts as green. A PR that changes `src/net/`, `server/` or `k8s/` gets
+  the `coop` label (`gh api -X POST repos/otobrglez/bongbong/issues/<N>/labels
+  -f 'labels[]=coop'`) so its server deploys and its preview has co-op.
   - Exit 0, everything `pass` or `skipping`: `save_issue` state
     **In Review**, then `save_comment` the PR link, plus anything its reader
     should know that the PR doesn't say (a follow-up filed, a reading of a

@@ -154,12 +154,15 @@ probe on it would restart the pod seconds into every deploy (the admin listener 
 drain for the same reason); and there is no CPU *limit*, only a request, because a CFS quota would
 throttle the 60 Hz tick at the period boundary and stutter every room together. `just
 rooms-image`/`rooms-image-run`/`rooms-push`/`rooms-deploy`/`rooms-manifests`/`rooms-logs` are the
-hand paths. **Every open PR also gets its own server** (`.github/workflows/pr-server.yml`,
-`k8s/preview/rooms-preview.yaml`): namespace `bongbong-pr-<N>`, reachable at
+hand paths. **A PR labelled `coop` also gets its own server** (`.github/workflows/pr-server.yml`,
+`k8s/preview/rooms-preview.yaml`; a PR without the label deploys none, and its web preview is built
+without the `online` feature, so it has no ONLINE button and reaches no room server): namespace
+`bongbong-pr-<N>`, reachable at
 `wss://rooms.bongbong.io/pr-<N>/ws` - a *path* on production's host, rewritten to `/ws` by the
 ingress, so a preview needs no DNS record, no certificate and no client change (`--rooms
 wss://rooms.bongbong.io/pr-<N>` already builds that URL). The web preview's sticky comment links it
-at this server (`<preview>/?rooms=...`). One namespace holds the lot, so closing the PR deletes it;
+at this server (`<preview>/?rooms=...`). One namespace holds the lot, so closing the PR, or taking
+the label off, deletes it;
 previews run at 100m CPU with `--max-rooms 3` and a 30 s grace, since `delete namespace` waits the
 grace out. **Monitoring** (k8s/README.md): production and every preview carry a ServiceMonitor, and
 the Grafana dashboard "bongbong room servers" is `k8s/base/grafana/bongbong-rooms.json`, shipped as

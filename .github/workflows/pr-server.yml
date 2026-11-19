@@ -1,10 +1,16 @@
 name: PR Room Server
 
-# Deploys every open PR's room server into its own Kubernetes namespace
-# (`bongbong-pr-<N>`) on the Hetzner cluster, so a PR's protocol and
-# server changes can be played before merging. Sibling to pr-preview.yml,
-# which does the same for the web client; between them a PR gets a client
-# and a server that talk to each other.
+# Deploys the room server of a PR labelled `coop` into its own Kubernetes
+# namespace (`bongbong-pr-<N>`) on the Hetzner cluster, so a PR's protocol
+# and server changes can be played before merging. Sibling to
+# pr-preview.yml, which builds the web client for every PR; on a labelled
+# PR the two are a client and a server that talk to each other.
+#
+# **The label is the switch.** A PR without `coop` deploys nothing here and
+# its web preview is built with co-op disconnected (pr-preview.yml). Adding
+# the label deploys the server; every later push redeploys it; removing the
+# label, or closing the PR, deletes it. A PR that never carried the label
+# never reaches the cluster, on close either.
 #
 # **The preview shares production's hostname and takes a path**:
 # `wss://rooms.bongbong.io/pr-<N>/ws`, rewritten to `/ws` by the ingress
@@ -16,7 +22,7 @@ name: PR Room Server
 # wss://rooms.bongbong.io/pr-<N>` already produces exactly that socket URL
 # (`net::rooms::socket_url` appends `/ws` to whatever base it is given).
 #
-# The whole preview is one namespace, so teardown on PR close is a single
+# The whole preview is one namespace, so teardown is a single
 # `kubectl delete namespace`. Production (`bongbong-prod`) is never
 # touched - previews only ever own `bongbong-pr-<N>`.
 #
@@ -32,14 +38,7 @@ name: PR Room Server
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
-
-# One group per PR: a new push cancels the superseded build, and a close
-# event cancels any in-flight deploy so teardown cannot race a deploy that
-# would re-create the namespace after deletion.
-concurrency:
-  group: pr-server-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+    types: [opened, synchronize, reopened, labeled, unlabeled, closed]
 
 env:
   REGISTRY: registry.folk-decibel.ts.net
@@ -48,10 +47,24 @@ env:
 
 jobs:
   deploy:
+    # Only a PR that carries `coop`; and of the label events only `coop`
+    # being added - another label going on or coming off a labelled PR
+    # changes nothing the server is built from.
     if: >-
-      github.event.action != 'closed' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.state == 'open' &&
+      contains(github.event.pull_request.labels.*.name, 'coop') &&
+      github.event.action != 'unlabeled' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'coop')
     runs-on: ubuntu-latest
+    # One group per PR, shared with `teardown` and set on the jobs rather
+    # than the workflow: a new push cancels the superseded build, and a
+    # teardown cancels any in-flight deploy so it cannot race a deploy that
+    # would re-create the namespace after deletion - while a run both jobs
+    # sit out (an unrelated label) joins no group and cancels nothing.
+    concurrency:
+      group: pr-server-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: write
@@ -179,7 +192,7 @@ jobs:
               `# health and metrics: the "bongbong room servers" Grafana dashboard`,
               '```',
               '',
-              `Namespace \`bongbong-pr-${pr}\`, up to 3 rooms. Deleted when this PR closes.`,
+              `Namespace \`bongbong-pr-${pr}\`, up to 3 rooms. Deleted when this PR closes or loses the \`coop\` label.`,
               '</details>',
               '',
               `Updated for ${sha}.`,
@@ -197,13 +210,19 @@ jobs:
             }
 
   teardown:
-    # Same fork guard as the deploy job: a fork PR never got secrets and
-    # so never deployed, and without them the Tailscale step would fail
-    # and paint a red X on someone else's closed PR.
+    # When a labelled PR closes, or `coop` comes off an open one. Same fork
+    # guard as the deploy job: a fork PR never got secrets and so never
+    # deployed, and without them the Tailscale step would fail and paint a
+    # red X on someone else's closed PR.
     if: >-
-      github.event.action == 'closed' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((github.event.action == 'closed' &&
+        contains(github.event.pull_request.labels.*.name, 'coop')) ||
+       (github.event.action == 'unlabeled' && github.event.label.name == 'coop'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: pr-server-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       pull-requests: write
     steps:
@@ -228,9 +247,8 @@ jobs:
 
       # One namespace holds the whole preview, so this is the entire
       # teardown: Deployment, Service, Ingress, secret and pod all go with
-      # it. A namespace that is not there (a PR closed before any
-      # successful deploy, or a fork PR that never got secrets) is
-      # already-clean, not a failure.
+      # it. A namespace that is not there (a PR closed or unlabelled before
+      # any successful deploy) is already-clean, not a failure.
       - name: Delete the preview namespace
         run: |
           kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=5m
