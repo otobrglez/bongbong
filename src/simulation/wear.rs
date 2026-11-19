@@ -6,7 +6,7 @@
 //! hash of a position or a hull's odometer, so a seeded replay presses the
 //! same ground and nothing that plays reads it.
 
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 use rand::RngExt;
 
 use super::Game;
@@ -173,7 +173,7 @@ impl Game {
 /// hard it presses against its chassis. Four draws, two of them setting
 /// nothing: they keep every seed's stream - and every pinned replay - where
 /// it was.
-pub(super) fn roll_tread(tank: &mut Tank, rng: &mut SmallRng) {
+pub(super) fn roll_tread(tank: &mut Tank, rng: &mut RoundRng) {
     let _: f32 = rng.random_range(1.5..6.0);
     let _: f32 = rng.random_range(40.0..120.0);
     let period = TREAD_BY_ROW[tank.row.clamp(0, 11) as usize].period as f32;
