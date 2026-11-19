@@ -2260,6 +2260,7 @@ impl Game {
         debug_assert!(self.rng.is_some(), "Game::rng missing at update entry - init has not run");
         self.frame += 1;
         self.events.clear();
+        self.begin_step_poses();
         if input.pause_pressed {
             self.paused = !self.paused;
         }
@@ -3106,6 +3107,76 @@ impl Game {
         let tank = self.world.get::<&Tank>(entity).ok()?;
         let velocity = tank.body.map_or(Position::new(0.0, 0.0), |h| self.physics.velocity(h));
         Some((tank.position, tank.rotation, velocity))
+    }
+
+    /// A step begins: every tank, projectile and bong notes the pose it starts
+    /// from, which is where a frame drawn between this step and the next
+    /// glides from (`pose.rs`). It also drops whatever pose the last frame
+    /// drew, so all through the step `drawn` answers the live pose.
+    /// Presentation only: no RNG, no events, and nothing here is read back.
+    fn begin_step_poses(&mut self) {
+        for tank in self.world.query_mut::<&mut Tank>() {
+            let pose = tank.pose();
+            tank.smooth.begin_step(pose);
+        }
+        for shell in self.world.query_mut::<&mut Shell>() {
+            shell.smooth.begin_step(crate::pose::Pose::at(shell.position));
+        }
+        for bullet in self.world.query_mut::<&mut Bullet>() {
+            bullet.smooth.begin_step(crate::pose::Pose::at(bullet.position));
+        }
+        for plasma in self.world.query_mut::<&mut Plasma>() {
+            plasma.smooth.begin_step(crate::pose::Pose::at(plasma.position));
+        }
+        for missile in self.world.query_mut::<&mut Missile>() {
+            let pose = missile.pose();
+            missile.smooth.begin_step(pose);
+        }
+        for grenade in self.world.query_mut::<&mut crate::grenade::Grenade>() {
+            let pose = grenade.pose();
+            grenade.smooth.begin_step(pose);
+        }
+        for bong in self.world.query_mut::<&mut crate::bong::Bong>() {
+            bong.smooth.begin_step(crate::pose::Pose::at(bong.position));
+        }
+    }
+
+    /// Pose the round for a frame drawn between two steps (`pose.rs`):
+    /// every tank, projectile and bong `alpha` of the way from where the last
+    /// step began to where it ended, `alpha` being the share of the next
+    /// step the frame loop's clock already holds. 1 is the round as it
+    /// stands. `texel` lands every tank on a whole world pixel, which a
+    /// followed view needs (`follow::TexelLock`). The frame loop calls
+    /// this once its steps have run; a round nobody poses - a thumbnail, a
+    /// test, a replica - draws as it stands. Presentation only: it writes
+    /// each thing's `smooth` and nothing else, draws no RNG, and nothing
+    /// `update` does reads what it wrote (`begin_step_poses`).
+    pub fn pose_at(&mut self, alpha: f32, texel: bool) {
+        use crate::pose::{BODY_JUMP_PX, Pose, SHOT_JUMP_PX};
+        for tank in self.world.query_mut::<&mut Tank>() {
+            let pose = tank.pose();
+            tank.smooth.show(pose, alpha, BODY_JUMP_PX, texel);
+        }
+        for shell in self.world.query_mut::<&mut Shell>() {
+            shell.smooth.show(Pose::at(shell.position), alpha, SHOT_JUMP_PX, false);
+        }
+        for bullet in self.world.query_mut::<&mut Bullet>() {
+            bullet.smooth.show(Pose::at(bullet.position), alpha, SHOT_JUMP_PX, false);
+        }
+        for plasma in self.world.query_mut::<&mut Plasma>() {
+            plasma.smooth.show(Pose::at(plasma.position), alpha, SHOT_JUMP_PX, false);
+        }
+        for missile in self.world.query_mut::<&mut Missile>() {
+            let pose = missile.pose();
+            missile.smooth.show(pose, alpha, SHOT_JUMP_PX, false);
+        }
+        for grenade in self.world.query_mut::<&mut crate::grenade::Grenade>() {
+            let pose = grenade.pose();
+            grenade.smooth.show(pose, alpha, SHOT_JUMP_PX, false);
+        }
+        for bong in self.world.query_mut::<&mut crate::bong::Bong>() {
+            bong.smooth.show(Pose::at(bong.position), alpha, BODY_JUMP_PX, false);
+        }
     }
 
     pub fn tick_presentation(&mut self, dt: f32) {
@@ -7135,6 +7206,65 @@ mod determinism_tests {
         }
     }
 
+    /// The poses a frame draws between two steps (`pose.rs`,
+    /// `Game::pose_at`) are presentation only: a round posed after every
+    /// step, at several shares of a step, on and off the texel grid, with
+    /// every drawn pose read back and the last one left standing for the
+    /// next step to find, replays the round nobody posed bit for bit -
+    /// the same hulls and the same events on the same frames.
+    #[test]
+    fn posing_the_round_for_a_frame_never_changes_the_replay() {
+        let run = |posed: bool| {
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.level_overrides.mission = Some(Mission::Protect);
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+            game.enemy_count_override = Some(4);
+            game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
+            game.init(1280.0, 720.0);
+            let mut stream: Vec<(u32, Vec<_>, String)> = Vec::new();
+            let (mut glided, mut shots) = (false, false);
+            for frame in 1..=600u32 {
+                // The seat drives and fires, so there are shots in flight.
+                let dir = [Dir::Right, Dir::Down, Dir::Left, Dir::Up][(frame / 90 % 4) as usize];
+                let input = Input::single(Intent { move_dir: Some(dir), fire: frame % 20 < 2, ..Intent::default() });
+                game.update(input, 1.0 / 60.0, 1280.0, 720.0);
+                if posed {
+                    for (i, alpha) in [0.0, 0.37, 0.9, 1.0, 0.5].into_iter().enumerate() {
+                        game.pose_at(alpha, (frame as usize + i) % 2 == 0);
+                        for tank in game.world.query::<&Tank>().iter() {
+                            glided |= tank.drawn().position != tank.position;
+                            std::hint::black_box((tank.drawn(), tank.draw_shift()));
+                        }
+                        for shell in game.world.query::<&Shell>().iter() {
+                            shots |= shell.drawn() != shell.position;
+                        }
+                        for bullet in game.world.query::<&Bullet>().iter() {
+                            std::hint::black_box(bullet.drawn());
+                        }
+                        for plasma in game.world.query::<&Plasma>().iter() {
+                            std::hint::black_box(plasma.drawn());
+                        }
+                        for missile in game.world.query::<&Missile>().iter() {
+                            std::hint::black_box(missile.drawn());
+                        }
+                    }
+                }
+                stream.push((frame, game.tank_snapshots().iter().map(key).collect(), format!("{:?}", game.events())));
+            }
+            if posed {
+                assert!(glided, "a posed tank was drawn between two steps: the test poses something");
+                assert!(shots, "and so was a shell");
+            }
+            stream
+        };
+        let (plain, posed) = (run(false), run(true));
+        assert!(plain.iter().any(|(_, _, events)| events.contains("Hit")), "the round fights");
+        for (a, b) in plain.iter().zip(&posed) {
+            assert_eq!(a, b, "frame {}: posing the round changed it", a.0);
+        }
+    }
+
     /// Trampling (`simulation::trample`) draws no RNG and walks the hulls
     /// in slot order: with it on, the same seed replays the same hulls and
     /// tramples the same cells on the same frames.
@@ -9262,6 +9392,63 @@ cells."30,20" = { kind = "bong" }
                 _ => None,
             })
             .collect()
+    }
+
+    /// `pose.rs`: a frame between two steps draws a tank part way along
+    /// the step it just made, and a tank a portal moved where it landed -
+    /// nothing streaks across the field. A round nobody posed draws every
+    /// tank where it stands.
+    #[test]
+    fn a_frame_between_two_steps_glides_a_tank_and_never_across_a_portal() {
+        let map = portal_rooms_map(true, 0);
+        let mut game = game_on(&map, 0, None);
+        let player = game.player().unwrap();
+        let live = |game: &Game| game.world.get::<&Tank>(player).unwrap().position;
+        let drawn = |game: &Game| game.world.get::<&Tank>(player).unwrap().drawn().position;
+        let right = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+        // Up to speed, well short of the portal.
+        for _ in 0..30 {
+            step(&mut game, right);
+        }
+        assert_eq!(drawn(&game), live(&game), "nobody posed it: drawn where it stands");
+        let before = live(&game);
+        step(&mut game, right);
+        let after = live(&game);
+        assert!(after.x > before.x + 0.5, "it moved this step: {before:?} -> {after:?}");
+        game.pose_at(0.25, false);
+        let at = drawn(&game);
+        assert!((at.x - (before.x + (after.x - before.x) * 0.25)).abs() < 1e-3, "a quarter of the way along the step: {at:?}");
+        assert_eq!(live(&game), after, "the tank itself did not move");
+        game.pose_at(1.0, false);
+        assert_eq!(drawn(&game), after, "alpha 1 is the round as it stands");
+        // On a followed map the anchor is a whole texel.
+        game.pose_at(0.25, true);
+        let at = drawn(&game);
+        assert_eq!((at.x.fract(), at.y.fract()), (0.0, 0.0), "a whole texel: {at:?}");
+        // The hop: drawn where it lands at any share of the step.
+        let mut hopped = false;
+        for _ in 0..600 {
+            let before = live(&game);
+            step(&mut game, right);
+            if !teleports_of(&game, 0).is_empty() {
+                let after = live(&game);
+                assert!(after.distance_to(before) > 300.0, "a long way: {before:?} -> {after:?}");
+                for alpha in [0.0, 0.5, 0.99] {
+                    game.pose_at(alpha, false);
+                    assert_eq!(drawn(&game), after, "alpha {alpha}: no streak across the field");
+                }
+                hopped = true;
+                break;
+            }
+        }
+        assert!(hopped, "the player reached portal A");
+        // The step after, it glides again from where it landed.
+        let before = live(&game);
+        step(&mut game, right);
+        let after = live(&game);
+        game.pose_at(0.5, false);
+        let at = drawn(&game);
+        assert!((at.x - (before.x + after.x) / 2.0).abs() < 1e-3 && at.distance_to(after) < 4.0, "{before:?} {at:?} {after:?}");
     }
 
     /// `Game::portal_phase`: the player drives into portal A and comes

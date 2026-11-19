@@ -97,7 +97,7 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     crate::tank::draw_tank_slime(c, tank, time);
     if role != TankRole::RollIn {
         let t = crate::tuning::tuning();
-        let lean = crate::pyro::smoke_lean(&t, tank.position, time);
+        let lean = crate::pyro::smoke_lean(&t, tank.drawn().position, time);
         crate::pyro::draw(c, &crate::damage_stage::flames(tank, time, lean));
         // A smouldering hulk's glowing breaches and flare-ups; their light
         // is the glowing pass's.
@@ -133,7 +133,7 @@ pub fn halo_of(tank: &Tank, time: f32) -> Option<crate::fpv::HaloLook> {
     // An EMP drops the halo over `HALO_SETTLE_SECONDS` from its start.
     let settle = if tank.is_disabled() { ((t.emp_disable_seconds - tank.disabled) / HALO_SETTLE_SECONDS).clamp(0.0, 1.0) } else { 0.0 };
     Some(crate::fpv::HaloLook {
-        centre: tank.position,
+        centre: tank.drawn().position,
         sprite_size: tank.sprite_size(),
         drones,
         halo: crate::fpv::Halo::of(&t),

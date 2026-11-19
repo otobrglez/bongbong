@@ -846,7 +846,7 @@ The drawn pose is written into the replica between the snapshot and
 and presses the tread marks of the pose that is actually drawn.
 
 **The lead.** The client sends one packet per `PHYSICS_FIXED_DT` of real time
-(`app::StepClock`'s discipline) and the room reads one per tick, so on a
+(`pacing::StepClock`'s discipline) and the room reads one per tick, so on a
 steady link the mailbox holds nothing or one intent after each read and
 nobody waits. Jitter is what the depth absorbs: a packet late by a tick is
 covered by the one already waiting. The client keeps a small, adaptive lead

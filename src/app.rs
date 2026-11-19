@@ -34,7 +34,6 @@ use crate::view::{Camera, FollowFrame, ScaleCap, View};
 use crate::{
     Layout,
     PHYSICS_FIXED_DT,
-    SIM_MAX_STEPS_PER_FRAME,
 };
 use clap::Parser;
 use sola_raylib::core::game_loop;
@@ -747,45 +746,6 @@ fn save_progress(progress: &crate::levels::Progress) {
     }
 }
 
-/// The play clock: real frame time paid out in whole simulation steps of
-/// `PHYSICS_FIXED_DT`, so `Game::update` always sees the step the dev
-/// server, the probe and a replay see (docs/online-coop-prd.md §4.1). A
-/// rendered frame runs the steps it has accumulated - none on every other
-/// frame of a 120 Hz display, one per frame at 60 Hz, two after a hitch -
-/// and at most `SIM_MAX_STEPS_PER_FRAME`: a frame owing more runs the cap
-/// and forgets the rest, so a stall costs the round real time, never a
-/// spiral of catch-up steps.
-#[derive(Default)]
-struct StepClock {
-    /// Real seconds not yet paid out as a step, below one step after
-    /// `advance`.
-    owed: f32,
-}
-
-impl StepClock {
-    /// Add a rendered frame's `dt` and take the steps it pays for.
-    fn advance(&mut self, dt: f32) -> u32 {
-        let cap = SIM_MAX_STEPS_PER_FRAME as f32 * PHYSICS_FIXED_DT;
-        self.owed = (self.owed + dt.max(0.0)).min(cap);
-        let mut steps = 0;
-        while self.owed >= PHYSICS_FIXED_DT && steps < SIM_MAX_STEPS_PER_FRAME {
-            self.owed -= PHYSICS_FIXED_DT;
-            steps += 1;
-        }
-        if steps == SIM_MAX_STEPS_PER_FRAME {
-            self.owed = 0.0;
-        }
-        steps
-    }
-
-    /// Forget what is owed: the round was not running (a dialog, the
-    /// builder, the dev server's freeze), so it resumes on a fresh step
-    /// rather than a burst for the time it stood still.
-    fn reset(&mut self) {
-        self.owed = 0.0;
-    }
-}
-
 /// Command-line flags for bongbong's native binary. All optional - with none
 /// given, behavior matches today's defaults exactly (random enemy count,
 /// random player chassis, 1280x720 window, shadows on).
@@ -1405,9 +1365,10 @@ pub fn run(args: Args) {
     // full density (the raylib build carries
     // tools/ios/raylib-sdl-highdpi.patch for that; screen coordinates,
     // touch included, stay in points). Native windows resize freely and
-    // draw at the panel's real density.
+    // draw at the panel's real density, and swap on the display's vertical
+    // blank: one frame per refresh, none torn.
     if !crate::EMBEDDED {
-        builder.resizable().highdpi();
+        builder.resizable().highdpi().vsync();
     }
     #[cfg(target_os = "ios")]
     builder.fullscreen().highdpi().vsync();
@@ -1837,11 +1798,23 @@ pub fn run(args: Args) {
             0
         }
     } else {
-        120
+        // A desktop window is paced by its vsync. The cap only catches a
+        // driver that ignores the swap interval, which would spin: a
+        // quarter over the display's rate, so it never holds back a frame
+        // the display paced.
+        let refresh = sola_raylib::core::window::get_monitor_refresh_rate(sola_raylib::core::window::get_current_monitor());
+        if refresh > 0 { refresh + refresh / 4 } else { 120 }
     };
     // The round's clock and the input of a frame that ran no step (its
     // presses are owed to the next step - see `Input::or_presses`).
-    let mut clock = StepClock::default();
+    let mut clock = crate::pacing::StepClock::default();
+    let mut refresh = crate::pacing::Refresh::default();
+    // How far into the next step the local round was last drawn
+    // (`StepClock::alpha`, `Game::pose_at`).
+    let mut shown_alpha = 1.0_f32;
+    // The followed views' texel locks (`follow::TexelLock`): the first
+    // half's and a couch split's second.
+    let mut texel_locks = [crate::follow::TexelLock::default(), crate::follow::TexelLock::default()];
     let mut carried = Input::default();
     // What `bb_net_stats` hands the page: the online round's readings.
     #[cfg(feature = "dev-tools")]
@@ -1997,9 +1970,15 @@ pub fn run(args: Args) {
             || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL)
             || rl.is_key_down(KeyboardKey::KEY_LEFT_SUPER)
             || rl.is_key_down(KeyboardKey::KEY_RIGHT_SUPER);
-        let dt = rl.get_frame_time();
+        // The frame's time, on the display's refresh period where it is
+        // within a wobble of it (`pacing::Refresh`), so a 59.94 Hz panel
+        // or a vsync that is a hair early does not make a frame run no
+        // step or two. A room's round keeps the raw time: it runs on the
+        // room's clock, not this one.
+        let raw_dt = rl.get_frame_time();
+        let dt = refresh.pace(raw_dt);
         #[cfg(all(feature = "dev-tools", any(target_os = "ios", target_os = "android")))]
-        phone_frame_stats.sample(dt, rl.get_time(), rl.get_fps(), fx.live());
+        phone_frame_stats.sample(raw_dt, rl.get_time(), rl.get_fps(), fx.live());
 
         match session.mode() {
             Driver::Play => {
@@ -2362,7 +2341,7 @@ pub fn run(args: Args) {
             if let Some(scripted) = crate::capi::take_scripted_input() {
                 intent = scripted;
             }
-            session.update_online(&intent, dt);
+            session.update_online(&intent, raw_dt);
         }
         // The page reads a round's numbers only while one is played: the
         // frame the window is in any other mode - the round over and the
@@ -2378,8 +2357,9 @@ pub fn run(args: Args) {
         // this frame's input with the one-shot presses spent by the first.
         // With the dev server attached it runs those steps, or a lockstep
         // `step`'s own frames, or nothing while frozen - and a frozen or
-        // dialog frame leaves the clock at zero, so the round resumes on a
-        // fresh step rather than catching up on the time it stood still.
+        // dialog frame adds nothing to the clock, so the round resumes
+        // where it stood rather than catching up on the time it stood
+        // still.
         // How far the particle layer ages this frame: the frame's real
         // time, except in a dev-server lockstep, where it is the simulated
         // time the frame's `step` ran - so a frozen round's sparks and hits
@@ -2392,9 +2372,11 @@ pub fn run(args: Args) {
         let scaled_dt = dt * session.time_scale() * if session.mode() == Driver::Play { feedback.time_scale() } else { 1.0 };
         #[cfg_attr(not(all(feature = "dev-tools", not(target_os = "emscripten"))), allow(unused_mut))]
         let mut fx_dt = scaled_dt;
-        // How far the local round got this frame, which is how far a
-        // followed view moves: with the round, step for step.
+        // Where the local round stood before this frame's steps.
         let frame_before = session.game.frame();
+        // The share of the next step the round is posed at this frame
+        // (`Game::pose_at`), `None` on a frame that left it as it was.
+        let mut posed: Option<f32> = None;
         if session.playing() {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let frozen = dev.as_ref().is_some_and(|dev| dev.lockstep());
@@ -2449,8 +2431,15 @@ pub fn run(args: Args) {
             }
             drop(steps_stage);
             carried = if steps == 0 && !frozen { input } else { Input::default() };
+            // The frame falls between two steps: every tank and shot is
+            // drawn that far along the last one (`pose.rs`), on whole
+            // texels where the view follows a tank. A frozen round is
+            // drawn as it stands, so `step` then `screenshot` is exact.
+            let alpha = if frozen { 1.0 } else { clock.alpha() };
+            let texel = !frozen && plan.followed.is_some() && !plan.establishing && plan.pinned.is_none();
+            session.game.pose_at(alpha, texel);
+            posed = Some(alpha);
         } else {
-            clock.reset();
             carried = Input::default();
         }
         // The particle layer stands still with the round: under a dialog,
@@ -2458,6 +2447,14 @@ pub fn run(args: Args) {
         if !fx_runs(session.mode(), session.playing(), session.game.paused) {
             fx_dt = 0.0;
         }
+        // The time the local round's picture moved on by: its steps and
+        // the change in the share of the next one it is posed at.
+        let shown_seconds = {
+            let steps = session.game.frame().checked_sub(frame_before).unwrap_or(0) as f32 * PHYSICS_FIXED_DT;
+            let part = posed.map_or(0.0, |alpha| (alpha - shown_alpha) * PHYSICS_FIXED_DT);
+            shown_alpha = posed.unwrap_or(shown_alpha);
+            (steps + part).max(0.0)
+        };
         // A won level is progress, kept the frame it is won - a player who
         // closes the window on the end screen has still reached the next.
         session.note_outcome();
@@ -2515,9 +2512,11 @@ pub fn run(args: Args) {
                     followed_in = Some(scene);
                 }
                 follow.observe_events(game);
+                // A local round's view moves by exactly the time its
+                // tanks are drawn to have moved.
                 let advanced = match session.mode() {
-                    Driver::Online => dt,
-                    _ => session.game.frame().checked_sub(frame_before).unwrap_or(0) as f32 * PHYSICS_FIXED_DT,
+                    Driver::Online => raw_dt,
+                    _ => shown_seconds,
                 };
                 // The seats this screen plays (`local_seats`): until a
                 // room's `Welcome` the window draws the local round, where
@@ -2526,9 +2525,22 @@ pub fn run(args: Args) {
                 let stage = crate::follow::Stage { visible: frame.framing.visible, field, sight: frame.sight };
                 let shot = follow.update(&crate::follow::Seats::of(game, &local), advanced, &stage, &crate::follow::FollowRules::current());
                 let device_scale = frame.device_scale(framebuffer_ratio(rl));
-                let follow_camera = Camera::following(field, shot.corner, frame.framing.visible, 1.0, device_scale);
+                // Each view's corner, moved by what its own seat's texel
+                // anchor dropped while the view rides with that seat, so
+                // the tank and the ground stay on one texel grid
+                // (`follow::TexelLock`).
+                let [first_lock, second_lock] = &mut texel_locks;
+                let own = matches!(shot.kind, crate::follow::ShotKind::Seat | crate::follow::ShotKind::Split);
+                let corner = first_lock.corner(shot.corner, shot.seat.filter(|_| own && !shot.cut).and_then(|seat| crate::follow::seat_anchor(game, seat)), advanced, &stage);
+                let follow_camera = Camera::following(field, corner, frame.framing.visible, 1.0, device_scale);
                 // A couch pair apart: the second half's own camera.
-                let second = shot.split.map(|split| (Camera::following(field, split.corner, frame.framing.visible, 1.0, device_scale), split));
+                let second = shot.split.map(|split| {
+                    let corner = second_lock.corner(split.corner, Some(split.seat).filter(|_| !split.cut).and_then(|seat| crate::follow::seat_anchor(game, seat)), advanced, &stage);
+                    (Camera::following(field, corner, frame.framing.visible, 1.0, device_scale), split)
+                });
+                if shot.split.is_none() {
+                    second_lock.cut();
+                }
                 // The establishing shot (establish.rs): a local round's
                 // opening on a field map its view shows part of shows the
                 // whole map, then zooms down to the follow view - drawn
@@ -2973,22 +2985,6 @@ mod tests {
         assert!(fx_runs(Driver::Online, false, false) && fx_runs(Driver::Online, false, true));
     }
 
-    /// A 120 Hz display pays for a step every other frame, a 60 Hz one
-    /// every frame, and the round never falls behind either: over a second
-    /// both run sixty steps.
-    #[test]
-    fn the_step_clock_pays_real_time_out_in_whole_steps() {
-        let mut clock = StepClock::default();
-        let per_frame: Vec<u32> = (0..8).map(|_| clock.advance(1.0 / 120.0)).collect();
-        assert_eq!(per_frame, vec![0, 1, 0, 1, 0, 1, 0, 1]);
-        let mut clock = StepClock::default();
-        assert!((0..600).all(|_| clock.advance(1.0 / 60.0) == 1), "one step per 60 Hz frame, no drift");
-        let mut clock = StepClock::default();
-        assert_eq!((0..120).map(|_| clock.advance(1.0 / 120.0)).sum::<u32>(), 60);
-        let mut clock = StepClock::default();
-        assert!((0..30).all(|_| clock.advance(1.0 / 30.0) == 2), "two steps per 30 Hz frame");
-    }
-
     /// `--host -m` with a map nobody has won as it stands never dials: the
     /// round opens closed, its note the clear check's refusal, which is
     /// what the lobby's closed face shows.
@@ -3007,20 +3003,5 @@ mod tests {
         let why = crate::text::text().get(crate::text::keys::NOTE_NOT_CLEARED);
         assert_eq!(round.note(), Some(why.as_str()));
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// A stall runs the cap and forgets the rest: the next frame owes
-    /// nothing extra, and a reset clock owes nothing at all.
-    #[test]
-    fn the_step_clock_caps_a_stall_and_drops_the_remainder() {
-        let mut clock = StepClock::default();
-        assert_eq!(clock.advance(2.0), SIM_MAX_STEPS_PER_FRAME);
-        assert_eq!(clock.advance(0.0), 0);
-        assert_eq!(clock.advance(1.0 / 60.0), 1);
-        let mut clock = StepClock::default();
-        clock.advance(0.9 / 60.0);
-        clock.reset();
-        assert_eq!(clock.advance(0.2 / 60.0), 0, "a reset forgets the time owed");
-        assert_eq!(clock.advance(-1.0), 0, "a negative dt owes nothing");
     }
 }
