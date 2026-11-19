@@ -1645,7 +1645,7 @@ mod dev {
                 "phase": self.life.phase().name(),
                 "events": self.dev_events_from(from, 256, params),
             });
-            if params.get("snapshot").and_then(Value::as_bool).unwrap_or(true)
+            if params.get("snapshot").and_then(Value::as_bool).unwrap_or(false)
                 && let Some(value) = self.dev_snapshot_value(Detail::Compact)
                 && let Some(obj) = out.as_object_mut()
             {

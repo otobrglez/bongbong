@@ -47,6 +47,13 @@ toml = "1"
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"], optional = true }
+# The dev server (src/devserver.rs) is native only, and so are its two
+# crates, which only `dev-tools` builds carry: `schemars` derives each
+# tool's input schema from its parameter struct (src/devserver/tools.rs),
+# and `png` lets a headless round's `screenshot` decode the sheets and
+# encode the frame without raylib (src/devserver/headless.rs).
+schemars = { version = "1.2.3", optional = true }
+png = { version = "0.17", optional = true }
 
 # iOS (docs/ios-native-port-prd.md, CLAUDE.md's iOS section): raylib (SDL
 # backend, OpenGL ES 2.0) and a static SDL3 are prebuilt for the simulator
@@ -97,7 +104,7 @@ render = ["dep:sola-raylib"]
 # socket (the table itself - src/tuning.rs - is always compiled; only the
 # ways to drive it at runtime are gated). Enable with `--features dev-tools`
 # (`just run-dev`, `just build-web-dev`).
-dev-tools = []
+dev-tools = ["dep:schemars", "dep:png"]
 # The touch stick on the right half of the field and fire on the left
 # (src/touch.rs, `TOUCH_STEER_RIGHT`): a build-time mirror of the default
 # left-thumb layout, deliberately not a runtime knob - no panel, `--tuning`
@@ -140,11 +147,12 @@ required-features = ["render"]
 # The MCP adapter for the dev server (src/devserver.rs,
 # docs/dev-server-design.md). Gated on `dev-tools` so a plain build - and
 # a cargo-dist release archive, which builds without features - never
-# carries it.
+# carries it. It needs no `render`: `just build-mcp` builds it headless,
+# with no raylib in its graph.
 [[bin]]
 name = "bbmcp"
 path = "src/bin/bbmcp.rs"
-required-features = ["dev-tools", "render"]
+required-features = ["dev-tools"]
 
 # The map thumbnail tool (docs/mapshot-prd.md) decodes and encodes PNGs
 # through raylib's image functions.

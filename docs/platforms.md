@@ -99,7 +99,8 @@ newline-delimited JSON on `127.0.0.1:4849` (`--dev-port`), the same framing and 
 `mcp__bongbong-rooms__*` beside `mcp__bongbong__*`. The *table* is
 `bongbong::devserver::ROOM_TOOLS`, in the game crate because the dependency runs the other way (a
 table in the server could not be read by a `bbmcp` that lives in the lib); the dispatch is the
-server's and `every_advertised_tool_has_an_arm` holds the two together. Tools: `server_status`,
+server's and `every_advertised_tool_has_an_arm` holds the two together; each call is checked
+against its row first (`ToolSpec::check`: an unknown parameter or a wrong type is refused by name). Tools: `server_status`,
 `rooms`, `room` (seats **with their mailboxes** - `depth`, `acked`, `starvations`, the reading that
 says whether input was lost on the way in), `room_open` (a room and a started round with no client
 at all, `seats` bots, `tuning` rows of its own), `seat_intent` (drive a seat; a standing script fed

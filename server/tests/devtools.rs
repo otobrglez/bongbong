@@ -66,7 +66,7 @@ async fn a_co_op_round_is_opened_driven_and_read_with_no_client() {
     assert_eq!(posted["driving"], 120, "{posted}");
 
     // Step the round deterministically - no wall clock, no sleeping.
-    let stepped = dispatch(&hub, "room_step", &json!({ "code": code, "ticks": 120 })).await.unwrap();
+    let stepped = dispatch(&hub, "room_step", &json!({ "code": code, "ticks": 120, "snapshot": true })).await.unwrap();
     assert_eq!(stepped["frozen"], true);
     assert!(stepped["tick"].as_u64().unwrap() >= 120, "{}", stepped["tick"]);
     assert!(stepped["snapshot"]["tanks"].is_array(), "a step carries the world back");
@@ -197,7 +197,7 @@ cells."4,12" = { kind = "start" }
         };
         let from = y(&dispatch(&hub, "room_snapshot", &json!({ "code": code })).await.unwrap());
         dispatch(&hub, "seat_intent", &json!({ "code": code, "seat": 0, "ticks": 60, "move_dir": "up" })).await.unwrap();
-        let stepped = dispatch(&hub, "room_step", &json!({ "code": code, "ticks": 60 })).await.unwrap();
+        let stepped = dispatch(&hub, "room_step", &json!({ "code": code, "ticks": 60, "snapshot": true })).await.unwrap();
         moved.push(from - y(&stepped["snapshot"]));
     }
     assert!(moved[0] > moved[1] * 1.25, "the room's tank_speed did not drive its seat: {moved:?}");

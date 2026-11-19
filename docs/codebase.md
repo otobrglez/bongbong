@@ -24,8 +24,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   run from inside `BongBong.app` into its `Resources` and its saved maps to the user's data
   directory (`map::set_maps_dir`, `levels::data_dir`), and gives a run outside it the app's icon in
   the Dock (`dock_icon`: the embedded `AppIcon.png` through the Objective-C runtime once GLFW has
-  made `NSApp`); `android/` is the cdylib crate. The `bongbong`, `bbmcp` and `mapshot` bins carry
-  `required-features = ["render"]`; `probe` builds without it.
+  made `NSApp`); `android/` is the cdylib crate. The `bongbong` and `mapshot` bins carry
+  `required-features = ["render"]`; `probe` and `bbmcp` (`dev-tools`) build without it.
 - `static/` assets and shaders, `tools/` scripts, `maps/` TOML maps (`maps/stamps/` the builder's
   shipped stamps), `levels.toml` the level order (docs/levels.md), `docs/` design docs and sheet
   specs (read the doc a module names before changing it), `site/` the Astro web page, `k8s/` the
@@ -2673,9 +2673,23 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `Session`, so nothing touches `Game` mid-update. **Lockstep**: `step {frames}` freezes real time
   and runs N updates at `PHYSICS_FIXED_DT` in one rendered frame (bit-for-bit replayable from
   `restart {seed}`, which leaves the round frozen); `pause`/`resume`. Screenshots are captured one
-  rendered frame after the request (raylib's read-back lags the swap). `TOOLS` is the single tool
-  table `bbmcp` advertises: a new tool is one `ToolSpec` row (name, description, schema,
-  `read_only`/`destructive` - the MCP annotations) plus a `dispatch` arm. **The round the tools read
+  rendered frame after the request (raylib's read-back lags the swap). `TOOLS` (`devserver/tools.rs`) is the single tool
+  table `bbmcp` advertises: a new tool is one `ToolSpec` row plus a `dispatch` arm. A row is the
+  name, a short `description` (the tool list), `help` (the long form, served by the `help` tool),
+  `params` (a parameter struct in the same file: the input schema is derived from it with
+  `schemars` and the arm parses it with `parse::<tools::XParams>`, so the two cannot disagree),
+  `read_only`/`destructive` (the MCP annotations), `in_build`/`online` (the build-mode and
+  online-round refusals `dispatch` reads off the row) and `present` (JSON, a text field, an
+  image). `ToolSpec::check` runs before every arm and refuses an unknown parameter or a wrong
+  type by name. `tools` is a private module so rustc's dead-code warning names any parameter no
+  arm reads; the room server's structs are `tools::room` (public as `devserver::room_params`),
+  which its dispatch checks against while its arms still read the `Value`. `status` is a core
+  plus `sections` (`STATUS_SECTIONS`); `step` leaves the snapshot out unless asked, and stops
+  early on `until` (event names) or `until_outcome`. `devserver/headless.rs` is `Headless`: the
+  same `DevServer` and `Session` with no window, called by `bbmcp` in-process (`before_frame`,
+  then `advance` for a pending step; `resume`/`input` refused for want of a clock; `screenshot`
+  through `thumbnail::render_cpu` and the `png` crate); `status.host`/`mode.host` name what
+  answers and its working directory. **The round the tools read
   is `Session::shown()`**, so in an online round every reader - `status`, `snapshot`, `terrain`,
   `events`, `history`, `nav_grid`, `field`, `map_get`, `lint`, and `screenshot`/`overlays`, which
   write only a drawing flag through `Session::shown_mut` - describes the room's replica;
@@ -2684,7 +2698,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   its target, the jitter, the cadence, frames extrapolated, lateness p50/p95, stalls, the playout
   rate, corrections, stale events - and `prediction` - `Predictor::report` plus the lead's
   `lead_up`/`lead_down`/`lead_depth` and the `crossings`/`crossings_hit`/`crossings_missed` of
-  decision 9), `ONLINE_REFUSED_TOOLS` - everything that would drive the local round or the builder -
+  decision 9), the rows with `online: false` - everything that would drive the local round or the builder -
   refuse by name because only the server simulates that round, and `key {escape}` gives the seat up,
   as does a `click` on the bar's `LEAVE` button. `input` is allowed online: it stands in for the
   keyboard, so it drives this window's seat in the room (`shape_input` runs before the online
@@ -2697,7 +2711,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   select's tiles, and `key` takes `escape` (open or close it) and `left`/`right`/`up`/`down`/`enter`
   in it (`status`/`mode` carry `levels_open` and `levels_focus`). `step` refuses by name while a
   dialog or the level select freezes the round, rather than waiting for frames that never run.
-  `GAME_ONLY_TOOLS` are refused in build mode with an error naming `play`; `status`, `screenshot`,
+  The rows with `in_build: false` are refused in build mode with an error naming `play`; `status`, `screenshot`,
   `overlays`, `map_get`, `lint` (the map linter over the builder's canvas or the round's map, on a
   temporary headless round), `tuning_*`, `lang` (the language on screen: report, or switch to a
   shipped tag at the frame boundary; `status.language` carries it) and `restart` work in both modes;
@@ -2714,8 +2728,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `device_scale`, `cell_mm`, `area`), `builder_touch` (frames of `{id, x, y}` in window coordinates,
   the fingers lifted after the last; refused online), `builder_select` (`rect`, `clear`, `move_by`,
   `action`: copy|cut|delete|flip_h|flip_v|stamp|paste|place|cancel, `at`) and `builder_stamp`
-  (`name`, `at`, `place`) drive the select tool and the STAMPS list (both in
-  `ONLINE_REFUSED_TOOLS`), `builder_tool`/`builder_paint` take `shape` (pen|rect|fill|scatter) and
+  (`name`, `at`, `place`) drive the select tool and the STAMPS list (both
+  `online: false`), `builder_tool`/`builder_paint` take `shape` (pen|rect|fill|scatter) and
   `builder_paint` replies with the status line's `message`, `builder_settings {size, anchor}`, `key
   {zoom_in|zoom_out|arrows|copy|cut|paste|delete}`, and `click` replies with the world point and the
   cell. `status.builder` also carries `buttons` (the plates' by name - `back`, `day` while the
@@ -2765,14 +2779,20 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   calls `capi::keep_alive()` so the symbols survive; `build.rs` emits `-sEXPORTED_FUNCTIONS` and
   `-sSTACK_OVERFLOW_CHECK=2` for the wasm dev build (`capi::EXPORTS` and the build.rs list are
   checked against each other by a test).
-- `bin/bbmcp.rs` *(`required-features = ["dev-tools", "render"]`, excluded from `[dist.binaries]`)*
-  — the stdio MCP adapter `.mcp.json` launches, **once per target**: bare it drives the game
-  window's dev server (`TOOLS`, port 4747), `bbmcp rooms` the room server's (`ROOM_TOOLS`, port 4849) -
-  one binary, one protocol, two tool tables, picked by a `Target` so a name from one can never be
-  called against the other. One request line to the target per call (`handle_line` is the
-  per-message handler, unit-tested with a stubbed game), screenshots as `image` content,
-  `tools/list` carries each tool's annotations, an unreachable game is an `isError` naming `just
-  run-dev`. `bbmcp call <tool> [json]` for shells (`just mcp-call`). stdout is protocol only - log
+- `bin/bbmcp.rs` *(`required-features = ["dev-tools"]`, no `render`; excluded from `[dist.binaries]`)*
+  — the stdio MCP adapter `.mcp.json` launches through `tools/dev/bbmcp.sh` (the built binary,
+  `just build-mcp`), **once per target**: bare it drives the game (`TOOLS`), `bbmcp rooms` the room
+  server's dev socket (`ROOM_TOOLS`, port 4849) - one binary, one protocol, two tool tables, picked
+  by a `Target` so a name from one can never be called against the other. The game's `Backend` is a
+  window (one request line per call to port 4747) or a `devserver::Headless` round in-process,
+  settled on the first call (`Adapter::settle`: `BBMCP_TARGET`, else this checkout's window by its
+  `mode.host.cwd`, else headless). The adapter's own tools (`Target::own`: `help`, `attach`,
+  `batch`, `reload`, `probe`; rows in `devserver/tools.rs`) are answered in `Adapter::call`;
+  `reload` builds, `exec`s the new binary with the call's id in `BBMCP_RELOAD_ID`, and the new
+  process answers it and sends `notifications/tools/list_changed` (`resume`). `handle_line` is the
+  per-message handler, unit-tested with a stubbed window; replies are presented by the row's
+  `present` (compact JSON, a text field, or `image` content), `tools/list` carries each tool's
+  derived schema and annotations, an unreachable window is an `isError` naming `just run-dev`. `bbmcp call <tool> [json]` for shells (`just mcp-call`). stdout is protocol only - log
   with `eprintln!`. Stub `main` for emscripten (a wasm build without `--bin` compiles every bin; the
   web builds name `bongbong` alone).
 
