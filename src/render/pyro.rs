@@ -7,11 +7,13 @@ use sola_raylib::prelude::*;
 use crate::math::Color;
 use crate::pyro::Blocks;
 
-/// A raylib draw handle (or a blend-mode scope of one) as `Blocks`.
+/// A raylib draw handle (or a blend-mode scope of one) as `Blocks`. A
+/// dev-tools build counts each block (`frame_stages::Draws::rects`).
 pub struct Rl<'a, D: RaylibDraw>(pub &'a mut D);
 
 impl<D: RaylibDraw> Blocks for Rl<'_, D> {
     fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color) {
+        crate::frame_stages::rect();
         self.0.draw_rectangle(x, y, width, height, color);
     }
 }

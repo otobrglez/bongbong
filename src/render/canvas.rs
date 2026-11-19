@@ -7,6 +7,7 @@ use sola_raylib::prelude::*;
 use std::collections::BTreeMap;
 
 use crate::canvas::{BlockImage, Canvas, CpuCanvas, Pixels, Sheet};
+use crate::frame_stages;
 use crate::math::{Color, Rectangle, Vec2};
 use crate::Position;
 
@@ -109,7 +110,8 @@ impl BlockTextures {
 }
 
 /// A [`Canvas`] over a raylib draw handle: every call forwards to the
-/// raylib call the trait is named after.
+/// raylib call the trait is named after, and a dev-tools build counts it
+/// (`frame_stages::Draws`).
 pub struct GpuCanvas<'a, D, S> {
     d: &'a mut D,
     sheets: &'a S,
@@ -131,26 +133,33 @@ impl<'a, D: RaylibDraw, S: Sheets> GpuCanvas<'a, D, S> {
 
 impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
     fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color) {
-        self.d.draw_texture_pro(self.sheets.texture(sheet), src, dest, origin, rotation, tint);
+        let texture = self.sheets.texture(sheet);
+        frame_stages::blit(texture.id);
+        self.d.draw_texture_pro(texture, src, dest, origin, rotation, tint);
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color) {
+        frame_stages::rect();
         self.d.draw_rectangle(x, y, width, height, color);
     }
 
     fn gradient_v(&mut self, x: i32, y: i32, width: i32, height: i32, top: Color, bottom: Color) {
+        frame_stages::rect();
         self.d.draw_rectangle_gradient_v(x, y, width, height, top, bottom);
     }
 
     fn gradient_h(&mut self, x: i32, y: i32, width: i32, height: i32, left: Color, right: Color) {
+        frame_stages::rect();
         self.d.draw_rectangle_gradient_h(x, y, width, height, left, right);
     }
 
     fn disc(&mut self, center: Position, radius: f32, color: Color) {
+        frame_stages::shape();
         self.d.draw_circle_v(center, radius, color);
     }
 
     fn ring(&mut self, center: Position, inner: f32, outer: f32, start_deg: f32, end_deg: f32, segments: i32, color: Color) {
+        frame_stages::shape();
         self.d.draw_ring(center, inner, outer, start_deg, end_deg, segments, color);
     }
 
@@ -158,6 +167,7 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
         let Some(texture) = self.sheets.blocks_texture(image.stamp) else { return };
         let (w, h) = (image.width as f32, image.height as f32);
         let b = image.block as f32;
+        frame_stages::blit(texture.id);
         self.d.draw_texture_pro(texture, Rectangle::new(0.0, 0.0, w, h), Rectangle::new(0.0, 0.0, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
     }
 
@@ -165,6 +175,7 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
         let Some(texture) = self.sheets.blocks_texture(image.stamp) else { return };
         let (x, y, w, h) = (src.0 as f32, src.1 as f32, src.2 as f32, src.3 as f32);
         let b = image.block as f32;
+        frame_stages::blit(texture.id);
         self.d.draw_texture_pro(texture, Rectangle::new(x, y, w, h), Rectangle::new(at.0 as f32, at.1 as f32, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
     }
 

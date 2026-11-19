@@ -10,6 +10,10 @@
 //! always runs one before its first render. With no enemies on the field
 //! that update draws no RNG, so the frame is a pure function of (map,
 //! seed, options).
+//!
+//! [`paint_bench`] is the painters' benchmark on the same canvas: a live
+//! seeded round, enemies and all, painted every few steps and timed
+//! (`mapshot --paint-bench`, `just perf-paint`; docs/tooling.md).
 
 use crate::canvas::{CpuCanvas, Pixels, Sheet};
 use crate::game::PaintOptions;
@@ -94,6 +98,58 @@ pub fn render_cpu(game: &Game, sheets: &BTreeMap<Sheet, Pixels>) -> CpuCanvas {
     let mut canvas = CpuCanvas::new(w, h, sheets.clone());
     game.paint_field(&mut canvas, PAINT);
     canvas
+}
+
+/// The simulation steps between two frames [`paint_bench`] paints, so its
+/// frames show a round moving on: a sixth of a second.
+pub const PAINT_BENCH_STRIDE: usize = 10;
+
+/// What [`paint_bench`] measured.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaintBench {
+    /// The canvas painted, in pixels.
+    pub width: usize,
+    pub height: usize,
+    /// Each frame's `paint_field`, ms.
+    pub ms: Vec<f64>,
+    /// Every frame's pixels folded into one number: the same map, seed and
+    /// frame count give the same one, on any machine.
+    pub hash: u64,
+}
+
+impl PaintBench {
+    /// The mean, the quickest and the slowest frame, ms.
+    pub fn spread(&self) -> (f64, f64, f64) {
+        let mean = self.ms.iter().sum::<f64>() / self.ms.len().max(1) as f64;
+        (mean, self.ms.iter().copied().fold(f64::INFINITY, f64::min), self.ms.iter().copied().fold(0.0, f64::max))
+    }
+}
+
+/// Time `Game::paint_field` on the CPU canvas over `frames` frames of a
+/// live round on `map` at `seed`: the map's own enemies, nobody at the
+/// controls, [`PAINT_BENCH_STRIDE`] steps between frames. One canvas is
+/// painted over and over, so a frame's time is the painters' alone - no
+/// allocation, no copy of the sheets. Needs no window.
+pub fn paint_bench(map: MapFile, seed: u64, frames: usize, sheets: &BTreeMap<Sheet, Pixels>) -> PaintBench {
+    let mut game = Game::default();
+    game.map = map;
+    game.show_intro = false;
+    game.seed_override = Some(seed);
+    let (width, height) = game.map.field_size();
+    game.init(width, height);
+    let (w, h) = field_pixels(&game);
+    let mut canvas = CpuCanvas::new(w, h, sheets.clone());
+    let mut bench = PaintBench { width: w, height: h, ms: Vec::with_capacity(frames), hash: 0 };
+    for _ in 0..frames {
+        for _ in 0..PAINT_BENCH_STRIDE {
+            game.update(Input::default(), PHYSICS_FIXED_DT, width, height);
+        }
+        let started = std::time::Instant::now();
+        game.paint_field(&mut canvas, PAINT);
+        bench.ms.push(started.elapsed().as_secs_f64() * 1e3);
+        bench.hash = bench.hash.rotate_left(5) ^ canvas.hash();
+    }
+    bench
 }
 
 /// How far two renders of one field are apart: the mean absolute
@@ -236,6 +292,19 @@ mod tests {
         assert_ne!(base, render_cpu(&stage_round(shipped("default"), &plain), &sheets).hash());
         let seeded = ThumbnailOptions { seed: 7, ..Default::default() };
         assert_ne!(base, render_cpu(&stage_round(shipped("default"), &seeded), &sheets).hash());
+    }
+
+    #[test]
+    fn the_paint_bench_paints_the_same_frames_for_the_same_seed() {
+        let sheets = BTreeMap::new();
+        let a = paint_bench(shipped("default"), 7, 3, &sheets);
+        let b = paint_bench(shipped("default"), 7, 3, &sheets);
+        assert_eq!(a.ms.len(), 3);
+        let (width, height) = shipped("default").field_size();
+        assert_eq!((a.width, a.height), (width as usize, height as usize));
+        assert_eq!(a.hash, b.hash);
+        let (mean, least, most) = a.spread();
+        assert!(least <= mean && mean <= most);
     }
 
     #[test]

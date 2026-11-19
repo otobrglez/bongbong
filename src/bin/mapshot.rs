@@ -4,6 +4,7 @@
 //! mapshot maps/default.toml -o default.png
 //! mapshot --out-dir target/thumbnails maps
 //! mapshot --renderer gpu --scale 2 maps/missions/*.toml
+//! mapshot --paint-bench 60 maps/longwater.toml
 //! ```
 //!
 //! Each PNG is the map's field - its `size` in 32 px cells, no HUD bar -
@@ -17,6 +18,10 @@
 //! - `gpu` opens a hidden raylib window and runs the game's own pass-1
 //!   stages into a render texture - the cross-check that the CPU output
 //!   is the game's.
+//!
+//! `--paint-bench N` writes no PNG: it times the CPU painters over N
+//! frames of a live seeded round on each map (`thumbnail::paint_bench`)
+//! and prints the time a frame and a hash of every frame's pixels.
 //!
 //! Sheets resolve against the working directory (`static/...`), the
 //! contract every bin has, so run it from the repository root or an
@@ -111,6 +116,13 @@ struct Args {
     /// renderer's; a map beyond tolerance counts as a failure.
     #[arg(long)]
     check: bool,
+
+    /// Write no PNG: paint this many frames of a live round on each map
+    /// on the CPU canvas and print the time a frame
+    /// (`thumbnail::paint_bench`). The hash printed is the same on every
+    /// run of one map, seed and frame count.
+    #[arg(long = "paint-bench", value_name = "FRAMES", conflicts_with_all = ["out", "out_dir", "check"], value_parser = clap::value_parser!(u32).range(1..=100_000))]
+    paint_bench: Option<u32>,
 }
 
 /// One map to render and where its PNG goes.
@@ -203,6 +215,21 @@ fn run(args: &Args) -> Result<usize, String> {
     let jobs = plan(args)?;
     if jobs.is_empty() {
         return Err("no maps found".into());
+    }
+    if let Some(frames) = args.paint_bench {
+        let sheets = load_cpu_sheets()?;
+        for job in &jobs {
+            let bench = thumbnail::paint_bench(MapFile::load(&job.map)?, args.seed, frames as usize, &sheets);
+            let (mean, least, most) = bench.spread();
+            println!(
+                "{}: {}x{} px, {frames} frames: {mean:.2} ms/frame (min {least:.2}, max {most:.2}), hash 0x{:016x}",
+                job.map.display(),
+                bench.width,
+                bench.height,
+                bench.hash
+            );
+        }
+        return Ok(0);
     }
     let options = ThumbnailOptions {
         seed: args.seed,

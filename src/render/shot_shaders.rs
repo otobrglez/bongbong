@@ -188,7 +188,7 @@ impl ShotShaders {
         let dest = Rectangle::new(plasma.position.x, plasma.position.y, w * r, h * r);
         let origin = Vector2::new(ORB_REACH * r, ORB_REACH * r);
         let quad = &self.quad;
-        d.draw_shader_mode(s, |mut sd| {
+        d.draw_shader_mode(crate::frame_stages::shader(s), |mut sd| {
             sd.draw_texture_pro(quad, Rectangle::new(0.0, 0.0, 1.0, 1.0), dest, origin, plasma.rotation, Color::WHITE);
         });
     }
@@ -216,7 +216,7 @@ impl ShotShaders {
         let angle = dir.y.atan2(dir.x).to_degrees() - 90.0;
         let dest = Rectangle::new(origin.x, origin.y, half * 2.0, reach);
         let quad = &self.quad;
-        d.draw_shader_mode(s, |mut sd| {
+        d.draw_shader_mode(crate::frame_stages::shader(s), |mut sd| {
             sd.draw_texture_pro(quad, Rectangle::new(0.0, 0.0, 1.0, 1.0), dest, Vector2::new(half, 0.0), angle, Color::WHITE);
         });
     }

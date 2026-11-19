@@ -453,6 +453,44 @@ rooms-logs *ARGS:
 mcp-call TOOL ARGS='{}':
     cargo run -q --features dev-tools --bin bbmcp -- call {{TOOL}} '{{ARGS}}'
 
+# --- Performance instruments (docs/tooling.md, "Performance") ---
+
+# The repeatable perf scene, against a running dev-tools game (start one in
+# another terminal: `cargo run --release --features dev-tools --
+# --resolution 1280x720`; BONGBONG_DEV_PORT picks it, as for `mcp-call`):
+# the default arena and longwater at a pinned seed, stepped in lockstep,
+# with what each stepped frame drew (`status.frame_stages.draws`) read
+# twice over - the run fails unless both passes agree - then each let run
+# in real time for its stage averages, p99 and worst frame and its
+# steps-a-frame histogram. `--seconds 0` skips the timed half.
+perf-scene *ARGS:
+    python3 tools/perf/scene.py {{ARGS}}
+
+# The painters' benchmark, no window: `Game::paint_field` on the CPU canvas
+# over 60 frames of a live seeded round on the default arena and on
+# longwater (`thumbnail::paint_bench`), ms a frame and a hash of every
+# frame's pixels that is the same on every run. Another frame count and
+# other maps: `just perf-paint 120 maps/towers.toml`.
+perf-paint FRAMES='60' *MAPS='maps/default.toml maps/longwater.toml':
+    cargo run --release --bin mapshot -- --quiet --paint-bench {{FRAMES}} {{MAPS}}
+
+# What a map at the format's limit costs the simulation: the probe on
+# maps/perf/dense-250.toml (250 x 250 cells, 15 thousand tiles; written by
+# tools/gen_perf_map.py), three one-minute rounds of the perfect defence at
+# a pinned seed, built with the dev tools so `probe: phases:` splits the
+# tick into the groups `Game::update` times (`frame_stages.rs`). No
+# ceilings: it is a timing, and the anomaly lines are not its subject.
+# More load passes through (`just perf-field --enemies 32 --players 8`,
+# `--scenario advance`).
+perf-field *ARGS:
+    cargo run --release --no-default-features --features dev-tools --bin probe -- --map maps/perf/dense-250.toml --scenario defend --frames 3600 --rounds 3 --seed 1000 {{ARGS}} | grep -E "^probe: (outcomes|timing|phases)"
+
+# The same timing in wasm: the probe built for wasm32-unknown-emscripten
+# and run under node (tools/perf/field_wasm.sh). Arguments replace the
+# default run's.
+perf-field-wasm *ARGS:
+    tools/perf/field_wasm.sh {{ARGS}}
+
 # --- iOS simulator (docs/ios-native-port-prd.md, CLAUDE.md's iOS section) ---
 # Every recipe runs through tools/ios/env.sh: Xcode as DEVELOPER_DIR (the
 # devenv shell points it at nix's apple-sdk), Xcode's clang as the host
