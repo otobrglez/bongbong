@@ -115,6 +115,9 @@ pub struct Textures<'a> {
     pub towers: &'a Texture2D,
     /// static/portal_sheet.png - the turning spiral (portal.rs).
     pub portal: &'a Texture2D,
+    /// The shader a sprite turned off the quarters is drawn with
+    /// (`render::turn`); `None` turns every sprite the plain way.
+    pub turn: Option<&'a crate::render::turn::TurnShader>,
     /// The round's baked images as `app.rs` uploaded them before the
     /// frame (`render::canvas::BlockTextures`, `Game::with_block_images`):
     /// the floor shade, the ground's worn cells, the forest floor, the
@@ -126,6 +129,10 @@ pub struct Textures<'a> {
 /// The game's `Sheet` lookup: what a `GpuCanvas` over these textures blits
 /// from. Every sheet the field can name is here.
 impl Sheets for Textures<'_> {
+    fn turn_shader(&self) -> Option<&crate::render::turn::TurnShader> {
+        self.turn
+    }
+
     fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
         self.blocks.iter().find(|(held, _)| *held == stamp).map(|(_, texture)| *texture)
     }
@@ -208,6 +215,10 @@ pub struct Effects<'a> {
     /// canvas the window left, the window's size, over the world at this
     /// share of its strength.
     pub swap: Option<(&'a RenderTexture2D, f32)>,
+    /// The picture a window off a whole scale is presented through
+    /// (`view::Prescale`, `render::view::PrescaleFx`); `None` scales the
+    /// world straight onto the window, the nearest texel to the pixel.
+    pub prescale: Option<&'a mut crate::render::view::PrescaleFx>,
 }
 
 /// The second half of a couch's split screen, as a frame draws it
@@ -343,10 +354,8 @@ impl Game {
     /// daylight's share, as `draw_ground_light`'s): every other cell a
     /// stepped glow, brighter in the surge. Where the frame kept the bake
     /// (`LavaPictures::ground_light`) it is its tiles, their strength in
-    /// the tint's alpha, added to the colour alone - an additive blend
-    /// would add that alpha to the target's too and lift the banks' shade
-    /// where the scene meets the window, which the glows' faint blocks
-    /// never did. Otherwise the glows block by block, additive.
+    /// the tint's alpha; otherwise the glows block by block. Additive
+    /// either way.
     fn draw_lava_ground_light<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, k: f32, cull: Option<Rectangle>) {
         if self.lava.is_empty() || k <= 0.0 {
             return;
@@ -362,14 +371,12 @@ impl Game {
         });
         match baked {
             Some((atlas, texture)) => {
-                use sola_raylib::ffi::{RL_FUNC_ADD, RL_ONE, RL_SRC_ALPHA, RL_ZERO};
                 let share = strength * k * tuning().shot_glow_strength / crate::lava::GROUND_LIGHT_BAKED;
                 let tint = Color::new(255, 255, 255, (255.0 * share.clamp(0.0, 1.0)) as u8);
                 if tint.a == 0 {
                     return;
                 }
-                d.set_blend_factors_separate(RL_SRC_ALPHA as i32, RL_ONE as i32, RL_ZERO as i32, RL_ONE as i32, RL_FUNC_ADD as i32, RL_FUNC_ADD as i32);
-                d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_CUSTOM_SEPARATE), |mut bd| {
+                d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                     let b = atlas.image.block as f32;
                     for ((x, y), (sx, sy, w, h)) in atlas.tiles() {
                         if culled(reach, Position::new(x as f32 + 16.0, y as f32 + 16.0)) {
@@ -573,6 +580,33 @@ impl Game {
             Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale },
             frame.units,
         );
+        // Where a texel is not a whole number of device pixels the world
+        // goes onto the window through a picture of it at a whole number
+        // (`view::Prescale`): the texel grid's own corner on the window -
+        // the bitmap's, or a followed view's world less its sub-block
+        // shift - is the picture's anchor, so every texel's edge is a
+        // pixel's edge in it.
+        let picture = {
+            let (texel, anchor) = if camera.follows() {
+                let texel = view.scale * camera.scale;
+                let corner = view.to_window(layout.field_origin());
+                (texel, crate::math::Vec2::new(corner.x - camera.offset.x * texel, corner.y - camera.offset.y * texel))
+            } else {
+                (view.scale, view.offset)
+            };
+            let device = crate::render::view::window_device_units(rl);
+            let plan = crate::view::Prescale::of(view.window, texel, device, anchor, crate::view::PrescaleLimits::here()).filter(|_| tuning().present_prescale);
+            match (plan, effects.prescale.as_deref_mut()) {
+                (Some(plan), Some(fx)) => fx.hold(rl, thread, &plan).map(|target| {
+                    let onto = crate::render::view::Picture::camera(&plan);
+                    rl.draw_texture_mode(thread, crate::frame_stages::target(&mut *target), |mut t| {
+                        t.draw_mode2D(onto, |mut t, _| present_frame(&mut t, composite, camera, view, layout, backdrop, margins.as_ref(), &split));
+                    });
+                    crate::render::view::Picture { target: &*target, plan }
+                }),
+                _ => None,
+            }
+        };
         // This frame's screen, kept for the dissolve into the next round
         // (`render::dissolve`): the picture the window gets below, drawn
         // into the kept texture first. raylib scales the window's direct
@@ -584,7 +618,10 @@ impl Game {
                 if let Some(target) = dissolve.keep(rl, thread, size) {
                     let onto = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.units };
                     rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut t| {
-                        t.draw_mode2D(onto, |mut t, _| present_frame(&mut t, composite, camera, view, layout, backdrop, margins.as_ref(), &split));
+                        t.draw_mode2D(onto, |mut t, _| match picture.as_ref() {
+                            Some(picture) => picture.present(&mut t),
+                            None => present_frame(&mut t, composite, camera, view, layout, backdrop, margins.as_ref(), &split),
+                        });
                         self.draw_chrome(&mut t, &text, &hud, chrome, &frame, layout, camera, indicators, bubble, minimap.as_ref(), textures, touch, fx_live, base);
                     });
                 }
@@ -595,7 +632,10 @@ impl Game {
             _ => {}
         }
         let mut d = rl.begin_drawing(thread);
-        present_frame(&mut d, composite, camera, view, layout, backdrop, margins.as_ref(), &split);
+        match picture.as_ref() {
+            Some(picture) => picture.present(&mut d),
+            None => present_frame(&mut d, composite, camera, view, layout, backdrop, margins.as_ref(), &split),
+        }
         // The swap out of the builder: the canvas the window left, fading
         // off the world under the chrome.
         if let Some((picture, alpha)) = effects.swap {
@@ -612,6 +652,9 @@ impl Game {
             let block = tuning().round_dissolve_block_pt * ui.scale * frame.units;
             dissolve.draw(&mut d, eased, block, view.window);
         }
+        // A sheet that would not load or a target that could not be made,
+        // said over everything.
+        crate::render::target::draw_trouble(&mut d, view.window, 14.0 * ui.scale);
         let _swap = crate::frame_stages::stage("swap");
         drop(d);
     }
@@ -828,25 +871,19 @@ impl Game {
             }
         }
 
-        // The render texture is stored upside-down relative to the screen; a
-        // negative source height flips it back on the way out.
-        let source = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: target_width as f32,
-            height: -(target_height as f32),
-        };
-
         // Camera shake (`shockwave::camera_shake`): a short decaying wobble
         // on the same kill-shockwave trigger as `self.shock` itself, applied
-        // purely as an offset on this blit's destination, in world pixels at
-        // the camera's scale - shifting where the already-composited scene
-        // lands is the cheapest way to get the effect. A view of part of
+        // purely to what this blit reads, in world pixels - the scene lands
+        // on the field's place in the bitmap as ever and shows the texels
+        // the shake's length away, which is the cheapest way to get the
+        // effect and leaves no edge of the bitmap bare: a followed view's
+        // scene target holds that much of the world round the view
+        // (`Camera::overscanned`), and past an arena's field the target's
+        // clamped edge repeats its last texel. A view of part of
         // the field is shaken only by what happens near it; the whole field,
         // an arena's, by everything. Muzzle/impact flash quads
         // and the HUD deliberately aren't shifted: they're either their own
-        // small on-screen quad or meant to stay put. The field origin is
-        // added on top: the scene lands on the field's place in the bitmap.
+        // small on-screen quad or meant to stay put.
         // Reduced motion (`motion.rs`) has no shake, and no ripple bending
         // the whole screen either (`WorldPass::bend`).
         let still = crate::motion::reduced();
@@ -860,6 +897,16 @@ impl Game {
             crate::shockwave::camera_shake_of(shocks, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning())
         };
         let blit_offset = Vector2::new(shake.x, shake.y);
+        // The render texture is stored upside-down relative to the screen; a
+        // negative source height flips it back on the way out. The whole
+        // of it, moved against the shake: the texel `shake` up and left of
+        // each place is the one drawn there.
+        let source = Rectangle {
+            x: -shake.x,
+            y: shake.y,
+            width: target_width as f32,
+            height: -(target_height as f32),
+        };
 
         // Where pass 2 puts the world, and at what scale: the field area of
         // the bitmap at the camera's - or, for a followed view, the whole
@@ -869,14 +916,28 @@ impl Game {
             if camera.follows() { (crate::math::Vec2::new(0.0, 0.0), 1.0) } else { (layout.field_origin(), camera.scale) };
         let shaken_origin = crate::math::Vec2::new(world_origin.x + blit_offset.x * world_scale, world_origin.y + blit_offset.y * world_scale);
         let in_world = |offset: crate::math::Vec2| Camera2D { offset: offset.into(), target: camera.origin.into(), rotation: 0.0, zoom: world_scale };
+        // What of the bitmap the window shows, for what is laid over the
+        // view and not the world (a kill's flash, a hurt seat's pulse): the
+        // field's area, or the part of a followed view's target its view
+        // takes, out to whole blocks - the target holds the shake's reach
+        // more on every side (`Camera::overscanned`), which no window shows.
+        let shown = if camera.follows() {
+            let block = crate::pyro::BLOCK;
+            let near = |offset: f32| (offset / block).floor() * block;
+            let far = |offset: f32, size: f32| ((offset + size) / block).ceil() * block;
+            let (x, y) = (near(camera.offset.x), near(camera.offset.y));
+            Rectangle::new(x, y, far(camera.offset.x, camera.size.0) - x, far(camera.offset.y, camera.size.1) - y)
+        } else {
+            Rectangle::new(0.0, 0.0, screen_width as f32, screen_height as f32)
+        };
         let world = WorldPass {
             scene: &*scene_target,
             source,
-            blit: Rectangle::new(shaken_origin.x, shaken_origin.y, target_width as f32 * world_scale, target_height as f32 * world_scale),
+            blit: Rectangle::new(world_origin.x, world_origin.y, target_width as f32 * world_scale, target_height as f32 * world_scale),
             on_field: in_world(world_origin),
             shaken: in_world(shaken_origin),
-            area_camera: Camera2D { offset: world_origin.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: 1.0 },
-            area: if camera.follows() { (target_width, target_height) } else { (screen_width, screen_height) },
+            area_camera: Camera2D { offset: Vector2::new(world_origin.x + shown.x, world_origin.y + shown.y), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: 1.0 },
+            area: (shown.width as i32, shown.height as i32),
             camera: *camera,
             cull,
             backdrop,
@@ -935,9 +996,10 @@ fn draw_edge_pulse(d: &mut impl RaylibDraw, pulse: &crate::feedback::Pulse, area
 struct WorldPass<'a> {
     /// Pass 1's picture.
     scene: &'a RenderTexture2D,
-    /// All of it, flipped: a render texture reads back bottom-up.
+    /// All of it, flipped - a render texture reads back bottom-up - and
+    /// moved against the shake.
     source: Rectangle,
-    /// Where it lands, with the shake.
+    /// Where it lands.
     blit: Rectangle,
     /// What lies in the world, drawn over it; `shaken` moves with the
     /// shake as the scene does.
@@ -1014,16 +1076,22 @@ impl Game {
         let target_height = camera.target_size().1;
         let texel = |at: Position| Vector2::new(at.x - camera.origin.x, target_height as f32 - (at.y - camera.origin.y));
 
-        if !self.shocks.is_empty() && w.bend {
-            d.draw_shader_mode(crate::frame_stages::shader(&mut effects.shock.shader), |mut sd| {
-                sd.draw_texture_pro(w.scene, w.source, w.blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-            });
-        } else {
-            d.draw_texture_pro(w.scene, w.source, w.blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
+        // The scene and the ripples' patches of it replace what is under
+        // them (`draw_opaque`): the scene target's alpha is what its
+        // translucent draws left in it, not a coverage.
+        let bent = !self.shocks.is_empty() && w.bend;
+        crate::render::view::draw_opaque(d, |d| {
+            if bent {
+                d.draw_shader_mode(crate::frame_stages::shader(&mut effects.shock.shader), |mut sd| {
+                    sd.draw_texture_pro(w.scene, w.source, w.blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                });
+            } else {
+                d.draw_texture_pro(w.scene, w.source, w.blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
+        });
 
         // The ripples' quads lie in the world: drawn through `on_field`.
-        d.draw_mode2D(w.on_field, |mut d, _| {
+        crate::render::view::draw_opaque(d, |d| d.draw_mode2D(w.on_field, |mut d, _| {
             // Layer each muzzle flash's tiny heat-haze ripple on top, one small
             // quad at a time: source and dest are the same on-screen patch (just
             // re-sampling that bit of the already-composited scene through the
@@ -1107,7 +1175,7 @@ impl Game {
                     );
                 });
             }
-        });
+        }));
 
         // A kill or a barrel blast opens with a brief whole-screen
         // flash (`Game::screen_flash`, started and spaced out by

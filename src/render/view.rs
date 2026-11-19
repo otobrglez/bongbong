@@ -5,7 +5,7 @@
 use sola_raylib::prelude::*;
 
 use crate::math::{Color, Rectangle, Vec2};
-use crate::view::{Camera, View};
+use crate::view::{Camera, Prescale, View};
 use crate::Layout;
 
 impl Camera {
@@ -59,6 +59,104 @@ pub fn onto_window(camera: Camera2D, units: f32) -> Camera2D {
     }
 }
 
+/// Draw one render target onto another, or onto the window, as it is:
+/// what `draw` draws replaces the colour under it and leaves the alpha
+/// there alone. A target's own alpha is whatever its translucent draws
+/// left in it - smoke at a half leaves three quarters - and is no
+/// coverage: blended with, the picture would come out darker at every
+/// step from the scene to the window, by as much as it had been blended
+/// before. Every blit of a finished picture goes through here, so a
+/// translucent effect is as bright on the glass as it was drawn.
+pub fn draw_opaque<D: RaylibDraw>(d: &mut D, mut draw: impl FnMut(&mut RaylibBlendMode<'_, D>)) {
+    use sola_raylib::ffi::{RL_FUNC_ADD, RL_ONE, RL_ZERO};
+    d.set_blend_factors_separate(RL_ONE as i32, RL_ZERO as i32, RL_ZERO as i32, RL_ONE as i32, RL_FUNC_ADD as i32, RL_FUNC_ADD as i32);
+    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_CUSTOM_SEPARATE), |mut bd| draw(&mut bd));
+}
+
+/// Device pixels to the window unit: what the framebuffer holds across one
+/// unit of the window's own coordinates - 2 on a Retina desktop, 3 on an
+/// iPhone (whose window is in points), 1 on the web canvas and on Android,
+/// whose windows are in pixels already.
+pub fn window_device_units(rl: &RaylibHandle) -> f32 {
+    let (screen, render) = (rl.get_screen_width(), rl.get_render_width());
+    if screen > 0 && render > 0 { render as f32 / screen as f32 } else { 1.0 }
+}
+
+/// The picture a window off a whole scale is presented through
+/// (`view::Prescale`): the world drawn at a whole number of pixels to the
+/// texel, to be put on the window smoothly. `app.rs` holds one for the
+/// session; the target is made when a frame first needs it, a step larger
+/// than the picture (`render::target::stepped`), so a window dragged by
+/// its edge makes it again every step and not every frame.
+#[derive(Default)]
+pub struct PrescaleFx {
+    held: Option<RenderTexture2D>,
+    /// The size a target could not be made at: not asked for again until
+    /// the picture needs another.
+    refused: Option<(i32, i32)>,
+}
+
+impl PrescaleFx {
+    /// The target to draw `plan`'s picture into, its top-left corner the
+    /// picture's; `None` where it cannot be made, which leaves the window
+    /// the nearest texel.
+    pub fn hold(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, plan: &Prescale) -> Option<&mut RenderTexture2D> {
+        let size = crate::render::target::stepped(plan.size);
+        if !self.held.as_ref().is_some_and(|t| (t.texture.width, t.texture.height) == size) {
+            if self.refused == Some(size) {
+                return None;
+            }
+            self.held = None;
+            match crate::render::target::load(rl, thread, size) {
+                Ok(target) => {
+                    // The one target read between its texels.
+                    target.set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+                    crate::render::target::recovered(PRESCALE_TARGET);
+                    self.refused = None;
+                    self.held = Some(target);
+                }
+                Err(e) => {
+                    crate::render::target::trouble(PRESCALE_TARGET, &e);
+                    self.refused = Some(size);
+                }
+            }
+        }
+        self.held.as_mut()
+    }
+
+    /// The memory the held target takes, texels: for the dev tools.
+    pub fn held_size(&self) -> Option<(i32, i32)> {
+        self.held.as_ref().map(|t| (t.texture.width, t.texture.height))
+    }
+}
+
+/// What the picture's target is called when it cannot be made.
+const PRESCALE_TARGET: &str = "prescale target";
+
+/// A frame's picture of the world, drawn (`PrescaleFx::hold`, through
+/// `Picture::camera`) and ready for the window.
+pub struct Picture<'a> {
+    pub target: &'a RenderTexture2D,
+    pub plan: Prescale,
+}
+
+impl Picture<'_> {
+    /// The camera that draws what is laid out in the window's units into
+    /// `plan`'s picture.
+    pub fn camera(plan: &Prescale) -> Camera2D {
+        Camera2D { offset: plan.origin.into(), target: plan.anchor.into(), rotation: 0.0, zoom: plan.zoom }
+    }
+
+    /// The picture onto the window, into the frame `d` is drawing: read
+    /// between its pixels, so each texel's edge lands where the window's
+    /// scale puts it.
+    pub fn present(&self, d: &mut impl RaylibDraw) {
+        let source = crate::render::target::filled(self.target, (self.plan.size.0 as f32, self.plan.size.1 as f32));
+        let dest = self.plan.dest();
+        draw_opaque(d, |d| d.draw_texture_pro(self.target, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE));
+    }
+}
+
 /// Put the composited frame on screen: the margins in `backdrop` (the
 /// HUD bar's own colour, so the bar and the margins read as one panel), a
 /// one-pixel frame around the bitmap, then the bitmap into `view.dest()`.
@@ -73,11 +171,9 @@ pub fn present(rl: &mut RaylibHandle, thread: &RaylibThread, composite: &RenderT
 /// the HUD's corners, its dialogs - can follow it onto the same frame.
 /// With `margins`, the window round the bitmap shows the world past an
 /// arena's field (`render::margin`) rather than the bars, on the bitmap's
-/// own pixel grid so the two meet block for block. Either way the bitmap
-/// lands on the backdrop's colour, which is what shows through where a
-/// translucent draw left its alpha under one - so the field looks the same
-/// with margins or bars round it, and the margins, put on the same way,
-/// match it at the edge.
+/// own pixel grid so the two meet block for block; the backdrop lies under
+/// them, for any sliver of the window their whole blocks leave. The bitmap
+/// and the margins replace what is under them (`draw_opaque`).
 pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: &View, backdrop: Color, margins: Option<&Margins>) {
     // A render texture reads back bottom-up; a negative source height
     // flips it on the way out.
@@ -87,18 +183,20 @@ pub fn present_into(d: &mut impl RaylibDraw, composite: &RenderTexture2D, view: 
     match margins {
         Some(m) => {
             d.draw_rectangle(0, 0, view.window.0 as i32, view.window.1 as i32, backdrop);
-            for part in &m.parts {
-                // Read the right way up: a render texture is stored
-                // bottom-up.
-                let rows = Rectangle::new(part.x - m.rect.x, m.rect.y + m.rect.height - part.y - part.height, part.width, -part.height);
-                let at = view.to_window(Vec2::new(part.x, part.y));
-                let to = Rectangle::new(at.x, at.y, part.width * view.scale, part.height * view.scale);
-                d.draw_texture_pro(m.target, rows, to, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-            }
+            draw_opaque(d, |d| {
+                for part in &m.parts {
+                    // Read the right way up: a render texture is stored
+                    // bottom-up.
+                    let rows = Rectangle::new(part.x - m.rect.x, m.rect.y + m.rect.height - part.y - part.height, part.width, -part.height);
+                    let at = view.to_window(Vec2::new(part.x, part.y));
+                    let to = Rectangle::new(at.x, at.y, part.width * view.scale, part.height * view.scale);
+                    d.draw_texture_pro(m.target, rows, to, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                }
+            });
         }
         None => letterbox(d, view, backdrop),
     }
-    d.draw_texture_pro(composite, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+    draw_opaque(d, |d| d.draw_texture_pro(composite, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE));
 }
 
 /// What an arena shows round its field (`render::margin`): the target
@@ -143,7 +241,7 @@ pub fn present_world(d: &mut impl RaylibDraw, world: &RenderTexture2D, camera: &
     let source = Rectangle::new(camera.offset.x, target_h as f32 - camera.offset.y - h, w, -h);
     let corner = view.to_window(layout.field_origin());
     let dest = Rectangle::new(corner.x, corner.y, layout.field.w * view.scale, layout.field.h * view.scale);
-    d.draw_texture_pro(world, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+    draw_opaque(d, |d| d.draw_texture_pro(world, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE));
 }
 
 /// The second half of a couch's split screen (`follow::Split`) on the
@@ -153,7 +251,7 @@ pub fn present_world(d: &mut impl RaylibDraw, world: &RenderTexture2D, camera: &
 /// sub-block offset and drawn only over the part of the field area past
 /// the divider (the line through `at`, square to the unit `normal`, both in
 /// the followed bitmap's pixels), so the cut is exact at any angle.
-pub fn present_half(_d: &mut impl RaylibDraw, world: &RenderTexture2D, camera: &Camera, view: &View, layout: &Layout, at: Vec2, normal: Vec2) {
+pub fn present_half(d: &mut impl RaylibDraw, world: &RenderTexture2D, camera: &Camera, view: &View, layout: &Layout, at: Vec2, normal: Vec2) {
     let origin = view.to_window(layout.field_origin());
     let (w, h) = (layout.field.w * view.scale, layout.field.h * view.scale);
     let field = [origin, Vec2::new(origin.x + w, origin.y), Vec2::new(origin.x + w, origin.y + h), Vec2::new(origin.x, origin.y + h)];
@@ -163,9 +261,11 @@ pub fn present_half(_d: &mut impl RaylibDraw, world: &RenderTexture2D, camera: &
     // A window point: the point of the field area under it, then the texel
     // of the half's world that shows there - a render texture reads back
     // bottom-up, so its rows count from the bottom.
-    draw_textured(world.texture.id, &shown, |p| {
-        let (x, y) = ((p.x - origin.x) / view.scale, (p.y - origin.y) / view.scale);
-        Vec2::new((camera.offset.x + x / camera.scale) / tex_w, (target_h as f32 - camera.offset.y - y / camera.scale) / tex_h)
+    draw_opaque(d, |_| {
+        draw_textured(world.texture.id, &shown, |p| {
+            let (x, y) = ((p.x - origin.x) / view.scale, (p.y - origin.y) / view.scale);
+            Vec2::new((camera.offset.x + x / camera.scale) / tex_w, (target_h as f32 - camera.offset.y - y / camera.scale) / tex_h)
+        })
     });
 }
 
@@ -202,9 +302,11 @@ pub fn present_zoom_half(d: &mut impl RaylibDraw, composite: &RenderTexture2D, v
     let shown = past_line(&corners(dest), at, normal);
     let (tex_w, tex_h) = (composite.texture.width.max(1) as f32, composite.texture.height.max(1) as f32);
     // `present_into`'s source rectangle, the bitmap read the right way up.
-    draw_textured(composite.texture.id, &shown, |p| {
-        let (x, y) = ((p.x - dest.x) / view.scale, (p.y - dest.y) / view.scale);
-        Vec2::new(x / tex_w, (view.bitmap.1 - y) / tex_h)
+    draw_opaque(d, |_| {
+        draw_textured(composite.texture.id, &shown, |p| {
+            let (x, y) = ((p.x - dest.x) / view.scale, (p.y - dest.y) / view.scale);
+            Vec2::new(x / tex_w, (view.bitmap.1 - y) / tex_h)
+        })
     });
 }
 

@@ -146,6 +146,15 @@ pub fn camera_shake_of<'a>(shocks: impl IntoIterator<Item = &'a Shockwave>, view
     offset
 }
 
+/// The furthest `camera_shake_of` moves the scene on an axis, world px:
+/// its cap, and the block the snap to whole blocks can add. A followed
+/// view's scene target holds this much of the world round the view
+/// (`view::Camera::overscanned`), so a shaken screen shows what is there.
+pub fn shake_overscan(t: &Tuning) -> f32 {
+    let cap = (t.camera_shake_magnitude * t.screen_fx_intensity * t.camera_shake_max_stack).max(0.0);
+    ((cap + 1.0) / 2.0).ceil() * 2.0
+}
+
 /// How much of a ripple at `at` shakes a screen showing the world
 /// rectangle `view`: all of it anywhere within `camera_shake_margin_px` of
 /// the view - a blast just off screen still throws its fire into it -
@@ -260,6 +269,23 @@ mod shake_tests {
             moved += usize::from(before != Vec2::new(0.0, 0.0));
         }
         assert!(moved > 20, "the sets shake: {moved}");
+    }
+
+    /// A followed view's scene target holds `shake_overscan` of the world
+    /// round the view: no shake moves the scene further, at the default
+    /// knobs or at a louder setting.
+    #[test]
+    fn no_shake_reaches_past_the_overscan() {
+        let loud = Tuning { camera_shake_magnitude: 11.0, camera_shake_max_stack: 2.3, screen_fx_intensity: 1.5, ..Tuning::DEFAULT };
+        assert_eq!(shake_overscan(&Tuning::DEFAULT), 10.0);
+        for t in [Tuning::DEFAULT, loud] {
+            let reach = shake_overscan(&t);
+            assert_eq!(reach % 2.0, 0.0);
+            for shocks in sets() {
+                let s = camera_shake(&shocks, None, &t);
+                assert!(s.x.abs() <= reach && s.y.abs() <= reach, "{s:?} past {reach}");
+            }
+        }
     }
 
     #[test]

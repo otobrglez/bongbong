@@ -78,6 +78,9 @@ round-lost = YOU LOSE
 round-restarting = Restarting in { $seconds }...
 round-back-to-lobby = Back to the lobby in { $seconds }...
 paused = PAUSED
+# A sheet that would not load or a picture the graphics card would not
+# make (src/render/target.rs): $name is the file's or the picture's name.
+render-trouble = Graphics trouble: { $name }
 
 # The mission as one word: the HUD bar's title, where it shares a 158 px
 # slot in 18 px text with " 12/12" in a wave round (about 8 letters), and

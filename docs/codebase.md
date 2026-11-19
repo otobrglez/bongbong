@@ -102,7 +102,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   one behind the level select), the end screen's words lift out over its last
   `round_verdict_lift_seconds` (`verdict_lift`, `take_way` hurrying the clock to it, the dim
   staying), and a round started from a kept screen dissolves in from it (`dissolve`):
-  `render/dissolve.rs` keeps the screen in a framebuffer-sized texture (`Effects::dissolve`, drawn
+  `render/dissolve.rs` keeps the screen in a framebuffer-sized texture, held a step larger
+  (`render::target::stepped`) (`Effects::dissolve`, drawn
   before `begin_drawing` through a camera at the window's scale) and drops it block by block through
   `static/dissolve.fs` over everything; a round started mid-play (R) or from the builder cuts in. The level select comes before everything while it is up (a
   `level_select::SelectInput` from the pointer, the arrows, Enter and Esc/Tab, every press claimed
@@ -1358,7 +1359,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the sky without them (docs/weather.md "Without shaders"): `weather/plain.rs` composes the snow on
   the ground and the fog, sand, rain and snow in the air as plain blocks from the shaders' own noise
   (headless, tested), and `render/weather.rs` multiplies the light map onto the field with a blend
-  mode (`multiply_light`) and draws the blocks with the target's alpha kept (`draw_blocks`); the
+  mode (`multiply_light`) and draws the blocks alpha-blended (`draw_blocks`); the
   `weather_without_shaders` knob shows it anywhere and `status.weather.without_shaders` reports it.
 
 ## Weapons and projectiles
@@ -1417,8 +1418,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the roll) lying across its roll and tumbling in the air, lifted by its height over its shadow, in
   the y-sorted standing walk so grass covers it only from in front (over everything while airborne);
   `fx.rs` trails a thick, shaded white `ParticleKind::Plume` (`Game::grenade_trails`,
-  `grenade_trail_*`), opaque blocks thinned by the dither (blended white lands grey on the scene
-  target). The launcher module (`TANK_MODULE_GRENADE_COL`, its drum showing the rounds fired) and
+  `grenade_trail_*`), fading by its alpha like every other puff. The launcher module (`TANK_MODULE_GRENADE_COL`, its drum showing the rounds fired) and
   `tank_art::GRENADE_MUZZLE` come from `tankdesign`. Tuning group `grenades`.
 - `sonic.rs` (docs/sonic-hammer.md) — the sonic hammer, headless: `SonicCone` (a fan of rays
   `SONIC_RAY_ARC_PX` apart walked over map cells, stopped by `Material::blocks_sound`, glass a
@@ -1531,9 +1531,18 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the bitmap, while a followed view draws its world into `composite` at one pixel per texel,
   `render::view::present_world` puts it on the window shifted by `Camera::offset`, and `draw_chrome`
   draws on the window through the bitmap-to-window camera, so the HUD stands still while the world
-  slides under it. After pass 2 an arena's margins are made (`Effects::margins`) for `present_into`;
-  the composite is always cleared to black, so the field looks the same with margins or bars round
-  it. Takes `hud::PlayChrome` from `Session::play_chrome`. `draw_debug_overlays` and the per-tank
+  slides under it. After pass 2 an arena's margins are made (`Effects::margins`) for `present_into`.
+  **Every blit of a finished target is opaque** (`render::view::draw_opaque`: the colour replaced,
+  the destination's alpha kept) - scene to composite, the ripples' patches, composite, margins,
+  split halves and the builder's canvas to the window - since a target's alpha is what its
+  translucent draws left in it and no coverage: blended with, the picture came out darker at every
+  step. The shake moves what pass 2 reads of the scene, not where it lands: a followed view's
+  target holds `shockwave::shake_overscan` of the world round the view (`Camera::overscanned`), an
+  arena's clamped edge repeats its last texel, and what is laid over the view (a kill's flash, a
+  hurt seat's pulse) covers the view's part of the target. Where a texel is not a whole number of
+  device pixels the frame goes through `Effects::prescale` (`view::Prescale`, below). A sheet that
+  would not load or a target that could not be made is said over everything
+  (`render::target::draw_trouble`). Takes `hud::PlayChrome` from `Session::play_chrome`. `draw_debug_overlays` and the per-tank
   `draw_tank_boxes`/`draw_tank_stats` (`cfg(feature = "dev-tools")`) draw through `Camera::on_field`
   after pass 2, and then `render::indicators::draw_indicators` paints `Effects::indicators`, under
   the banners and dialogs. `Effects::split` (`SplitLayer`): `Follow` draws the second half of a
@@ -1739,12 +1748,42 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   its quad), and `RippleFx::set_view` puts the scene target in that frame (`viewUv`/`viewUvSize`,
   `Camera::ripple_view`) with every centre measured from the target's corner (`ripple_uv`,
   `RippleFx::uv_of`), so the numbers stay small on any map. Camera shake sums the ripples and snaps
-  to whole 2 px blocks; `camera_shake(shocks, view, t)` scales each ripple by `shake_reach` from the
+  to whole 2 px blocks (`shake_overscan` is its furthest reach, what a followed view's scene target
+  holds round the view); `camera_shake(shocks, view, t)` scales each ripple by `shake_reach` from the
   view a followed or pinned screen shows - full within `camera_shake_margin_px`, gone
   `camera_shake_fade_screens` screens past it (the `fx` group); `None` (an arena) is the plain sum,
   each split half shakes by its own view, and nothing shakes or bends under reduced motion;
   `screen_fx_intensity` scales flash, ripple and shake together. Shaders: `static/*.fs` with
-  hand-ported GLSL ES 100 twins in `static/web/`.
+  hand-ported GLSL ES 100 twins in `static/web/`, all three ripples compiled from sources in the
+  binary (`RippleShader`); one that will not compile is reported (`render::target::trouble`) and
+  the raylib default shader stands in, so the scene is drawn unbent. `render/shot_shaders.rs` holds
+  the twin test for every pair (`the_web_twins_are_the_desktop_shaders`: the bodies equal once
+  comments, blank space and the `precision` line are gone).
+- `render/target.rs` — how the frame's textures are made and what happens when one is not: `load`
+  (a render target, clamp wrap on every one, an `Err` and not a panic), `stepped`/`filled` (targets
+  that follow the window's size are held a 64 px step larger, so a window dragged by its edge makes
+  them again every step and not every frame), `sheet`/`sheet_failed` (a sheet that will not load is
+  a magenta checker), and the trouble list (`trouble`, `recovered`, `draw_trouble`): each failure
+  logged once and shown as a line over the frame (`text::keys::RENDER_TROUBLE`) until it mends.
+  `app.rs` keeps the last good scene, composite and split targets when a new size cannot be made
+  and asks again the next frame.
+- `turn.rs` + `render/turn.rs` — the crisp turn (D-5 of docs/november-26-rebuild-upgrade.md): a
+  sprite drawn at an angle off the quarter turns, kept on its own design-pixel grid. `turn::block`
+  names the sheets that are (the four tank sheets, one texel to the design pixel drawn at 2; the
+  towers, baked at two texels) - everything else, and every quarter turn (`is_quarter`), is the
+  plain blit, texel for texel what it was. `Turned::of` makes the quad (the turned cell and
+  `MARGIN` design pixels round it) and what the shader needs; `static/turn.vs`/`turn.fs` (twins in
+  `static/web/`, both pairs in the twin tests) cut the screen into blocks the size a design pixel
+  is drawn, laid from the pivot, and give each whole block one design pixel of the cell and no
+  colour the cell lacks: `turn_mode` 1 the pixel under the block's centre with Scale2x's corner
+  rule (`turn_corner`; five texture reads a fragment), 2 the cell sheared three times so every
+  pixel is kept (one read), 0 the plain blit. `GpuCanvas` opens the shader for the first turned
+  sprite and closes it before anything else is drawn and on drop, so a run is one shader scope
+  (`frame_stages` counts it); the cell's corner and the angle ride in the batch's normal, so
+  sprites of one sheet in a run share a draw call, and the uniforms (`Fit`: texel, cell, pivot)
+  change only with the sheet, flushed first. `Sheets::turn_shader` is `None` for the thumbnails,
+  and `CpuCanvas` turns the plain way: no pinned hash moves. A shader that will not compile is a
+  trouble line (`render::target::trouble`) and plain turns.
 - `frame_stages.rs` — where a frame's time goes, in a dev-tools build (every call is empty and
   every reading zero without it): `stage(name)` guards in `app.rs` and `Game::render` (`sim`, `fx`,
   `pictures`, `lights`, `world`, `post`, `chrome`, `swap`) and in `Game::update` round its groups
@@ -1932,7 +1971,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the ripples' frame, and `cull`, the view grown by `CULL_MARGIN_PX`, `None` for the whole field;
   `render/view.rs` builds its `in_target` (pass 1) and `on_field` (the world onto the bitmap's field
   area, through the offset) `Camera2D`s, and `present_world` puts a followed view's world on the
-  window shifted by its offset). `View::fill` is `fit` with the centring offset rounded.
+  window shifted by its offset; `overscanned(pad)` moves a followed view's target corner `pad`
+  back and rounds its size up to `TARGET_STEP`, the view itself where it was).
+  **`Prescale::of(window, texel, device, anchor, limits)`** is the picture a window off a whole
+  scale is presented through: `n` whole pixels to the texel (the next whole number, or the one
+  below when within an eighth of it), the texel grid's corner on a whole pixel, the window and a
+  pixel round it; `None` where a texel is a whole number of device pixels already or
+  `PrescaleLimits` (a 4096 side and 6 MP on a phone, 8 MP in a browser; 8192 and 12 MP on a
+  desktop) leave nothing within 1.25x. `render::view::PrescaleFx` holds its bilinear target,
+  `Game::render` draws `present_frame` into it through `Picture::camera` and `Picture::present`
+  puts it on the window, the kept screen and the swap alike; the builder's own frames do not use
+  it. Knob `present_prescale`. `View::fill` is `fit` with the centring offset rounded.
   `FollowFrame::new(Screen, window, Seating, SightBox, &ViewRules)` is `framing::frame` (play draws
   no bar over the world), `Layout::bare` of the view and `View::fill`, so nothing is letterboxed
   from 4:3 to 2.4:1; `device_scale(framebuffer)` is what the offset rounds to and the touch scheme
@@ -2033,11 +2082,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   shade made for a round's floor and reach (`fits`; reach rounded up to 4 cells, at most `MAX_CELLS`
   96, the plateau past it). Nothing stands or plays there; the simulation, the field's rect, `View`
   and every pointer are untouched. `render/margin.rs` is `MarginFx`: into targets of the window's
-  world, the ground once, the shade part by part, then the sky of its `render::weather::Scene` - a
+  world grown to whole 64 px steps (`MarginFrame::rect`; `window` is what is drawn of it), the ground once, the shade part by part, then the sky of its `render::weather::Scene` - a
   round's, or the builder's canvas's - through `render::weather`'s passes over the parts
   (`PassView::parts`) under a 1x1 light map of the ambient with the margin grid's own cell mask
   (`CellMask::origin`, the shader's `cellOrigin`), or the plain path's blocks and
-  `multiply_ambient` - copied onto black like the field's bitmap; `Game::render` makes it only while
+  `multiply_ambient` - copied opaque like the field's bitmap; `Game::render` makes it only while
   `Camera::is_whole()` (never a followed or pinned view) and the builder only at FIT on an arena, and
   `render::view::present_into` fills the window with the backdrop, then draws its parts round the
   bitmap, so the two meet colour for colour. The margins do not shake with the field's camera shake.

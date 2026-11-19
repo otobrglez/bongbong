@@ -308,7 +308,9 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   and `...&join=CODE` in a second tab.
 - **Shaders need GLSL ES 100 ports**: `static/web/*.fs` are hand-ported twins of `static/*.fs`
   (`#version 100`, `precision mediump float`, `varying`, `texture2D`, `gl_FragColor`);
-  `shader_path()` picks the directory. Change both by hand.
+  every shader is compiled from a source in the binary, the twin on the embedded platforms
+  (`crate::EMBEDDED`). Change both by hand: `the_web_twins_are_the_desktop_shaders` fails a pair
+  whose bodies differ.
 - Audio: none yet. Adding `InitAudioDevice` needs `-sASYNCIFY=1` back in the rustflags, and with it
   the speed cost decision 19 removed.
 - **CI**: `.github/actions/build-web/action.yml` is the shared build (version pins as input defaults -

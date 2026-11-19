@@ -40,11 +40,19 @@ pub const MAX_CELLS: usize = 96;
 /// little keeps the ground it has.
 const CELLS_STEP: usize = 4;
 
+/// The step the margins' target grows by, world px (`MarginFrame::rect`).
+pub const RECT_STEP: f32 = 64.0;
+
 /// The world a window shows round an arena's field.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MarginFrame {
     /// The world rectangle the whole window shows, px, rounded out to the
     /// 2 px block grid: the field and the margins round it.
+    pub window: Rectangle,
+    /// The world rectangle the margins' target holds, a texel a pixel:
+    /// `window` from its own corner, grown right and down to whole
+    /// `RECT_STEP`s, so a window dragged by its edge keeps its targets for
+    /// a step at a time. Only `window`'s part of it is ever drawn.
     pub rect: Rectangle,
     /// How many cells past the field's own ground grid the ground has to
     /// reach to cover `rect`, rounded up to `CELLS_STEP`, at most
@@ -84,19 +92,22 @@ impl MarginFrame {
         let past = (-half - x0).max(-half - y0).max(x1 - right).max(y1 - bottom).max(0.0);
         let cells = ((past / tile).ceil() as usize).max(1).div_ceil(CELLS_STEP) * CELLS_STEP;
         let field = Rectangle::new(0.0, 0.0, w, h);
-        Some(MarginFrame { rect: Rectangle::new(x0, y0, x1 - x0, y1 - y0), cells: cells.min(MAX_CELLS), field })
+        let stepped = |side: f32| (side / RECT_STEP).ceil() * RECT_STEP;
+        let window = Rectangle::new(x0, y0, x1 - x0, y1 - y0);
+        let rect = Rectangle::new(x0, y0, stepped(window.width), stepped(window.height));
+        Some(MarginFrame { window, rect, cells: cells.min(MAX_CELLS), field })
     }
 
     /// The window past the field, in world px: the bands over and under
-    /// the field the whole width of `rect` and the two beside it, reaching
+    /// the field the whole width of `window` and the two beside it, reaching
     /// `into` px into the field (a pass that reads a few pixels off its own
     /// needs ground drawn there) - at most four, none empty and no two
     /// overlapping, so what is drawn part by part lands once. The rest of
-    /// `rect` is under the field's bitmap, which nothing there would show.
+    /// `window` is under the field's bitmap, which nothing there would show.
     pub fn parts(&self, into: f32) -> Vec<Rectangle> {
         let f = self.field;
         let inner = Rectangle::new(f.x + into, f.y + into, (f.width - 2.0 * into).max(0.0), (f.height - 2.0 * into).max(0.0));
-        around(self.rect, inner).into_iter().filter(|r| r.width > 0.0 && r.height > 0.0).collect()
+        around(self.window, inner).into_iter().filter(|r| r.width > 0.0 && r.height > 0.0).collect()
     }
 }
 
@@ -167,14 +178,18 @@ mod tests {
     }
 
     /// The window shows the field where `View` puts it, and the world
-    /// round it to the window's edges: the rect is the window in world
-    /// pixels, rounded out to whole blocks, and the ground reaches it.
+    /// round it to the window's edges: `window` is the window in world
+    /// pixels, rounded out to whole blocks, and the ground reaches it; the
+    /// target's `rect` is that from the same corner, in whole steps.
     #[test]
     fn the_margins_are_the_window_past_the_field_in_world_pixels() {
         for (window, sides) in [((1088.0, 576.0), false), ((1180.0, 820.0), false), ((852.0, 393.0), true), ((1024.0, 768.0), false), ((1920.0, 1080.0), false)] {
             let f = frame(window).unwrap_or_else(|| panic!("{window:?} has margins"));
             let view = View::fit(FIELD, window);
-            let r = f.rect;
+            let (r, held) = (f.window, f.rect);
+            assert_eq!((held.x, held.y), (r.x, r.y), "{window:?}: the target starts at the window's corner");
+            assert!(held.width >= r.width && held.width < r.width + RECT_STEP && held.width % RECT_STEP == 0.0, "{window:?}: {held:?}");
+            assert!(held.height >= r.height && held.height < r.height + RECT_STEP && held.height % RECT_STEP == 0.0, "{window:?}: {held:?}");
             for v in [r.x, r.y, r.width, r.height] {
                 assert_eq!(v % 2.0, 0.0, "{window:?}: on the block grid: {r:?}");
             }
@@ -228,7 +243,7 @@ mod tests {
                     assert_eq!(overlap(*a, *b), None, "{window:?}: {a:?} and {b:?}");
                 }
             }
-            let r = f.rect;
+            let r = f.window;
             for y in (r.y as i32..(r.y + r.height) as i32).step_by(5) {
                 for x in (r.x as i32..(r.x + r.width) as i32).step_by(5) {
                     let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
@@ -245,7 +260,10 @@ mod tests {
         // are a small share of the window.
         let f = frame((852.0, 393.0)).expect("margins");
         let area: f32 = f.parts(16.0).iter().map(|p| p.width * p.height).sum();
-        assert!(area < 0.2 * f.rect.width * f.rect.height, "{area} of {:?}", f.rect);
+        assert!(area < 0.2 * f.window.width * f.window.height, "{area} of {:?}", f.window);
+        // A window dragged a pixel at a time keeps its target a step long.
+        let held: std::collections::BTreeSet<(i32, i32)> = (0..200).filter_map(|i| frame((1280.0 + i as f32, 720.0))).map(|f| (f.rect.width as i32, f.rect.height as i32)).collect();
+        assert!(held.len() <= 5, "{held:?}");
     }
 
     /// A window far past its arena - a tall desktop window - asks for no

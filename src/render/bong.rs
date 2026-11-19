@@ -24,7 +24,7 @@ impl BongTextures {
     pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread, kind: BongKind) -> BongTextures {
         let mut clip = |clip: BongAnim| {
             let path = Sheet::Bong { kind, clip }.path();
-            rl.load_texture(thread, &path).unwrap_or_else(|e| panic!("failed loading {path}: {e}"))
+            crate::render::target::sheet(rl, thread, &path)
         };
         BongTextures {
             idle: clip(BongAnim::Idle),

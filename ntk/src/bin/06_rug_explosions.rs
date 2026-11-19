@@ -30,7 +30,7 @@ use bongbong::level::{LevelOverrides, Mission};
 use bongbong::map::{CellObject, MapFile};
 use bongbong::mode::{Driver, Session};
 use bongbong::obstacle::Drum;
-use bongbong::render::shockwave::{RippleFx, RippleTuning};
+use bongbong::render::shockwave::{RippleFx, RippleShader, RippleTuning};
 use bongbong::simulation::debug::TankPatch;
 use bongbong::simulation::{Game, Input};
 use bongbong::tuning::tuning;
@@ -90,15 +90,15 @@ fn main() {
         bongbong::bong::BongKind::ALL.into_iter().map(|kind| bongbong::render::bong::BongTextures::load(&mut rl, &thread, kind)).collect();
 
     // The three full-screen ripple shaders the renderer resolves in pass 2.
-    let ripple = |rl: &mut RaylibHandle, file: &str, speed: f32, width_: f32, strength: f32, duration: f32| {
-        RippleFx::load(rl, &thread, &format!("static/{file}"), RippleTuning { speed, width: width_, strength, duration })
+    let ripple = |rl: &mut RaylibHandle, which: RippleShader, speed: f32, width_: f32, strength: f32, duration: f32| {
+        RippleFx::load(rl, &thread, which, RippleTuning { speed, width: width_, strength, duration })
     };
     let (mut shock, mut muzzle, mut impact) = {
         let t = tuning();
         (
-            ripple(&mut rl, "shockwave.fs", t.shockwave_speed, t.shockwave_width, t.shockwave_strength * t.screen_fx_intensity, t.shockwave_duration),
-            ripple(&mut rl, "muzzle_flash.fs", t.muzzle_flash_speed, t.muzzle_flash_width, t.muzzle_flash_strength, t.muzzle_flash_duration),
-            ripple(&mut rl, "impact.fs", t.impact_flash_speed, t.impact_flash_width, t.impact_flash_strength, t.impact_flash_duration),
+            ripple(&mut rl, RippleShader::Shockwave, t.shockwave_speed, t.shockwave_width, t.shockwave_strength * t.screen_fx_intensity, t.shockwave_duration),
+            ripple(&mut rl, RippleShader::MuzzleFlash, t.muzzle_flash_speed, t.muzzle_flash_width, t.muzzle_flash_strength, t.muzzle_flash_duration),
+            ripple(&mut rl, RippleShader::Impact, t.impact_flash_speed, t.impact_flash_width, t.impact_flash_strength, t.impact_flash_duration),
         )
     };
     let mut fx = Fx::default();
@@ -180,6 +180,7 @@ fn main() {
             pickup_glyphs: &pickup_glyphs,
             aircraft: &aircraft,
             portal: &portal,
+            turn: None,
             obstacles: &obstacles,
             props: &props,
             barrel_explosion: &barrel_explosion,
@@ -275,7 +276,7 @@ fn main() {
             &view,
             &Camera::whole((width, height)),
             bongbong::math::Color::WHITE,
-            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, feedback: None, touch: None, indicators: None, bubble: None, minimap: None, margins: None, split: None, dissolve: None, swap: None },
+            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, feedback: None, touch: None, indicators: None, bubble: None, minimap: None, margins: None, split: None, dissolve: None, swap: None, prescale: None },
             &textures,
             &layout_play,
             &PlayChrome::default(),

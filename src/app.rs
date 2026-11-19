@@ -24,7 +24,7 @@ use crate::net::client::{Identity, RoomClient, RoomSetup, Target};
 use crate::net::round::{AnyRound, OnlineRound};
 #[cfg(not(target_os = "emscripten"))]
 use crate::net::transport::Transport;
-use crate::render::shockwave::{RippleFx, RippleTuning};
+use crate::render::shockwave::{RippleFx, RippleShader, RippleTuning};
 use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
 use crate::tank::{Dir, TankKind};
@@ -332,7 +332,10 @@ impl Presentation {
             let (scene, composite) = if establishing {
                 (Camera::whole(field).target_size(), Layout::bare(field.0, field.1).window_size())
             } else {
-                (frame.target_size(), frame.target_size())
+                // The view with the shake's reach of the world round it
+                // (`Camera::overscanned`).
+                let held = frame.target_size(crate::shockwave::shake_overscan(&tuning()));
+                (held, held)
             };
             return Presentation { field, mode, followed: Some(frame), establishing, pinned, layout: frame.layout, view: frame.view, scene, composite };
         }
@@ -410,7 +413,9 @@ impl Presentation {
     }
 
     /// Re-create the render targets this presentation needs where their
-    /// sizes differ.
+    /// sizes differ. One that cannot be made leaves the target it has in
+    /// place and is asked for again on the next frame, with the failure on
+    /// screen meanwhile (`render::target::trouble`).
     fn fit_targets(
         &self,
         rl: &mut RaylibHandle,
@@ -420,17 +425,39 @@ impl Presentation {
         composite: &mut sola_raylib::prelude::RenderTexture2D,
         composite_size: &mut (i32, i32),
     ) {
-        if self.scene != *scene_size {
-            *scene_size = self.scene;
-            *scene_target = rl
-                .load_render_texture(thread, scene_size.0 as u32, scene_size.1 as u32)
-                .expect("failed re-creating scene render texture");
+        for (what, want, size, target) in [(SCENE_TARGET, self.scene, scene_size, scene_target), (COMPOSITE_TARGET, self.composite, composite_size, composite)] {
+            if want == *size {
+                continue;
+            }
+            match crate::render::target::load(rl, thread, want) {
+                Ok(made) => {
+                    *target = made;
+                    *size = want;
+                    crate::render::target::recovered(what);
+                }
+                Err(e) => crate::render::target::trouble(what, &e),
+            }
         }
-        if self.composite != *composite_size {
-            *composite_size = self.composite;
-            *composite = rl
-                .load_render_texture(thread, composite_size.0 as u32, composite_size.1 as u32)
-                .expect("failed re-creating composite render texture");
+    }
+}
+
+/// What the two targets every frame is drawn through are called when one
+/// cannot be made (`render::target::trouble`).
+const SCENE_TARGET: &str = "scene target";
+const COMPOSITE_TARGET: &str = "composite target";
+const SPLIT_TARGET: &str = "split screen target";
+
+/// The target `what` names, `size` texels, as the window opens - or, where
+/// it cannot be made, one texel to stand in for it and the size the frame
+/// asks for again (`Presentation::fit_targets`): the window then says what
+/// is wrong instead of closing.
+fn first_target(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread, what: &str, size: (i32, i32)) -> (sola_raylib::prelude::RenderTexture2D, (i32, i32)) {
+    match crate::render::target::load(rl, thread, size) {
+        Ok(target) => (target, size),
+        Err(e) => {
+            crate::render::target::trouble(what, &e);
+            let stand_in = crate::render::target::load(rl, thread, (1, 1)).expect("a one-texel render target can be made wherever the window was");
+            (stand_in, (1, 1))
         }
     }
 }
@@ -1137,15 +1164,6 @@ fn parse_resolution(s: &str) -> Result<(i32, i32), String> {
     Ok((width, height))
 }
 
-// raylib's PLATFORM_WEB build defaults to OpenGL ES2, and the iOS build is
-// raylib on its SDL backend with the ES 2.0 renderer (tools/setup_ios.sh);
-// both only accept GLSL ES 100 shaders - desktop's `#version 330` files
-// won't compile there. static/web/ holds GLSL ES 100 ports of the same
-// effects (see CLAUDE.md).
-fn shader_path(name: &str) -> String {
-    if crate::EMBEDDED { format!("static/web/{name}") } else { format!("static/{name}") }
-}
-
 
 /// Native-only tuning transport: re-apply `--tuning <file>` whenever its
 /// mtime changes (polled every `POLL_FRAMES` frames - a stat, not a read),
@@ -1194,7 +1212,7 @@ fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThre
     let shock = RippleFx::load(
         rl,
         thread,
-        &shader_path("shockwave.fs"),
+        RippleShader::Shockwave,
         RippleTuning {
             speed: tuning().shockwave_speed,
             width: tuning().shockwave_width,
@@ -1205,7 +1223,7 @@ fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThre
     let muzzle = RippleFx::load(
         rl,
         thread,
-        &shader_path("muzzle_flash.fs"),
+        RippleShader::MuzzleFlash,
         RippleTuning {
             speed: tuning().muzzle_flash_speed,
             width: tuning().muzzle_flash_width,
@@ -1216,7 +1234,7 @@ fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThre
     let impact = RippleFx::load(
         rl,
         thread,
-        &shader_path("impact.fs"),
+        RippleShader::Impact,
         RippleTuning {
             speed: tuning().impact_flash_speed,
             width: tuning().impact_flash_width,
@@ -1410,16 +1428,16 @@ pub fn run(args: Args) {
 
     let tanks_texture = rl
         .load_texture(&thread, "static/scifi_tanks_sheet.png")
-        .expect("failed loading tanks texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/scifi_tanks_sheet.png", &e.to_string()));
     let shells_texture = rl
         .load_texture(&thread, "static/shells.png")
-        .expect("failed loading shells texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/shells.png", &e.to_string()));
     let plasma_texture = rl
         .load_texture(&thread, "static/plasma.png")
-        .expect("failed loading plasma texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/plasma.png", &e.to_string()));
     let minigun_bullets_texture = rl
         .load_texture(&thread, "static/minigun_bullets.png")
-        .expect("failed loading minigun bullets texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/minigun_bullets.png", &e.to_string()));
     // One ground tileset and one tall-grass sheet per `map::Theme`, all
     // loaded up front and indexed by `Theme::ALL` position: the pair the
     // frame draws with is the live map's, so a builder THEME change or a
@@ -1427,63 +1445,61 @@ pub fn run(args: Args) {
     let ground_textures: Vec<sola_raylib::prelude::Texture2D> = crate::map::Theme::ALL
         .iter()
         .map(|t| {
-            rl.load_texture(&thread, t.ground_texture_path())
-                .unwrap_or_else(|e| panic!("failed loading {} ground texture: {e}", t.name()))
+            crate::render::target::sheet(&mut rl, &thread, t.ground_texture_path())
         })
         .collect();
     let grass_textures: Vec<sola_raylib::prelude::Texture2D> = crate::map::Theme::ALL
         .iter()
         .map(|t| {
-            rl.load_texture(&thread, t.grass_texture_path())
-                .unwrap_or_else(|e| panic!("failed loading {} grass texture: {e}", t.name()))
+            crate::render::target::sheet(&mut rl, &thread, t.grass_texture_path())
         })
         .collect();
     let theme_index = |t: crate::map::Theme| crate::map::Theme::ALL.iter().position(|x| *x == t).expect("every theme is in ALL");
     let trees_texture = rl
         .load_texture(&thread, "static/trees_sheet.png")
-        .expect("failed loading trees texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/trees_sheet.png", &e.to_string()));
     let bushes_texture = rl
         .load_texture(&thread, "static/bushes_sheet.png")
-        .expect("failed loading bushes texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/bushes_sheet.png", &e.to_string()));
     let towers_texture = rl
         .load_texture(&thread, "static/towers_sheet.png")
-        .expect("failed loading towers texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/towers_sheet.png", &e.to_string()));
     let crates_texture = rl
         .load_texture(&thread, "static/crates_sheet.png")
-        .expect("failed loading crates texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/crates_sheet.png", &e.to_string()));
     let pickup_glyphs_texture = rl
         .load_texture(&thread, "static/pickup_glyphs.png")
-        .expect("failed loading pickup symbols texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/pickup_glyphs.png", &e.to_string()));
     let aircraft_texture = rl
         .load_texture(&thread, "static/aircraft_sheet.png")
-        .expect("failed loading aircraft texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/aircraft_sheet.png", &e.to_string()));
     let portal_texture = rl
         .load_texture(&thread, "static/portal_sheet.png")
-        .expect("failed loading portal texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/portal_sheet.png", &e.to_string()));
     let tank_glow_texture = rl
         .load_texture(&thread, "static/scifi_tanks_glow.png")
-        .expect("failed loading tank glow texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/scifi_tanks_glow.png", &e.to_string()));
     let tank_modules_texture = rl
         .load_texture(&thread, "static/tank_modules.png")
-        .expect("failed loading tank modules texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/tank_modules.png", &e.to_string()));
     let tank_modules_glow_texture = rl
         .load_texture(&thread, "static/tank_modules_glow.png")
-        .expect("failed loading tank modules glow texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/tank_modules_glow.png", &e.to_string()));
     let missile_texture = rl
         .load_texture(&thread, "static/missile.png")
-        .expect("failed loading missile texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/missile.png", &e.to_string()));
     let obstacles_texture = rl
         .load_texture(&thread, "static/walls_sheet.png")
-        .expect("failed loading obstacles texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/walls_sheet.png", &e.to_string()));
     let props_texture = rl
         .load_texture(&thread, "static/props_sheet.png")
-        .expect("failed loading props texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/props_sheet.png", &e.to_string()));
     let target_texture = rl
         .load_texture(&thread, "static/target_sheet.png")
-        .expect("failed loading target texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/target_sheet.png", &e.to_string()));
     let barrel_explosion_texture = rl
         .load_texture(&thread, "static/barrel_explosion.png")
-        .expect("failed loading barrel explosion texture");
+        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/barrel_explosion.png", &e.to_string()));
     // One full clip set per bong character, in `BongKind::ALL` order -
     // `Bong::kind` (the map's choice for its side) picks which one
     // `game.rs::render` draws from. Loaded up front like every other
@@ -1504,6 +1520,9 @@ pub fn run(args: Args) {
             None
         }
     };
+    // The shader that keeps a turning sprite on its pixel grid
+    // (`render::turn`). A driver that cannot compile it turns them plain.
+    let turn_shader = crate::render::turn::TurnShader::load(&mut rl, &thread);
     // The weather's passes (docs/weather.md). A driver that cannot compile
     // them draws every sky without them (`weather::plain`), so the night
     // stays dark there too; the round plays the same either way.
@@ -1556,6 +1575,9 @@ pub fn run(args: Args) {
     // swaps the plates (`mode::Swap`), the window's size; and the camera
     // play last drew through, for a field map's.
     let mut swap_picture: Option<(sola_raylib::prelude::RenderTexture2D, (i32, i32))> = None;
+    // The picture a window off a whole scale is presented through
+    // (`view::Prescale`).
+    let mut prescale_fx = crate::render::view::PrescaleFx::default();
     let mut last_play_camera: Option<Camera> = None;
     // The layout the last frame put the world on the window with.
     let mut last_shown: Option<(View, Layout)> = None;
@@ -1576,18 +1598,12 @@ pub fn run(args: Args) {
     // block of margin for a followed field map. Re-created when that
     // changes size (a dev-server `restart` on a map of another size, the
     // builder loading one, a `camera` pin, a resized window).
-    let mut scene_size = Camera::whole((screen_width as f32, screen_height as f32)).target_size();
-    let mut scene_target = rl
-        .load_render_texture(&thread, scene_size.0 as u32, scene_size.1 as u32)
-        .expect("failed creating scene render texture");
+    let (mut scene_target, mut scene_size) = first_target(&mut rl, &thread, SCENE_TARGET, Camera::whole((screen_width as f32, screen_height as f32)).target_size());
     // The composited bitmap - the field, under the builder's bar in Build -
     // that `view::present` fits into the window, or a followed view's world
     // alone, the scene target's size (`Game::render`); re-created when that
     // size changes.
-    let mut composite_size = bitmap;
-    let mut composite = rl
-        .load_render_texture(&thread, bitmap.0 as u32, bitmap.1 as u32)
-        .expect("failed creating composite render texture");
+    let (mut composite, mut composite_size) = first_target(&mut rl, &thread, COMPOSITE_TARGET, bitmap);
     // The follow camera's state (follow.rs), and what it last followed in -
     // a room's round or the local one, and the map - so a change of either
     // cuts.
@@ -2267,6 +2283,7 @@ pub fn run(args: Args) {
                         pickup_glyphs: &pickup_glyphs_texture,
                         aircraft: &aircraft_texture,
                         portal: &portal_texture,
+                        turn: turn_shader.as_ref(),
                         blocks,
                     },
                     theme,
@@ -2532,11 +2549,14 @@ pub fn run(args: Args) {
                 let [first_lock, second_lock] = &mut texel_locks;
                 let own = matches!(shot.kind, crate::follow::ShotKind::Seat | crate::follow::ShotKind::Split);
                 let corner = first_lock.corner(shot.corner, shot.seat.filter(|_| own && !shot.cut).and_then(|seat| crate::follow::seat_anchor(game, seat)), advanced, &stage);
-                let follow_camera = Camera::following(field, corner, frame.framing.visible, 1.0, device_scale);
+                // Each view holds the shake's reach of the world round
+                // it, so a shaken screen shows what is there.
+                let overscan = crate::shockwave::shake_overscan(&tuning());
+                let follow_camera = Camera::following(field, corner, frame.framing.visible, 1.0, device_scale).overscanned(overscan);
                 // A couch pair apart: the second half's own camera.
                 let second = shot.split.map(|split| {
                     let corner = second_lock.corner(split.corner, Some(split.seat).filter(|_| !split.cut).and_then(|seat| crate::follow::seat_anchor(game, seat)), advanced, &stage);
-                    (Camera::following(field, corner, frame.framing.visible, 1.0, device_scale), split)
+                    (Camera::following(field, corner, frame.framing.visible, 1.0, device_scale).overscanned(overscan), split)
                 });
                 if shot.split.is_none() {
                     second_lock.cut();
@@ -2761,9 +2781,19 @@ pub fn run(args: Args) {
             _ => None,
         };
         // The second half's targets, the first half's size.
+        // Where they cannot be made the couch shares the first half's view.
         if split_view.is_some() && split_targets.as_ref().is_none_or(|(_, _, size)| *size != plan.scene) {
-            let mut make = || rl.load_render_texture(thread, plan.scene.0 as u32, plan.scene.1 as u32).expect("failed creating a split half's render texture");
-            split_targets = Some((make(), make(), plan.scene));
+            let mut make = || crate::render::target::load(rl, thread, plan.scene);
+            split_targets = match (make(), make()) {
+                (Ok(scene), Ok(composite)) => {
+                    crate::render::target::recovered(SPLIT_TARGET);
+                    Some((scene, composite, plan.scene))
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    crate::render::target::trouble(SPLIT_TARGET, &e);
+                    None
+                }
+            };
         }
         // The pictures the round keeps (the lava, its pools, the craters)
         // brought up to this frame for what the window shows, then every
@@ -2826,6 +2856,7 @@ pub fn run(args: Args) {
                     _ => None,
                 },
                 dissolve: Some(&mut dissolve),
+                prescale: Some(&mut prescale_fx),
                 swap: session.swap().filter(|swap| swap.from == Driver::Build).zip(swap_picture.as_ref()).map(|(swap, (picture, _))| (picture, 1.0 - swap.progress())),
             },
             &Textures {
@@ -2851,6 +2882,7 @@ pub fn run(args: Args) {
                 pickup_glyphs: &pickup_glyphs_texture,
                 aircraft: &aircraft_texture,
                 portal: &portal_texture,
+                turn: turn_shader.as_ref(),
                 blocks,
             },
             &layout,
@@ -2908,7 +2940,7 @@ fn take_swap_picture(
     }
     let size = (view.window.0.ceil() as i32, view.window.1.ceil() as i32);
     if !picture.as_ref().is_some_and(|(_, held)| *held == size) {
-        *picture = rl.load_render_texture(thread, size.0.max(1) as u32, size.1.max(1) as u32).ok().map(|t| (t, size));
+        *picture = crate::render::target::load(rl, thread, size).ok().map(|t| (t, size));
     }
     let margins = crate::margin::MarginFrame::of(&view, &layout).zip(margin_fx.picture()).map(|(frame, target)| {
         let at = layout.field_origin();

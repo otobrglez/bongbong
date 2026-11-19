@@ -90,6 +90,7 @@ keys! {
     ROUND_RESTARTING = "round-restarting";
     ROUND_BACK_TO_LOBBY = "round-back-to-lobby";
     PAUSED = "paused";
+    RENDER_TROUBLE = "render-trouble";
     MISSION_PROTECT = "mission-protect";
     MISSION_HUNT = "mission-hunt";
     MISSION_DESTROY = "mission-destroy";

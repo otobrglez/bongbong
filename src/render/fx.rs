@@ -149,14 +149,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
             if k <= 0.05 {
                 return;
             }
-            // A plume thins by the dither, in whole opaque blocks: blended
-            // white over the scene's target lands grey, since the target's
-            // own alpha drops with it.
-            let plume = p.kind == ParticleKind::Plume;
-            if plume && k < 0.5 {
-                return;
-            }
-            let fade = |c: Color| if plume { c } else { pyro::alpha(c, k.min(1.0)) };
+            let fade = |c: Color| pyro::alpha(c, k.min(1.0));
             let puff = Puff {
                 pos: at,
                 radius: (p.size * 0.5 + 0.5).max(BLOCK),
@@ -164,7 +157,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
                 shadow: shadow.map(fade),
                 lit: lit.map(fade),
                 core: None,
-                cover: if plume { k.min(1.0) } else { 1.0 },
+                cover: 1.0,
             };
             pyro::draw_puff(&mut b, &puff);
         }

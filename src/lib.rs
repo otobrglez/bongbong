@@ -1090,6 +1090,7 @@ pub mod touch;
 pub mod training;
 pub mod tower;
 pub mod trig;
+pub mod turn;
 pub mod tuning;
 pub mod view;
 pub mod volcano;
