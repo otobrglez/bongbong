@@ -7,22 +7,21 @@
 use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
+use std::collections::HashSet;
 use rand::RngExt;
 use rapier2d::prelude::RigidBodyHandle;
 use crate::math::Vec2;
 
-use crate::ai::Ai;
 use crate::blast::{BlastFx, BlastKind, Lean, Scorch};
 pub(crate) use crate::blast::BlastShape;
 use crate::decal::Decal;
-use crate::bong::Bong;
 use crate::map::{cell_to_world, world_to_cell};
-use crate::obstacle::{face_toward, Drum, Fuse, Material, Obstacle};
+use crate::obstacle::{Drum, Fuse, Material, Obstacle};
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
-use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position, RUBBLE_ROW_BARREL};
+use crate::{OBSTACLE_GRID_SIZE, Position, RUBBLE_ROW_BARREL};
 
-use super::combat::{explosion_hit, BlastParams};
+use super::combat::{BlastParams, Hurt};
 use super::{Event, Frame, Game, Spectacle};
 
 /// Everything `obstacle_died` needs to know about a tile that just died.
@@ -43,6 +42,17 @@ pub(super) struct DeadTile {
     pub charred: bool,
     /// Barrel only: what its blast looks like.
     pub shape: BlastShape,
+}
+
+/// Whether a tile of `material` closes a seam with a neighbour
+/// (`battlefield::tile_half_extent`): all but a tree and a lamp post.
+fn closes_seam(material: Material) -> bool {
+    !material.is_tree() && material != Material::Lamp
+}
+
+/// Whether `o` stands and closes a seam with a neighbour (`closes_seam`).
+fn closes_seams(o: &Obstacle) -> bool {
+    !o.destroyed && closes_seam(o.material)
 }
 
 /// What is damaging an obstacle - the fence and barrel rules differ by it.
@@ -401,14 +411,9 @@ impl Game {
         let reach = OBSTACLE_GRID_SIZE / 2.0 - into;
         let face = Position::new(mid.x + dir.x * reach, mid.y + dir.y * reach);
         let mut victims: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
-        victims.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
+        victims.extend(self.enemies_by_slot());
         for entity in victims {
-            let mut q = self.world.query_one::<&mut Tank>(entity);
-            let Ok(tank) = q.get() else { continue };
-            if tank.is_wreck() || by.same_side(tank.owner()) {
-                continue;
-            }
-            let (hc, hh) = tank.hull_bbox_world();
+            let Some((hc, hh)) = self.world.get::<&Tank>(entity).ok().filter(|tank| !tank.is_wreck() && !by.same_side(tank.owner())).map(|tank| tank.hull_bbox_world()) else { continue };
             let rel = Position::new(hc.x - face.x, hc.y - face.y);
             let along = rel.x * dir.x + rel.y * dir.y;
             let across = (rel.x * dir.y - rel.y * dir.x).abs();
@@ -420,27 +425,7 @@ impl Game {
             if d <= 0.0 {
                 continue;
             }
-            let landed = tank.take_damage(d, crate::MAX_DAMAGE);
-            tank.mark_hit();
-            tank.credit(by);
-            let killed = tank.is_wreck();
-            let target = match tank.owner() {
-                crate::shell::Owner::Player(player) => super::HitTarget::Player { player },
-                crate::shell::Owner::Enemy(slot) => super::HitTarget::Enemy { slot },
-                crate::shell::Owner::Tower { .. } => continue,
-            };
-            let at = tank.position;
-            f.events.push(Event::Hit { target, damage: landed, killed, x: face.x, y: face.y, cause: super::HitCause::Spall });
-            if killed {
-                f.kills.push((at, tank.owner()));
-            }
-            drop(q);
-            if !killed {
-                let mut q = self.world.query_one::<&mut Ai>(entity);
-                if let Ok(ai) = q.get() {
-                    ai.notify_hit();
-                }
-            }
+            self.hurt_tank(f, entity, Hurt::hit(d, super::HitCause::Spall, Some(by), face));
         }
     }
 
@@ -516,40 +501,89 @@ impl Game {
         }
     }
 
-    /// Fit a chunked tile's body to what of it still stands: its
-    /// seam-closed box (`battlefield::tile_half_extent`, as it was spawned)
-    /// cut down to its standing quadrants (`Chunks::solid_box`). A hull
-    /// never fits a quadrant's gap, but it no longer stops short of a
-    /// wall's half that is gone.
-    pub(crate) fn fit_tile_body(&mut self, entity: Entity) {
-        let (body, pos, material, base, solid) = {
-            let mut q = self.world.query_one::<&Obstacle>(entity);
-            let Ok(o) = q.get() else { return };
-            // A cage stands over its whole cell, whatever was left of the
-            // wall round it.
-            let whole = (Vec2::zero(), Vec2::new(OBSTACLE_GRID_SIZE / 2.0, OBSTACLE_GRID_SIZE / 2.0));
-            let solid = if o.cage.is_some() { whole } else {
-                let Some(solid) = o.chunks.and_then(|c| c.solid_box()) else { return };
-                solid
-            };
-            (o.body, o.position, o.material, o.hull_size() * 0.5, solid)
+    /// The cells whose tiles close a seam with a neighbour
+    /// (`battlefield::tile_half_extent`): every standing tile but the trees
+    /// and the lamp posts, the set `spawn_from_map` sized the bodies by
+    /// less what has died since.
+    fn seam_cells(&self) -> HashSet<(i32, i32)> {
+        self.world.query::<&Obstacle>().iter().filter(|o| closes_seams(o)).map(|o| crate::battlefield::pos_to_cell(o.position)).collect()
+    }
+
+    /// The box `entity`'s body takes among the seam-closing `cells`, as
+    /// (body, offset from the tile's centre, half-extents): its seam-closed
+    /// box (`battlefield::tile_half_extent`) cut down to its standing
+    /// quadrants (`Chunks::solid_box`); a cage stands over its whole cell,
+    /// whatever was left of the wall round it. `None` for a tile with
+    /// nothing standing.
+    fn tile_fit(&self, entity: Entity, cells: &HashSet<(i32, i32)>) -> Option<(RigidBodyHandle, Position, Position)> {
+        let mut q = self.world.query_one::<&Obstacle>(entity);
+        let o = q.get().ok()?;
+        let whole = (Vec2::zero(), Vec2::new(OBSTACLE_GRID_SIZE / 2.0, OBSTACLE_GRID_SIZE / 2.0));
+        let (off, h) = match o.chunks {
+            Some(chunks) if o.cage.is_none() => chunks.solid_box()?,
+            _ => whole,
         };
-        let cells: std::collections::HashSet<(i32, i32)> = self
-            .world
-            .query::<&Obstacle>()
-            .iter()
-            .filter(|o| !o.destroyed && !o.material.is_tree())
-            .map(|o| crate::battlefield::pos_to_cell(o.position))
-            .collect();
-        let (gx, gy) = crate::battlefield::pos_to_cell(pos);
-        let half = crate::battlefield::tile_half_extent(material, &cells, gx, gy, base);
-        let (off, h) = solid;
+        let (gx, gy) = crate::battlefield::pos_to_cell(o.position);
+        let half = crate::battlefield::tile_half_extent(o.material, cells, gx, gy, o.hull_size() * 0.5);
         let (x0, x1) = ((-half.x).max(off.x - h.x), half.x.min(off.x + h.x));
         let (y0, y1) = ((-half.y).max(off.y - h.y), half.y.min(off.y + h.y));
         if x0 >= x1 || y0 >= y1 {
+            return None;
+        }
+        Some((o.body, Position::new((x0 + x1) / 2.0, (y0 + y1) / 2.0), Position::new((x1 - x0) / 2.0, (y1 - y0) / 2.0)))
+    }
+
+    /// Fit a chunked or caged tile's body to what of it still stands
+    /// (`tile_fit`). A hull never fits a quadrant's gap, but it no longer
+    /// stops short of a wall's half that is gone.
+    pub(crate) fn fit_tile_body(&mut self, entity: Entity) {
+        if !self.world.get::<&Obstacle>(entity).is_ok_and(|o| o.cage.is_some() || o.chunks.is_some()) {
             return;
         }
-        self.physics.fit_static(body, Position::new((x0 + x1) / 2.0, (y0 + y1) / 2.0), Position::new((x1 - x0) / 2.0, (y1 - y0) / 2.0));
+        let cells = self.seam_cells();
+        if let Some((body, offset, half)) = self.tile_fit(entity, &cells) {
+            self.physics.fit_static(body, offset, half);
+        }
+    }
+
+    /// The structure tile at `dead` is gone: refit the bodies of the four
+    /// tiles beside it (`tile_fit`), in cell order. One that just lost its
+    /// only neighbour on an axis goes back to its own width there, so the
+    /// breach is as wide for a hull as it is for a shot (`hits::Terrain`)
+    /// and a hull driving through does not catch on a box still reaching
+    /// for the tile that is gone. A body whose box does not change is left
+    /// alone. Trees and lamp posts close no seam, so neither is refitted
+    /// and the death of one refits nothing. Every way a tile leaves the
+    /// field calls it: `obstacle_died`, a training door opening, a drum a
+    /// gravity well lifts, and a replica's `net::apply`.
+    pub(crate) fn refit_neighbours(&mut self, material: Material, dead: Position) {
+        if !closes_seam(material) {
+            return;
+        }
+        let (dc, dr) = crate::battlefield::pos_to_cell(dead);
+        let away = |(c, r): (i32, i32)| (c - dc).abs() + (r - dr).abs();
+        // All a refit reads: the four neighbours and their own neighbours.
+        let near: Vec<(Entity, (i32, i32))> = self
+            .world
+            .query::<(Entity, &Obstacle)>()
+            .iter()
+            .filter(|(_, o)| closes_seams(o))
+            .map(|(e, o)| (e, crate::battlefield::pos_to_cell(o.position)))
+            .filter(|&(_, cell)| (1..=2).contains(&away(cell)))
+            .collect();
+        let now: HashSet<(i32, i32)> = near.iter().map(|&(_, cell)| cell).collect();
+        let mut before = now.clone();
+        before.insert((dc, dr));
+        let mut beside: Vec<(Entity, (i32, i32))> = near.into_iter().filter(|&(_, cell)| away(cell) == 1).collect();
+        beside.sort_by_key(|&(_, (c, r))| (r, c));
+        for (entity, _) in beside {
+            let fit = self.tile_fit(entity, &now);
+            if fit != self.tile_fit(entity, &before)
+                && let Some((body, offset, half)) = fit
+            {
+                self.physics.fit_static(body, offset, half);
+            }
+        }
     }
 
     /// Record an obstacle's death and leave its rubble behind; an
@@ -579,6 +613,7 @@ impl Game {
         if let Some(kind) = crate::tower::TowerKind::from_material(material) {
             self.tower_died(f, kind, crate::tower::side_of_variant(variant), pos);
         }
+        self.refit_neighbours(material, pos);
     }
 
     /// A barrel's detonation: everyone inside the drum's blast radius
@@ -609,75 +644,7 @@ impl Game {
             params.knockback *= t.barrel_ram_kick_factor;
         }
         if live {
-            // The drums a gravity well holds in its reach go off too.
-            self.chain_held_drums(f, center, params.radius);
-            // Players first, in index order, then the enemies - the same
-            // draw order as a wreck's blast (`Game::apply_explosion`).
-            for player in self.seats_on_field().into_iter().flatten() {
-                let mut q = self.world.query_one::<&mut Tank>(player);
-                let tank = q.get().expect("player entity always has a Tank");
-                if let Some(dv) = explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
-                    f.shoves.push(tank.owner(), dv);
-                }
-            }
-            for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
-                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
-            }
-            let mut dead_bongs = Vec::new();
-            for bong in self.world.query::<&mut Bong>().iter() {
-                if bong.is_dead() {
-                    continue;
-                }
-                let dist = bong.position.distance_to(center);
-                if dist > params.radius {
-                    continue;
-                }
-                bong.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
-                if bong.is_dead() {
-                    dead_bongs.push(bong.position);
-                }
-            }
-            for pos in dead_bongs {
-                f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
-            }
-            // A lantern on the ground near the blast is knocked out.
-            let reach = params.radius * 0.6;
-            let mut broken = Vec::new();
-            self.lanterns.retain(|l| {
-                let hit = l.position.distance_to(center) <= reach;
-                if hit {
-                    broken.push(l.position);
-                }
-                !hit
-            });
-            for at in broken {
-                f.events.push(Event::LanternBroken { x: at.x, y: at.y });
-            }
-            // Collect first: `damage_obstacle` needs the world free.
-            let hits: Vec<(Entity, Material, f32)> = self
-                .world
-                .query::<(Entity, &mut Obstacle)>()
-                .iter()
-                .filter(|(_, o)| !o.destroyed && o.fuse.is_none())
-                .filter_map(|(e, o)| {
-                    let dist = o.position.distance_to(center);
-                    if dist > params.radius {
-                        return None;
-                    }
-                    // Soot on whichever face looked at the blast; a
-                    // wall's business only, and cosmetic.
-                    if o.material.is_wall() {
-                        o.scorched |= face_toward(o.position, center);
-                    }
-                    Some((e, o.material, 1.0 - dist / params.radius))
-                })
-                .collect();
-            for (entity, material, falloff) in hits {
-                // Barrels inside always chain - no roll needed.
-                let amount = if material.is_explosive() { f32::MAX } else { params.roll_damage(&mut f.rng) * falloff };
-                self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
-            }
-            self.blast_crates(f, center, &params);
+            self.blast(f, center, &params, &[]);
             // A lava bomb splashes burning lava round where it lands: a
             // plus at one cell, a diamond further, no RNG.
             if drum == Drum::Lava && t.volcano_pool_radius_cells >= 0 {
@@ -915,26 +882,24 @@ impl Game {
             if dps > 0.0 {
                 let half_cell = OBSTACLE_GRID_SIZE * 0.5;
                 let mut order: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
-                order.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
+                order.extend(self.enemies_by_slot());
                 for entity in order {
-                    let mut q = self.world.query_one::<&mut Tank>(entity);
-                    let Ok(tank) = q.get() else { continue };
                     // A heat shield keeps a burning cell off the hull too.
-                    if tank.is_wreck() || !tank.takes_heat() {
+                    let Some((at, reach)) = self
+                        .world
+                        .get::<&Tank>(entity)
+                        .ok()
+                        .filter(|tank| !tank.is_wreck() && tank.takes_heat())
+                        .map(|tank| (tank.position, tank.hull_size() * 0.5 + half_cell))
+                    else {
                         continue;
-                    }
-                    let reach = tank.hull_size() * 0.5 + half_cell;
+                    };
                     let over = burning.iter().any(|&(c, r)| {
                         let p = cell_to_world(c, r);
-                        (p.x - tank.position.x).abs() < reach && (p.y - tank.position.y).abs() < reach
+                        (p.x - at.x).abs() < reach && (p.y - at.y).abs() < reach
                     });
-                    if !over {
-                        continue;
-                    }
-                    tank.take_damage(dps * f.dt, MAX_DAMAGE);
-                    tank.mark_hit();
-                    if tank.is_wreck() {
-                        f.kills.push((tank.position, tank.owner()));
+                    if over {
+                        self.hurt_tank(f, entity, Hurt::contact(dps * f.dt, super::HitCause::Fire, None, at));
                     }
                 }
             }
@@ -1061,6 +1026,11 @@ impl Game {
                 charred.push((o.material, o.variant, o.position));
             }
         }
+        // In cell order: what the burnt tiles leave and set off is queued
+        // in it.
+        opened.sort_by_key(|&(_, at, _)| super::cell_order(at));
+        charred.sort_by_key(|&(_, _, at)| super::cell_order(at));
+        throws.sort_by_key(|&(at, ..)| super::cell_order(at));
         for (entity, position, broken) in opened {
             self.fit_tile_body(entity);
             f.events.push(Event::ChunksCharred { x: position.x, y: position.y, broken });
@@ -1143,6 +1113,8 @@ impl Game {
                 popped.push((entity, o.material, o.variant, o.position, *fuse));
             }
         }
+        // In cell order: each drum's blast is queued, and rolled, in it.
+        popped.sort_by_key(|&(.., at, _)| super::cell_order(at));
         for (entity, material, variant, position, fuse) in popped {
             let drum = Drum::from_variant(variant);
             if material.is_explosive() && drum == Drum::Fuel {
@@ -1308,18 +1280,21 @@ impl Game {
                 Some(limit) => {
                     o.ram_timer = if pushed { o.ram_timer + f.dt } else { (o.ram_timer - f.dt).max(0.0) };
                     if pushed && o.ram_timer >= limit {
-                        collapsed.push(entity);
+                        collapsed.push((super::cell_order(o.position), entity));
                     }
                 }
-                None if pushed && o.material.is_explosive() => barrel_hits.push(entity),
+                None if pushed && o.material.is_explosive() => barrel_hits.push((super::cell_order(o.position), entity)),
                 None => {}
             }
         }
-        for entity in collapsed {
+        // In cell order: a tile that dies queues what it leaves.
+        collapsed.sort();
+        barrel_hits.sort();
+        for (_, entity) in collapsed {
             self.damage_obstacle(f, entity, f32::MAX, DamageCause::Ram);
         }
         let ram_damage = tuning().barrel_ram_damage_per_second * f.dt;
-        for entity in barrel_hits {
+        for (_, entity) in barrel_hits {
             self.damage_obstacle(f, entity, ram_damage, DamageCause::Ram);
         }
     }

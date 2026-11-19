@@ -857,6 +857,9 @@ impl Fx {
                         self.burst(at, ParticleKind::Smoke, self.count(1), 14.0, &[SOOT_T]);
                     }
                     Event::EmberFlew { x, y, to_x, to_y } => self.pieces.ember(Position::new(x, y), Position::new(to_x, to_y)),
+                    // A blast's share, lava, fire and ooze are drawn by
+                    // their own events.
+                    Event::Hit { cause, .. } if !cause.is_shot() => {}
                     // A gauss rail's slug through a hull or a tile, or a
                     // rod crushing one: the flash alone - the bursts are
                     // the slug's own (`gauss::compose_slug`) and the rod's

@@ -206,8 +206,7 @@ impl Game {
             if tank.is_wreck() || tank.body.is_none() || tank.owner() == pulse.owner {
                 continue;
             }
-            let (c, h) = tank.hull_bbox_world();
-            if !swept(emp::box_reach(origin, c, Vec2::new(h.x, h.y))) {
+            if !swept(tank.target_shape().reach_from(origin)) {
                 continue;
             }
             pulse.struck.push(slot);

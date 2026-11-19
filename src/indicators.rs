@@ -960,7 +960,7 @@ impl Awareness {
                         unit(wave.cone.origin - pos)
                     })
                     .map(|from| Note::Hit { from }),
-                Event::Hit { target: HitTarget::Player { player }, x, y, .. } if player == seat => me
+                Event::Hit { target: HitTarget::Player { player }, x, y, cause, .. } if player == seat && cause.is_shot() => me
                     .and_then(|(entity, pos, hull, _)| hit_from(game, entity, pos, hull, Position::new(x, y)))
                     .map(|from| Note::Hit { from }),
                 Event::Ram { slot, other_slot, .. } if slot == me_slot || other_slot == me_slot => {

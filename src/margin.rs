@@ -24,7 +24,7 @@
 //! field, and `Margin` the ground and the shade made for it, kept until the
 //! round's floor changes or a window needs the ground to reach further.
 
-use crate::ground::{bake_margin_shade, GroundGrid, MarginShade};
+use crate::ground::{bake_margin_shade, GroundGrid, MarginShade, Moves};
 use crate::map::Theme;
 use crate::math::{Rectangle, Vec2};
 use crate::tuning::Tuning;
@@ -139,6 +139,8 @@ pub struct Margin {
     pub ground: GroundGrid,
     pub shade: MarginShade,
     pub theme: Theme,
+    /// What of `ground`'s picture its clock moves (`GroundGrid::moves`).
+    pub moves: Moves,
     /// What it was made from: the floor's build (`GroundGrid::stamp`) and
     /// the reach.
     floor: u64,
@@ -149,7 +151,9 @@ impl Margin {
     /// The margins of a round whose floor is `floor`, its field `field` px
     /// in the theme `theme`, the ground carried `cells` cells past it.
     pub fn new(floor: &GroundGrid, field: (f32, f32), theme: Theme, cells: usize, t: &Tuning) -> Margin {
-        Margin { ground: floor.beyond(cells), shade: bake_margin_shade(field.0, field.1, theme, t), theme, floor: floor.stamp(), cells }
+        let ground = floor.beyond(cells);
+        let moves = ground.moves();
+        Margin { ground, shade: bake_margin_shade(field.0, field.1, theme, t), theme, moves, floor: floor.stamp(), cells }
     }
 
     /// Whether this was made for the floor `floor` and reaches `cells`

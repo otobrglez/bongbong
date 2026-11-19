@@ -34,6 +34,23 @@ use crate::tuning::tuning;
 /// ground drawn for it.
 const UNDER_FIELD_PX: f32 = 16.0;
 
+/// What a kept picture of the margins under no sky was drawn from: all
+/// that `MarginFx::draw` reads then. The same again is the same picture.
+#[derive(Clone, Copy, PartialEq)]
+struct Kept {
+    frame: MarginFrame,
+    /// Which `Margin` (`MarginFx::made`) and its shade's bake.
+    margin: u64,
+    shade: u64,
+    theme: crate::map::Theme,
+    /// The ground tileset's texture.
+    sheet: u32,
+    backdrop: Color,
+    /// Where the ground's clock stands (`ground::clock_step`): the
+    /// water's frame and its flow marks.
+    clock: ground::ClockStep,
+}
+
 /// The targets the margins are drawn through, the frame's size.
 struct Targets {
     size: (i32, i32),
@@ -51,8 +68,14 @@ struct Targets {
 /// draws the flat bars.
 #[derive(Default)]
 pub struct MarginFx {
-    /// The ground and the shade, made for a round's floor and a reach.
+    /// The ground and the shade, made for a round's floor and a reach,
+    /// and how many have been made.
     margin: Option<Margin>,
+    made: u64,
+    /// What the picture in `Targets::out` was drawn from, while it is one
+    /// drawn under no sky: a frame that asks for the same again is handed
+    /// it as it is.
+    kept: Option<Kept>,
     /// The shade's image on the GPU.
     shade: BlockTexture,
     targets: Option<Targets>,
@@ -77,7 +100,9 @@ impl MarginFx {
     /// frame's weather and its passes - when the field has one, over the
     /// margins (`MarginFrame::parts`). `backdrop` is what lies past the
     /// ground's reach. `None` where a target could not be made, which
-    /// leaves the bars.
+    /// leaves the bars. Under no sky the picture is drawn only when what
+    /// it is drawn from changed (`Kept`): the floor, the window's shape,
+    /// the water's frame or its flow marks; a sky moves every frame.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -99,10 +124,24 @@ impl MarginFx {
         }
         if !self.margin.as_ref().is_some_and(|m| m.fits(scene.ground, frame.cells)) {
             self.margin = Some(Margin::new(scene.ground, scene.field, scene.theme, frame.cells, &tuning()));
+            self.made += 1;
         }
-        let MarginFx { margin, shade, targets, light, mask, .. } = self;
+        let MarginFx { margin, made, kept, shade, targets, light, mask, .. } = self;
         let margin = margin.as_ref().expect("made above");
         let shade_texture = shade.sync(rl, thread, &margin.shade.image).map(|(_, texture)| texture);
+        let asked = sky.is_none().then(|| Kept {
+            frame: *frame,
+            margin: *made,
+            shade: shade_texture.map_or(0, |_| margin.shade.image.stamp),
+            theme: margin.theme,
+            sheet: crate::render::canvas::Sheets::texture(textures, crate::canvas::Sheet::Ground(margin.theme)).id,
+            backdrop,
+            clock: ground::clock_step(margin.moves, scene.time, &tuning()),
+        });
+        if asked.is_some() && *kept == asked {
+            return targets.as_ref().map(|t| &t.out);
+        }
+        *kept = asked;
         let Targets { a, b, ground: bare, out, .. } = targets.as_mut().expect("made above");
         let rect = frame.rect;
         let world = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(rect.x, rect.y), rotation: 0.0, zoom: 1.0 };
@@ -239,6 +278,7 @@ impl MarginFx {
             self.light = Some(crate::render::target::load(rl, thread, (1, 1)).map_err(|e| format!("margin light map: {e}"))?);
         }
         self.targets = Some(Targets { size, a, b, ground, out });
+        self.kept = None;
         Ok(())
     }
 }

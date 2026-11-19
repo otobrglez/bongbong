@@ -974,6 +974,16 @@ pub struct Tank {
     /// (`Game::round_stats`). `None` until a seat touches it, and always on
     /// a seat's own tank.
     pub last_hit_by: Option<u8>,
+    /// Seconds `last_hit_by` still stands: `kill_credit_seconds` from the
+    /// seat's last hit, run down by `tick_credit`. A wreck long after the
+    /// seat last touched the tank is nobody's.
+    pub credit_timer: f32,
+    /// The lasting sources touching this hull this frame (`touch`), a bit
+    /// a cause, and those that touched it the frame before: how a stream,
+    /// lava, fire or ooze is reported once when it first reaches the hull
+    /// instead of every frame. Rolled over by `Game::tick_timers`.
+    pub contacts: u32,
+    pub contacts_before: u32,
     /// The seat that damaged this tank in the frame just simulated, if one
     /// did: set by `credit` beside `last_hit_by` and cleared at the top of
     /// every frame (`Game::tick_timers`). Nothing in the round reads it;
@@ -1158,6 +1168,9 @@ impl Default for Tank {
             flame_held: false,
             burn_timer: 0.0,
             last_hit_by: None,
+            credit_timer: 0.0,
+            contacts: 0,
+            contacts_before: 0,
             hit_by_seat: None,
             hit_by_enemy: None,
             slime_timer: 0.0,
@@ -2205,6 +2218,52 @@ impl Tank {
         self.hit_flash_timer = tuning().health_ring_hit_seconds;
     }
 
+    /// Run the kill credit down by `dt`: `kill_credit_seconds` after the
+    /// last seat's hit, `last_hit_by` is nobody again. A wreck keeps the
+    /// credit it died with.
+    pub fn tick_credit(&mut self, dt: f32) {
+        if self.is_wreck() || self.last_hit_by.is_none() {
+            return;
+        }
+        self.credit_timer -= dt;
+        if self.credit_timer <= 0.0 {
+            self.last_hit_by = None;
+            self.credit_timer = 0.0;
+        }
+    }
+
+    /// Note that the lasting source `cause` is on this hull this frame;
+    /// true when it was not the frame before and has not been noted yet
+    /// in this one - the first tick of the contact, the one reported
+    /// (`simulation::combat::Report::Contact`).
+    pub fn touch(&mut self, cause: crate::simulation::HitCause) -> bool {
+        let bit = 1u32 << (cause as u32 % 32);
+        let first = (self.contacts | self.contacts_before) & bit == 0;
+        self.contacts |= bit;
+        first
+    }
+
+    /// Wreck this hull whole (docs/rod-from-god.md "The impact"): a live
+    /// rainbow shield pops - `drain_shield_breaks` logs it - and the hull
+    /// is gone past the shield, the armour and friendly fire.
+    pub fn crush(&mut self) {
+        if self.is_shielded() {
+            self.shield_hp = 0.0;
+            self.shield_timer = 0.0;
+            self.shield_recharge_delay = 0.0;
+            self.shield_broke = true;
+        }
+        self.damage = MAX_DAMAGE;
+    }
+
+    /// This tank as a target (`shape::TargetShape`): its hull box and its
+    /// turret box where it stands and faces now. **Every weapon asks its
+    /// hit of this** - a shot by `swept`, a ring by `reach_from`, a cone by
+    /// `in_cone`.
+    pub fn target_shape(&self) -> crate::shape::TargetShape {
+        crate::shape::TargetShape { hull: self.hull_bbox_world(), turret: self.turret_bbox_world() }
+    }
+
     /// `by` has just damaged this tank: a seat's hit on an enemy makes
     /// that seat the one its wreck is credited to (`last_hit_by`) and the
     /// one that hit it this frame (`hit_by_seat`). An enemy's hit, or any
@@ -2214,6 +2273,7 @@ impl Tank {
         match (by, self.owner) {
             (Owner::Player(seat), owner) if !owner.is_player() => {
                 self.last_hit_by = Some(seat);
+                self.credit_timer = tuning().kill_credit_seconds;
                 self.hit_by_seat = Some(seat);
             }
             (Owner::Enemy(by), Owner::Enemy(own)) if by != own => self.hit_by_enemy = Some(by),
@@ -2222,13 +2282,13 @@ impl Tank {
     }
 
     /// Decide this tank's rotation and commanded velocity for one frame.
-    /// `move_dir` faces the hull that way and sets `velocity` to its
-    /// damage-scaled speed along that axis (classic 4-direction, no momentum;
-    /// see `effective_speed`). `face` turns the hull in place without moving
-    /// (used when an AI stops to aim). `move_dir` takes precedence. Shared by
-    /// the player and the AI so both move identically. Does not touch
-    /// `position` - that's the physics body's job once `velocity` is handed
-    /// to it; see `Game::drive_tank`.
+    /// `move_dir` faces the hull that way and sets `velocity`, the
+    /// *commanded* cardinal vector, to its damage-scaled speed along that
+    /// axis (see `effective_speed`). `face` turns the hull in place without
+    /// moving (used when an AI stops to aim). `move_dir` takes precedence.
+    /// Shared by the player and the AI so both move identically. Does not
+    /// touch `position` or the body: `simulation::drive_tank` accelerates
+    /// the body toward `velocity` with momentum, and the step moves it.
     pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>) {
         if self.spin > 0.0 {
             // Spun round by an overcharged slug's recoil: the stick
@@ -2899,10 +2959,11 @@ pub fn draw_tank_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
     if tank.is_wreck() {
         return;
     }
-    let base_hue = (time * tuning().shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
+    let t = tuning();
+    let base_hue = (time * t.shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
     let base = match tank.owner() {
-        Owner::Player(i) => with_opacity(team_color(i), tuning().player_ring_opacity * tuning().health_ring_base_opacity),
-        Owner::Enemy(_) | Owner::Tower { .. } => with_opacity(BLACK, tuning().health_ring_gap_opacity),
+        Owner::Player(i) => with_opacity(team_color(i), t.player_ring_opacity * t.health_ring_base_opacity),
+        Owner::Enemy(_) | Owner::Tower { .. } => with_opacity(BLACK, t.health_ring_gap_opacity),
     };
     let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
     draw_ground_ring(c, tank, time, style, shield_visibility(tank));
@@ -3162,8 +3223,9 @@ pub fn draw_ammo_pips(c: &mut impl Canvas, tank: &Tank, rounds: i32, max: i32, c
 pub fn draw_tank_shadow(c: &mut impl Canvas, tank: &Tank, time: f32) {
     let size = tank.sprite_size();
     let origin = draw_pivot(size);
-    let (dx, dy) = (tuning().shadow_dir_x * tuning().tank_shadow_offset, tuning().shadow_dir_y * tuning().tank_shadow_offset);
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
+    let t = tuning();
+    let (dx, dy) = (t.shadow_dir_x * t.tank_shadow_offset, t.shadow_dir_y * t.tank_shadow_offset);
+    let shadow = Color::new(0, 0, 0, (255.0 * t.tank_shadow_opacity * tank.alpha()) as u8);
     for (sheet, src, at, rot) in layers(tank, time, false) {
         c.blit(sheet, src, Rectangle::new(at.x + dx, at.y + dy, size, size), origin, rot, shadow);
     }

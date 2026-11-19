@@ -17,7 +17,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rand::RngExt;
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 
 use crate::ai::Ai;
 use crate::map::{CellObject, MapFile, cell_to_world};
@@ -58,7 +58,7 @@ const PLACEMENT_MAX_ATTEMPTS: u32 = 2000;
 /// rejected sample can sit inside a wall. Used by the enemy and
 /// bong-fallback placement loops in `Game::init`.
 pub fn sample_clear_position(
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
     width: f32,
     height: f32,
     margin_min: f32,
@@ -78,7 +78,7 @@ pub fn sample_clear_position(
 /// margin leaves no room on (`margin_min` at least half its length) is its
 /// centre line and draws nothing, so `enemy_spawn_margin_min` at 0.5
 /// collapses the band onto the field's middle instead of panicking.
-pub fn sample_band_position(rng: &mut SmallRng, width: f32, height: f32, margin_min: f32) -> Position {
+pub fn sample_band_position(rng: &mut RoundRng, width: f32, height: f32, margin_min: f32) -> Position {
     let mut axis = |length: f32| {
         let (lo, hi) = (margin_min, length - margin_min);
         if lo < hi { rng.random_range(lo..hi) } else { length * 0.5 }
@@ -345,12 +345,15 @@ pub fn relocate_unusable_spawns(physics: &mut Physics, world: &mut hecs::World, 
     // needs every *other* tank's current position, relocated ones
     // included, so two stranded tanks near each other never both land on
     // the exact same nearest cell.
-    let mut positions: Vec<(hecs::Entity, Position)> = world
+    let mut enemies: Vec<(usize, hecs::Entity, Position)> = world
         .query::<(hecs::Entity, &Tank)>()
         .with::<&Ai>()
         .iter()
-        .map(|(entity, tank)| (entity, tank.position))
+        .map(|(entity, tank)| (tank.owner_slot(), entity, tank.position))
         .collect();
+    // By owner slot: an earlier tank's new cell is kept clear by a later.
+    enemies.sort_by_key(|&(slot, ..)| slot);
+    let mut positions: Vec<(hecs::Entity, Position)> = enemies.into_iter().map(|(_, entity, at)| (entity, at)).collect();
     for i in 0..positions.len() {
         let (entity, pos) = positions[i];
         if grid.usable(pos) {
@@ -453,7 +456,7 @@ pub struct MapSpawn {
 pub fn spawn_from_map(
     physics: &mut Physics,
     world: &mut hecs::World,
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
     map: &MapFile,
     obstacle_half_extent: f32,
 ) -> MapSpawn {

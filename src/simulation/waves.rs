@@ -218,6 +218,9 @@ impl Game {
             let floor = super::wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
             super::wear::press_treads(&mut self.wear, tank, before, f.dt, &floor, look, now);
         }
+        // By owner slot: an arrival takes a body from rapier and may roll
+        // its role, and a tank that leaves the roll-in reorders the rest.
+        arrived.sort_by_key(|&(_, slot)| slot);
         for (entity, slot) in arrived {
             let (pos, half, mass) =
                 with_tank(&self.world, entity, |t| (t.position, t.move_half_extents(t.facing_along_x()), t.mass()));
@@ -798,6 +801,7 @@ impl Game {
                 gone.push((entity, tank.owner_slot(), tank.position));
             }
         }
+        gone.sort_by_key(|&(_, slot, _)| slot);
         for (entity, slot, at) in gone {
             if let Some(body) = with_tank(&self.world, entity, |t| t.body) {
                 self.physics.remove_body(body);

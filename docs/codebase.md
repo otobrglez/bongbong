@@ -30,9 +30,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   shipped stamps), `levels.toml` the level order (docs/levels.md), `docs/` design docs and sheet
   specs (read the doc a module names before changing it), `site/` the Astro web page, `k8s/` the
   room server's manifests (see its README and docs/platforms.md, Room server), `tests/` integration
-  tests, `netlab/` the network measurement harness (docs/tooling.md), `ntk/` the conference demo
-  crate (`just ntk <bin>`: numbered single-file raylib examples; `06_explosions` runs the real
-  engine through the `bongbong` lib and is the only one that depends on it).
+  tests, `netlab/` the network measurement harness (docs/tooling.md).
 
 ## App, session and data
 
@@ -403,6 +401,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   first uneven frame ends it (a hitch, the slowed end of a round; not a frame of no time). A clock
   in step keeps half a step to a step and a half owed, so going in or out moves the picture by
   half a step at most, never a whole one.
+- `knock.rs` — `Knock {speed, mass_exponent, max_speed, skid}` and **the one mass rule**,
+  `Knock::velocity(mass_factor) = min(speed / mass_factor^exponent, max_speed)`: the presets
+  `blast` (`blast_knock_mass_exponent`, `blast_knock_max_speed`, a `blast_skid_max_seconds` skid
+  so a thrown hull is seen to be thrown), `impact` (`impact_knock_mass_exponent`, no skid), `ram`
+  (already split by the two masses) and `recoil`; the hammer, the rod, the well and the rail build
+  theirs from their own rows. The world half is `simulation::combat::knock`.
+- `shape.rs` — `TargetShape` (`Tank::target_shape`): the hull box and the turret box and the three
+  questions a weapon asks of them - `swept` (what travels: shells, bolts, a flame's ray),
+  `reach_from` (what spreads from a point: a blast, the rod, an EMP ring, a well's collapse - to
+  the hull's nearest point, never the barrel) and `in_cone`/`points` (the hammer's wave). Also
+  `segment_hits_aabb` and `box_reach`.
 - `math.rs` — the plain value types the simulation and the renderer share: `Vec2` (`Position` is its
   alias; positions, velocities and directions, the arithmetic written out component by component in
   the order raylib's `Vector2` performs it so seeded replays and the probe fixtures keep their
@@ -417,7 +426,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   ulp apart (a seeded round split at frame 537 between a Mac and CI). `portable_math_tests` fails
   on a platform call outside its `PRESENTATION` list of files that only draw; add a new draw-only
   file there, never a file a round's outcome reads. Rapier runs with `enhanced-determinism` for the
-  same reason (docs/gameplay-verification-design.md).
+  same reason (docs/gameplay-verification-design.md). **The round's RNG** is `crate::RoundRng`
+  (`lib.rs`): `rand::rngs::Xoshiro256PlusPlus` named outright, because `SmallRng` is that generator
+  on a 64-bit target and xoshiro128++ on wasm32, where a seed then played another round from its
+  first draw. `round_rng_tests` pins the stream; `just probe-wasm-parity` compares the two builds.
 - `lib.rs` — *layout* constants and types only: `Position` (= `math::Vec2`), atlas columns/sizes,
   `*_VARIANTS`, collider boxes, grid/physics sizes, `HUD_BAR_HEIGHT` (40 UI points, a top plate's
   height with a mouse)/`Rect`/`Layout` (`bare`: the field alone at `(0, 0)`, play's bitmap and the
@@ -513,14 +525,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     tank within `missile_seek_range` (ties on slot; none = the launcher's aim point) and keeps its
     aim on that tank while it chases (an enemy's missile locks a seat only while its launcher stands
     inside that seat's sight box); `resolve_missiles` bursts the ones that landed (`missile_blast`:
-    `explosion_hit` for the side opposing the shooter, a shove for everyone, opposing bongs,
-    `damage_obstacle` for tiles). Missiles have **no hit test** - they fly over everything and only
+    `Game::blast` with `BlastParams::ordnance`: the side opposing the shooter hurt, a shove for
+    everyone, opposing bongs, `damage_obstacle` for tiles). Missiles have **no hit test** - they fly over everything and only
     the blast touches anything. No RNG beyond the blast's damage rolls.
   - `grenades.rs` (docs/grenade-launcher.md) — the grenades' world half (`grenade.rs` is the ball):
     `roll_grenades` (after `step_world` and the ram, on the end screen too) rolls each among
-    `Terrain::tile_boxes`/`edge_boxes` and every hull with a body (a live one at its body's
-    velocity, a wreck still); `resolve_grenades` sets off the spent ones in id order through
-    `side_blast` (missiles.rs: the side opposing the launcher hurt, everyone shoved, opposing bongs,
+    `Terrain::solid_boxes` (each tile's body as a hull meets it, `Entry::Solid`, and the bongs),
+    `edge_boxes` and every hull with a body (a live one at its body's velocity, a wreck still);
+    `resolve_grenades` sets off the spent ones in id order through `Game::blast`
+    (`BlastParams::grenade`: the side opposing the launcher hurt, everyone shoved, opposing bongs,
     tiles, crates) and `grenade_show` (a replica's off `Event::GrenadeBlast`: fireball, a
     `grenade_shock` ripple, the screen flash, scorch). A grenade moves no tank and a round without
     one draws exactly what it did; no RNG beyond the blast's damage rolls.
@@ -562,7 +575,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `resolve_lasers`) traces each leg through `Terrain::pierce_rewound` (every box in order to the
     first permanent tile or wall, iron cut overcharged, portals leg by leg), `pierce_hit` (fixed
     damage with keep factors, `DamageCause::Pierce`, `HitCause::Rail`), the recoil (`recoil_hull`
-    through `sonic::knock_hull`, `Shoves::allow_knock`, an overcharge's spin);
+    through `combat::knock_hull`, `Shoves::allow_knock`, an overcharge's spin);
     `rail_show`/`charge_end_show` the cosmetic halves a replica and a client's own release take;
     `gauss_senses` (`ai::GaussSense`; only for the tanks that think this tick - `field::thinks`,
     `field::mind`'s rule asked ahead - and only the lanes a counting seat or the quarry could be on,
@@ -575,7 +588,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     seat's press the nearest enemy in its sight box not under a tree's crown, an enemy's what its
     rule asked, `Tank::fpv_want`), `guide_drones` keeps or loses the lock (wreck, crown, portal),
     `advance_drones` flies them in the fixed step (gusts carry them), `resolve_drones` bursts a
-    dive's end as a small side blast (`side_blast_sparing`: hulls and bongs under a crown spared; in
+    dive's end as a small side blast (`Game::blast` with a spared list: hulls and bongs under a crown spared; in
     a crown the tree alone) or crashes a downed one a dud; `drone_show` the cosmetic half a replica
     takes. **Air targets** (`air.rs`, `Game::air_targets`/`strike_air`, the one setter): only
     bullets strike the air (`Terrain::sweep_air`, lag-compensated through `HitBoxFrame::air`), sides
@@ -630,7 +643,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     enemy tanks and standing enemy towers inside the seat's sight box (`air_targets_near`: nearest,
     a tank before a tower at the same distance, then slot or cell), flies it,
     and lets it fire: the heli's salvos are seeker missiles (`f.pending_missiles`, every missile
-    rule kept), the jet's cannon bursts and bombs `air_strike` (a `side_blast`, then
+    rule kept), the jet's cannon bursts and bombs `air_strike` (a `Game::blast`, then
     `air_strike_show`, which a replica plays off `Event::AirStrike`). The heli is an air target
     (`AirKey::Aircraft`; `strike_aircraft` via `strike_air`, `air_heli_hits` bullets or any other
     strike, `Event::AircraftDowned`). No RNG but the blasts' damage rolls. Tests:
@@ -640,8 +653,20 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     whole frame's movement (wrecks skipped). A player's shot is tested against an enemy's hull and
     turret grown by `player_shot_hit_pad_px` (read into the snapshot at `build`), while enemy shots,
     the seats, tiles and walls keep the exact boxes. A tower's shot flies over the tiles its aim
-    sees past (sandbags and fences, `Material::blocks_sight`). Projectiles have no physics body;
-    rapier is never consulted for hits. A shot is swept only up to the portal it goes into
+    sees past (sandbags and fences, `Material::blocks_sight`). **"Is it solid" is one question**,
+    `TerrainBox::entry(p0, p1, pad, mode)`: `Entry::Shot` is what flies at barrel height - the
+    sweep, a gauss slug (`pierce_rewound`, `rail_tiles`), each ray of a flame
+    (`first_shot_along`) and a shot a client draws ahead of the room - a whole tile by its box,
+    a chunked one by its standing chunks, a cage not at all; `Entry::Solid` is what is on the
+    ground - a bong's walk to a pack (`first_solid_along`) and a grenade's bounce
+    (`solid_boxes`, bongs included) - the tile's body as the physics has it (`solid_box`), a
+    cage's whole cell. A sonic wave keeps its own cell grid (`Material::blocks_sound`).
+    `line_of_fire` is the cover a blast respects: permanent tiles only, inset
+    `LINE_OF_FIRE_INSET_PX`, a tile the blast stands in ignored. The segment-against-box test is
+    `shape::segment_hits_aabb`. Projectiles have no physics body;
+    rapier is never consulted for hits. `Terrain` holds its tiles in cell order, its bongs in
+    `bong_order` and sweeps enemies by slot, so an exact tie on entry time is settled by place,
+    never by storage order. A shot is swept only up to the portal it goes into
     (`portals.rs`). `Terrain::line_of_sight` is the AI's fire gate. **Lag compensation**
     (docs/online-coop-prd.md §4.16, favour the shooter): `HitBoxHistory` is a ring of the last
     `REWIND_MAX_TICKS` (15, 250 ms) ticks of every live enemy's hull and turret boxes and every
@@ -653,9 +678,26 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     present, a tank with no entry is tested where it stands, and seats, tiles and walls stay
     current. The laser takes the firing seat's rewind; a shield deflection zeroes a shot's. A round
     with no seat views - every local round - rewinds nothing, and recording draws no RNG.
-  - `combat.rs` — `apply_hit` (damage, knockback, bong hop, `Ai::notify_hit`), `ram` (impact speed
-    from the bodies' *real* velocities; enemy pairs walked sorted i<j with a distance cull so the
-    RNG draw order is fixed), explosions.
+  - `combat.rs` — the three things every weapon shares. **`hurt`/`Game::hurt_tank` is the one way
+    a tank loses health** (`Hurt {amount, cap, by, at, report, crush}`): `Tank::take_damage` or the
+    rod's `crush`, the hit flash, the credit (`Tank::credit`, which runs out after
+    `kill_credit_seconds`), the report (`Report::Hit` an `Event::Hit` with what landed;
+    `Report::Contact` - a stream, lava, burning ground, ooze - one with damage 0 on the first tick
+    of the contact, `Tank::touch`, and on the tick that wrecks; `Report::Own` for a ram and a bite,
+    which log their own event), the kill list, and for an enemy that survives the alert
+    (`Ai::notify_hit`, or the tower grudge). It draws no RNG: a source rolls first. `HitCause`
+    names the source and travels as itself (protocol 34; `is_shot` false for `Blast`/`Lava`/`Fire`/`Slime`, which the painters, the
+    hit arrows and the probe's hit count skip). **`knock`/`knock_hull`/`shove` is the one shove**
+    over a `knock::Knock` and its one mass rule. **`Game::blast` is the one blast** over
+    `BlastParams` (`world`, `ordnance`, `tank_wreck` and the per-weapon constructors beside each
+    weapon): hulls in seat-then-slot order, each reached at the nearest point of its hull
+    (`TargetShape::reach_from`), hurt unless `spares` its side and thrown either way, with no
+    hurt and no shove behind a permanent tile (`Terrain::line_of_fire`; the damage roll is still
+    drawn so cover never moves the stream); then bongs (`BlastBongs`), lanterns, grenades, tiles
+    (`chains` is a drum's way with other drums) and crates, which no cover shields. `apply_hit`
+    (the roll, the funnel, the impact's knock, bong hop) and `ram` (impact speed from the bodies'
+    *real* velocities; enemy pairs walked sorted i<j with a distance cull so the RNG draw order is
+    fixed; a seat's ram alerts the enemy, two enemies bumping alert nobody) stand on them.
   - `engage.rs` — the engagement-slot ring (`EngageRing`; a seat ring's firing slots stand half a
     cell inside the seat's sight box, `EngageCtx::sight_box` - north and south at 224 px): world
     access as closures, reachability from one `Grid::components` flood fill per frame;
@@ -669,8 +711,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `debug_track_rows`, `clusters`/`CLUSTER_RADIUS_PX` (shared with the probe).
   - `props.rs` (docs/sandbags-barrels-fences.md, docs/barrel-explosion-variety.md) —
     `damage_obstacle` is the one place a tile loses health (fence one-shot odds, barrels on a `Fuse`
-    scaled by the drum kind, direct hit/ram pops at once); `apply_blast` (a `PendingBlast`: falloff
-    damage and knockback to both sides, bongs and tiles, sooted wall faces, oil pools, thrown and
+    scaled by the drum kind, direct hit/ram pops at once); `apply_blast` (a `PendingBlast`:
+    `Game::blast` with the drum's `BlastParams` - falloff damage and knockback to both sides, bongs
+    and tiles, sooted wall faces - then oil pools, thrown and
     re-thrown decals, flattened grass, burnt-in tracks, cook-offs); `tick_fires` (`GroundFire`:
     pools and oil-trail cells burn, spread, damage hulls, fuse drums, char the grass in them
     (`char_grass` - and `light_cell_as` chars a cell's grass the moment it is lit, whatever phase
@@ -696,8 +739,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `Tank::oil_cell`). Knob 0 (the default) returns before touching anything. No RNG.
   - `flame.rs` (docs/flamethrower-prd.md) — a `Cone` per held frame from the gun line's muzzle
     (`Tank::gun_line_muzzle`; the jet is *drawn* from the flamethrower module's nozzle,
-    `FlameJet::drawn`), reach capped at the first solid tile on the centre line, rate damage with
-    **no RNG in the whole phase**, afterburn dealt only on frames the stream is off the hull.
+    `FlameJet::drawn`), cast as five rays across its width (`RAYS`), each capped at the first tile a
+    shot would meet (`Terrain::first_shot_along`) and then at the first hull or bong it meets
+    (`TargetShape::swept`) - nothing burns behind a wall's corner or behind a tank; rate damage
+    through `hurt_tank` with **no RNG in the whole phase**, afterburn dealt only on frames the
+    stream is off the hull.
     Exposure: ground cells (`Game::heat`, a `BTreeMap`) and tiles gain heat under the stream and
     ignite at `flame_ignite_seconds` (`Event::Ignited`); the shooter's own cells never heat. The
     fuel pickup is player-only. Tests: `flame_tests.rs`.
@@ -1049,7 +1095,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`ActiveWeapon::full_load`), the vitals' own readout (`hud::WeaponSlot`) -
   (`ammo_pips`/`draw_ammo_pips`, `AMMO_PIPS` 10, drawn in `paint_field_glowing`), the shield ring,
   the locate ripple and `P1`..`P8` labels, all centred on the hull's `position` (no lag behind it). `Tank::hit_by_seat` is the per-frame twin of
-  `last_hit_by` and `Tank::hit_by_enemy` the other enemy that damaged an enemy this frame (the probe's fire tally; nothing in the round reads either). **One special weapon at a time** (`Tank::take_weapon`,
+  `last_hit_by` and `Tank::hit_by_enemy` the other enemy that damaged an enemy this frame (the probe's fire tally; nothing in the round reads either); the credit runs out `kill_credit_seconds` after the seat's last hit (`tick_credit`), and `touch`/`contacts` mark which lasting sources are on the hull so a contact is reported once. `target_shape` (`shape::TargetShape`) is the hull and turret boxes every weapon asks its hit of; `crush` is the rod's wreck. **One special weapon at a time** (`Tank::take_weapon`,
   `SPECIAL_WEAPONS`): a weapon crate replaces the special carried (its ammo lost) and stacks a
   crate's worth (`*_per_pickup`) on the same one, up to its carry limit (`*_max`, never under a
   crate - `ActiveWeapon::crate_load`); `active_weapon` is that special while it has ammo, else
@@ -1112,7 +1158,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   sheet (`is_drawn`: `Volcano` - a cone cell, permanent like Iron - and `Lamp`, a lamp post;
   docs/volcano.md). Ask the predicates (`is_permanent` - Iron, a volcano's cone and a training door -, `ricochets_shells` - Iron and the cone, never a door -, `blocks_sight`, `blocks_light`
   (the weather's shadows: walls but glass, and towers), `is_wall`/`is_prop`/`is_tree`,
-  `pass_over_chance`, `deflect_chance`, `ram_seconds`, `flammable_chance`, `is_explosive`), never
+  `pass_over_chance` - every tile an enemy sees over has one, so it never fires into a wall it
+  cannot see; a laser and a rail fly flat and roll neither it nor -, `deflect_chance`, `ram_seconds`, `flammable_chance`, `is_explosive`), never
   match variants. **Trees are 48 px art on a 32 px cell**: excluded from seam-closing in physics and
   hits (`battlefield::tile_half_extent`), no edge cap, drawn in the vegetation pass after the tanks;
   their idle is a colour shimmer, not motion, and a ram lean shifts whole 2 px bands. On a desert map
@@ -1140,7 +1187,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`solid_box`: the standing 16 px quadrants), and the order a fire takes a burning plank's chunks in
   (`burn_ranks`, `burn_state`; BB-84, docs/WALLS_SPEC.md §12). Plain data, no RNG. `Terrain::sweep` tests a chunked
   tile's standing chunks (`hits::segment_hits_chunks`), so a hole lets shots through - a loophole -
-  while `Game::fit_tile_body` keeps the tile's body over its standing quadrants. Every chunk a blow
+  while `Game::fit_tile_body` keeps the tile's body over its standing quadrants and
+  `Game::refit_neighbours` hands the four tiles beside a dead one their own width back (one rule,
+  `tile_fit`; a breach is as wide for a hull as for a shot; trees and lamp posts close no seam). Every chunk a blow
   breaks is an `Event::ChunksBroken`. What a breach does besides (BB-82, docs/WALLS_SPEC.md §10)
   lives in `props.rs`: `Game::spall` (a shell's breach hurts the tank sheltering behind,
   `HitCause::Spall`), `lay_rubble` (`chunks::Rubble`, `Game::rubble`: it slows a hull through
@@ -1792,7 +1841,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   line), and `frame_done` at the top of the loop, kept as averages over about half a second and as
   totals (`totals`, the probe's `phases:` line). Beside them `Draws` - what the last whole frame
   drew, counted where `GpuCanvas` and `render::pyro::Rl` forward to raylib (`blit`, `rect`,
-  `shape`; `texture_switches` from the id of each draw's texture, 0 for the shapes texture) and
+  `shape`; `texture_switches` from the id of each draw's texture, a rectangle's and a shape's being
+  the one `shapes_texture` named - the walls sheet's, `render/shapes.rs` - or 0 for raylib's own) and
   where a blend, shader or render-target scope opens (`blend`/`shader`/`target` hand their argument
   back, so the count sits in the call: `d.draw_blend_mode(frame_stages::blend(mode), ..)` - a new
   scope is written the same way) - and `Pace`, the last `WINDOW` (600) frames' worst and 99th
@@ -1804,7 +1854,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   test's its own. docs/tooling.md, Performance instruments, has the recipes and the baseline.
   `render/batch.rs` is `RenderBatch`: rlgl's batch raised to the desktop's 8192 quads on the GLES
   builds (the web, iOS, Android; ES 2's own is 2048), loaded after the window opens and held by the
-  frame closure.
+  frame closure. `render/shapes.rs` is the walls sheet's texture with the white block raylib draws
+  its shapes from (`SetShapesTexture`), so a rectangle and a wall sprite share a batch - a wall
+  piece is a shadow rectangle then its sprite. The texture is the sheet at the origin of one twice
+  as tall and no wider: halving a texture coordinate loses no bit, so every sample lands on the
+  texel it did. **No sheet is packed into an atlas at an offset or another size**: a turned
+  sprite's samples then round onto other texels (measured: 1 to 20 pixels a frame on the default
+  arena with only the tanks' sheet padded to 4096 px), so an atlas changes the picture.
 
 ## HUD and chrome
 
@@ -2081,7 +2137,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   at most four disjoint rects reaching `into` px under the field's edge, `Margin` the ground and
   shade made for a round's floor and reach (`fits`; reach rounded up to 4 cells, at most `MAX_CELLS`
   96, the plateau past it). Nothing stands or plays there; the simulation, the field's rect, `View`
-  and every pointer are untouched. `render/margin.rs` is `MarginFx`: into targets of the window's
+  and every pointer are untouched. Under no sky the picture is kept and drawn again only when what
+  it is drawn from changed (`Kept`: the frame, the floor, the backdrop, and `ground::clock_step` -
+  the water's frame and the whole pixels its flow marks have drifted, for a ground that has either,
+  `GroundGrid::moves`); a sky moves every frame. `render/margin.rs` is `MarginFx`: into targets of the window's
   world grown to whole 64 px steps (`MarginFrame::rect`; `window` is what is drawn of it), the ground once, the shade part by part, then the sky of its `render::weather::Scene` - a
   round's, or the builder's canvas's - through `render::weather`'s passes over the parts
   (`PassView::parts`) under a 1x1 light map of the ambient with the margin grid's own cell mask
@@ -2390,7 +2449,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     (`-lwebsocket.js` in `.cargo/config.toml`), the four callbacks pushing into an unbounded queue
     the frame drains - a hidden tab's backlog is caught up, never trimmed, or the delta chain
     breaks; `loopback.rs`, the rig's in-process pair with dialled delay, jitter and loss off a
-    seeded `SmallRng` per direction, head-of-line like the socket it stands in for, drivable at a
+    seeded `RoundRng` per direction, head-of-line like the socket it stands in for, drivable at a
     given `Instant` so its tests need no sleeping. `now.rs` is `Now`, where the client's half reads
     the time: the wall in every build that plays, or `Now::manual()`, a clock that moves only on
     `advance`. A test hands one manual clock to both loopback ends (`Loopback::set_clock`) and the

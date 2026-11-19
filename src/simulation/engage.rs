@@ -201,8 +201,8 @@ impl EngageRing {
     }
 
     /// Assign one target point to each tank in `engaged` (entity, current
-    /// position - callers pass these sorted by entity so the greedy order
-    /// is stable frame to frame). A tank prefers the axis it already stands
+    /// position - callers pass these in owner-slot order, which is the
+    /// greedy order). A tank prefers the axis it already stands
     /// closest to and the nearer side of it, and any firing slot over any
     /// reserve slot. A slot must be reachable from the tank and have line
     /// of sight to the player; a tank that finds none gets no target (and

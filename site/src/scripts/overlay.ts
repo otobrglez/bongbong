@@ -1,8 +1,9 @@
 // Where the page's own controls (Full screen, the App Store badge and Get
 // updates; on a touch screen Full screen and More) stand over the canvas,
-// published for the game (src/hud.rs `PageOverlay`, read once a
-// frame by src/app/web.rs): `window.bbOverlay` is `top x y width height`
-// in CSS pixels from the canvas's corner.
+// published for the game (src/hud.rs `PageOverlay`, read by
+// src/app/web.rs when the page says it changed, `window.bbChanged`):
+// `window.bbOverlay` is `top x y width height` in CSS pixels from the
+// canvas's corner.
 //
 // `x y width height` is the controls' box, which the game's off-screen
 // arrows keep off wherever it is. `top` is the band along the canvas's top
@@ -52,17 +53,22 @@ export function installOverlay(): void {
   const controls = document.querySelector<HTMLElement>(".overlay-controls");
   if (!canvas || !controls) return;
 
+  const say = (overlay: string) => {
+    if (overlay === window.bbOverlay) return;
+    window.bbOverlay = overlay;
+    if (window.bbChanged) window.bbChanged();
+  };
   const publish = () => {
     const c = canvas.getBoundingClientRect();
     const o = controls.getBoundingClientRect();
     if (c.width < 1 || c.height < 1 || o.width < 1 || o.height < 1) {
-      window.bbOverlay = "";
+      say("");
       return;
     }
     const x = o.left - c.left;
     const y = o.top - c.top;
     const top = touch && touch.matches ? Math.max(0, y + o.height + GAP_PX) : 0;
-    window.bbOverlay = [top, x, y, o.width, o.height].map((v) => Math.round(v * 100) / 100).join(" ");
+    say([top, x, y, o.width, o.height].map((v) => Math.round(v * 100) / 100).join(" "));
   };
 
   // The box moves with the canvas (full screen, immersive mode, a resize,

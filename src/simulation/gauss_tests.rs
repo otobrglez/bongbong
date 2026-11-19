@@ -1071,7 +1071,8 @@ fn a_sonic_shove_mid_charge_keeps_it() {
         let Game { world, physics, water, lava, craters, weather, time, .. } = &mut game;
         let footing = Footing::at(water, lava, craters, *weather, Position::new(96.0, 192.0), *time);
         let mut tank = world.get::<&mut Tank>(s).unwrap();
-        super::sonic::knock_hull(physics, &mut tank, Vec2::new(0.0, 1.0), 300.0, footing);
+        let knock = crate::knock::Knock { speed: 300.0, mass_exponent: 0.0, max_speed: f32::INFINITY, skid: tuning().sonic_skid_max_seconds };
+        super::combat::knock_hull(physics, &mut tank, Vec2::new(0.0, 1.0), knock, footing);
     }
     assert!(with_tank(&game.world, s, |t| t.skid > 0.0 && t.charge.is_some()), "skidding, still charging");
     let rest = charge(&mut game, full_ticks());

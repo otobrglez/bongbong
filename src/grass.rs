@@ -502,23 +502,21 @@ pub fn mean_wind(t: &Tuning) -> f32 {
 /// How far this tuft's tip leans right now, in world px: the wind, the
 /// tuft's own flutter, and whatever `tick` last recorded. Matted grass
 /// barely moves in the wind, so both are scaled down by the crush.
-fn bend(tuft: &GrassTuft, time: f32) -> f32 {
-    let t = tuning();
+fn bend(tuft: &GrassTuft, time: f32, t: &Tuning) -> f32 {
     // Per-tuft phase, so a field in a gust does not move as one sheet.
     let phase = (tuft.seed % 628) as f32 * 0.01;
     let flutter = crate::trig::sin(time * t.grass_sway_speed + phase) * t.grass_sway_px;
-    let lean = (wind_at(&t, tuft.base, time) + flutter) * (1.0 - tuft.crush) + tuft.push;
+    let lean = (wind_at(t, tuft.base, time) + flutter) * (1.0 - tuft.crush) + tuft.push;
     // Never over a tile beside the cell (`keep_off`).
     lean.clamp(-tuft.lean[0], tuft.lean[1])
 }
 
 /// Draw one tuft, leaning and squashed by however flat it is lying, from
-/// `theme`'s sheet (`Sheet::Grass`).
-pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32) {
+/// `theme`'s sheet (`Sheet::Grass`), under the knobs `t`.
+pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32, t: &Tuning) {
     let cell = GRASS_TEXTURE_SIZE;
-    let t = tuning();
     if let (Some(_), false) = (tuft.bush, tuft.burnt) {
-        draw_bush(c, tuft, theme);
+        draw_bush(c, tuft, theme, t);
         return;
     }
     if tuft.burnt {
@@ -541,7 +539,7 @@ pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32)
     // Rotating about the base is what makes the tip move and the root stay
     // put; raylib rotates about `origin`, so the origin sits at the bottom
     // centre of the sprite.
-    let rotation = crate::trig::atan2(bend(tuft, time), size).to_degrees();
+    let rotation = crate::trig::atan2(bend(tuft, time, t), size).to_degrees();
     let dest = Rectangle::new(tuft.base.x, tuft.base.y, size, height);
     let origin = Vec2::new(size / 2.0, height);
     c.blit(Sheet::Grass(theme), src, dest, origin, rotation, Color::WHITE);
@@ -559,8 +557,7 @@ pub fn bush_source_rec(bush: Bush, theme: Theme) -> Rectangle {
 /// `bush_crush_flatten` while a hull holds it down, and shoved sideways by
 /// a passing hull in whole 2 px blocks. No wind and no rotation (see the
 /// module comment).
-fn draw_bush(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme) {
-    let t = tuning();
+fn draw_bush(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, t: &Tuning) {
     let cell = BUSH_TEXTURE_SIZE;
     let dry = if theme == Theme::Desert { BUSH_DRY_COL } else { 0 };
     let flip = if tuft.seed & 1 != 0 { -1.0 } else { 1.0 };

@@ -92,13 +92,7 @@ impl EmpPulse {
     }
 }
 
-/// How far from `origin` the nearest point of the box `center` +- `half`
-/// lies: where a ring from `origin` reaches it. 0 inside the box.
-pub fn box_reach(origin: Position, center: Position, half: Vec2) -> f32 {
-    let dx = ((origin.x - center.x).abs() - half.x).max(0.0);
-    let dy = ((origin.y - center.y).abs() - half.y).max(0.0);
-    (dx * dx + dy * dy).sqrt()
-}
+pub use crate::shape::box_reach;
 
 /// What one seat in an enemy's ring is worth to it (docs/emp-burst.md
 /// "AI"): `emp_ai_seat_value`, plus `emp_ai_shield_value` with a live

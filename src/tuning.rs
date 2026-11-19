@@ -1893,8 +1893,28 @@ tunables! {
         /// fraction of the closing speed becomes push speed, mass-normalized
         /// so a lighter tank gets shoved further. Wrecks are infinite mass.
         knockback_strength: f32 = 0.2 in 0.0 ..= 2.0;
-        /// px/s cap on any one ram push - keeps it small.
+        /// px/s cap on any one ram push and on a shell's or a bolt's
+        /// impact shove - keeps them small.
         knockback_max_speed: f32 = 60.0 in 0.0 ..= 500.0;
+        /// How a chassis's mass resists a shell's or a bolt's impact shove
+        /// (`Knock::impact`): the speed over the mass factor to this power.
+        /// 1 is a blast's and a recoil's rule; 0 shoves every chassis alike.
+        impact_knock_mass_exponent: f32 = 1.0 in 0.0 ..= 4.0;
+        /// How a chassis's mass resists a blast's shove (`Knock::blast`),
+        /// whatever went off: a wreck, a drum, a missile, a grenade, a bomb.
+        blast_knock_mass_exponent: f32 = 1.0 in 0.0 ..= 4.0;
+        /// px/s cap on any one blast's shove, above every blast's own
+        /// `*_knockback*` row on the standard chassis so each row shows.
+        blast_knock_max_speed: f32 = 300.0 in 0.0 ..= 600.0;
+        /// The longest a blast takes a hull off its tracks, seconds
+        /// (`Tank::skid`): it slides until the skid's friction
+        /// (`sonic_skid_decel`) stops it or this runs out. 0 puts the shove
+        /// back under the drive, which erases it within a frame or two.
+        blast_skid_max_seconds: f32 = 0.35 in 0.0 ..= 2.0;
+        /// Seconds a seat's hit on an enemy keeps the credit for its wreck
+        /// (`Tank::last_hit_by`): an enemy that dies later than this after
+        /// the seat last touched it - in lava, to a drum - is nobody's.
+        kill_credit_seconds: f32 = 10.0 in 0.0 ..= 600.0;
         /// A tank's death deals a small splash of damage to opposing tanks
         /// within this radius (px), on top of the shockwave visual.
         explosion_radius: f32 = 110.0 in 0.0 ..= 600.0;
@@ -2651,6 +2671,19 @@ tunables! {
         /// Odds a shell, bullet or plasma bolt sails over a sandbag tile
         /// instead of hitting it, rolled per projectile per tile.
         sandbag_pass_over_chance: f64 = 0.35 in 0.0 ..= 1.0;
+        /// Odds a projectile goes through a fence's mesh instead of hitting
+        /// it. With the four below, every tile an enemy sees over
+        /// (`Material::blocks_sight`) has a pass-over chance.
+        fence_pass_over_chance: f64 = 0.5 in 0.0 ..= 1.0;
+        /// Odds a projectile misses a lamp post: a pole in a 32 px cell.
+        lamp_pass_over_chance: f64 = 0.75 in 0.0 ..= 1.0;
+        /// Odds a projectile sails over a fir sapling, below a hull's eye
+        /// line as a sandbag is.
+        sapling_pass_over_chance: f64 = 0.35 in 0.0 ..= 1.0;
+        /// Odds a projectile passes a palm: a trunk and a few fronds.
+        palm_pass_over_chance: f64 = 0.6 in 0.0 ..= 1.0;
+        /// Odds a projectile passes between a snag's bare limbs.
+        snag_pass_over_chance: f64 = 0.5 in 0.0 ..= 1.0;
         /// Seconds a tank has to keep pushing into a sandbag before it
         /// collapses. Kept under `enemy_breach_after_seconds` so an AI that
         /// drives into one pushes through instead of stopping to shoot it.

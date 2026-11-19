@@ -306,8 +306,13 @@ pub fn falloff(t: &Tuning, d: f32) -> f32 {
 
 /// The shove a hull of `mass_factor` gets `d` px out (px/s).
 pub fn shove_speed(t: &Tuning, mass_factor: f32, d: f32) -> f32 {
-    let resist = math::powf(mass_factor.max(0.05), t.rod_mass_exponent);
-    (t.rod_shove_speed * falloff(t, d) / resist).min(t.rod_shove_max_speed)
+    knock_at(t, d).velocity(mass_factor)
+}
+
+/// The knock the impact puts on a hull `d` px out in its shove ring
+/// (`Knock`): the rod's own mass rule and cap, and a skid.
+pub fn knock_at(t: &Tuning, d: f32) -> crate::knock::Knock {
+    crate::knock::Knock { speed: t.rod_shove_speed * falloff(t, d), mass_exponent: t.rod_mass_exponent, max_speed: t.rod_shove_max_speed, skid: t.sonic_skid_max_seconds }
 }
 
 /// A crater's cells: those within `reach` steps of `cell` (a plus at 1), in

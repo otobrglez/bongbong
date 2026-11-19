@@ -39,7 +39,8 @@
 //! `net/wire.rs` calls into this module - a test greps for it.
 
 use std::borrow::Cow;
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use fluent_bundle::concurrent::FluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource, FluentValue};
@@ -406,7 +407,15 @@ pub struct Catalogue {
     /// one when English is the choice). A lookup takes the first bundle
     /// that has the message.
     bundles: Vec<FluentBundle<FluentResource>>,
+    /// Every message with no placeholders asked for so far, by id, as
+    /// `message` answered it: the chrome asks for the same few words every
+    /// frame, and a catalogue's answer to one never changes.
+    plain: Mutex<HashMap<String, Option<String>>>,
 }
+
+/// How many answers `Catalogue::plain` keeps before it starts over: ids
+/// built from data names (`named`) are not a closed set.
+const PLAIN_KEPT: usize = 1024;
 
 impl Catalogue {
     /// The catalogue for `tag`, one of `SHIPPED_LANGS` - anything else is
@@ -419,7 +428,7 @@ impl Catalogue {
         if tag != DEFAULT_LANG {
             bundles.push(bundle(DEFAULT_LANG));
         }
-        Catalogue { tag, bundles }
+        Catalogue { tag, bundles, plain: Mutex::new(HashMap::new()) }
     }
 
     /// The language this catalogue speaks, as its shipped tag.
@@ -443,6 +452,23 @@ impl Catalogue {
     /// families whose ids are built from a data name - or `None` when no
     /// shipped language has it.
     pub fn message(&self, id: &str, args: &[Arg]) -> Option<String> {
+        if !args.is_empty() {
+            return self.format(id, args);
+        }
+        let mut plain = self.plain.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(kept) = plain.get(id) {
+            return kept.clone();
+        }
+        let answer = self.format(id, args);
+        if plain.len() >= PLAIN_KEPT {
+            plain.clear();
+        }
+        plain.insert(id.to_string(), answer.clone());
+        answer
+    }
+
+    /// `message`, through Fluent.
+    fn format(&self, id: &str, args: &[Arg]) -> Option<String> {
         let mut fluent_args = FluentArgs::new();
         for (name, value) in args {
             fluent_args.set(*name, value.clone());

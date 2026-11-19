@@ -14,7 +14,7 @@ use crate::math::{Color, Rectangle, Vec2};
 use crate::view::culled;
 use crate::pyro::{self, Puff, BLOCK, FIRE, SMOKE};
 use crate::render::pyro::Rl;
-use crate::tuning::tuning;
+use crate::tuning::{tuning, Tuning};
 
 /// Draw every particle `cull` keeps (`view::Camera::cull`; `None` keeps
 /// them all). Non-additive kinds first in one run, then all the additive
@@ -23,13 +23,14 @@ use crate::tuning::tuning;
 /// of two for the whole layer.
 pub fn draw(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
     let shown = |p: &&Particle| !culled(cull, p.pos) && !p.kind.on_ground();
+    let t = tuning();
     for p in fx.particles().iter().filter(|p| !p.kind.additive()).filter(shown) {
-        draw_particle(d, p);
+        draw_particle(d, p, &t);
     }
     if fx.particles().iter().filter(shown).any(|p| p.kind.additive()) {
         d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
             for p in fx.particles().iter().filter(|p| p.kind.additive()).filter(shown) {
-                draw_particle(&mut bd, p);
+                draw_particle(&mut bd, p, &t);
             }
         });
     }
@@ -39,8 +40,9 @@ pub fn draw(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
 /// foam - in the lit field (`paint_field_lit`), under the hulls and the
 /// light pass, so it darkens at night and shows in a headlight's beam.
 pub fn draw_ground(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
+    let t = tuning();
     for p in fx.particles().iter().filter(|p| p.kind.on_ground() && !culled(cull, p.pos)) {
-        draw_particle(d, p);
+        draw_particle(d, p, &t);
     }
 }
 
@@ -98,7 +100,7 @@ fn tinted(tint: Color, t: f32) -> Color {
     }
 }
 
-fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
+fn draw_particle(d: &mut impl RaylibDraw, p: &Particle, knobs: &Tuning) {
     let t = (p.age / p.life).clamp(0.0, 1.0);
     // `z` is a straight y-offset - the game looks straight down with no
     // perspective, so height is just "further up the screen".
@@ -135,11 +137,11 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
                 ParticleKind::Smoke => {
                     let soot = p.tint.r == SOOT_T.r && p.tint.g == SOOT_T.g && p.tint.b == SOOT_T.b;
                     let body = ramp_at(if soot { &SOOT_RAMP } else { &SMOKE_RAMP }, t);
-                    (tuning().smoke_opacity * 1.15, body, lighter(&SMOKE, body), None)
+                    (knobs.smoke_opacity * 1.15, body, lighter(&SMOKE, body), None)
                 }
                 ParticleKind::Trail => {
                     let body = ramp_at(&TRAIL_RAMP, t);
-                    (tuning().missile_trail_opacity, body, lighter(&SMOKE, body), darker(&SMOKE, body))
+                    (knobs.missile_trail_opacity, body, lighter(&SMOKE, body), darker(&SMOKE, body))
                 }
                 ParticleKind::Plume => (1.0, ramp_at(&PLUME_RAMP, t), Some(PLUME_LIT), Some(PLUME_SHADE)),
                 // Dust keeps the colour of whatever it came off.

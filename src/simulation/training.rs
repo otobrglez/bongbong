@@ -152,9 +152,13 @@ impl Game {
         if doors.is_empty() {
             return;
         }
+        let at: Vec<Position> = doors.iter().filter_map(|&(e, _)| self.world.get::<&Obstacle>(e).ok().map(|o| o.position)).collect();
         for (entity, body) in doors {
             self.physics.remove_body(body);
             self.world.despawn(entity).ok();
+        }
+        for at in at {
+            self.refit_neighbours(Material::Door, at);
         }
         self.refresh_edge_masks();
     }
@@ -571,11 +575,18 @@ impl Game {
 
     /// Take away every door the end of beat `beat` (1-based) opens.
     fn open_doors(&mut self, beat: usize, f: &mut Frame) {
+        let mut opened: Vec<Position> = Vec::new();
         for o in self.world.query::<&mut Obstacle>().iter() {
             if o.material == Material::Door && o.variant as usize == beat && !o.destroyed {
                 o.destroyed = true;
-                f.events.push(Event::DoorOpened { beat, x: o.position.x, y: o.position.y });
+                opened.push(o.position);
             }
+        }
+        // In cell order, and the walls beside each doorway let go of it.
+        opened.sort_by_key(|&at| super::cell_order(at));
+        for at in opened {
+            f.events.push(Event::DoorOpened { beat, x: at.x, y: at.y });
+            self.refit_neighbours(Material::Door, at);
         }
     }
 }

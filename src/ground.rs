@@ -617,6 +617,11 @@ impl GroundGrid {
         self.stamp
     }
 
+    /// What of this grid's picture `draw`'s clock moves.
+    pub fn moves(&self) -> Moves {
+        Moves { frames: self.tiles.iter().any(|frames| frames.iter().any(|tile| *tile != frames[0])), flow: self.current.iter().any(|c| *c != Current::Still) }
+    }
+
     /// Whether `other` draws the same floor: the same tiles, currents and
     /// floor shade, whatever either's stamp.
     #[cfg(test)]
@@ -626,6 +631,56 @@ impl GroundGrid {
             && self.current == other.current
             && self.shade().texels == other.shade().texels
     }
+}
+
+/// What of a grid's picture `draw`'s clock moves (`GroundGrid::moves`): the
+/// water's frames, where a tile has more than one, and the flow marks,
+/// where a cell has a current.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Moves {
+    pub frames: bool,
+    pub flow: bool,
+}
+
+/// Where `draw`'s clock stands for a grid (`clock_step`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClockStep {
+    frame: usize,
+    flow: FlowStep,
+}
+
+/// Where the flow marks stand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FlowStep {
+    /// The grid draws none.
+    Still,
+    /// The whole pixels the marks have drifted.
+    Px(i64),
+    /// The clock itself, where the drift is too near a whole pixel, or
+    /// too large, for `Px` to name the picture.
+    At(u32),
+}
+
+/// Where `draw`'s clock stands at `time` for a grid that `moves`: `draw`
+/// paints one picture of that grid at any two times this answers alike,
+/// so a picture kept of it (`render::margin`) is still the one to show.
+///
+/// The frame is `draw`'s own. A mark sits at the floor of a whole number
+/// plus the drift, `time` times the speed, halved onto the 2 px grid: that
+/// is the drift's floor's doing wherever the sum cannot round up to the
+/// next whole number - a drift under 100,000 px whose fraction is under
+/// 0.99, an f32 there being 0.008 px apart at most.
+pub fn clock_step(moves: Moves, time: f32, t: &Tuning) -> ClockStep {
+    let frame = if moves.frames { ((time / t.water_frame_seconds.max(0.01)).floor() as i64).rem_euclid(WATER_FRAME_COUNT as i64) as usize } else { 0 };
+    let drift = time * t.water_flow_speed;
+    let flow = if !moves.flow || t.water_flow_lanes <= 0 {
+        FlowStep::Still
+    } else if drift.abs() < 100_000.0 && drift - drift.floor() < 0.99 {
+        FlowStep::Px(drift.floor() as i64)
+    } else {
+        FlowStep::At(time.to_bits())
+    };
+    ClockStep { frame, flow }
 }
 
 /// Deterministic per-cell grass-fill variant pick, keyed by `seed` (one
@@ -2475,7 +2530,7 @@ mod tests {
         use std::collections::BTreeMap;
         let mut checked = 0;
         for seed in 0..16u64 {
-            let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+            let mut rng = crate::RoundRng::seed_from_u64(seed);
             let (cols, rows) = (14, 9);
             let height = if seed % 2 == 0 { rows as f32 } else { rows as f32 - 0.5 } * GROUND_WORLD_TILE;
             let width = cols as f32 * GROUND_WORLD_TILE;
@@ -2529,7 +2584,7 @@ mod tests {
 
     fn random_field(seed: u64) -> (Vec<Position>, Vec<Position>) {
         use rand::{RngExt, SeedableRng};
-        let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+        let mut rng = crate::RoundRng::seed_from_u64(seed);
         let (cols, rows) = (16i32, 12i32);
         let blobs: Vec<(f32, f32, f32)> = (0..rng.random_range(1..=5))
             .map(|_| (rng.random_range(0.0..cols as f32), rng.random_range(0.0..rows as f32), rng.random_range(1.5..4.0)))

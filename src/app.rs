@@ -83,16 +83,11 @@ fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
 /// maps keyCode 0x10 to the left key and never looks at `event.location`),
 /// so Right Shift would fire player 2's tank too: the page keeps
 /// `window.bbShift` (bit 1 = ShiftLeft, from `keydown`/`keyup` on
-/// `event.code`) and this reads it once a frame instead.
+/// `event.code`) and this is the game's reading of it (`web::read_page`,
+/// taken at the top of the frame when the page changed it).
 #[cfg(target_os = "emscripten")]
 fn left_shift_down(_rl: &RaylibHandle) -> bool {
-    unsafe extern "C" {
-        fn emscripten_run_script_int(script: *const std::os::raw::c_char) -> std::os::raw::c_int;
-    }
-    // SAFETY: a NUL-terminated literal, evaluated synchronously by the
-    // emscripten runtime; the value is a plain int.
-    let mask = unsafe { emscripten_run_script_int(c"(window.bbShift|0)".as_ptr()) };
-    mask & 1 != 0
+    web::shift_mask() & 1 != 0
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -1281,6 +1276,10 @@ pub fn run(args: Args) {
     // cell under a finger by (`touch_points_per_mm`).
     #[cfg(target_os = "emscripten")]
     web::set_full_size_ipad(page_string(PAGE_IPAD).trim() == "1");
+    // What the page changes while the game runs - the Shift key, its
+    // controls' box - is read again only when the page says so.
+    #[cfg(target_os = "emscripten")]
+    web::watch_page();
     eprintln!(
         "[motion] the platform asks for {}",
         match crate::motion::platform() {
@@ -1488,9 +1487,10 @@ pub fn run(args: Args) {
     let missile_texture = rl
         .load_texture(&thread, "static/missile.png")
         .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/missile.png", &e.to_string()));
-    let obstacles_texture = rl
-        .load_texture(&thread, "static/walls_sheet.png")
-        .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/walls_sheet.png", &e.to_string()));
+    // The walls sheet's texture carries the white the shapes are drawn
+    // from, so a rectangle batches with a wall sprite (`render::shapes`).
+    let (obstacles_texture, shapes_white) = crate::render::shapes::load(&mut rl, &thread, "static/walls_sheet.png").expect("failed loading obstacles texture");
+    crate::render::shapes::draw_from(&mut rl, &obstacles_texture, shapes_white);
     let props_texture = rl
         .load_texture(&thread, "static/props_sheet.png")
         .unwrap_or_else(|e| crate::render::target::sheet_failed(&mut rl, &thread, "static/props_sheet.png", &e.to_string()));

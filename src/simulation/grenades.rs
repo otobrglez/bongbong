@@ -27,12 +27,7 @@ impl BlastParams {
     /// One grenade's blast, launched by `by`.
     pub fn grenade(by: Owner) -> Self {
         let t = tuning();
-        BlastParams {
-            radius: t.grenade_blast_radius,
-            damage: (t.grenade_blast_damage_min, t.grenade_blast_damage_max),
-            knockback: t.grenade_blast_knockback_speed,
-            by: Some(by),
-        }
+        BlastParams::ordnance(t.grenade_blast_radius, (t.grenade_blast_damage_min, t.grenade_blast_damage_max), t.grenade_blast_knockback_speed, by)
     }
 }
 
@@ -47,7 +42,7 @@ impl Game {
         if self.world.query::<&Grenade>().iter().next().is_none() {
             return;
         }
-        let mut around = Surroundings { solids: f.terrain.tile_boxes(), edges: f.terrain.edge_boxes(), hulls: Vec::new() };
+        let mut around = Surroundings { solids: f.terrain.solid_boxes(), edges: f.terrain.edge_boxes(), hulls: Vec::new() };
         let mut add = |tank: &Tank, physics: &crate::physics::Physics| {
             let Some(body) = tank.body else { return };
             let moving = if tank.is_wreck() { Vec2::zero() } else { physics.velocity(body) };
@@ -57,13 +52,13 @@ impl Game {
         for player in self.players().into_iter().flatten() {
             super::with_tank(&self.world, player, |t| add(t, &self.physics));
         }
-        for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
+        for tank in super::ordered(self.world.query::<&Tank>().with::<&Ai>().iter(), |t| t.owner_slot()) {
             add(tank, &self.physics);
         }
         let t = crate::tuning::tuning();
         let (wells, now) = (&f.wells, self.time);
         let zones = &self.zones;
-        for grenade in self.world.query::<&mut Grenade>().iter() {
+        for grenade in super::ordered(self.world.query::<&mut Grenade>().iter(), |g| g.id) {
             // On a well's ring (docs/gravity-well.md "Grenades"): placed by
             // the clock, its fuse burning on; a ring whose well is gone
             // lets it go where it is.
@@ -125,7 +120,7 @@ impl Game {
             self.world.despawn(entity).ok();
             f.events.push(Event::GrenadeBlast { slot: owner.slot(), x: center.x, y: center.y });
             if live {
-                self.side_blast(f, center, owner, &BlastParams::grenade(owner));
+                self.blast(f, center, &BlastParams::grenade(owner), &[]);
             }
             let mut show = Spectacle::default();
             self.grenade_show(&mut show, center);

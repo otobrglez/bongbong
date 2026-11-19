@@ -337,8 +337,14 @@ pub fn falloff(t: &Tuning, d: f32) -> f32 {
 /// The shove a hull of chassis mass factor `mass_factor` takes at `d` px
 /// from the pivot (px/s).
 pub fn shove_speed(t: &Tuning, mass_factor: f32, d: f32) -> f32 {
-    let resist = math::powf(mass_factor.max(0.05), t.sonic_mass_exponent);
-    (t.sonic_shove_speed * falloff(t, d) / resist).min(t.sonic_shove_max_speed)
+    knock_at(t, d).velocity(mass_factor)
+}
+
+/// The knock a wave puts on a hull it reaches `d` px out (`Knock`): the
+/// shove fallen off with distance, the hammer's own mass rule and cap,
+/// and a skid.
+pub fn knock_at(t: &Tuning, d: f32) -> crate::knock::Knock {
+    crate::knock::Knock { speed: t.sonic_shove_speed * falloff(t, d), mass_exponent: t.sonic_mass_exponent, max_speed: t.sonic_shove_max_speed, skid: t.sonic_skid_max_seconds }
 }
 
 /// A skidding hull's friction on ground of `grip` (px/s^2).

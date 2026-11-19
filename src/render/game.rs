@@ -1499,7 +1499,7 @@ impl Game {
                         .min_by(|a, b| a.position.distance_to(at).total_cmp(&b.position.distance_to(at)));
                     let Some(o) = struck else { continue };
                     if o.material.is_tree() {
-                        crate::obstacle::draw_tree_tinted(c, o, 0.0, self.time, tint);
+                        crate::obstacle::draw_tree_tinted(c, o, 0.0, self.time, tint, &tuning());
                     } else if o.material.is_tower() {
                         if let Some(v) = self.tower_views().into_iter().find(|v| v.position.distance_to(o.position) < 1.0) {
                             crate::tower::draw_tower_tinted(c, v.kind, v.side, v.position, v.stage, v.heading, tint);
@@ -1762,21 +1762,24 @@ impl Game {
         for glob in &self.globs {
             crate::tower::draw_glob(&mut GpuCanvas::new(d, textures), glob);
         }
-        d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| self.draw_towers_light(&mut bd));
-
         // The tanks' own lights - lamps, strips, sensor eyes, the modules'
         // lenses, a wreck's embers - under a dark sky, which multiplied
         // their paint down with everything else (`tank::draw_tank_glow`).
         // `day_pools` is 1 in daylight and falls as the sky's lights rise.
+        // They follow the towers' in the same additive block, which a
+        // frame with neither does not open.
         let tank_glow = 1.0 - day_pools;
-        if tank_glow > 0.0 {
+        if tank_glow > 0.0 || !self.towers.is_empty() || !self.globs.is_empty() {
             d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
-                let mut c = GpuCanvas::new(&mut bd, textures);
-                for tank in self.world.query::<&Tank>().iter() {
-                    if (self.hide_players && tank.is_player()) || culled(cull, tank.position) {
-                        continue;
+                self.draw_towers_light(&mut bd);
+                if tank_glow > 0.0 {
+                    let mut c = GpuCanvas::new(&mut bd, textures);
+                    for tank in self.world.query::<&Tank>().iter() {
+                        if (self.hide_players && tank.is_player()) || culled(cull, tank.position) {
+                            continue;
+                        }
+                        crate::tank::draw_tank_glow(&mut c, tank, self.time, tank_glow);
                     }
-                    crate::tank::draw_tank_glow(&mut c, tank, self.time, tank_glow);
                 }
             });
         }
@@ -2143,7 +2146,7 @@ impl Game {
                 for (o, open) in &opens {
                     if open.crate_alpha > 0.0 {
                         let tint = pyro::alpha(Color::WHITE, open.crate_alpha);
-                        crate::pickup::draw_crate(&mut c, o.kind, o.at, crate::CRATE_COL_INTACT, self.shadows_enabled, tint);
+                        crate::pickup::draw_crate(&mut c, o.kind, o.at, crate::CRATE_COL_INTACT, self.shadows_enabled, tint, &t);
                     }
                     pyro::draw(&mut c, &open.shapes);
                     if let Some(symbol) = open.symbol {
@@ -2162,7 +2165,7 @@ impl Game {
                     for (o, open) in &opens {
                         if open.crate_flash > 0.0 {
                             let tint = pyro::alpha(Color::WHITE, open.crate_flash);
-                            crate::pickup::draw_crate(&mut c, o.kind, o.at, crate::CRATE_COL_INTACT, false, tint);
+                            crate::pickup::draw_crate(&mut c, o.kind, o.at, crate::CRATE_COL_INTACT, false, tint, &t);
                         }
                         if let Some(symbol) = open.symbol.filter(|s| s.flash > 0.0) {
                             crate::pickup::draw_glyph(&mut c, o.kind, symbol.pos, symbol.size, pyro::alpha(Color::WHITE, symbol.flash));

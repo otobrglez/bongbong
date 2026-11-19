@@ -130,9 +130,19 @@ probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames
 # bong-block, spin=1 (maze, pockets, props, tight-corridors), churn=24
 # (maze, pockets), clustering=4 (choke, maze), never-arrived=4 maze,
 # pile-up=2 maze; the rest read 0. All 90 rounds run to the frame cap.
+# Re-read 2026-11-19 (BB-166) once every shove took the one mass rule
+# (`knock::Knock`): a shell's impact is divided by the chassis's mass
+# factor and a blast throws a hull into a short skid, so every round with
+# a hit in it replays differently. Five readings stand one to three over
+# their ceilings - border-stuck=6 and churn=25 (pockets), jitter=14
+# (choke), clustering=7 and never-arrived=5 (maze) - while staircase fell
+# to 15; the nine maps' total went 352 to 360. Over six seed bases (60
+# rounds a map) the same kinds do not move: maze clustering 42 to 43 and
+# never-arrived 22 to 20, choke jitter 79 to 69, pockets border-stuck 24
+# to 24 and churn 131 to 128.
 # Re-baseline as `probe-fixtures` is: on purpose, never to go green. CI
 # runs this recipe too.
-survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=5 --budget jitter=13 --budget staircase=17 --budget spin=1 --budget churn=24 --budget clustering=4 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=4 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0"
+survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=14 --budget staircase=17 --budget spin=1 --budget churn=25 --budget clustering=7 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0"
 
 probe-survive *args: (_probe-maps "probe-survive" "maps/test/*.toml" "--scenario survive --frames 1800 --rounds 10 --seed 1000 " + survive_ceilings + " " + args)
 
@@ -273,9 +283,14 @@ _probe-maps name maps sweep:
 # make; stall=1, wall-grind=1, low-progress=1 and tank-grind=1 stand one
 # over their 0. border-stuck=8 stands over a 6 (castle-moat), spin=12 over
 # a 5 and churn=43 over a 26 (both hedge-maze).
+# staircase=30 is hedge-maze re-read 2026-11-19 (BB-166), one over the 29
+# it stood at, with the one mass rule for every shove (see
+# `survive_ceilings`): the seven maps' total fell from 213 to 200, and
+# over six seed bases hedge-maze's staircases read 148 before and 150
+# after.
 # How the maps are run is `_probe-maps`: one per core, about a minute in a
 # debug build. CI runs this recipe (.github/workflows/ci.yml).
-field_ceilings := "--budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=7 --budget staircase=29 --budget spin=12 --budget churn=43 --budget clustering=1 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=1 --budget offbox-fire=0"
+field_ceilings := "--budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=7 --budget staircase=30 --budget spin=12 --budget churn=43 --budget clustering=1 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=1 --budget offbox-fire=0"
 
 probe-fields *args: (_probe-maps "probe-fields" "maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml" "--frames 3600 --rounds 10 --seed 1000 " + field_ceilings + " " + args)
 
@@ -545,6 +560,14 @@ perf-field *ARGS:
 perf-field-wasm *ARGS:
     tools/perf/field_wasm.sh {{ARGS}}
 
+# Does a seed play the same round in wasm as natively: both probes print
+# `Game::state_hash` every frame (`--state-hash-every 1`) for 600 frames
+# of `defend` at seed 1000 on the default arena, longwater and the perf
+# map, and the lines must match (tools/perf/wasm_parity.sh). Arguments
+# replace the three runs with one.
+probe-wasm-parity *ARGS:
+    tools/perf/wasm_parity.sh {{ARGS}}
+
 # --- iOS simulator (docs/ios-native-port-prd.md, CLAUDE.md's iOS section) ---
 # Every recipe runs through tools/ios/env.sh: Xcode as DEVELOPER_DIR (the
 # devenv shell points it at nix's apple-sdk), Xcode's clang as the host
@@ -695,11 +718,6 @@ android-tap X Y:
     bash -c 'source tools/android/env.sh; adb shell input tap {{X}} {{Y}}'
 android-swipe X1 Y1 X2 Y2 MS="300":
     bash -c 'source tools/android/env.sh; adb shell input swipe {{X1}} {{Y1}} {{X2}} {{Y2}} {{MS}}'
-
-# Conference demos (ntk/): isolated raylib-with-Rust examples, one file per
-# demo under ntk/src/bin/. `just ntk 01_hello`.
-ntk NAME *ARGS:
-    cargo run -p ntk-demos --bin {{NAME}} -- {{ARGS}}
 
 # --- Releases (CLAUDE.md's Releases section, tools/release/) ---
 

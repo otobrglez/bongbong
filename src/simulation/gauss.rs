@@ -20,8 +20,9 @@ use crate::shell::Owner;
 use crate::shockwave::Shockwave;
 use crate::tank::{ActiveWeapon, ChargeEdge, ChargeEnd, ChargeStage, Dir, Tank};
 use crate::tuning::tuning;
-use crate::{MAX_DAMAGE, Position};
+use crate::Position;
 
+use super::combat::Hurt;
 use super::hits::{self, ShellTarget};
 use super::props::DamageCause;
 use super::{Event, Footing, Frame, Game, HitCause, HitTarget, Spectacle, laser_reach, portals};
@@ -163,9 +164,13 @@ pub(super) fn fire_charge(f: &mut Frame, entity: Entity, tank: &mut Tank, owner:
 /// own release (`Game::predict_seat_with`) alike.
 pub(super) fn recoil_hull(physics: &mut crate::physics::Physics, tank: &mut Tank, dir: Vec2, overcharged: bool, footing: Footing) -> Option<(Vec2, f32)> {
     let t = tuning();
-    let mass = t.tank_mass_factor[tank.row.clamp(0, 11) as usize];
-    let speed = gauss::recoil_speed(&t, mass, overcharged, crate::sonic::skid_friction(&t, 1.0));
-    let knocked = super::sonic::knock_hull(physics, tank, dir * -1.0, speed, footing)?;
+    let recoil = crate::knock::Knock {
+        speed: gauss::recoil_speed(&t, 1.0, overcharged, crate::sonic::skid_friction(&t, 1.0)),
+        mass_exponent: t.gauss_recoil_mass_exponent,
+        max_speed: f32::INFINITY,
+        skid: t.sonic_skid_max_seconds,
+    };
+    let knocked = super::combat::knock_hull(physics, tank, dir * -1.0, recoil, footing)?;
     if overcharged {
         tank.rotation = (tank.rotation + 180.0).rem_euclid(360.0);
         tank.spin = tank.spin.max(tank.skid);
@@ -331,35 +336,18 @@ impl Game {
         let t = tuning();
         match target {
             ShellTarget::Tank(entity) => {
-                let (what, survived) = {
-                    let mut q = self.world.query_one::<&mut Tank>(entity);
-                    let tank = q.get().ok()?;
+                let (what, seat) = {
+                    let tank = self.world.get::<&Tank>(entity).ok()?;
                     if tank.is_wreck() {
                         return None;
                     }
-                    let what = if tank.is_shielded() { Pierced::Shield } else { Pierced::Tank };
-                    let mut d = *damage;
-                    if shooter.is_player() && tank.owner().is_player() {
-                        d *= t.friendly_fire_damage_factor;
-                    }
-                    let landed = tank.take_damage(d, MAX_DAMAGE);
-                    tank.mark_hit();
-                    tank.credit(shooter);
-                    let killed = tank.is_wreck();
-                    let hit_target = match tank.owner() {
-                        Owner::Player(player) => HitTarget::Player { player },
-                        Owner::Enemy(slot) => HitTarget::Enemy { slot },
-                        Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
-                    };
-                    f.events.push(Event::Hit { target: hit_target, damage: landed, killed, x: at.x, y: at.y, cause: HitCause::Rail });
-                    if killed {
-                        f.kills.push((tank.position, tank.owner()));
-                    }
-                    (what, !killed)
+                    (if tank.is_shielded() { Pierced::Shield } else { Pierced::Tank }, tank.owner().is_player())
                 };
-                if survived && let Ok(ai) = self.world.query_one_mut::<&mut crate::ai::Ai>(entity) {
-                    ai.notify_hit();
+                let mut d = *damage;
+                if shooter.is_player() && seat {
+                    d *= t.friendly_fire_damage_factor;
                 }
+                self.hurt_tank(f, entity, Hurt::hit(d, HitCause::Rail, Some(shooter), at));
                 *damage *= t.gauss_pierce_keep;
                 Some(what)
             }
