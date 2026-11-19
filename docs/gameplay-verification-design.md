@@ -189,9 +189,16 @@ of `update` catches a missed restore on the very next frame).
 
 Notes:
 
-- `SmallRng` is `rand::rngs::SmallRng` (unconditionally exported in rand
-  0.10; `SeedableRng::seed_from_u64` runs SplitMix64 internally, so even
-  adjacent seeds like `base + round` are well-decorrelated).
+- The stream's type is `crate::RoundRng`, an alias of
+  `rand::rngs::Xoshiro256PlusPlus` (`SeedableRng::seed_from_u64` runs
+  SplitMix64 internally, so even adjacent seeds like `base + round` are
+  well-decorrelated). It is not `rand::rngs::SmallRng`, which the
+  snippets here still spell: `SmallRng` picks its generator by pointer
+  width - xoshiro256++ on 64-bit targets, xoshiro128++ on wasm32 - so
+  the same seed played a different round in the browser, differing from
+  the first draw (BB-159). The alias is the same generator and the same
+  bits on every native target. `just probe-wasm-parity` compares the
+  per-frame `Game::state_hash` of a native and a wasm probe.
 - The one remaining `ThreadRng` use inside the game is the entropy draw for
   an unseeded round's seed — one `u64`, after which everything flows from
   the `SmallRng` stream.

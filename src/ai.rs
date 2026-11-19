@@ -1,7 +1,7 @@
 use crate::tuning::tuning;
 use serde::{Deserialize, Serialize};
 use rand::RngExt;
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 use crate::math::Vec2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
@@ -1352,7 +1352,7 @@ impl Ai {
         movers: &[Mover],
         my_index: usize,
         grid: &Grid,
-        rng: &mut SmallRng,
+        rng: &mut RoundRng,
         alert: Option<Position>,
         engage_target: Option<Position>,
         pickups: &[(PickupKind, Position)],
@@ -1918,7 +1918,7 @@ impl Ai {
         margin: f32,
         ctx: AvoidCtx,
         grid: &Grid,
-        rng: &mut SmallRng,
+        rng: &mut RoundRng,
     ) -> Dir {
         let heading = self.route_heading();
         let route = if ctx.on_portal_cooldown {
@@ -1996,7 +1996,7 @@ impl Ai {
         leash: Option<Leash>,
         ctx: AvoidCtx,
         grid: &Grid,
-        rng: &mut SmallRng,
+        rng: &mut RoundRng,
     ) -> Dir {
         let (width, height) = bounds;
         // A label read, not a search: a candidate is a point nobody is
@@ -2795,7 +2795,7 @@ struct Brain<'a> {
     /// This frame's obstacle occupancy grid, for routing around static
     /// obstacles - see `Ai::steer`.
     grid: &'a Grid,
-    rng: &'a mut SmallRng,
+    rng: &'a mut RoundRng,
     ai: &'a mut Ai,
     intent: Intent,
     /// Last known player position shared across every enemy this round,
@@ -4983,7 +4983,7 @@ mod role_tests {
             Mover { position: player, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
             Mover { position: me, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         ai.think(
             &me_tank,
             &player_tank,
@@ -5038,7 +5038,7 @@ mod role_tests {
                 Mover { position: player_at, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
                 Mover { position: home, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
             ];
-            let mut rng = SmallRng::seed_from_u64(7);
+            let mut rng = RoundRng::seed_from_u64(7);
             ai.think(
                 &me,
                 &player,
@@ -5207,7 +5207,7 @@ mod sight_tests {
             Mover { position: PLAYER, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
             Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         ai.think(
             &me,
             &player,
@@ -5475,7 +5475,7 @@ mod stuck_tests {
             Mover { position: player.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
             Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         ai.think(
             &me,
             &player,
@@ -5635,7 +5635,7 @@ mod away_tests {
             Mover { position: player, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
             Mover { position: me, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         ai.think(
             &me_tank,
             &player_tank,
@@ -5704,7 +5704,7 @@ mod aimed_tests {
             Mover { position: seat, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
             Mover { position: me, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         ai.think(
             &me_tank,
             &player,
@@ -6004,7 +6004,7 @@ mod hammer_tests {
             Mover { position: seat, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
             Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], &[], true, true, false, walls, tuning().enemy_view_range, &sense, &[])
     }
 
@@ -6172,7 +6172,7 @@ mod emp_rule_tests {
             Mover { position: seat, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
             Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         ai.think(me, &player, seat, None, 1280.0, 720.0, 1.0 / 60.0, &movers, 1, &grid, &mut rng, None, None, &[], &[], true, true, hidden, [None; 4], tuning().enemy_view_range, &sense, dangers)
     }
 
@@ -6443,7 +6443,7 @@ mod crate_claim_tests {
             Mover { position: seat_at, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
             Mover { position: me, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         ai.think(
             &tank,
             &seat,

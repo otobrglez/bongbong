@@ -6,7 +6,7 @@ use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 use crate::math::Vec2;
 
 use crate::ai::Ai;
@@ -79,7 +79,7 @@ impl BlastParams {
     }
 
     /// Centre damage before falloff (`roll_range`).
-    pub fn roll_damage(&self, rng: &mut SmallRng) -> f32 {
+    pub fn roll_damage(&self, rng: &mut RoundRng) -> f32 {
         roll_range(rng, self.damage.0, self.damage.1)
     }
 }
@@ -87,7 +87,7 @@ impl BlastParams {
 /// A uniform roll in `min..max`: one draw. A tuned range that is empty or
 /// inverted (`min >= max`) is `min` and draws nothing, so a knob pair set
 /// the wrong way round plays instead of panicking.
-pub(super) fn roll_range(rng: &mut SmallRng, min: f32, max: f32) -> f32 {
+pub(super) fn roll_range(rng: &mut RoundRng, min: f32, max: f32) -> f32 {
     if max > min { rng.random_range(min..max) } else { min }
 }
 
@@ -316,7 +316,7 @@ pub(super) fn ram(
     a: &mut Tank,
     b: &mut Tank,
     physics: &mut Physics,
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
     kills: &mut Vec<(Position, Owner)>,
     shoves: &mut Shoves,
     damage_scale: f32,
@@ -382,7 +382,7 @@ pub(super) fn explosion_hit(
     center: Position,
     damage: bool,
     physics: &mut Physics,
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
     kills: &mut Vec<(Position, Owner)>,
     params: &BlastParams,
 ) -> Option<Vec2> {
@@ -440,7 +440,7 @@ pub(super) fn explosion_hit(
 /// only a landing in water, then any landing. One jitter draw either way,
 /// so a map without water hops exactly as before.
 pub(super) fn bong_hop_target(
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
     bong_pos: Position,
     away_dir: Vec2,
     distance: f32,
@@ -496,12 +496,12 @@ mod ram_tests {
         let terrain = Terrain::build(&world, w, h, &[], &water);
         let bong = crate::map::cell_to_world(11, 11);
         let away = Vec2::new(1.0, 0.0);
-        let mut rng = SmallRng::seed_from_u64(3);
+        let mut rng = RoundRng::seed_from_u64(3);
         let landing = bong_hop_target(&mut rng, bong, away, 96.0, &terrain, w, h).expect("a landing");
         assert_ne!(water.depth_at(landing), crate::ground::Depth::Dry, "landed in the pond: {landing:?}");
         // Threat from the east: hopping west finds no water in the fan, so
         // it lands on dry ground as before.
-        let mut rng = SmallRng::seed_from_u64(3);
+        let mut rng = RoundRng::seed_from_u64(3);
         let landing = bong_hop_target(&mut rng, bong, Vec2::new(-1.0, 0.0), 96.0, &terrain, w, h).expect("a landing");
         assert_eq!(water.depth_at(landing), crate::ground::Depth::Dry);
         assert!(landing.x < bong.x);
@@ -510,19 +510,19 @@ mod ram_tests {
     #[test]
     fn roll_range_is_min_and_draws_nothing_on_an_empty_or_inverted_range() {
         for (min, max) in [(6.0_f32, 2.0_f32), (4.0, 4.0), (0.0, 0.0), (-0.0, 0.0)] {
-            let mut rng = SmallRng::seed_from_u64(9);
+            let mut rng = RoundRng::seed_from_u64(9);
             let mut untouched = rng.clone();
             assert_eq!(roll_range(&mut rng, min, max), min, "{min}..{max}");
             assert_eq!(rng.random_range(0..u32::MAX), untouched.random_range(0..u32::MAX), "{min}..{max} drew");
         }
         let blast = BlastParams { radius: 10.0, damage: (8.0, 3.0), knockback: 0.0, by: None };
-        assert_eq!(blast.roll_damage(&mut SmallRng::seed_from_u64(9)), 8.0);
+        assert_eq!(blast.roll_damage(&mut RoundRng::seed_from_u64(9)), 8.0);
     }
 
     #[test]
     fn roll_range_is_the_one_plain_draw_on_a_valid_range() {
         for (seed, min, max) in [(1_u64, 2.0_f32, 6.0_f32), (2, 0.0, 100.0), (0xB0B5, -10.0, 10.0), (4, 3.0, 3.5)] {
-            let mut rng = SmallRng::seed_from_u64(seed);
+            let mut rng = RoundRng::seed_from_u64(seed);
             let mut plain = rng.clone();
             for _ in 0..32 {
                 assert_eq!(roll_range(&mut rng, min, max).to_bits(), plain.random_range(min..max).to_bits(), "seed {seed}, {min}..{max}");
@@ -541,7 +541,7 @@ mod ram_tests {
         let water = crate::ground::WaterLayout::build(w, h, &[], &[]);
         let terrain = Terrain::build(&world, w, h, &[], &water);
         let bong = crate::map::cell_to_world(11, 11);
-        let mut rng = SmallRng::seed_from_u64(3);
+        let mut rng = RoundRng::seed_from_u64(3);
         let landing = crate::tuning::in_force(Some(&table), || bong_hop_target(&mut rng, bong, Vec2::new(1.0, 0.0), 96.0, &terrain, w, h));
         assert!(landing.is_some_and(|p| p.x > bong.x), "{landing:?}");
     }
@@ -551,7 +551,7 @@ mod ram_tests {
         let mut physics = Physics::new();
         let mut wreck = tank_at(100.0, MAX_DAMAGE, &mut physics);
         let mut live = tank_at(130.0, 10.0, &mut physics);
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = RoundRng::seed_from_u64(1);
         let mut kills = Vec::new();
         ram(&mut wreck, &mut live, &mut physics, &mut rng, &mut kills, &mut Shoves::default(), 1.0);
         assert_eq!(live.damage, 10.0);
@@ -564,7 +564,7 @@ mod ram_tests {
         let mut physics = Physics::new();
         let mut a = tank_at(100.0, 0.0, &mut physics);
         let mut b = tank_at(130.0, 0.0, &mut physics);
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = RoundRng::seed_from_u64(1);
         let mut kills = Vec::new();
         ram(&mut a, &mut b, &mut physics, &mut rng, &mut kills, &mut Shoves::default(), 1.0);
         assert!(a.damage >= tuning().ram_damage_min && a.damage < tuning().ram_damage_max);
@@ -586,7 +586,7 @@ mod ram_tests {
         physics.set_velocity(seat.body.expect("a body"), Position::new(120.0, 0.0));
         let mut shoves = Shoves::default();
         shoves.owned[0] = true;
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = RoundRng::seed_from_u64(1);
         let mut kills = Vec::new();
         ram(&mut seat, &mut enemy, &mut physics, &mut rng, &mut kills, &mut shoves, 1.0).expect("an exchange");
         assert_eq!(shoves.log.len(), 1, "the enemy's push is nobody's to be told: {:?}", shoves.log);

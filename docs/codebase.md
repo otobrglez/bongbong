@@ -414,7 +414,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   ulp apart (a seeded round split at frame 537 between a Mac and CI). `portable_math_tests` fails
   on a platform call outside its `PRESENTATION` list of files that only draw; add a new draw-only
   file there, never a file a round's outcome reads. Rapier runs with `enhanced-determinism` for the
-  same reason (docs/gameplay-verification-design.md).
+  same reason (docs/gameplay-verification-design.md). **The round's RNG** is `crate::RoundRng`
+  (`lib.rs`): `rand::rngs::Xoshiro256PlusPlus` named outright, because `SmallRng` is that generator
+  on a 64-bit target and xoshiro128++ on wasm32, where a seed then played another round from its
+  first draw. `round_rng_tests` pins the stream; `just probe-wasm-parity` compares the two builds.
 - `lib.rs` — *layout* constants and types only: `Position` (= `math::Vec2`), atlas columns/sizes,
   `*_VARIANTS`, collider boxes, grid/physics sizes, `HUD_BAR_HEIGHT` (40 UI points, a top plate's
   height with a mouse)/`Rect`/`Layout` (`bare`: the field alone at `(0, 0)`, play's bitmap and the
@@ -2353,7 +2356,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     (`-lwebsocket.js` in `.cargo/config.toml`), the four callbacks pushing into an unbounded queue
     the frame drains - a hidden tab's backlog is caught up, never trimmed, or the delta chain
     breaks; `loopback.rs`, the rig's in-process pair with dialled delay, jitter and loss off a
-    seeded `SmallRng` per direction, head-of-line like the socket it stands in for, drivable at a
+    seeded `RoundRng` per direction, head-of-line like the socket it stands in for, drivable at a
     given `Instant` so its tests need no sleeping. `now.rs` is `Now`, where the client's half reads
     the time: the wall in every build that plays, or `Now::manual()`, a clock that moves only on
     `advance`. A test hands one manual clock to both loopback ends (`Loopback::set_clock`) and the
