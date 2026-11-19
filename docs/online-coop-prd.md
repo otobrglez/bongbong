@@ -358,13 +358,13 @@ never sent (the AI's trace, recorded only while `Game::trace_ai` is set);
 | `RoundStarted` | arrives in `Welcome`; re-init the replica from map and seed; banner | `Game::init` (presentation parts), `Mission::banner` |
 | `Fired {slot, weapon}` | muzzle flash; laser beam; stage 2: confirms a predicted shot | `weapons.rs`' flash push, `LaserBeam::new` |
 | `Hit {target, damage, killed, x, y}` | impact flash; hit flash on the tank | `impact_flashes.push` |
-| `Wreck {slot, x, y}` | fireball, flash, scorch, thrown parts, cook-off queue, screen flash, ripple, shake | `Game::wreck_fx`, `flash_screen`, `SHOCK_KILL` |
+| `Wreck {slot, x, y}` | fireball, flash, scorch, thrown parts, cook-off queue, screen flash, ripple, shake | `Game::wreck_fx`, `flash_screen`, `kill_shock` |
 | `Ram` | contact sparks and dust | `fx.rs` |
 | `PickupCollected` / `PickupRespawned` | pop / appear | `fx.rs` |
 | `Deflected` (a shield turned a shot, which changes owner), `ShellsCollided` | spark, small flash | `impact_flashes.push` |
-| `BongBite` | bite cue, bong ripple | `SHOCK_BONG` |
+| `BongBite` | bite cue, bong ripple | `bong_shock` |
 | `BongHealed {side, slot, amount, x, y}` | green sparks off the bong, its gauge refills | `fx.rs` |
-| `ShieldBroken {slot, x, y}` | a ring of sparks and smoke off the hull, ripple and shake, the shield ring goes | `fx.rs`, `drain_shield_breaks`' `SHOCK_SHIELD_BREAK` |
+| `ShieldBroken {slot, x, y}` | a ring of sparks and smoke off the hull, ripple and shake, the shield ring goes | `fx.rs`, `drain_shield_breaks`' `shield_break_shock` |
 | `WaveStarted`, `TankEntered`, `WreckRemoved` | WAVE N banner; roll-in appears at the gate; the wreck goes (it has been fading on its own) | HUD, `fade_wrecks` |
 | `ObstacleDestroyed {material, x, y}` | rubble decal, thrown | `props::obstacle_died`'s decal part |
 | `ChunksBroken {material, variant, x, y, broken, dir, collapsed}` | the broken chunks' pieces fly from the tile (the chunks themselves travel in `TileState::chunks`, the rubble they lay in `Snapshot::rubble`, a `RubbleState` a cell) | `pieces.rs` |

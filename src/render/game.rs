@@ -63,6 +63,7 @@ use crate::tank::Tank;
 use crate::tank::{ActiveWeapon, Dir};
 use crate::tuning::tuning;
 use crate::view::{culled, Camera, View};
+use crate::feedback::ViewOf;
 use crate::{Layout, Position, SHOCK_MAX};
 #[cfg(feature = "dev-tools")]
 use crate::math::Vec2;
@@ -172,6 +173,10 @@ pub struct Effects<'a> {
     /// (see `fx.rs`), and read-only here - `render` never mutates it, the
     /// same contract it has with `Game`.
     pub fx: &'a crate::fx::Fx,
+    /// What the seats this screen plays feel of being hit
+    /// (`feedback.rs`): their own views' shake and edge pulse and their
+    /// health readouts' tick; `None` draws none of it.
+    pub feedback: Option<&'a crate::feedback::Feedback>,
     /// The touch scheme's feedback (`touch.rs`), drawn over everything in
     /// UI points (`hud::UiFrame`) - nothing until a touch is seen; `None`
     /// draws nothing at all. The `bool` is whether the stick lives on the
@@ -214,6 +219,9 @@ pub enum SplitLayer<'a> {
         /// The second half's camera (`Camera::following` of
         /// `follow::Split`).
         camera: Camera,
+        /// The seat it follows (`follow::Split::seat`): this half is that
+        /// seat's own view, the first half every other seat's.
+        seat: usize,
         /// Its own pass-1 target and composite, the first half's sizes.
         scene: &'a mut RenderTexture2D,
         composite: &'a mut RenderTexture2D,
@@ -429,7 +437,16 @@ impl Game {
         // borrow it, and the dev label needs the number.
         #[cfg(feature = "dev-tools")]
         let frame_ms = rl.get_frame_time() * 1000.0;
-        let hud = HudModel::gather(self, chrome.seat);
+        #[allow(unused_mut)]
+        let mut hud = HudModel::gather(self, chrome.seat);
+        if let Some(feedback) = effects.feedback {
+            let (t, nudge) = (tuning(), !crate::motion::reduced());
+            let first = chrome.seat.unwrap_or(0) as usize;
+            hud.local.hurt = feedback.tick_of(first, &t).map(|step| (step, nudge));
+            if let Some(second) = hud.second.as_mut() {
+                second.hurt = feedback.tick_of(1, &t).map(|step| (step, nudge));
+            }
+        }
         let t = crate::text::text();
         // The seats whose shells ride under their rings: this window's
         // own - the room's seat online, the couch's one or two locally -
@@ -498,10 +515,16 @@ impl Game {
             Some(SplitLayer::Follow { marks, .. }) => *marks,
             _ => [&[], &[]],
         };
-        let weather = self.draw_world(rl, thread, scene_target, composite, camera, layout, effects, textures, &ammo_seats, backdrop, marks[0]);
+        // Whose view each is (`feedback::ViewOf`): a split's second half
+        // is its seat's own, the first every other seat's.
+        let (first_of, second_of) = match &split {
+            Some(SplitLayer::Follow { seat, .. }) => (ViewOf::Except(*seat), ViewOf::Only(*seat)),
+            _ => (ViewOf::Every, ViewOf::Every),
+        };
+        let weather = self.draw_world(rl, thread, scene_target, composite, camera, layout, effects, textures, &ammo_seats, backdrop, marks[0], first_of);
         if let Some(SplitLayer::Follow { camera, scene, composite, .. }) = split.as_mut() {
             let camera = *camera;
-            self.draw_world(rl, thread, &mut **scene, &mut **composite, &camera, layout, effects, textures, &ammo_seats, backdrop, marks[1]);
+            self.draw_world(rl, thread, &mut **scene, &mut **composite, &camera, layout, effects, textures, &ammo_seats, backdrop, marks[1], second_of);
         }
 
         let text = ChromeText {
@@ -649,6 +672,7 @@ impl Game {
         ammo_seats: &[u8],
         backdrop: Color,
         marks: &[crate::indicators::Fill],
+        view_of: ViewOf,
     ) -> Option<crate::render::weather::WeatherFrame> {
         // The field area of the bitmap, which what covers the whole world
         // (a kill's flash) fills: whole pixels, rounded up so a followed
@@ -829,7 +853,11 @@ impl Game {
         let shake = if still {
             crate::math::Vec2::new(0.0, 0.0)
         } else {
-            crate::shockwave::camera_shake(&self.shocks, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning())
+            // The round's ripples, the slams that are no ripple of its
+            // own, and the blows this view's own seats took.
+            let hurts = effects.feedback.into_iter().flat_map(|feedback| feedback.shakes(view_of));
+            let shocks = self.shocks.iter().chain(effects.fx.jolts().iter().map(|jolt| &jolt.shock)).chain(hurts);
+            crate::shockwave::camera_shake_of(shocks, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning())
         };
         let blit_offset = Vector2::new(shake.x, shake.y);
 
@@ -854,6 +882,7 @@ impl Game {
             backdrop,
             bend: !still,
             marks,
+            pulse: effects.feedback.filter(|_| !still).and_then(|feedback| feedback.pulse(view_of, &tuning())),
         };
         rl.draw_texture_mode(thread, crate::frame_stages::target(composite), |mut d| {
             d.clear_background(Color::BLACK);
@@ -861,6 +890,44 @@ impl Game {
         });
         drop(post_stage);
         weather
+    }
+}
+
+/// A hurt seat's pulse round the edge of its view (`feedback::Pulse`), over
+/// an area `area` px across: rows of 2 px blocks in from each edge, a row
+/// that is whole as four strips and a dithered one block by block, each
+/// block drawn once where two edges' rows cross at a corner.
+fn draw_edge_pulse(d: &mut impl RaylibDraw, pulse: &crate::feedback::Pulse, area: (i32, i32)) {
+    let block = crate::pyro::BLOCK as i32;
+    let (cols, rows) = ((area.0 + block - 1) / block, (area.1 + block - 1) / block);
+    let color: Color = pulse.color.into();
+    for depth in 0..pulse.depth.min(cols / 2).min(rows / 2) {
+        // The ring of blocks `depth` in: its top and bottom runs whole,
+        // its sides between them.
+        let (left, right, top, bottom) = (depth, cols - 1 - depth, depth, rows - 1 - depth);
+        if pulse.whole_row(depth) {
+            let across = (right - left + 1) * block;
+            let down = (bottom - top - 1) * block;
+            d.draw_rectangle(left * block, top * block, across, block, color);
+            d.draw_rectangle(left * block, bottom * block, across, block, color);
+            d.draw_rectangle(left * block, (top + 1) * block, block, down, color);
+            d.draw_rectangle(right * block, (top + 1) * block, block, down, color);
+            continue;
+        }
+        for bx in left..=right {
+            for by in [top, bottom] {
+                if pulse.block(depth, bx, by) {
+                    d.draw_rectangle(bx * block, by * block, block, block, color);
+                }
+            }
+        }
+        for by in top + 1..bottom {
+            for bx in [left, right] {
+                if pulse.block(depth, bx, by) {
+                    d.draw_rectangle(bx * block, by * block, block, block, color);
+                }
+            }
+        }
     }
 }
 
@@ -890,6 +957,9 @@ struct WorldPass<'a> {
     /// screen half's (`Effects::split`); empty otherwise, the indicators
     /// being drawn with the chrome.
     marks: &'a [crate::indicators::Fill],
+    /// The pulse round this view's edge while one of its own seats has
+    /// just been hurt (`feedback::Pulse`); none under reduced motion.
+    pulse: Option<crate::feedback::Pulse>,
 }
 
 /// Seconds the corner clusters take to step aside once the round is
@@ -1055,6 +1125,9 @@ impl Game {
                     let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
                     d.draw_rectangle(0, 0, w.area.0, w.area.1, Color::new(255, 240, 200, a));
                 }
+            }
+            if let Some(pulse) = &w.pulse {
+                draw_edge_pulse(&mut d, pulse, w.area);
             }
         });
 

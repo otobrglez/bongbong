@@ -906,10 +906,8 @@ tunables! {
         grenade_blast_damage_min: f32 = 30.0 in 0.0 ..= 100.0;
         grenade_blast_damage_max: f32 = 50.0 in 0.0 ..= 100.0;
         grenade_blast_knockback_speed: f32 = 240.0 in 0.0 ..= 500.0;
-        /// Size of the fireball and scorch against a barrel's, and how
-        /// hard its shockwave ripples and shakes against a tank dying.
+        /// Size of the fireball and scorch against a barrel's.
         grenade_blast_fx_scale: f32 = 1.5 in 0.1 ..= 3.0;
-        grenade_shock: f32 = 1.0 in 0.0 ..= 2.0;
         /// The white plume a grenade trails while in the air or rolling
         /// faster than `grenade_trail_min_speed` (px/s): a puff every this
         /// many px (0 turns it off), each swelling and gone in
@@ -988,8 +986,6 @@ tunables! {
         /// off), each gone in `sonic_dust_seconds`.
         sonic_dust_spacing_px: f32 = 10.0 in 0.0 ..= 64.0;
         sonic_dust_seconds: f32 = 0.5 in 0.05 ..= 3.0;
-        /// The screen ripple and shake against a tank dying's.
-        sonic_shock: f32 = 0.35 in 0.0 ..= 2.0;
         /// Seconds the dish shows its firing cell.
         sonic_flash_seconds: f32 = 0.2 in 0.0 ..= 2.0;
         /// How far a tree's crown leans as the front passes (px).
@@ -1046,8 +1042,6 @@ tunables! {
         emp_ring_seconds: f32 = 0.4 in 0.05 ..= 3.0;
         /// The module's pulse cell.
         emp_flash_seconds: f32 = 0.25 in 0.0 ..= 2.0;
-        /// The screen ripple and shake of a pulse, against a tank dying's.
-        emp_shock: f32 = 0.25 in 0.0 ..= 2.0;
         /// How far a disabled enemy's turret, and an offline tower's top,
         /// sags off its aim (degrees; drawn only).
         emp_droop_deg: f32 = 15.0 in 0.0 ..= 45.0;
@@ -1156,9 +1150,6 @@ tunables! {
         gauss_trail_seconds: f32 = 1.6 in 0.1 ..= 5.0;
         /// The module's shot cell (s).
         gauss_module_flash_seconds: f32 = 0.25 in 0.0 ..= 2.0;
-        /// The screen ripple and shake a slug sets off at the muzzle,
-        /// against a tank dying's.
-        gauss_shock: f32 = 0.4 in 0.0 ..= 2.0;
         /// The light a full charge throws at night, against a headlight's.
         gauss_charge_light: f32 = 0.6 in 0.0 ..= 2.0;
         /// The light the white frame throws along the line at night.
@@ -1245,8 +1236,6 @@ tunables! {
         fpv_lamp_light: f32 = 0.35 in 0.0 ..= 2.0;
         /// Its burst's fireball against a missile's.
         fpv_blast_fx_scale: f32 = 0.35 in 0.1 ..= 2.0;
-        /// Its burst's ripple and shake against a tank dying's.
-        fpv_shock: f32 = 0.15 in 0.0 ..= 2.0;
         /// Its shadow's opacity.
         fpv_shadow_opacity: f32 = 0.3 in 0.0 ..= 1.0;
         /// Dust blocks a second off the ground under a low drone (cosmetic).
@@ -1340,8 +1329,6 @@ tunables! {
         rod_column_seconds: f32 = 0.05 in 0.01 ..= 0.5;
         /// The screen flash against a drum's.
         rod_screen_flash: f32 = 2.5 in 0.0 ..= 8.0;
-        /// The ripple and shake against a tank dying's.
-        rod_shock: f32 = 1.5 in 0.0 ..= 3.0;
         /// The impact's fireball against a drum's.
         rod_fireball_scale: f32 = 1.3 in 0.1 ..= 3.0;
         /// Its scorch, against a drum's.
@@ -1480,10 +1467,6 @@ tunables! {
         well_grass_lean_px: f32 = 6.0 in 0.0 ..= 16.0;
         /// Blocks in a well's swirl.
         well_particles: i32 = 48 in 0 ..= 200;
-        /// The inward ripple at an anchor, against a tank dying's.
-        well_snap_shock: f32 = 0.35 in 0.0 ..= 2.0;
-        /// The collapse's ripple and shake, against a tank dying's.
-        well_shock: f32 = 0.6 in 0.0 ..= 2.0;
         /// The collapse's screen flash, against a drum's.
         well_screen_flash: f32 = 0.6 in 0.0 ..= 8.0;
         /// The module's launch and anchor cells (s).
@@ -2449,8 +2432,6 @@ tunables! {
         /// it lands (radius, cells) and how long they burn (seconds).
         volcano_pool_radius_cells: i32 = 1 in 0 ..= 4;
         volcano_pool_seconds: f32 = 6.0 in 0.5 ..= 60.0;
-        /// The eruption's shock ring and shake, as a fraction of a kill's.
-        volcano_shock_scale: f32 = 1.6 in 0.0 ..= 4.0;
         /// A lava stream (a ford): the fraction of top speed and of grip a
         /// hull keeps wading it.
         lava_speed_factor: f32 = 0.5 in 0.05 ..= 1.0;
@@ -3037,6 +3018,42 @@ tunables! {
         /// Dust kicked up per second while a tank grinds a prop under its
         /// tracks - the one part of `ram_props` that was visually silent.
         ram_dust_rate: f32 = 14.0 in 0.0 ..= 100.0;
+        /// A slam (`Fx::slam`): a hull whose hardest contact is
+        /// `ram_fx_min_impulse` or more, and `ram_fx_rise` times the step
+        /// before's or more, throws a burst, flashes and shakes the
+        /// screen, all growing with the impulse up to
+        /// `ram_fx_full_impulse`. The light chassis at full speed into a
+        /// wall is about 650 and holds 70 to 220 while it pushes on, a
+        /// ratio the same for every chassis, so the rise tells a blow from
+        /// a push. A hull slams again no sooner than `ram_fx_gap_seconds`
+        /// later. A ram that hurts (`Event::Ram`) is a slam whatever its
+        /// impulse.
+        ram_fx_min_impulse: f32 = 300.0 in 0.0 ..= 4000.0;
+        ram_fx_full_impulse: f32 = 900.0 in 1.0 ..= 8000.0;
+        ram_fx_rise: f32 = 4.0 in 1.0 ..= 20.0;
+        ram_fx_gap_seconds: f32 = 0.25 in 0.0 ..= 5.0;
+        /// Particles a slam at full impulse throws.
+        ram_fx_particles: i32 = 14 in 0 ..= 100;
+        /// Being hit (`feedback.rs`): the damage, of `MAX_DAMAGE`'s 100, a
+        /// seat loses at once for the whole of `hurt_shock`, the edge
+        /// pulse and the tick; less scales them down, and under
+        /// `hurt_min_damage` nothing shows - a fire's or lava's trickle.
+        hurt_full_damage: f32 = 30.0 in 1.0 ..= 100.0;
+        hurt_min_damage: f32 = 2.0 in 0.0 ..= 100.0;
+        /// The pulse round the edge of a hurt seat's view: how long it
+        /// takes to step down and dissolve (0 turns it off), and how many
+        /// 2 px blocks deep it is at full strength.
+        hurt_pulse_seconds: f32 = 0.45 in 0.0 ..= 3.0;
+        hurt_pulse_blocks: i32 = 10 in 0 ..= 64;
+        /// The health readout's tick when its seat is hurt: seconds the
+        /// number stands lit and nudged (0 turns it off).
+        hurt_tick_seconds: f32 = 0.3 in 0.0 ..= 2.0;
+        /// The hold on a local seat's kill, offline: real seconds the
+        /// round and its particles stand still (0 turns it off; two to
+        /// three frames at 60 Hz), and the least time between two holds,
+        /// so a burst through a line of hulls does not stutter.
+        kill_hitstop_seconds: f32 = 0.045 in 0.0 ..= 0.3;
+        kill_hitstop_gap_seconds: f32 = 0.3 in 0.0 ..= 5.0;
     }
 
     group tank_models {
@@ -4028,6 +4045,63 @@ tunables! {
         drive_foam_rate: f32 = 40.0 in 0.0 ..= 300.0;
         /// Exhaust puffs a second while a hull pulls away.
         drive_exhaust_rate: f32 = 16.0 in 0.0 ..= 200.0;
+    }
+
+    group shock {
+        /// How hard each cause ripples and shakes the screen, and how big
+        /// its particle burst is (`Fx::explosion`), on one scale: 1 is a
+        /// tank dying, and a blast is its reach over 140 px - 0.3 for
+        /// 44 px (a missile, a drone), 0.45 for 64 px (a bomb),
+        /// 0.7 for 96 px (an oil drum), 0.9 for 128 px (a fuel drum, a
+        /// grenade) - so blasts of one size shake alike whatever set them
+        /// off. The whole set turns up or down with
+        /// `camera_shake_magnitude` and `shockwave_strength`. A tank dying:
+        kill_shock: f32 = 1.0 in 0.0 ..= 3.0;
+        /// An oil drum, a lava bomb and a crate cooking off.
+        barrel_shock: f32 = 0.7 in 0.0 ..= 3.0;
+        /// A fuel drum.
+        fuel_shock: f32 = 0.9 in 0.0 ..= 3.0;
+        /// A bong dying: no blast of its own, a real loss.
+        bong_shock: f32 = 0.6 in 0.0 ..= 3.0;
+        /// Ammo cooking off inside a wreck: a faint local ring, too weak
+        /// to move the camera once the shake snaps to 2 px blocks.
+        cookoff_shock: f32 = 0.1 in 0.0 ..= 3.0;
+        /// A rainbow shield shattering: felt across the field, but it
+        /// kills nobody.
+        shield_break_shock: f32 = 0.45 in 0.0 ..= 3.0;
+        /// Each end of a tank's trip through a portal.
+        teleport_shock: f32 = 0.3 in 0.0 ..= 3.0;
+        /// A seeker missile's burst; a volley is four in a row.
+        missile_shock: f32 = 0.3 in 0.0 ..= 3.0;
+        /// An FPV drone's burst.
+        fpv_shock: f32 = 0.3 in 0.0 ..= 3.0;
+        /// A jet's bomb.
+        bomb_shock: f32 = 0.45 in 0.0 ..= 3.0;
+        /// A grenade.
+        grenade_shock: f32 = 0.9 in 0.0 ..= 3.0;
+        /// A rod from god's impact.
+        rod_shock: f32 = 1.5 in 0.0 ..= 3.0;
+        /// A gravity well's collapse.
+        well_shock: f32 = 0.6 in 0.0 ..= 3.0;
+        /// The inward ripple where a well anchors.
+        well_snap_shock: f32 = 0.35 in 0.0 ..= 3.0;
+        /// A volcano's eruption; each of its bursts on the way is 0.35 of
+        /// it.
+        volcano_shock_scale: f32 = 1.6 in 0.0 ..= 4.0;
+        /// A gauss rail's slug, at the muzzle.
+        gauss_shock: f32 = 0.4 in 0.0 ..= 3.0;
+        /// A sonic hammer's wave, at the dish.
+        sonic_shock: f32 = 0.35 in 0.0 ..= 3.0;
+        /// An EMP's pulse.
+        emp_shock: f32 = 0.25 in 0.0 ..= 3.0;
+        /// A hull slamming into a wall or another hull at
+        /// `ram_fx_full_impulse` or harder: a shake with no ripple, less
+        /// for a lighter slam (`Fx::slam`).
+        ram_shock: f32 = 0.5 in 0.0 ..= 3.0;
+        /// A seat losing `hurt_full_damage` or more of its hull at once:
+        /// a shake of that seat's own view alone, down to two fifths of
+        /// it for the lightest blow that shows (`feedback.rs`).
+        hurt_shock: f32 = 0.6 in 0.0 ..= 3.0;
     }
 
     group shot_fx {

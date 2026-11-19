@@ -1636,30 +1636,6 @@ pub(crate) struct Spectacle {
     pub(crate) shocks: Vec<Shockwave>,
 }
 
-// How hard each thing that shakes the screen shakes it, relative to a tank
-// dying. These are ratios between events rather than feel knobs - the
-// overall amount is `camera_shake_magnitude` and `shockwave_strength` in
-// tuning.rs - so they live here next to the code that decides which is
-// which, and a designer turns the whole set up or down with one knob.
-pub(crate) const SHOCK_KILL: f32 = 1.0;
-pub(crate) const SHOCK_BARREL: f32 = 0.7;
-/// A fuel drum: harder than oil, still short of a tank dying.
-pub(crate) const SHOCK_FUEL: f32 = 0.9;
-pub(crate) const SHOCK_BONG: f32 = 0.6;
-/// Ammo cooking off inside a wreck: a faint local ring, and too weak to
-/// move the camera once the shake snaps to 2px blocks - a cook-off is a
-/// pop next to the hulk, not another explosion.
-pub(crate) const SHOCK_COOKOFF: f32 = 0.1;
-/// A rainbow shield shattering. Between a cook-off and a barrel: it is a
-/// real event the whole field should feel, but it kills nobody, so it stays
-/// well under a tank dying. Deliberately no `flash_screen` - the whole-screen
-/// flash is reserved for kills and barrels.
-pub(crate) const SHOCK_SHIELD_BREAK: f32 = 0.45;
-/// A tank leaving or arriving through a portal: one small ring at each
-/// end, so the eye is led from where it vanished to where it appeared.
-/// Under a shield break - nothing was hurt - and no `flash_screen`.
-pub(crate) const SHOCK_TELEPORT: f32 = 0.3;
-
 impl Game {
     /// Put `sky` on the round's map - one sky, or several of which the
     /// round's seed picks one, as `init` would - and fight the rest of the
@@ -3834,8 +3810,8 @@ impl Game {
             if let Some(o) = occupied.iter_mut().find(|(e, _)| *e == entity) {
                 o.1 = to;
             }
-            f.shocks.push(Shockwave::scaled(from, SHOCK_TELEPORT));
-            f.shocks.push(Shockwave::scaled(to, SHOCK_TELEPORT));
+            f.shocks.push(Shockwave::scaled(from, crate::tuning::tuning().teleport_shock));
+            f.shocks.push(Shockwave::scaled(to, crate::tuning::tuning().teleport_shock));
             f.events.push(Event::Teleported { slot, x: from.x, y: from.y, to_x: to.x, to_y: to.y });
         }
     }
@@ -5287,7 +5263,7 @@ impl Game {
     /// Everything but the damage and the cook-offs, which is why a replica
     /// can call it off `Event::Wreck`. No RNG.
     pub(crate) fn wreck_show(&mut self, show: &mut Spectacle, center: Position) {
-        show.shocks.push(Shockwave::scaled(center, SHOCK_KILL));
+        show.shocks.push(Shockwave::scaled(center, crate::tuning::tuning().kill_shock));
         show.blast_fx.push(BlastFx::wreck(center));
         show.impact_flashes.push(Shockwave::new(center));
         self.flash_screen();
@@ -5365,7 +5341,7 @@ impl Game {
     /// nothing screen-level. A replica calls it off `Event::CookOff`.
     pub(crate) fn cookoff_show(show: &mut Spectacle, center: Position) {
         show.blast_fx.push(BlastFx::small(center));
-        show.shocks.push(Shockwave::scaled(center, SHOCK_COOKOFF));
+        show.shocks.push(Shockwave::scaled(center, crate::tuning::tuning().cookoff_shock));
     }
 
     /// Every tank killed this frame gets a shockwave and an explosion, and
@@ -5863,28 +5839,27 @@ impl Game {
             .collect()
     }
 
-    /// Every tank contact hard enough to be worth showing, as
-    /// `(where, how hard, was it another tank)`.
-    ///
-    /// `Physics::contact_stats` has computed this every frame since the
-    /// probe's anomaly work and **nothing in the game has ever read it** -
-    /// so driving into a wall, shunting a wreck and grinding through a
-    /// six-tank pileup all produced no feedback whatsoever. A contact is a
-    /// *state*, not an event (a tank scrapes along a wall for a second, it
-    /// does not scrape at an instant), so this is sampled by the
-    /// presentation layer rather than pushed as an event - which also means
-    /// no new RNG and no simulation change at all.
-    pub fn contacts(&self) -> Vec<(Position, f32, bool)> {
-        self.world
+    /// Every live hull's hardest contact (`Physics::contact_stats`), as
+    /// `(owner slot, where, how hard, was it another tank)`, in slot
+    /// order. A contact is a *state*, not an event - a tank scrapes along
+    /// a wall for a second, it does not scrape at an instant - so the
+    /// presentation layer samples this rather than reading an event, which
+    /// costs the simulation no RNG and no change. A replica steps no
+    /// physics and has none.
+    pub fn contacts(&self) -> Vec<(usize, Position, f32, bool)> {
+        let mut out: Vec<(usize, Position, f32, bool)> = self
+            .world
             .query::<&Tank>()
             .iter()
             .filter(|t| !t.is_dead())
             .filter_map(|t| {
                 let stats = self.physics.contact_stats(t.body?);
                 let at = stats.contact?;
-                (stats.max_impulse > 0.0).then_some((at, stats.max_impulse, stats.touching_tank))
+                (stats.max_impulse > 0.0).then_some((t.owner_slot(), at, stats.max_impulse, stats.touching_tank))
             })
-            .collect()
+            .collect();
+        out.sort_by_key(|c| c.0);
+        out
     }
 
     /// Every prop currently being ground down under a tank's tracks, with
@@ -6559,7 +6534,7 @@ fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind, dro
 
 impl Game {
     /// Announce every shield that shattered this frame: one
-    /// `Event::ShieldBroken` and one `SHOCK_SHIELD_BREAK` ripple per tank,
+    /// `Event::ShieldBroken` and one `shield_break_shock` ripple per tank,
     /// then clear the latch.
     ///
     /// One drain rather than an emit at each seam. A shield is spent in
@@ -6590,7 +6565,7 @@ impl Game {
         }
         for (slot, at) in broken {
             f.events.push(Event::ShieldBroken { slot, x: at.x, y: at.y });
-            f.shocks.push(Shockwave::scaled(at, SHOCK_SHIELD_BREAK));
+            f.shocks.push(Shockwave::scaled(at, crate::tuning::tuning().shield_break_shock));
         }
     }
 }

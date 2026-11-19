@@ -23,7 +23,7 @@ use crate::tank::Tank;
 use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position, RUBBLE_ROW_BARREL};
 
 use super::combat::{explosion_hit, BlastParams};
-use super::{Event, Frame, Game, Spectacle, SHOCK_BARREL, SHOCK_BONG, SHOCK_FUEL};
+use super::{Event, Frame, Game, Spectacle};
 
 /// Everything `obstacle_died` needs to know about a tile that just died.
 /// Bundled rather than passed loose because each death path has the whole
@@ -638,7 +638,7 @@ impl Game {
                 }
             }
             for pos in dead_bongs {
-                f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
+                f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
             }
             // A lantern on the ground near the blast is knocked out.
             let reach = params.radius * 0.6;
@@ -771,7 +771,7 @@ impl Game {
             Drum::Oil | Drum::Lava => BlastKind::Oil,
             Drum::Fuel => BlastKind::Fuel,
         };
-        show.shocks.push(Shockwave::scaled(center, if drum == Drum::Fuel { SHOCK_FUEL } else { SHOCK_BARREL }));
+        show.shocks.push(Shockwave::scaled(center, if drum == Drum::Fuel { crate::tuning::tuning().fuel_shock } else { crate::tuning::tuning().barrel_shock }));
         show.impact_flashes.push(Shockwave::new(center));
         let mut fx = BlastFx::shaped(center, kind, shape);
         if drum == Drum::Lava {

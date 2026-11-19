@@ -191,7 +191,7 @@ When a dive's time is up the drone bursts where its ground point is
 - `Event::DroneBurst { id, slot, x, y, crown }` and the ordinary events of
   what the blast did (`Wreck`, `ObstacleDestroyed`, `Blast`, `ShieldBroken`,
   `Shoved`); the show (§5): a small fireball leaning down the dive, a weak
-  ripple (`fpv_shock`, 0.15 of a tank dying), the impact flash, a small
+  ripple (`fpv_shock`, 0.3 of a tank dying, a missile's), the impact flash, a small
   scorch on dry ground (none in a crown, none on water), the grass round it
   flattened.
 
@@ -900,7 +900,7 @@ drone, the tank and their age, hashed from ids and slots, never rolled.
 - **The burst** (`drone_show`): a small fireball leaning down the dive,
   `BlastFx::shaped(at, BlastKind::Oil, BlastShape::Shot { dir })` at
   `fpv_blast_fx_scale` (0.35) - the missile's burst, smaller -, the ripple
-  `Shockwave::scaled(at, fpv_shock)` (0.15), the impact flash, a scorch at
+  `Shockwave::scaled(at, fpv_shock)` (0.3), the impact flash, a scorch at
   that scale on dry ground, the grass round it flattened; sparks and a
   puff in `fx.rs`. In a crown: the same fireball among the leaves and a
   spray of leaf chips (`ParticleKind::Chip` in the leaves' colours -
@@ -1025,7 +1025,7 @@ in `enemies`:
 | `fpv_lamp_hz`, `fpv_dive_lamp_hz` | 3, 10 | 0.5..=20, 0.5..=30 | How fast its lamp blinks, and in the dive. |
 | `fpv_lamp_light` | 0.35 | 0..=2 | The light its lamp throws at night, against a headlight's. |
 | `fpv_blast_fx_scale` | 0.35 | 0.1..=2 | Its burst's fireball against a missile's. |
-| `fpv_shock` | 0.15 | 0..=2 | Its burst's ripple and shake against a tank dying's. |
+| `fpv_shock` | 0.3 | 0..=3 | Its burst's ripple and shake against a tank dying's. |
 | `fpv_shadow_opacity` | 0.3 | 0..=1 | Its shadow. |
 | `fpv_wash_rate` | 30 | 0..=200 | Dust blocks a second off the ground under a low drone. |
 | `fpv_enemy_gap_seconds` | 3.0 | 0.1..=20 | Seconds between an enemy's launches; it also waits for its last drone to come down. |

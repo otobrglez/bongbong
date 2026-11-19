@@ -1669,6 +1669,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   it appears), `glint_col` (the idle, hashed per crate) and `open` (`Opening::Taken` - planks fly,
   the symbol rises and drops into the tank -, `Spilled`, `Broken`). Knobs: the `crates` tuning
   group.
+- `fx.rs`'s feedback half: `Fx::explosion(at, size, kind)` is the one burst every blast event
+  throws, sized by the cause's row of the `shock` tuning group; `watch_slams` turns a hull's
+  contact impulse rising into a slam (burst, flash, a `Jolt` - a shake with no ripple) and
+  `Event::Ram` is one whatever its impulse; `watch_bongs` gives a bong's death its thud. The rate
+  limiter keeps one carry per source and `end_sample` drops those nobody asked about, and the
+  continuous emitters emit only where a view sees (`set_views`, `sees`; no views is the whole
+  field). `app::fx_runs` stops its clock with the round.
 - `fx.rs` — particles, owned by `app.rs` and passed through `Effects::fx`; `render/fx.rs` draws them
   in the effects language (docs/effects.md). **Deliberately not a field of `Game`**, which is why it
   may use `rand::rng()` while `decal.rs` may not: anything whose position matters later belongs in
@@ -1714,6 +1721,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `BLUE_PALE` glint) at `fish_opacity`; `render/fish.rs`'s `draw_fish` paints them in
   `paint_field_lit` straight after the floor. Knobs: the `fish` tuning group. Tests: `fish::tests`
   (`preview`, ignored, writes `target/fish-preview.png`).
+- `feedback.rs` (docs/effects.md, "Being hit, ramming, a kill") — what the seats this screen plays
+  feel, headless and owned by `app.rs`: `Feedback::observe_events` reads a `Reading` of the round
+  once a simulated frame (each local seat's hull damage and kill count) and keeps the blows
+  (`Hurt`) and the hold; `shakes`/`pulse`/`tick_of` are what a view draws, picked by `ViewOf`
+  (`Every`, or one half of the couch's split), and `time_scale` is the hold on a local seat's kill,
+  which only an offline round at full motion and off lockstep ever starts. It never writes `Game`,
+  sends nothing and draws no RNG. `render/game.rs` adds its shakes and `Fx::jolts` to the round's
+  (`shockwave::camera_shake_of`) and paints the pulse (`draw_edge_pulse`) over the screen flash;
+  `hud.rs` carries the tick as `PlayerHud::hurt`. Knobs: `hurt_*`, `kill_hitstop_*`. Tests:
+  `feedback::tests`.
 - `shockwave.rs` — `Game::shocks` is a list capped at `SHOCK_MAX` (the shader's uniform-array
   length), resolved in one blit that accumulates every ripple; eviction by `remaining()`.
   `render/shockwave.rs` is `RippleFx`, the compiled shader and its uniforms, compiled once; every

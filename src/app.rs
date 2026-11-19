@@ -125,6 +125,17 @@ fn local_seats(session: &Session) -> Vec<u8> {
     }
 }
 
+/// Whether the particle layer ages this frame: with the round on screen.
+/// A room's replica always runs; the local round does while it is played
+/// (`Session::playing`: no dialog, level select, lobby or builder over it)
+/// and not paused.
+fn fx_runs(mode: Driver, playing: bool, paused: bool) -> bool {
+    match mode {
+        Driver::Online => true,
+        _ => playing && !paused,
+    }
+}
+
 /// How many of the window's units make a point - what the indicators'
 /// sizes are given in (`indicators::in_points`): one where the window is
 /// laid out in points, and where it is in device pixels, the device pixels
@@ -1510,6 +1521,9 @@ pub fn run(args: Args) {
     // a lower density - wasm is the tighter budget and a dense wave is
     // where that shows.
     let mut fx = crate::fx::Fx::default();
+    // What the seats this screen plays feel of being hit, and the hold on
+    // their kills (feedback.rs).
+    let mut feedback = crate::feedback::Feedback::default();
     // What the screen cannot see (indicators.rs, docs/large-maps-follow-
     // camera.md section 7): a memory per local seat on this screen, fed
     // every step's events like the particle layer - presentation only, and
@@ -2354,7 +2368,8 @@ pub fn run(args: Args) {
         // The blow that decided the round is held, then slowed
         // (`Session::time_scale`): the round's clock and the particle
         // layer take that share of the frame's real time.
-        let scaled_dt = dt * session.time_scale();
+        // A local seat's kill is held too, a few frames (`Feedback`).
+        let scaled_dt = dt * session.time_scale() * if session.mode() == Driver::Play { feedback.time_scale() } else { 1.0 };
         #[cfg_attr(not(all(feature = "dev-tools", not(target_os = "emscripten"))), allow(unused_mut))]
         let mut fx_dt = scaled_dt;
         // Where the local round stood before this frame's steps.
@@ -2377,6 +2392,9 @@ pub fn run(args: Args) {
             };
             let steps_stage = crate::frame_stages::stage("sim");
             let seats = local_seats(&session);
+            // A kill holds a round played at full motion on the wall
+            // clock: never a lockstep's.
+            let hold = !frozen && !crate::motion::reduced();
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
                 Some(dev) => {
@@ -2385,6 +2403,7 @@ pub fn run(args: Args) {
                         fx.observe_events(game);
                         follow.observe_events(game);
                         awareness.observe_events(game, &seats);
+                        feedback.observe_events(game, &seats, &tuning(), hold);
                         voice.observe(game);
                     });
                     if frozen {
@@ -2406,6 +2425,7 @@ pub fn run(args: Args) {
                     fx.observe_events(&session.game);
                     follow.observe_events(&session.game);
                     awareness.observe_events(&session.game, &seats);
+                    feedback.observe_events(&session.game, &seats, &tuning(), hold);
                     voice.observe(&session.game);
                 }
             }
@@ -2421,6 +2441,11 @@ pub fn run(args: Args) {
             posed = Some(alpha);
         } else {
             carried = Input::default();
+        }
+        // The particle layer stands still with the round: under a dialog,
+        // the level select, the lobby or the builder, and while paused.
+        if !fx_runs(session.mode(), session.playing(), session.game.paused) {
+            fx_dt = 0.0;
         }
         // The time the local round's picture moved on by: its steps and
         // the change in the share of the next one it is posed at.
@@ -2596,8 +2621,15 @@ pub fn run(args: Args) {
         // then ages what is already in flight. Deliberately not inside
         // `Game` - see fx.rs.
         let fx_stage = crate::frame_stages::stage("fx");
+        // The continuous emitters throw only what a view can see.
+        match (camera.shows_whole_field(), second_shown) {
+            (true, _) => fx.set_views(&[]),
+            (false, Some(second)) => fx.set_views(&[camera.rect(), second]),
+            (false, None) => fx.set_views(&[camera.rect()]),
+        }
         fx.observe(game, fx_dt);
         fx.tick(fx_dt);
+        feedback.tick(fx_dt, dt, &tuning());
         drop(fx_stage);
         // What the screen cannot see: a replica's events read once a frame
         // (a local round's were read after every step), and the arrows
@@ -2607,6 +2639,7 @@ pub fn run(args: Args) {
         let seats = local_seats(&session);
         if session.mode() == Driver::Online {
             awareness.observe_events(game, &seats);
+            feedback.observe_events(game, &seats, &tuning(), false);
         }
         // The chrome the frame draws, and its corners laid out on the
         // window as this frame left it - a press may have opened a dialog
@@ -2762,6 +2795,7 @@ pub fn run(args: Args) {
                 shots: shot_shaders.as_mut(),
                 weather: Some(&mut weather_fx),
                 fx: &fx,
+                feedback: matches!(session.mode(), Driver::Play | Driver::Online).then_some(&feedback),
                 // No stick over the lobby: the field behind it is frozen
                 // and every press there belongs to the screen.
                 touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
@@ -2774,6 +2808,7 @@ pub fn run(args: Args) {
                 split: match (split_view, split_targets.as_mut(), zoom_split) {
                     (Some((camera, split)), Some((scene, composite, _)), _) => Some(crate::render::game::SplitLayer::Follow {
                         camera,
+                        seat: split.seat,
                         scene,
                         composite,
                         at: split.at,
@@ -2937,6 +2972,18 @@ impl FrameStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The particles stand still with the round: under a dialog, in the
+    /// builder or the lobby, and while paused - and never in a room, whose
+    /// round is not this window's to stop.
+    #[test]
+    fn the_particle_layer_stands_still_with_the_round() {
+        assert!(fx_runs(Driver::Play, true, false));
+        assert!(!fx_runs(Driver::Play, false, false), "a dialog or the level select");
+        assert!(!fx_runs(Driver::Play, true, true), "paused");
+        assert!(!fx_runs(Driver::Build, false, false) && !fx_runs(Driver::Lobby, false, false));
+        assert!(fx_runs(Driver::Online, false, false) && fx_runs(Driver::Online, false, true));
+    }
 
     /// `--host -m` with a map nobody has won as it stands never dials: the
     /// round opens closed, its note the clear check's refusal, which is

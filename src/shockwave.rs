@@ -110,6 +110,13 @@ impl Shockwave {
 /// a screen that cannot see it. `None` is the whole field, which every
 /// ripple is in: an arena's shake, every ripple's whole.
 pub fn camera_shake(shocks: &[Shockwave], view: Option<Rectangle>, t: &Tuning) -> Vec2 {
+    camera_shake_of(shocks, view, t)
+}
+
+/// `camera_shake` of any set of ripples: the round's with the shakes that
+/// are no ripple of its own - a hull's slam (`fx::Jolt`), a hurt seat's
+/// own view (`feedback.rs`) - summed under the one cap.
+pub fn camera_shake_of<'a>(shocks: impl IntoIterator<Item = &'a Shockwave>, view: Option<Rectangle>, t: &Tuning) -> Vec2 {
     let mut offset = Vec2::new(0.0, 0.0);
     // `screen_fx_intensity` scales every whole-screen effect together;
     // folding it into the magnitude keeps the stack cap proportional.

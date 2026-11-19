@@ -1023,6 +1023,7 @@ pub mod devserver;
 pub mod editor;
 pub mod establish;
 pub mod bong;
+pub mod feedback;
 pub mod fireball;
 pub mod fish;
 pub mod follow;
