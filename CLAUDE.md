@@ -89,7 +89,7 @@ One line per module: what it owns, the rule to keep, its design doc. **Before ch
 ## Room server (`server/`; detail in docs/platforms.md, k8s/README.md)
 
 - `bongbong-server`: the `bongbong` library headless (`default-features = false`; the image build fails if `sola` enters its graph), tokio + axum, **one instance holds every room** (one replica, `strategy: Recreate`). `GET /ws` carries every message; `/health`, `/ready` and `/metrics` are on the separate admin listener. A room is one task owning a `Game`, ticking at 60 Hz on the wall clock (`net::authority::TickClock`), sampling each seat's `net::mailbox`, sending snapshots. Difficulty follows the seat count (`tuning_patch`; one seat is the empty patch, so a room of one plays the offline round down to the bytes).
-- Liveness is `/health`, **never `/ready`** (it answers 503 for the whole drain); there is **no CPU limit**, only a request (a CFS quota stutters the 60 Hz tick). It ships with the client on the version tag; every open PR gets its own server at `wss://rooms.bongbong.io/pr-<N>/ws`.
+- Liveness is `/health`, **never `/ready`** (it answers 503 for the whole drain); there is **no CPU limit**, only a request (a CFS quota stutters the 60 Hz tick). It ships with the client on the version tag; a PR labelled `coop` gets its own server at `wss://rooms.bongbong.io/pr-<N>/ws` (without the label: no server, and a web preview built without `online`).
 - `just run-server` (`127.0.0.1:4848`), `just run-server-dev` (plus the dev socket on 4849), `cargo test -p bongbong-server`.
 
 ## Testing & tooling (detail in docs/tooling.md)

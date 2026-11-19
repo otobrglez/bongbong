@@ -15,9 +15,13 @@ k8s/preview/
 
 ## Per-PR previews
 
-Every open PR gets its own room server in namespace `bongbong-pr-<N>`,
-deployed by `.github/workflows/pr-server.yml` and reachable at
-**`wss://rooms.bongbong.io/pr-<N>/ws`**.
+An open PR labelled `coop` gets its own room server in namespace
+`bongbong-pr-<N>`, deployed by `.github/workflows/pr-server.yml` and
+reachable at **`wss://rooms.bongbong.io/pr-<N>/ws`**. The label is the
+switch: adding it deploys the server and rebuilds the PR's web preview with
+co-op, every later push redeploys, and removing it (or closing the PR)
+deletes the namespace. A PR without the label never reaches the cluster,
+and its web preview is built without the `online` feature.
 
 The preview takes a *path* on production's hostname rather than a host of
 its own, which is what makes it free: the one `rooms.bongbong.io` record
