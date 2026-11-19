@@ -207,6 +207,38 @@ pub struct Particle {
     pub(crate) kind: ParticleKind,
 }
 
+/// A shake of the screen with no ripple: a hull's slam into a wall or
+/// another hull. It shakes a view as a ripple of the round's does
+/// (`shockwave::camera_shake`), by how near it is.
+pub struct Jolt {
+    pub shock: crate::shockwave::Shockwave,
+}
+
+/// What blew up, for `Fx::explosion`: which particles a blast of its size
+/// throws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Explosion {
+    /// A charge - a missile, a grenade, a bomb, a drone, a round cooking
+    /// off: fire sparks and grey smoke.
+    Charge,
+    /// An oil drum: fire sparks under black smoke.
+    Oil,
+    /// A fuel drum: whiter, faster, and hardly any smoke - it burns clean.
+    Fuel,
+    /// A lava bomb: molten drops and grey ash.
+    Lava,
+    /// A hull: sparks, flecks of plate and smoke.
+    Hull,
+    /// A gravity well's collapse: violet sparks and dust thrown out.
+    Void,
+    /// Something that falls rather than burns - a bong: dust and chips.
+    Thud,
+}
+
+/// How far past a view a continuous emitter still emits, px: smoke off a
+/// fire just off screen drifts into it.
+const VIEW_FX_MARGIN: f32 = 96.0;
+
 /// Every short-lived effect the presentation layer owns.
 #[derive(Default)]
 pub struct Fx {
@@ -221,8 +253,25 @@ pub struct Fx {
     last_frame: u64,
     /// Fractional carry for rate-based emitters. A tile giving off 22
     /// embers a second at 120fps owes 0.18 of an ember per frame, so each
-    /// source keeps its own remainder, keyed by a hash of its position.
-    accum: HashMap<u32, f32>,
+    /// source keeps its own remainder, keyed by a hash of its position,
+    /// beside the `sample` it was last asked in: a source nobody asked
+    /// about this sample is gone, and its carry goes with it.
+    accum: HashMap<u32, (f32, u32)>,
+    /// How many times `sample_world` has run.
+    sample: u32,
+    /// The world rectangles the screen shows (`set_views`): a continuous
+    /// emitter outside all of them emits nothing. Empty is the whole
+    /// field.
+    views: Vec<crate::math::Rectangle>,
+    /// Each hull's hardest contact impulse at the last simulated frame
+    /// and the frame it last slammed on, if it has, by owner slot
+    /// (`watch_slams`).
+    slams: HashMap<usize, (f32, Option<u64>)>,
+    /// Shakes of the screen that are no ripple of the round's (`Jolt`).
+    jolts: Vec<Jolt>,
+    /// Whether each side's bong stood at the last simulated frame, so the
+    /// frame one falls throws its burst.
+    bongs: HashMap<crate::bong::Side, bool>,
     /// Owner slots of the hulls that were wading last frame, so the frame
     /// one wades in gets a splash rather than only the running spray.
     wading: HashSet<usize>,
@@ -298,6 +347,27 @@ impl Fx {
         &self.flashes
     }
 
+    /// The shakes that are no ripple of the round's, for the renderer.
+    pub fn jolts(&self) -> &[Jolt] {
+        &self.jolts
+    }
+
+    /// The world rectangles the screen shows this frame - none for the
+    /// whole field - so `sample_world` emits only where it can be seen.
+    pub fn set_views(&mut self, views: &[crate::math::Rectangle]) {
+        self.views.clear();
+        self.views.extend_from_slice(views);
+    }
+
+    /// Whether a continuous emitter at `at` is worth its particles: in a
+    /// view or within `VIEW_FX_MARGIN` of one.
+    fn sees(&self, at: Position) -> bool {
+        self.views.is_empty()
+            || self.views.iter().any(|v| {
+                at.x >= v.x - VIEW_FX_MARGIN && at.x <= v.x + v.width + VIEW_FX_MARGIN && at.y >= v.y - VIEW_FX_MARGIN && at.y <= v.y + v.height + VIEW_FX_MARGIN
+            })
+    }
+
     /// Light up what a hit landed on; a second hit on it starts its flash
     /// over rather than stacking another.
     fn flash(&mut self, what: Flashed) {
@@ -346,6 +416,9 @@ impl Fx {
         self.opens.clear();
         self.flashes.clear();
         self.burning.clear();
+        self.slams.clear();
+        self.jolts.clear();
+        self.bongs.clear();
     }
 
     fn push(&mut self, p: Particle) {
@@ -601,31 +674,122 @@ impl Fx {
         }
     }
 
-    fn wreck(&mut self, at: Position) {
-        self.burst(at, ParticleKind::Spark, self.count(tuning().wreck_burst_particles), 200.0, &[FIRE_T, EMBER_T, WHITE_T]);
-        self.burst(at, ParticleKind::Chip, self.count(10), 120.0, &[STONE_DK, STONE_MD]);
-        self.burst(at, ParticleKind::Smoke, self.count(8), 40.0, &[SMOKE_T]);
+    /// The particles of a blast at `at`: every cause's, so two blasts of
+    /// one `size` throw as much whatever set them off. `size` is the
+    /// cause's row of the `shock` tuning group - 1 a tank dying, the scale
+    /// its ripple and shake are on - and sets how many particles fly and
+    /// how fast; `kind` picks what they are. On water it throws spray too
+    /// (docs/water.md).
+    pub fn explosion(&mut self, game: &Game, at: Position, size: f32, kind: Explosion) {
+        let size = size.clamp(0.0, 3.0);
+        if size <= 0.0 {
+            return;
+        }
+        let (sparks, smoke) = explosion_counts(size);
+        let speed = 120.0 + 130.0 * size;
+        let drift = 26.0 + 14.0 * size;
+        match kind {
+            Explosion::Charge => {
+                self.burst(at, ParticleKind::Spark, self.count(sparks), speed, &[FIRE_T, EMBER_T, WHITE_T]);
+                self.burst(at, ParticleKind::Smoke, self.count(smoke), drift, &[SMOKE_T]);
+            }
+            Explosion::Oil => {
+                self.burst(at, ParticleKind::Spark, self.count(sparks), speed, &[FIRE_T, EMBER_T]);
+                self.burst(at, ParticleKind::Smoke, self.count(smoke), drift, &[SOOT_T]);
+            }
+            Explosion::Fuel => {
+                self.burst(at, ParticleKind::Spark, self.count(sparks), speed * 1.1, &[WHITE_T, FIRE_T]);
+                self.burst(at, ParticleKind::Smoke, self.count(smoke / 2), drift, &[SMOKE_T]);
+            }
+            Explosion::Lava => {
+                self.burst(at, ParticleKind::Ember, self.count(sparks), speed * 0.7, &[FIRE_T, EMBER_T]);
+                self.burst(at, ParticleKind::Smoke, self.count(smoke), drift, &[SMOKE_T]);
+            }
+            Explosion::Hull => {
+                let n = (tuning().wreck_burst_particles as f32 * size).round() as i32;
+                self.burst(at, ParticleKind::Spark, self.count(n), speed, &[FIRE_T, EMBER_T, WHITE_T]);
+                self.burst(at, ParticleKind::Chip, self.count((10.0 * size).round() as i32), 120.0, &[STONE_DK, STONE_MD]);
+                self.burst(at, ParticleKind::Smoke, self.count(smoke), drift, &[SMOKE_T]);
+            }
+            Explosion::Void => {
+                self.burst(at, ParticleKind::Spark, self.count(sparks), speed, &[crate::pyro::VOID[3], crate::pyro::VOID[4], WHITE_T]);
+                self.burst(at, ParticleKind::Dust, self.count(smoke), drift * 2.0, &[DUST_T]);
+            }
+            Explosion::Thud => {
+                self.burst(at, ParticleKind::Dust, self.count(sparks / 2), 50.0, &[DUST_T]);
+                self.burst(at, ParticleKind::Chip, self.count(smoke), 100.0, &[STONE_DK, STONE_MD]);
+            }
+        }
+        self.splash_if_wet(game, at, (4.0 + 14.0 * size).round() as i32);
     }
 
-    fn blast(&mut self, at: Position, chained: bool, drum: Drum) {
-        // A cascade fires one of these per link, so a chained pop is
-        // deliberately smaller - otherwise a barrel row saturates the cap
-        // and the later blasts evict the earlier ones' particles.
-        let scale = if chained { 0.5 } else { 1.0 };
-        match drum {
-            Drum::Oil => {
-                self.burst(at, ParticleKind::Spark, self.count((18.0 * scale) as i32), 210.0, &[FIRE_T, EMBER_T]);
-                self.burst(at, ParticleKind::Smoke, self.count((7.0 * scale) as i32), 35.0, &[SOOT_T]);
+    /// A hull's slam at `at` - into a wall, or (`on_tank`) another hull -
+    /// `hard` of a full one (0 to 1, `slam_strength`): a burst that grows
+    /// with it, steel's sparks off a hull and sparks and dust off a wall;
+    /// the hull's flash, unless motion is reduced (`motion.rs`); and a
+    /// shake with no ripple (`ram_shock`), which reduced motion leaves
+    /// undrawn as it does every shake.
+    fn slam(&mut self, slot: usize, at: Position, hard: f32, on_tank: bool) {
+        let n = (tuning().ram_fx_particles as f32 * (0.3 + 0.7 * hard)).round() as i32;
+        let speed = 70.0 + 110.0 * hard;
+        if on_tank {
+            self.burst(at, ParticleKind::Spark, self.count(n), speed, &[WHITE_T, FIRE_T, EMBER_T]);
+            self.burst(at, ParticleKind::Chip, self.count(n / 4), speed * 0.6, &[STONE_DK, STONE_MD]);
+        } else {
+            self.burst(at, ParticleKind::Spark, self.count(n / 2), speed, &[FIRE_T, WHITE_T]);
+            self.burst(at, ParticleKind::Dust, self.count(n / 2), 30.0 + 30.0 * hard, &[DUST_T]);
+        }
+        if !crate::motion::reduced() {
+            self.flash(Flashed::Tank(slot));
+        }
+        let shock = tuning().ram_shock * hard;
+        if shock > 0.0 {
+            if self.jolts.len() >= MAX_JOLTS {
+                self.jolts.remove(0);
             }
-            // A lava bomb: a spray of molten drops and grey ash.
-            Drum::Lava => {
-                self.burst(at, ParticleKind::Ember, self.count((16.0 * scale) as i32), 150.0, &[FIRE_T, EMBER_T]);
-                self.burst(at, ParticleKind::Smoke, self.count((6.0 * scale) as i32), 30.0, &[SMOKE_T]);
+            self.jolts.push(Jolt { shock: crate::shockwave::Shockwave::scaled(at, shock) });
+        }
+    }
+
+    /// The slams of the simulated frame `game` is at: a hull whose hardest
+    /// contact is `ram_fx_min_impulse` or over and has risen
+    /// `ram_fx_rise`-fold since the frame before - the blow that opens a
+    /// contact, where a hull pushing on at a wall holds its impulse and
+    /// slams once - no sooner than `ram_fx_gap_seconds` after its last.
+    /// `rammed` are the hulls an `Event::Ram` already slammed this frame.
+    fn watch_slams(&mut self, game: &Game, rammed: &[usize]) {
+        let t = tuning();
+        let frame = game.frame();
+        let gap = (t.ram_fx_gap_seconds / crate::PHYSICS_FIXED_DT).round() as u64;
+        let contacts = game.contacts();
+        // A hull touching nothing has let go: its next contact is a blow.
+        for (slot, entry) in self.slams.iter_mut() {
+            if !contacts.iter().any(|c| c.0 == *slot) {
+                entry.0 = 0.0;
             }
-            // Fuel: whiter, faster, and hardly any smoke - it burns clean.
-            Drum::Fuel => {
-                self.burst(at, ParticleKind::Spark, self.count((22.0 * scale) as i32), 260.0, &[WHITE_T, FIRE_T]);
-                self.burst(at, ParticleKind::Smoke, self.count((3.0 * scale) as i32), 40.0, &[SMOKE_T]);
+        }
+        for &(slot, at, impulse, on_tank) in &contacts {
+            let (before, last) = self.slams.get(&slot).copied().unwrap_or((0.0, None));
+            let rested = last.is_none_or(|last| frame.saturating_sub(last) >= gap);
+            let hard = slam_strength(impulse, &t);
+            let slammed = if rammed.contains(&slot) {
+                true
+            } else if hard > 0.0 && before * t.ram_fx_rise <= impulse && rested {
+                self.slam(slot, at, hard, on_tank);
+                true
+            } else {
+                false
+            };
+            self.slams.insert(slot, (impulse, if slammed { Some(frame) } else { last }));
+        }
+    }
+
+    /// The frame a bong falls: a burst of dust and chips where it stood.
+    fn watch_bongs(&mut self, game: &Game) {
+        let now: Vec<(crate::bong::Side, bool, Position)> = game.world.query::<&crate::bong::Bong>().iter().map(|b| (b.side, !b.is_dead(), b.position)).collect();
+        for (side, alive, at) in now {
+            if self.bongs.insert(side, alive) == Some(true) && !alive {
+                self.explosion(game, at, tuning().bong_shock, Explosion::Thud);
             }
         }
     }
@@ -654,6 +818,8 @@ impl Fx {
                 self.clear();
             }
             self.last_frame = game.frame();
+            // The hulls an `Event::Ram` slams this frame (`watch_slams`).
+            let mut rammed: Vec<usize> = Vec::new();
             for e in game.events() {
                 match *e {
                     Event::RoundStarted { .. } => self.clear(),
@@ -664,8 +830,11 @@ impl Fx {
                         let kind = crate::pickup::PickupKind::BongHealth;
                         self.start_open(CrateOpen { kind, at: Position::new(x, y), taker: Taker::Bong(side), spilled: false, age: 0.0 });
                     }
-                    Event::CrateBroken { kind, x, y, .. } => {
+                    Event::CrateBroken { kind, x, y, cooked } => {
                         let at = Position::new(x, y);
+                        if cooked {
+                            self.explosion(game, at, tuning().barrel_shock * tuning().crate_cookoff_scale, Explosion::Oil);
+                        }
                         self.start_open(CrateOpen { kind, at, taker: Taker::Broken, spilled: false, age: 0.0 });
                         if let Some(ramp) = crate::pyro::dust_of(Material::Wood) {
                             let tints = [ramp[1], ramp[2]];
@@ -722,13 +891,55 @@ impl Fx {
                         self.flash(Flashed::Tile(at));
                         self.tile_chip(material, at, shot_heading_near(game, at));
                     }
-                    Event::Wreck { x, y, .. } => {
-                        self.wreck(Position::new(x, y));
-                        self.splash_if_wet(game, Position::new(x, y), 14);
-                    }
+                    Event::Wreck { x, y, .. } => self.explosion(game, Position::new(x, y), tuning().kill_shock, Explosion::Hull),
+                    // A cascade fires one of these per link, so a chained
+                    // pop is half its size - otherwise a barrel row
+                    // saturates the cap and the later blasts evict the
+                    // earlier ones' particles.
                     Event::Blast { x, y, chained, drum } => {
-                        self.blast(Position::new(x, y), chained, drum);
-                        self.splash_if_wet(game, Position::new(x, y), 18);
+                        let (size, kind) = match drum {
+                            Drum::Oil => (tuning().barrel_shock, Explosion::Oil),
+                            Drum::Lava => (tuning().barrel_shock, Explosion::Lava),
+                            Drum::Fuel => (tuning().fuel_shock, Explosion::Fuel),
+                        };
+                        self.explosion(game, Position::new(x, y), if chained { size * 0.5 } else { size }, kind);
+                    }
+                    Event::GrenadeBlast { x, y, .. } => self.explosion(game, Position::new(x, y), tuning().grenade_shock, Explosion::Charge),
+                    // A jet's bomb; one of its cannon bursts is a spit of
+                    // sparks and dust off the ground.
+                    Event::AirStrike { bomb: true, x, y, .. } => self.explosion(game, Position::new(x, y), tuning().bomb_shock, Explosion::Charge),
+                    Event::AirStrike { bomb: false, x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(4), 110.0, &[WHITE_T, FIRE_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Dust, self.count(3), 40.0, &[DUST_T]);
+                        self.splash_if_wet(game, Position::new(x, y), 4);
+                    }
+                    // A helicopter struck down: sparks off it in the air,
+                    // and the wreck's burst where it comes down.
+                    Event::AircraftDowned { x, y, height, .. } => {
+                        self.burst(Position::new(x, y - height), ParticleKind::Spark, self.count(8), 110.0, &[WHITE_T, FIRE_T]);
+                        self.explosion(game, Position::new(x, y), tuning().bomb_shock, Explosion::Hull);
+                    }
+                    Event::WellCollapsed { x, y, .. } => self.explosion(game, Position::new(x, y), tuning().well_shock, Explosion::Void),
+                    // A ram that hurt: both hulls slam, where they meet.
+                    Event::Ram { slot, other_slot, damage } => {
+                        let contacts = game.contacts();
+                        let hit = contacts.iter().find(|c| (c.0 == slot || c.0 == other_slot) && c.3);
+                        let hulls = game.tank_snapshots();
+                        let of = |s: usize| hulls.iter().find(|t| t.slot == s).map(|t| t.position);
+                        let at = match (hit, of(slot), of(other_slot)) {
+                            (Some(c), _, _) => c.1,
+                            (None, Some(a), Some(b)) => Position::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5),
+                            _ => continue,
+                        };
+                        // With no contact to measure - a replica steps no
+                        // physics - the damage roll stands in for it.
+                        let t = tuning();
+                        let hard = hit.map_or(0.0, |c| slam_strength(c.2, &t)).max((damage / t.ram_damage_max.max(1.0)).clamp(0.3, 1.0));
+                        self.slam(slot, at, hard, true);
+                        if !crate::motion::reduced() {
+                            self.flash(Flashed::Tank(other_slot));
+                        }
+                        rammed.extend([slot, other_slot]);
                     }
                     // A fuel drum leaving the ground: a spit of sparks and
                     // a puff where it stood.
@@ -784,28 +995,20 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(10), 60.0, &[HEAL_T, WHITE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(4), 26.0, &[HEAL_T]);
                     }
-                    // A seeker missile coming down: a tight fireball's
-                    // worth of sparks and a puff, a volley's four in a row.
-                    Event::MissileBlast { x, y, .. } => {
-                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(10), 150.0, &[FIRE_T, EMBER_T, WHITE_T]);
-                        self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(4), 30.0, &[SMOKE_T]);
-                        self.splash_if_wet(game, Position::new(x, y), 8);
-                    }
+                    // A seeker missile coming down, a volley's four in a
+                    // row.
+                    Event::MissileBlast { x, y, .. } => self.explosion(game, Position::new(x, y), tuning().missile_shock, Explosion::Charge),
                     // An FPV drone off its halo: a ring of rotor wash round
                     // the slot it left (docs/fpv-swarm.md "Drawing").
                     Event::DroneLaunched { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Dust, self.count(6), 40.0, &[DUST_T]);
                     }
-                    // A drone's burst: the missile's sparks and puff,
-                    // fewer; in a crown, the leaves it shreds.
+                    // A drone's burst; in a crown, the leaves it shreds.
                     Event::DroneBurst { x, y, crown, .. } => {
                         let at = Position::new(x, y);
-                        self.burst(at, ParticleKind::Spark, self.count(6), 120.0, &[FIRE_T, EMBER_T, WHITE_T]);
-                        self.burst(at, ParticleKind::Smoke, self.count(2), 26.0, &[SMOKE_T]);
+                        self.explosion(game, at, tuning().fpv_shock, Explosion::Charge);
                         if crown {
                             self.burst(at, ParticleKind::Chip, self.count(8), 70.0, &[LEAF_L, LEAF_M, LEAF_D]);
-                        } else {
-                            self.splash_if_wet(game, at, 5);
                         }
                     }
                     // A drone struck in the air, at the drone as it is
@@ -829,9 +1032,7 @@ impl Fx {
                         self.burst(at, ParticleKind::Spark, self.count(3), 60.0, &[WHITE_T]);
                         self.splash_if_wet(game, at, 4);
                     }
-                    Event::CookOff { x, y } => {
-                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 120.0, &[FIRE_T, EMBER_T]);
-                    }
+                    Event::CookOff { x, y } => self.explosion(game, Position::new(x, y), tuning().cookoff_shock, Explosion::Charge),
                     // A missile an EMP killed hitting the ground a dud
                     // (docs/emp-burst.md): a puff of dust and a few pale
                     // sparks off its dead circuits - no fire.
@@ -859,7 +1060,7 @@ impl Fx {
                     // The shield itself giving way: a full ring of sparks
                     // off the hull plus a little smoke, so the moment reads
                     // as the shield going rather than another hit landing.
-                    // The camera shake rides `SHOCK_SHIELD_BREAK`, pushed in
+                    // The camera shake rides `shield_break_shock`, pushed in
                     // `simulation/`.
                     Event::ShieldBroken { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(16), 150.0, &[SHIELD_T, WHITE_T]);
@@ -971,6 +1172,8 @@ impl Fx {
                 }
             }
             self.muzzle_sparks(game);
+            self.watch_slams(game, &rammed);
+            self.watch_bongs(game);
         }
     }
 
@@ -1058,7 +1261,7 @@ impl Fx {
             if !self.wading.contains(&slot) {
                 self.burst(pos, ParticleKind::Spray, self.count(10), 80.0, &[WATER_L, WATER_M, WHITE_T]);
             }
-            if spray > 0.0 && speed > 15.0 {
+            if spray > 0.0 && speed > 15.0 && self.sees(pos) {
                 let rate = spray * (speed / 120.0).clamp(0.2, 1.5) * tuning().fx_density;
                 if self.due(0x5A7E_0000 ^ slot as u32, rate, dt) {
                     self.burst(pos, ParticleKind::Spray, 1, 50.0, &[WATER_L, WATER_M]);
@@ -1072,6 +1275,9 @@ impl Fx {
         // pale specks off one cruising, and smoke off one falling.
         let wash = tuning().fpv_wash_rate * tuning().fx_density;
         for d in game.drones() {
+            if !self.sees(d.ground) {
+                continue;
+            }
             let key = 0xD20_0000 ^ d.id;
             let drawn = d.drawn();
             match d.stage {
@@ -1100,7 +1306,7 @@ impl Fx {
         // (`Tank::skid`, docs/sonic-hammer.md), at a rate that follows its
         // speed.
         for (slot, pos, speed) in game.skidding() {
-            if speed > 20.0 {
+            if speed > 20.0 && self.sees(pos) {
                 let rate = 30.0 * (speed / 200.0).clamp(0.2, 1.5) * tuning().fx_density;
                 if self.due(0x5C1D_0000 ^ slot as u32, rate, dt) {
                     self.burst(pos, ParticleKind::Dust, 1, 30.0, &[DUST_T]);
@@ -1111,6 +1317,9 @@ impl Fx {
         let (ember_rate, smoke_rate) = (tuning().wood_ember_rate, tuning().wood_smoke_rate);
         self.burning = game.burning_tiles().iter().map(|&(pos, _)| crate::map::world_to_cell(pos)).collect();
         for (pos, _elapsed) in game.burning_tiles() {
+            if !self.sees(pos) {
+                continue;
+            }
             let key = crate::blast::seed_at(pos, 1);
             if self.due(key, ember_rate * tuning().fx_density, dt) {
                 self.burst(pos, ParticleKind::Ember, 1, 22.0, &[EMBER_T, FIRE_T]);
@@ -1122,6 +1331,9 @@ impl Fx {
         // Burning ground - a pool or a lit trail - throws what a burning
         // plank does, dying down over its last moments.
         for (pos, left, _total) in game.burning_cells() {
+            if !self.sees(pos) {
+                continue;
+            }
             let key = crate::blast::seed_at(pos, 6);
             let dying = (left / 0.6).clamp(0.2, 1.0);
             if self.due(key, ember_rate * dying * tuning().fx_density, dt) {
@@ -1141,7 +1353,7 @@ impl Fx {
             if rate > 0.0 {
                 for (col, row) in game.lava().cells() {
                     let pos = crate::map::cell_to_world(col, row);
-                    if self.due(crate::blast::seed_at(pos, 12), rate, dt) {
+                    if self.sees(pos) && self.due(crate::blast::seed_at(pos, 12), rate, dt) {
                         self.burst(pos, ParticleKind::Ember, 1, 18.0, &[EMBER_T, FIRE_T]);
                     }
                 }
@@ -1149,7 +1361,7 @@ impl Fx {
             for v in game.volcanoes() {
                 let phase = v.phase(game.time, &t);
                 let key = crate::blast::seed_at(v.centre(), 13);
-                if self.due(key, t.lava_mote_rate * 8.0 * phase.heat * t.fx_density, dt) {
+                if self.sees(v.centre()) && self.due(key, t.lava_mote_rate * 8.0 * phase.heat * t.fx_density, dt) {
                     self.burst(v.centre(), ParticleKind::Ember, 1, 30.0 + 60.0 * phase.heat, &[EMBER_T, FIRE_T, WHITE_T]);
                 }
             }
@@ -1158,6 +1370,9 @@ impl Fx {
         // stage), a burning one throws what a burning plank does, a ruin
         // smoulders for `tower_ruin_smoke_seconds`, dying down as it goes.
         for view in game.tower_views() {
+            if !self.sees(view.position) {
+                continue;
+            }
             let key = crate::blast::seed_at(view.position, 8);
             let top = Position::new(view.position.x, view.position.y - 6.0);
             let smoke = match view.stage {
@@ -1176,6 +1391,9 @@ impl Fx {
         }
         let ruin_seconds = tuning().tower_ruin_smoke_seconds.max(0.01);
         for ruin in game.tower_ruins().iter().filter(|r| r.smouldering()) {
+            if !self.sees(ruin.position) {
+                continue;
+            }
             let key = crate::blast::seed_at(ruin.position, 9);
             let dying = (1.0 - ruin.age / ruin_seconds).clamp(0.2, 1.0);
             if self.due(key, smoke_rate * dying * tuning().fx_density, dt) {
@@ -1184,7 +1402,7 @@ impl Fx {
         }
         // A coated hull drips ooze.
         for (slot, pos) in game.slimed() {
-            if self.due(0x0DE0_0000 ^ slot as u32, 4.0 * tuning().fx_density, dt) {
+            if self.sees(pos) && self.due(0x0DE0_0000 ^ slot as u32, 4.0 * tuning().fx_density, dt) {
                 self.burst(pos, ParticleKind::Spray, 1, 30.0, &OOZE_TINTS);
             }
         }
@@ -1194,7 +1412,7 @@ impl Fx {
         if spark_rate > 0.0 {
             for pos in game.fused_barrels() {
                 let key = crate::blast::seed_at(pos, 7);
-                if self.due(key, spark_rate * tuning().fx_density, dt) {
+                if self.sees(pos) && self.due(key, spark_rate * tuning().fx_density, dt) {
                     let bung = Position::new(pos.x + 4.0, pos.y - 8.0);
                     self.burst(bung, ParticleKind::Spark, 1, 45.0, &[FIRE_T, WHITE_T]);
                 }
@@ -1301,6 +1519,9 @@ impl Fx {
         // timer runs out.
         let (flame_rate, wsmoke_rate) = (tuning().wreck_flame_rate, tuning().wreck_smoke_rate);
         for (pos, _left) in game.burning_tanks() {
+            if !self.sees(pos) {
+                continue;
+            }
             let key = crate::blast::seed_at(pos, 8);
             if self.due(key, flame_rate * tuning().fx_density, dt) {
                 self.burst(pos, ParticleKind::Ember, 1, 30.0, &[FIRE_T, EMBER_T]);
@@ -1310,6 +1531,9 @@ impl Fx {
             }
         }
         for (pos, _left) in game.burning_wrecks() {
+            if !self.sees(pos) {
+                continue;
+            }
             let key = crate::blast::seed_at(pos, 2);
             if self.due(key, flame_rate * tuning().fx_density, dt) {
                 self.burst(pos, ParticleKind::Ember, 1, 26.0, &[FIRE_T, EMBER_T]);
@@ -1325,7 +1549,7 @@ impl Fx {
             let t = tuning();
             for hot in game.smouldering() {
                 let flare = hot.flare(&t);
-                if flare > 0.0 && self.due(hot.seed ^ 0x5BA4_0000, spark * flare / 0.45, dt) {
+                if flare > 0.0 && self.sees(hot.at) && self.due(hot.seed ^ 0x5BA4_0000, spark * flare / 0.45, dt) {
                     self.burst(hot.at, ParticleKind::Ember, 1, 26.0, &[FIRE_T, EMBER_T]);
                 }
             }
@@ -1342,6 +1566,9 @@ impl Fx {
                 }
             }
             for (slot, at, thick, burning) in hulls {
+                if !self.sees(at) {
+                    continue;
+                }
                 let key = 0xDA3A_0000 ^ slot as u32;
                 if self.due(key, hull_rate * (0.15 + 0.85 * thick), dt) {
                     let tint = if burning { SOOT_T } else { SMOKE_T };
@@ -1364,21 +1591,23 @@ impl Fx {
                 crate::map::Theme::Desert => &[STRAW_L, STRAW_M, STRAW_D],
             };
             for pos in game.grass_disturbed() {
-                if self.due(crate::blast::seed_at(pos, 3), rustle * tuning().fx_density, dt) {
+                if self.sees(pos) && self.due(crate::blast::seed_at(pos, 3), rustle * tuning().fx_density, dt) {
                     self.burst(pos, ParticleKind::Dust, 1, 34.0, flecks);
                 }
             }
         }
-        // Impacts and scrapes. `max_impulse` is the solver's own measure of
-        // how hard the contact is, so a gentle nudge against a wall stays
-        // silent and a real slam throws sparks - the threshold is what
-        // separates the two rather than any guess about speed.
+        // Scrapes. `max_impulse` is the solver's own measure of how hard
+        // the contact is, so a gentle nudge against a wall stays silent
+        // and a hull grinding along one trickles sparks - the threshold is
+        // what separates the two rather than any guess about speed. Keyed
+        // by the hull, since the contact point moves every frame; the slam
+        // that opens a contact is `watch_slams`'.
         let (floor, spark_at) = (tuning().contact_fx_min_impulse, tuning().contact_fx_spark_impulse);
-        for (at, impulse, on_tank) in game.contacts() {
-            if impulse < floor {
+        for (slot, at, impulse, on_tank) in game.contacts() {
+            if impulse < floor || !self.sees(at) {
                 continue;
             }
-            let key = crate::blast::seed_at(at, 4);
+            let key = 0xC047_0000 ^ slot as u32;
             let hard = impulse >= spark_at;
             // Rate scales with how hard it is, so a scrape trickles and a
             // slam sprays.
@@ -1397,16 +1626,16 @@ impl Fx {
             }
         }
 
-        // Grinding a prop under the tracks used to be completely silent.
+        // A prop being ground under the tracks gives off dust.
         for (pos, _t) in game.ramming_tiles() {
             let key = crate::blast::seed_at(pos, 3);
-            if self.due(key, tuning().ram_dust_rate * tuning().fx_density, dt) {
+            if self.sees(pos) && self.due(key, tuning().ram_dust_rate * tuning().fx_density, dt) {
                 self.burst(pos, ParticleKind::Dust, 1, 30.0, &[DUST_T, SAND_M]);
             }
         }
+        self.end_sample();
     }
 
-    /// Rate limiter: true once per `1/rate` seconds for this source.
     /// How many of a rate-based emitter's particles are owed this frame:
     /// `due`, for a source that can owe more than one a frame (a fast
     /// hull's dust at a low frame rate).
@@ -1414,7 +1643,8 @@ impl Fx {
         if rate <= 0.0 {
             return 0;
         }
-        let acc = self.accum.entry(key).or_insert(0.0);
+        let (acc, seen) = self.accum.entry(key).or_insert((0.0, 0));
+        *seen = self.sample;
         *acc += rate * dt;
         let n = acc.floor().min(16.0);
         *acc -= n;
@@ -1441,7 +1671,7 @@ impl Fx {
         let mut rng = rand::rng();
         for d in game.driving() {
             let tread = d.tread;
-            if tread.speed <= 0.5 && tread.roll == crate::wear::Roll::Rolling {
+            if (tread.speed <= 0.5 && tread.roll == crate::wear::Roll::Rolling) || !self.sees(d.position) {
                 continue;
             }
             let profile = &crate::TREAD_BY_ROW[d.row];
@@ -1615,17 +1845,28 @@ impl Fx {
         self.push(Particle { pos: at, vel, z: 0.0, vz: -up, age: 0.0, life: 1.5, size, tint, kind: ParticleKind::Spray });
     }
 
+    /// Rate limiter: true once per `1/rate` seconds for this source.
     fn due(&mut self, key: u32, rate: f32, dt: f32) -> bool {
         if rate <= 0.0 {
             return false;
         }
-        let acc = self.accum.entry(key).or_insert(0.0);
+        let (acc, seen) = self.accum.entry(key).or_insert((0.0, 0));
+        *seen = self.sample;
         *acc += rate * dt;
         if *acc >= 1.0 {
             *acc -= 1.0;
             return true;
         }
         false
+    }
+
+    /// End a sample: the carry of every source not asked about in it is
+    /// dropped - a tile that finished burning, a hull that stopped, a fire
+    /// the view left - so the map holds the live sources and no others.
+    fn end_sample(&mut self) {
+        let sample = self.sample;
+        self.accum.retain(|_, (_, seen)| *seen == sample);
+        self.sample = self.sample.wrapping_add(1);
     }
 
     pub fn tick(&mut self, dt: f32) {
@@ -1722,13 +1963,29 @@ impl Fx {
             p.pos.y += p.vel.y * dt;
             true
         });
-        // The accumulators are keyed by source position, and sources go
-        // away (a tile finishes burning). Drop stale ones rather than
-        // growing the map for the whole round.
-        if self.accum.len() > 256 {
-            self.accum.clear();
-        }
+        let shake = t.camera_shake_duration;
+        self.jolts.retain_mut(|j| {
+            j.shock.time += dt;
+            j.shock.time < shake
+        });
     }
+}
+
+/// How many sparks and how many puffs of smoke a blast of `size` throws
+/// (`Fx::explosion`), before `fx_density`.
+fn explosion_counts(size: f32) -> (i32, i32) {
+    ((4.0 + 20.0 * size).round() as i32, (1.0 + 8.0 * size).round() as i32)
+}
+
+/// How hard a contact of `impulse` slams, 0 to 1: nothing under
+/// `ram_fx_min_impulse`, a third at it, all of it from
+/// `ram_fx_full_impulse` up.
+pub fn slam_strength(impulse: f32, t: &crate::tuning::Tuning) -> f32 {
+    if impulse < t.ram_fx_min_impulse {
+        return 0.0;
+    }
+    let span = (t.ram_fx_full_impulse - t.ram_fx_min_impulse).max(1.0);
+    (0.3 + 0.7 * (impulse - t.ram_fx_min_impulse) / span).clamp(0.0, 1.0)
 }
 
 /// The unit vector pointing back along `velocity`, or up for a shot at
@@ -1782,6 +2039,10 @@ pub(crate) const FX_GRID: f32 = 2.0;
 const MAX_IMPACTS: usize = 48;
 /// The most crates being opened at once; the oldest goes first.
 const MAX_OPENS: usize = 16;
+
+/// Slams shaking the screen at once: more than the hulls of a pile-up
+/// that can open a contact within one shake's length.
+const MAX_JOLTS: usize = 8;
 
 // Particle tints. Deliberately literals rather than a palette import:
 // these are light, not surface, and several are drawn additively where a
@@ -1988,6 +2249,145 @@ mod fx_tests {
         let c = fx.particles.first().expect("still alive");
         assert!(c.z >= 0.0, "it never sinks below the ground");
         assert!(c.z < peak * 0.5, "and has come back down rather than floating");
+    }
+
+    /// A map of iron-walled open ground with seat 0 at (6,6), an iron
+    /// wall three cells above it and `tanks` enemies.
+    fn slam_round(extra: &str, tanks: usize) -> Game {
+        let map = format!("version = 1\ntanks = {tanks}\ncells.\"6,6\" = {{ kind = \"start\" }}\ncells.\"6,3\" = {{ kind = \"wall\", material = \"iron\" }}\n{extra}");
+        let mut game = Game::default();
+        game.enemy_count_override = Some(tanks);
+        game.seed_override = Some(5);
+        game.player_row_override = Some(0);
+        game.map = crate::map::MapFile::from_toml_str(&map).expect("the map parses");
+        game.init(crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
+        game.intro_timer = 0.0;
+        game
+    }
+
+    fn drive_up(game: &mut Game) {
+        let up = crate::simulation::Input::single(crate::ai::Intent { move_dir: Some(crate::tank::Dir::Up), ..Default::default() });
+        game.update(up, crate::PHYSICS_FIXED_DT, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
+    }
+
+    /// A hull driven into a wall slams once - a burst, its flash and a
+    /// shake at the contact - and pushing on at the wall does not slam
+    /// again.
+    #[test]
+    fn a_hull_slams_into_a_wall_once() {
+        let mut game = slam_round("", 0);
+        let mut fx = Fx::default();
+        let mut first = None;
+        for frame in 0..120 {
+            drive_up(&mut game);
+            fx.observe_events(&game);
+            if first.is_none() && !fx.jolts().is_empty() {
+                first = Some((frame, fx.live()));
+            }
+        }
+        let (_, thrown) = first.expect("the hull reached the wall and slammed");
+        assert!(thrown > 0, "the slam threw its burst");
+        assert_eq!(fx.jolts().len(), 1, "one shake, however long it pushes on");
+        assert!(fx.flashes().iter().any(|f| f.what == Flashed::Tank(0)), "the hull flashed");
+        let jolt = &fx.jolts()[0].shock;
+        let hull = game.tank_snapshots()[0].position;
+        assert!(jolt.center.distance_to(hull) < 40.0 && jolt.center.y < hull.y, "at the contact, ahead of the hull");
+        assert!(jolt.strength > 0.0 && jolt.strength <= tuning().ram_shock);
+        // The shake ages out on the particle layer's clock.
+        fx.tick(tuning().camera_shake_duration + 0.01);
+        assert!(fx.jolts().is_empty());
+    }
+
+    /// A hull grinding at a wall trickles from one emitter keyed by its
+    /// owner slot, whatever the contact point does from frame to frame.
+    #[test]
+    fn a_scrape_is_one_emitter_a_hull() {
+        let mut game = slam_round("", 0);
+        let mut fx = Fx::default();
+        for _ in 0..40 {
+            drive_up(&mut game);
+        }
+        assert!(!game.contacts().is_empty(), "pushing at the wall");
+        for _ in 0..60 {
+            drive_up(&mut game);
+            fx.sample_world(&game, crate::PHYSICS_FIXED_DT);
+        }
+        assert!(fx.accum.contains_key(&0xC047_0000), "slot 0's scrape");
+        assert!(fx.live() >= 10, "a second of grinding threw {} particles", fx.live());
+    }
+
+    /// The slam's strength: nothing under the floor, three tenths at it,
+    /// all of it from the full impulse up.
+    #[test]
+    fn a_slam_grows_with_its_impulse() {
+        let t = crate::tuning::Tuning::default();
+        assert_eq!(slam_strength(t.ram_fx_min_impulse - 1.0, &t), 0.0);
+        assert!((slam_strength(t.ram_fx_min_impulse, &t) - 0.3).abs() < 1e-5);
+        assert_eq!(slam_strength(t.ram_fx_full_impulse, &t), 1.0);
+        assert_eq!(slam_strength(t.ram_fx_full_impulse * 4.0, &t), 1.0);
+        let mid = slam_strength((t.ram_fx_min_impulse + t.ram_fx_full_impulse) * 0.5, &t);
+        assert!(mid > 0.3 && mid < 1.0);
+    }
+
+    /// Blasts of one size throw as much whatever set them off, and a
+    /// bigger one more: the count is the size's alone.
+    #[test]
+    fn blasts_of_one_size_throw_alike() {
+        let t = crate::tuning::Tuning::default();
+        assert_eq!(explosion_counts(t.missile_shock), explosion_counts(t.fpv_shock), "a missile and a drone reach as far");
+        assert_eq!(explosion_counts(t.fuel_shock), explosion_counts(t.grenade_shock), "a fuel drum and a grenade");
+        let (small, big) = (explosion_counts(t.missile_shock), explosion_counts(t.kill_shock));
+        assert!(small.0 < big.0 && small.1 < big.1);
+
+        let game = slam_round("", 0);
+        let at = Position::new(300.0, 300.0);
+        let thrown = |kind: Explosion| {
+            let mut fx = Fx::default();
+            fx.explosion(&game, at, t.missile_shock, kind);
+            fx.live()
+        };
+        assert_eq!(thrown(Explosion::Charge), thrown(Explosion::Oil));
+        let mut none = Fx::default();
+        none.explosion(&game, at, 0.0, Explosion::Charge);
+        assert_eq!(none.live(), 0, "a cause turned down to nothing throws nothing");
+    }
+
+    /// More sources than the limiter once held - a lava lake's cells -
+    /// all keep their rate, and a source that stops being asked about
+    /// drops its carry at the end of the sample.
+    #[test]
+    fn the_rate_limiter_holds_any_number_of_sources_and_drops_stale_ones() {
+        let mut fx = Fx::default();
+        let mut hits = 0;
+        for _ in 0..120 {
+            for key in 0..600u32 {
+                if fx.due(key, 20.0, 1.0 / 120.0) {
+                    hits += 1;
+                }
+            }
+            fx.end_sample();
+            fx.tick(1.0 / 120.0);
+        }
+        assert!((600 * 19..=600 * 21).contains(&hits), "600 sources at 20/sec produced {hits} in a second");
+        assert_eq!(fx.accum.len(), 600);
+        fx.due(7, 20.0, 1.0 / 120.0);
+        fx.end_sample();
+        assert_eq!(fx.accum.keys().copied().collect::<Vec<_>>(), vec![7], "only the source still asked about is kept");
+    }
+
+    /// A continuous emitter emits where a view can see it: in one, or
+    /// within the margin of one; with no views, anywhere.
+    #[test]
+    fn continuous_emitters_follow_the_views() {
+        let mut fx = Fx::default();
+        let far = Position::new(5000.0, 5000.0);
+        assert!(fx.sees(far), "the whole field");
+        fx.set_views(&[crate::math::Rectangle::new(0.0, 0.0, 640.0, 360.0), crate::math::Rectangle::new(2000.0, 0.0, 640.0, 360.0)]);
+        assert!(fx.sees(Position::new(320.0, 180.0)) && fx.sees(Position::new(2100.0, 100.0)), "in either half of a split");
+        assert!(fx.sees(Position::new(640.0 + VIEW_FX_MARGIN - 1.0, 180.0)), "just past the edge");
+        assert!(!fx.sees(Position::new(1200.0, 180.0)) && !fx.sees(far));
+        fx.set_views(&[]);
+        assert!(fx.sees(far));
     }
 
     #[test]

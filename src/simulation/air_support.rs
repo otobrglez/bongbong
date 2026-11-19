@@ -26,9 +26,6 @@ use crate::{OBSTACLE_GRID_SIZE, Position};
 use super::combat::BlastParams;
 use super::{Event, Frame, Game, RollIn, Spectacle};
 
-/// How hard a bomb shakes the screen, relative to a tank dying.
-const SHOCK_BOMB: f32 = 0.6;
-
 /// What an aircraft does this step, decided while the world is read and
 /// done once it is free.
 enum Act {
@@ -293,8 +290,8 @@ impl Game {
 
     /// The show a cannon burst or a bomb puts on at `center`, the jet flying
     /// `dir`: a burst is a small fireball leaning downrange, the impact
-    /// flash and a small scorch; a bomb a big one, a ripple and a wide
-    /// scorch, the grass round it flattened. Everything but the damage, so a
+    /// flash and a small scorch; a bomb a big one, a ripple, the screen
+    /// flash and a wide scorch, the grass round it flattened. Everything but the damage, so a
     /// replica calls it off `Event::AirStrike`. No RNG.
     pub(crate) fn air_strike_show(&mut self, show: &mut Spectacle, center: Position, dir: Vec2, bomb: bool) {
         let t = tuning();
@@ -305,7 +302,8 @@ impl Game {
         fx.scale *= scale;
         show.blast_fx.push(fx);
         if bomb {
-            show.shocks.push(Shockwave::scaled(center, SHOCK_BOMB));
+            show.shocks.push(Shockwave::scaled(center, t.bomb_shock));
+            self.flash_screen();
         }
         show.impact_flashes.push(Shockwave::new(center));
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
@@ -318,7 +316,7 @@ impl Game {
     /// wreck's fireball and a ripple. Cosmetic: it hurts nothing.
     pub(crate) fn aircraft_crash_show(&mut self, show: &mut Spectacle, center: Position) {
         show.blast_fx.push(BlastFx::shaped(center, BlastKind::Fuel, BlastShape::Fire));
-        show.shocks.push(Shockwave::scaled(center, SHOCK_BOMB));
+        show.shocks.push(Shockwave::scaled(center, crate::tuning::tuning().bomb_shock));
         show.impact_flashes.push(Shockwave::new(center));
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
             show.scorches.push(Scorch::with(center, 1.2, None));

@@ -47,7 +47,7 @@ end in the same `apply_blast`:
 - fuse every other barrel in range, hurt every tile in range;
 - push one `BlastFx` (the single 12-frame fireball on
   `barrel_explosion.png`, mirrored by a position hash), one `Shockwave`
-  at `SHOCK_BARREL` (0.7 of a kill), one impact quad, one `Scorch` (3
+  at `barrel_shock` (0.7 of a kill), one impact quad, one `Scorch` (3
   variants, mirrored and quarter-turned by hash), and a screen flash
   through `flash_screen` (rate-limited to one per 0.35 s);
 - `fx.rs` adds 18 sparks and 7 smoke puffs (half that on a chained link);
@@ -75,8 +75,8 @@ Things the code already has that a barrel does *not* use:
   `Game::burning_tiles`, the `wood_ember_rate`/`wood_smoke_rate` sampling
   in `fx.rs`): fire exists as a state with particles, but only on wood and
   trees.
-- **Blast strength ratios** (`SHOCK_KILL`/`SHOCK_BARREL`/`SHOCK_BONG`/
-  `SHOCK_COOKOFF`): one constant per *event*, none per barrel.
+- **Blast strength ratios** (`kill_shock`/`barrel_shock`/`bong_shock`/
+  `cookoff_shock`): one row of the `shock` tuning group per *event*, none per barrel.
 - **Grass crush** (`grass.rs`'s `crush`): grass flattens under a hull, but
   a blast leaves it standing.
 - **The hit point and direction** (`Event::Hit { x, y }`, the projectile's
@@ -195,7 +195,7 @@ after a blast, queue 0..2 `BlastFx::small` pops over `cookoff_window_seconds`
 at hashed offsets. Make the count hashed too, so a third of barrels get
 none, a third one, a third two. This is the "sequential burst" every
 explosion tutorial asks for, and the queue, the small fireball, the
-`SHOCK_COOKOFF` ripple and the `Event::CookOff` spark burst already exist.
+`cookoff_shock` ripple and the `Event::CookOff` spark burst already exist.
 New knob: `barrel_cookoff_max: i32 = 2`. Cost: ten lines in `apply_blast`.
 
 **A4. Thrown drum parts.** In `obstacle_died` for `is_explosive()`
@@ -273,7 +273,7 @@ so enemies route around it or wait, which is a probe-baseline change on
 **B2. Fuel drum (the grey hazard one): concussion and a launch.** Bigger,
 sharper, shorter: `fuel_blast_radius` 128, damage 20..40, knockback 220,
 no pool, a whiter and faster fireball (A1's *tall* sheet at 1.15x
-`blast_anim_fps`), a harder shake (`SHOCK_FUEL` 0.9), and, when *chained*
+`blast_anim_fps`), a harder shake (`fuel_shock` 0.9), and, when *chained*
 rather than shot, a Half-Life launch: instead of the fuse popping it in
 place, the drum flies. Mechanically that is a `Decal::thrown` of the
 intact drum sprite over `debris_flight_seconds` to a landing cell chosen
@@ -432,7 +432,7 @@ Skip, or defer with a reason:
   Only after B1 has settled, and only as its own project.
 - A new ripple shape per barrel kind: `shockwave.fs` accumulates up to
   `SHOCK_MAX` rings in one blit and a second shape means a second uniform
-  set plus a hand-ported GLSL ES twin; the strength ratio (`SHOCK_FUEL`)
+  set plus a hand-ported GLSL ES twin; the strength ratio (`fuel_shock`)
   gives most of the difference for none of the cost.
 
 ## 6. How to verify each step
@@ -483,7 +483,7 @@ play-test and possibly a baseline.
   from the shooter so the hit side reads.
 - **Shell-vs-shell cancel** (free). `Event::ShellsCollided` is ignored; the
   rarest moment in the game reads like a wall hit. A double white spark
-  burst plus a `SHOCK_COOKOFF`-strength ripple. Only `Shell` is queried for
+  burst plus a `cookoff_shock`-strength ripple. Only `Shell` is queried for
   cancels; plasma and bullets never meet.
 - **Ricochets and barrel deflections** (free). The impact quad fires and
   the shell flies on in its plain frame. A directional spray along the
@@ -531,13 +531,13 @@ play-test and possibly a baseline.
   arm from `Event::Hit { Wall }`, and a scuff decal.
 - **Wave roll-in and round end** (cheap). A wave tank enters with no dust;
   the WAVE banner has no motion; the round end dims the field and does
-  nothing to the world. Gate dust from `TankEntered`; a last `SHOCK_KILL`
+  nothing to the world. Gate dust from `TankEntered`; a last `kill_shock`
   ripple centred on the deciding event, then a slow desaturation.
 - **Ripple, shake and flash as a set** (gameplay, for the play-test rather
   than the simulation). Four events push a ripple (kill 1.0, barrel 0.7,
   bong 0.6, cook-off 0.1) and two flash the screen; a player taking a
   heavy hit never shakes the camera. A 0.2 shake on a heavy hit to the
-  player gated by damage, and per-kind drum strength (`SHOCK_FUEL`) once
+  player gated by damage, and per-kind drum strength (`fuel_shock`) once
   B2 lands.
 
 Sources consulted for section 2: the Doom Wiki's barrel entry

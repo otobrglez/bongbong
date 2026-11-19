@@ -60,7 +60,7 @@ already agree when `sync_tanks_and_ram` measures travel and `press_treads` sees 
   position); alertness, retreat state, fire timer, escape count and target player stay. Every
   `EngageRing` releases the tank's sticky slot (`EngageRing::release`) - with merged components
   its old slot is still "reachable", and it would otherwise route straight back through.
-- **Events**: `Event::Teleported { slot, x, y, to_x, to_y }` and two `SHOCK_TELEPORT` ripples
+- **Events**: `Event::Teleported { slot, x, y, to_x, to_y }` and two `teleport_shock` ripples
   (from and to). No screen flash.
 
 ## Shots (`simulation/portals.rs`)

@@ -1208,8 +1208,8 @@ enemies' group:
 | `wear_well_scrub` | 1.2 | 0..=20 | Tread marks in its reach fade at this rate at the strongest point (a second; cosmetic, in the `wear` group). |
 | `well_grass_lean_px` | 6 | 0..=16 | Tall grass in its reach leans into it by this at the strongest point (cosmetic). |
 | `well_particles: i32` | 48 | 0..=200 | Blocks in its swirl. |
-| `well_snap_shock` | 0.35 | 0..=2 | The inward ripple at the anchor, against a tank dying's. |
-| `well_shock` | 0.6 | 0..=2 | The collapse's ripple and shake, against a tank dying's. |
+| `well_snap_shock` | 0.35 | 0..=3 | The inward ripple at the anchor, against a tank dying's. |
+| `well_shock` | 0.6 | 0..=3 | The collapse's ripple and shake, against a tank dying's. |
 | `well_screen_flash` | 0.6 | 0..=8 | The collapse's screen flash, against a drum's. |
 | `well_flash_seconds` | 0.25 | 0..=2 | The module's launch and anchor cells. |
 | `well_light` | 0.6 | 0..=2 | The light the ring throws at night, against a headlight's. |

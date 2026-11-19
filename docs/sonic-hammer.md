@@ -929,7 +929,7 @@ enemies' group:
 | `sonic_wave_rings` | 3 | 1..=6 | Arcs in the wave, the front and those behind it. |
 | `sonic_ring_gap_px` | 14 | 2..=64 | Px between two arcs. |
 | `sonic_dust_spacing_px`, `sonic_dust_seconds` | 10, 0.5 | 2..=64, 0.05..=3 | Dust along the front: one every this many px, gone in this long (0 spacing turns it off). |
-| `sonic_shock` | 0.35 | 0..=2 | The screen ripple and shake against a tank dying's. |
+| `sonic_shock` | 0.35 | 0..=3 | The screen ripple and shake against a tank dying's. |
 | `sonic_flash_seconds` | 0.2 | 0..=2 | The dish's firing cell. |
 | `sonic_tree_lean_px` | 4 | 0..=16 | How far a crown leans as the front passes. |
 | `sonic_fish_throw_px`, `sonic_fish_throw_max`, `sonic_fish_flop_seconds` | 40, 3, 2.5 | 0..=200, 0..=16, 0..=20 | A fish this close to dry ground along the wave's line is thrown onto the bank, at most this many a wave, flopping this long. |

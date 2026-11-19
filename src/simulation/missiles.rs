@@ -22,12 +22,7 @@ use crate::Position;
 
 use super::combat::{explosion_hit, BlastParams};
 use super::props::DamageCause;
-use super::{Event, Frame, Game, Spectacle, SHOCK_BONG};
-
-/// How hard one missile's burst shakes the screen, relative to a tank
-/// dying (see `SHOCK_KILL`): a volley is four of these in quick succession,
-/// so each is well short of a barrel.
-pub(super) const SHOCK_MISSILE: f32 = 0.3;
+use super::{Event, Frame, Game, Spectacle};
 
 impl BlastParams {
     /// One seeker missile's burst, fired by `by`.
@@ -212,7 +207,7 @@ impl Game {
             }
         }
         for pos in dead_bongs {
-            f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
+            f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
         }
         // Collect first: `damage_obstacle` needs the world free.
         let hits: Vec<(Entity, f32)> = self
@@ -248,7 +243,7 @@ impl Game {
         let mut fx = BlastFx::shaped(center, BlastKind::Oil, BlastShape::Shot { dir: lean });
         fx.scale *= tuning().missile_blast_fx_scale;
         show.blast_fx.push(fx);
-        show.shocks.push(Shockwave::scaled(center, SHOCK_MISSILE));
+        show.shocks.push(Shockwave::scaled(center, crate::tuning::tuning().missile_shock));
         show.impact_flashes.push(Shockwave::new(center));
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
             show.scorches.push(Scorch::with(center, tuning().missile_blast_fx_scale, None));

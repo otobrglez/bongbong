@@ -730,10 +730,10 @@ fn overlapping_shocks_are_capped_and_keep_the_hardest_hit() {
     // array length, and eviction sorts on `remaining` - strength faded by
     // age - so it is the weakest that go rather than the oldest. Evicting
     // by age would throw away the kill that set the cascade off.
-    let kill = Shockwave::scaled(Position::new(0.0, 0.0), SHOCK_KILL);
-    let pop = Shockwave::scaled(Position::new(0.0, 0.0), SHOCK_COOKOFF);
+    let kill = Shockwave::scaled(Position::new(0.0, 0.0), crate::tuning::tuning().kill_shock);
+    let pop = Shockwave::scaled(Position::new(0.0, 0.0), crate::tuning::tuning().cookoff_shock);
     assert!(kill.remaining() > pop.remaining(), "a kill outranks a cook-off pop");
-    let mut spent = Shockwave::scaled(Position::new(0.0, 0.0), SHOCK_KILL);
+    let mut spent = Shockwave::scaled(Position::new(0.0, 0.0), crate::tuning::tuning().kill_shock);
     spent.time = tuning().shockwave_duration;
     assert_eq!(spent.remaining(), 0.0, "and a finished one outranks nothing");
 
@@ -750,7 +750,7 @@ fn overlapping_shocks_are_capped_and_keep_the_hardest_hit() {
     }
     step(&mut game, Input::default());
     assert_eq!(game.shocks.len(), SHOCK_MAX, "never more than the shader can take");
-    assert!(game.shocks.iter().all(|s| s.strength == SHOCK_KILL), "and they are all real kills");
+    assert!(game.shocks.iter().all(|s| s.strength == crate::tuning::tuning().kill_shock), "and they are all real kills");
 }
 
 #[test]
@@ -1611,7 +1611,7 @@ fn a_shot_fuel_drum_pops_in_place_with_a_bigger_blast() {
     assert!(game.events().iter().any(|e| matches!(e, Event::Blast { chained: false, drum: crate::obstacle::Drum::Fuel, .. })));
     assert!(!game.events().iter().any(|e| matches!(e, Event::DrumLaunched { .. })), "no launch without a source blast");
     assert!(game.burning_cells().is_empty(), "and no pool - fuel burns clean");
-    assert!(game.shocks.iter().any(|s| s.strength == SHOCK_FUEL), "a harder shake than an oil drum");
+    assert!(game.shocks.iter().any(|s| s.strength == crate::tuning::tuning().fuel_shock), "a harder shake than an oil drum");
     assert!(player_damage(&game) > 0.0, "the player, three cells away, is well inside the bigger radius");
 }
 
