@@ -2588,6 +2588,7 @@ impl Game {
         let shells_held = self.training.as_ref().is_some_and(|run| run.shells_held);
         for tank in self.world.query::<&mut Tank>().iter() {
             tank.hit_by_seat = None;
+            tank.hit_by_enemy = None;
             if !(shells_held && tank.owner().is_player()) {
                 tank.tick_recharge(dt);
             }
@@ -5899,6 +5900,7 @@ impl Game {
                     is_wreck: tank.is_wreck(),
                     shot_at_seat: ai.and_then(Ai::shot_at_seat),
                     hit_by_seat: tank.hit_by_seat,
+                    hit_by_enemy: tank.hit_by_enemy,
                     asleep: self.field_map && ai.is_some_and(|ai| !ai.field.awake),
                     leashed: self.field_map
                         && ai.is_some_and(|ai| {
@@ -6030,6 +6032,9 @@ pub struct TankSnapshot {
     /// The seat that damaged this tank this frame, if one did
     /// (`Tank::hit_by_seat`).
     pub hit_by_seat: Option<u8>,
+    /// The owner slot of the other enemy that damaged this enemy tank this
+    /// frame, if one did (`Tank::hit_by_enemy`): a shot, a blast or a ram.
+    pub hit_by_enemy: Option<usize>,
     /// A field map's enemy nothing has woken yet (`simulation::field`): it
     /// holds still and thinks nothing, by design. Always false on an arena.
     pub asleep: bool,
