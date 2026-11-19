@@ -722,8 +722,8 @@ armory's CPU thumbnail pin is re-baselined for the crates.
 `set_tank`'s `wells` (above 0 arms it in place of the special carried), and
 one tool of the well's own, `well_at {x, y, enemy}` - a well anchored at
 once at the point (forming), player 1's or with `enemy: true` an enemy's
-(`Game::debug_well`, no RNG; a `GAME_ONLY_TOOLS` and `ONLINE_REFUSED_TOOLS`
-member, refused off the field or inside a solid cell; replies `{id, x, y,
+(`Game::debug_well`, no RNG; its row `in_build: false` and `online: false`,
+refused off the field or inside a solid cell; replies `{id, x, y,
 pulls_at}`), so a pull, a capture and a collapse are tried in lockstep without
 steering an orb. `status`/`snapshot` carry each tank's `wells` and `orb`
 (its orb's id and how far it has flown), every zone's well stage, the held

@@ -24,8 +24,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   run from inside `BongBong.app` into its `Resources` and its saved maps to the user's data
   directory (`map::set_maps_dir`, `levels::data_dir`), and gives a run outside it the app's icon in
   the Dock (`dock_icon`: the embedded `AppIcon.png` through the Objective-C runtime once GLFW has
-  made `NSApp`); `android/` is the cdylib crate. The `bongbong`, `bbmcp` and `mapshot` bins carry
-  `required-features = ["render"]`; `probe` builds without it.
+  made `NSApp`); `android/` is the cdylib crate. The `bongbong` and `mapshot` bins carry
+  `required-features = ["render"]`; `probe` and `bbmcp` (`dev-tools`) build without it.
 - `static/` assets and shaders, `tools/` scripts, `maps/` TOML maps (`maps/stamps/` the builder's
   shipped stamps), `levels.toml` the level order (docs/levels.md), `docs/` design docs and sheet
   specs (read the doc a module names before changing it), `site/` the Astro web page, `k8s/` the
@@ -100,7 +100,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   one behind the level select), the end screen's words lift out over its last
   `round_verdict_lift_seconds` (`verdict_lift`, `take_way` hurrying the clock to it, the dim
   staying), and a round started from a kept screen dissolves in from it (`dissolve`):
-  `render/dissolve.rs` keeps the screen in a framebuffer-sized texture (`Effects::dissolve`, drawn
+  `render/dissolve.rs` keeps the screen in a framebuffer-sized texture, held a step larger
+  (`render::target::stepped`) (`Effects::dissolve`, drawn
   before `begin_drawing` through a camera at the window's scale) and drops it block by block through
   `static/dissolve.fs` over everything; a round started mid-play (R) or from the builder cuts in. The level select comes before everything while it is up (a
   `level_select::SelectInput` from the pointer, the arrows, Enter and Esc/Tab, every press claimed
@@ -1419,7 +1420,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the sky without them (docs/weather.md "Without shaders"): `weather/plain.rs` composes the snow on
   the ground and the fog, sand, rain and snow in the air as plain blocks from the shaders' own noise
   (headless, tested), and `render/weather.rs` multiplies the light map onto the field with a blend
-  mode (`multiply_light`) and draws the blocks with the target's alpha kept (`draw_blocks`); the
+  mode (`multiply_light`) and draws the blocks alpha-blended (`draw_blocks`); the
   `weather_without_shaders` knob shows it anywhere and `status.weather.without_shaders` reports it.
 
 ## Weapons and projectiles
@@ -1478,8 +1479,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the roll) lying across its roll and tumbling in the air, lifted by its height over its shadow, in
   the y-sorted standing walk so grass covers it only from in front (over everything while airborne);
   `fx.rs` trails a thick, shaded white `ParticleKind::Plume` (`Game::grenade_trails`,
-  `grenade_trail_*`), opaque blocks thinned by the dither (blended white lands grey on the scene
-  target). The launcher module (`TANK_MODULE_GRENADE_COL`, its drum showing the rounds fired) and
+  `grenade_trail_*`), fading by its alpha like every other puff. The launcher module (`TANK_MODULE_GRENADE_COL`, its drum showing the rounds fired) and
   `tank_art::GRENADE_MUZZLE` come from `tankdesign`. Tuning group `grenades`.
 - `sonic.rs` (docs/sonic-hammer.md) — the sonic hammer, headless: `SonicCone` (a fan of rays
   `SONIC_RAY_ARC_PX` apart walked over map cells, stopped by `Material::blocks_sound`, glass a
@@ -1592,9 +1592,18 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the bitmap, while a followed view draws its world into `composite` at one pixel per texel,
   `render::view::present_world` puts it on the window shifted by `Camera::offset`, and `draw_chrome`
   draws on the window through the bitmap-to-window camera, so the HUD stands still while the world
-  slides under it. After pass 2 an arena's margins are made (`Effects::margins`) for `present_into`;
-  the composite is always cleared to black, so the field looks the same with margins or bars round
-  it. Takes `hud::PlayChrome` from `Session::play_chrome`. `draw_debug_overlays` and the per-tank
+  slides under it. After pass 2 an arena's margins are made (`Effects::margins`) for `present_into`.
+  **Every blit of a finished target is opaque** (`render::view::draw_opaque`: the colour replaced,
+  the destination's alpha kept) - scene to composite, the ripples' patches, composite, margins,
+  split halves and the builder's canvas to the window - since a target's alpha is what its
+  translucent draws left in it and no coverage: blended with, the picture came out darker at every
+  step. The shake moves what pass 2 reads of the scene, not where it lands: a followed view's
+  target holds `shockwave::shake_overscan` of the world round the view (`Camera::overscanned`), an
+  arena's clamped edge repeats its last texel, and what is laid over the view (a kill's flash, a
+  hurt seat's pulse) covers the view's part of the target. Where a texel is not a whole number of
+  device pixels the frame goes through `Effects::prescale` (`view::Prescale`, below). A sheet that
+  would not load or a target that could not be made is said over everything
+  (`render::target::draw_trouble`). Takes `hud::PlayChrome` from `Session::play_chrome`. `draw_debug_overlays` and the per-tank
   `draw_tank_boxes`/`draw_tank_stats` (`cfg(feature = "dev-tools")`) draw through `Camera::on_field`
   after pass 2, and then `render::indicators::draw_indicators` paints `Effects::indicators`, under
   the banners and dialogs. `Effects::split` (`SplitLayer`): `Follow` draws the second half of a
@@ -1800,12 +1809,42 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   its quad), and `RippleFx::set_view` puts the scene target in that frame (`viewUv`/`viewUvSize`,
   `Camera::ripple_view`) with every centre measured from the target's corner (`ripple_uv`,
   `RippleFx::uv_of`), so the numbers stay small on any map. Camera shake sums the ripples and snaps
-  to whole 2 px blocks; `camera_shake(shocks, view, t)` scales each ripple by `shake_reach` from the
+  to whole 2 px blocks (`shake_overscan` is its furthest reach, what a followed view's scene target
+  holds round the view); `camera_shake(shocks, view, t)` scales each ripple by `shake_reach` from the
   view a followed or pinned screen shows - full within `camera_shake_margin_px`, gone
   `camera_shake_fade_screens` screens past it (the `fx` group); `None` (an arena) is the plain sum,
   each split half shakes by its own view, and nothing shakes or bends under reduced motion;
   `screen_fx_intensity` scales flash, ripple and shake together. Shaders: `static/*.fs` with
-  hand-ported GLSL ES 100 twins in `static/web/`.
+  hand-ported GLSL ES 100 twins in `static/web/`, all three ripples compiled from sources in the
+  binary (`RippleShader`); one that will not compile is reported (`render::target::trouble`) and
+  the raylib default shader stands in, so the scene is drawn unbent. `render/shot_shaders.rs` holds
+  the twin test for every pair (`the_web_twins_are_the_desktop_shaders`: the bodies equal once
+  comments, blank space and the `precision` line are gone).
+- `render/target.rs` — how the frame's textures are made and what happens when one is not: `load`
+  (a render target, clamp wrap on every one, an `Err` and not a panic), `stepped`/`filled` (targets
+  that follow the window's size are held a 64 px step larger, so a window dragged by its edge makes
+  them again every step and not every frame), `sheet`/`sheet_failed` (a sheet that will not load is
+  a magenta checker), and the trouble list (`trouble`, `recovered`, `draw_trouble`): each failure
+  logged once and shown as a line over the frame (`text::keys::RENDER_TROUBLE`) until it mends.
+  `app.rs` keeps the last good scene, composite and split targets when a new size cannot be made
+  and asks again the next frame.
+- `turn.rs` + `render/turn.rs` — the crisp turn (D-5 of docs/november-26-rebuild-upgrade.md): a
+  sprite drawn at an angle off the quarter turns, kept on its own design-pixel grid. `turn::block`
+  names the sheets that are (the four tank sheets, one texel to the design pixel drawn at 2; the
+  towers, baked at two texels) - everything else, and every quarter turn (`is_quarter`), is the
+  plain blit, texel for texel what it was. `Turned::of` makes the quad (the turned cell and
+  `MARGIN` design pixels round it) and what the shader needs; `static/turn.vs`/`turn.fs` (twins in
+  `static/web/`, both pairs in the twin tests) cut the screen into blocks the size a design pixel
+  is drawn, laid from the pivot, and give each whole block one design pixel of the cell and no
+  colour the cell lacks: `turn_mode` 1 the pixel under the block's centre with Scale2x's corner
+  rule (`turn_corner`; five texture reads a fragment), 2 the cell sheared three times so every
+  pixel is kept (one read), 0 the plain blit. `GpuCanvas` opens the shader for the first turned
+  sprite and closes it before anything else is drawn and on drop, so a run is one shader scope
+  (`frame_stages` counts it); the cell's corner and the angle ride in the batch's normal, so
+  sprites of one sheet in a run share a draw call, and the uniforms (`Fit`: texel, cell, pivot)
+  change only with the sheet, flushed first. `Sheets::turn_shader` is `None` for the thumbnails,
+  and `CpuCanvas` turns the plain way: no pinned hash moves. A shader that will not compile is a
+  trouble line (`render::target::trouble`) and plain turns.
 - `frame_stages.rs` — where a frame's time goes, in a dev-tools build (every call is empty and
   every reading zero without it): `stage(name)` guards in `app.rs` and `Game::render` (`sim`, `fx`,
   `pictures`, `lights`, `world`, `post`, `chrome`, `swap`) and in `Game::update` round its groups
@@ -2000,7 +2039,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the ripples' frame, and `cull`, the view grown by `CULL_MARGIN_PX`, `None` for the whole field;
   `render/view.rs` builds its `in_target` (pass 1) and `on_field` (the world onto the bitmap's field
   area, through the offset) `Camera2D`s, and `present_world` puts a followed view's world on the
-  window shifted by its offset). `View::fill` is `fit` with the centring offset rounded.
+  window shifted by its offset; `overscanned(pad)` moves a followed view's target corner `pad`
+  back and rounds its size up to `TARGET_STEP`, the view itself where it was).
+  **`Prescale::of(window, texel, device, anchor, limits)`** is the picture a window off a whole
+  scale is presented through: `n` whole pixels to the texel (the next whole number, or the one
+  below when within an eighth of it), the texel grid's corner on a whole pixel, the window and a
+  pixel round it; `None` where a texel is a whole number of device pixels already or
+  `PrescaleLimits` (a 4096 side and 6 MP on a phone, 8 MP in a browser; 8192 and 12 MP on a
+  desktop) leave nothing within 1.25x. `render::view::PrescaleFx` holds its bilinear target,
+  `Game::render` draws `present_frame` into it through `Picture::camera` and `Picture::present`
+  puts it on the window, the kept screen and the swap alike; the builder's own frames do not use
+  it. Knob `present_prescale`. `View::fill` is `fit` with the centring offset rounded.
   `FollowFrame::new(Screen, window, Seating, SightBox, &ViewRules)` is `framing::frame` (play draws
   no bar over the world), `Layout::bare` of the view and `View::fill`, so nothing is letterboxed
   from 4:3 to 2.4:1; `device_scale(framebuffer)` is what the offset rounds to and the touch scheme
@@ -2044,12 +2093,22 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   round advanced and answers the exact corner, the `ShotKind` (Seat; Shared for a couch pair while
   both sight boxes fit the view as far as the field reaches, else Split; Spectating after
   `camera_spectate_delay_seconds`; Nobody), the lead and the cut: a dead zone
-  (`camera_dead_zone_px`), a look-ahead along the facing (`camera_lead_at_rest` of
-  `Framing::room_outside` less the dead zone, all of it at top speed, swinging at the pace of
-  `camera_lead_ease_seconds`, a reversal held `camera_lead_reverse_hold_seconds`), an exact
+  (`camera_dead_zone_px`), a look-ahead along the heading the seat has taken - its facing once it
+  has driven `camera_lead_commit_px` that way (`Tracker::turned`/`turned_px`), so a turn on the spot
+  and a short dodge move nothing; `Framing::room_outside` less the dead zone, at most
+  `camera_lead_max_px`, `camera_lead_at_rest` of it at rest (1: the same at any speed, so a stop
+  drifts nowhere) and all of it at top speed, swinging at the pace of
+  `camera_lead_ease_seconds` under a tank at top speed and `camera_lead_idle_pace` of that under one
+  standing (0: only a driving tank swings it), a reversal also held `camera_lead_reverse_hold_seconds` -, an exact
   critically damped `spring` (`camera_spring_seconds`) with velocity feed-forward toward a goal
   eased into the field over `camera_edge_ease_px`, then hard rules: the sight box stays on screen
-  (`Shot::boxes_in`), then the field, a short axis centred. It cuts on a followed seat's
+  (`Shot::boxes_in`), then the field, a short axis centred. **The kick**: `observe_events` notes
+  each seat's `Event::Fired`; the view on that seat (`ShotKind::Seat` or its half of a split, never
+  a shared or spectating view) is knocked `camera_fire_kick_px * screen_fx_intensity` back against
+  the gun, decaying over `camera_fire_kick_seconds`, never longer than one kick however fast the
+  gun - `Tracker::kick`, added to the centre `step` returns after the spring and put through the
+  same two rules, never written into `Tracker::center`; `FollowRules::reduced` (reduced motion)
+  has none. It cuts on a followed seat's
   `Teleported`/`TankEntered` (`observe_events`, after every step), on a jump, on a far hand-over and
   on `Follow::cut` (`app.rs`: another round on screen - another map, a room's replica or back). A
   restart - `RoundStarted` or a frame counter going back - cuts the tracker to the new start while
@@ -2071,9 +2130,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   along, none in the dead zone or against the field's edge, eased over `TEXEL_LOCK_SECONDS`), so
   the tank holds its place and the ground passes in whole texels. One per view (`app.rs` keeps the
   first half's and the split's second); a shared, spectating or cut view gets its exact corner.
-  Tests: 27 in `follow::tests` (dead zone, lead cap, the box under a slow spring, the spring
+  Tests: 34 in `follow::follow_tests` (dead zone, lead cap, the box under a slow spring, the spring
   at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, the restart glide, spectating, the couch,
-  the texel lock).
+  the texel lock; a stop and a start, the pixel cap, the commit, a dodge, the kick at 30/60/120 Hz,
+  under a burst, under reduced motion and at the field's edge). Their `rules()` are the table's
+  with the look-ahead by speed, uncapped and uncommitted and no kick - what the older cases
+  measure; `defaults()` are the table's own.
 - `establish.rs` (docs/large-maps-follow-camera.md §6) — the establishing shot: a local round on a
   field map whose view shows part of it, opening behind its mission banner, on a field no more than
   `MAX_TEXELS` (4096) a side (and on a phone or a tablet no more than `EMBEDDED_MAX_AREA`, 2048 x
@@ -2104,11 +2166,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   it is drawn from changed (`Kept`: the frame, the floor, the backdrop, and `ground::clock_step` -
   the water's frame and the whole pixels its flow marks have drifted, for a ground that has either,
   `GroundGrid::moves`); a sky moves every frame. `render/margin.rs` is `MarginFx`: into targets of the window's
-  world, the ground once, the shade part by part, then the sky of its `render::weather::Scene` - a
+  world grown to whole 64 px steps (`MarginFrame::rect`; `window` is what is drawn of it), the ground once, the shade part by part, then the sky of its `render::weather::Scene` - a
   round's, or the builder's canvas's - through `render::weather`'s passes over the parts
   (`PassView::parts`) under a 1x1 light map of the ambient with the margin grid's own cell mask
   (`CellMask::origin`, the shader's `cellOrigin`), or the plain path's blocks and
-  `multiply_ambient` - copied onto black like the field's bitmap; `Game::render` makes it only while
+  `multiply_ambient` - copied opaque like the field's bitmap; `Game::render` makes it only while
   `Camera::is_whole()` (never a followed or pinned view) and the builder only at FIT on an arena, and
   `render::view::present_into` fills the window with the backdrop, then draws its parts round the
   bitmap, so the two meet colour for colour. The margins do not shake with the field's camera shake.
@@ -2623,9 +2685,23 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `Session`, so nothing touches `Game` mid-update. **Lockstep**: `step {frames}` freezes real time
   and runs N updates at `PHYSICS_FIXED_DT` in one rendered frame (bit-for-bit replayable from
   `restart {seed}`, which leaves the round frozen); `pause`/`resume`. Screenshots are captured one
-  rendered frame after the request (raylib's read-back lags the swap). `TOOLS` is the single tool
-  table `bbmcp` advertises: a new tool is one `ToolSpec` row (name, description, schema,
-  `read_only`/`destructive` - the MCP annotations) plus a `dispatch` arm. **The round the tools read
+  rendered frame after the request (raylib's read-back lags the swap). `TOOLS` (`devserver/tools.rs`) is the single tool
+  table `bbmcp` advertises: a new tool is one `ToolSpec` row plus a `dispatch` arm. A row is the
+  name, a short `description` (the tool list), `help` (the long form, served by the `help` tool),
+  `params` (a parameter struct in the same file: the input schema is derived from it with
+  `schemars` and the arm parses it with `parse::<tools::XParams>`, so the two cannot disagree),
+  `read_only`/`destructive` (the MCP annotations), `in_build`/`online` (the build-mode and
+  online-round refusals `dispatch` reads off the row) and `present` (JSON, a text field, an
+  image). `ToolSpec::check` runs before every arm and refuses an unknown parameter or a wrong
+  type by name. `tools` is a private module so rustc's dead-code warning names any parameter no
+  arm reads; the room server's structs are `tools::room` (public as `devserver::room_params`),
+  which its dispatch checks against while its arms still read the `Value`. `status` is a core
+  plus `sections` (`STATUS_SECTIONS`); `step` leaves the snapshot out unless asked, and stops
+  early on `until` (event names) or `until_outcome`. `devserver/headless.rs` is `Headless`: the
+  same `DevServer` and `Session` with no window, called by `bbmcp` in-process (`before_frame`,
+  then `advance` for a pending step; `resume`/`input` refused for want of a clock; `screenshot`
+  through `thumbnail::render_cpu` and the `png` crate); `status.host`/`mode.host` name what
+  answers and its working directory. **The round the tools read
   is `Session::shown()`**, so in an online round every reader - `status`, `snapshot`, `terrain`,
   `events`, `history`, `nav_grid`, `field`, `map_get`, `lint`, and `screenshot`/`overlays`, which
   write only a drawing flag through `Session::shown_mut` - describes the room's replica;
@@ -2634,7 +2710,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   its target, the jitter, the cadence, frames extrapolated, lateness p50/p95, stalls, the playout
   rate, corrections, stale events - and `prediction` - `Predictor::report` plus the lead's
   `lead_up`/`lead_down`/`lead_depth` and the `crossings`/`crossings_hit`/`crossings_missed` of
-  decision 9), `ONLINE_REFUSED_TOOLS` - everything that would drive the local round or the builder -
+  decision 9), the rows with `online: false` - everything that would drive the local round or the builder -
   refuse by name because only the server simulates that round, and `key {escape}` gives the seat up,
   as does a `click` on the bar's `LEAVE` button. `input` is allowed online: it stands in for the
   keyboard, so it drives this window's seat in the room (`shape_input` runs before the online
@@ -2647,7 +2723,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   select's tiles, and `key` takes `escape` (open or close it) and `left`/`right`/`up`/`down`/`enter`
   in it (`status`/`mode` carry `levels_open` and `levels_focus`). `step` refuses by name while a
   dialog or the level select freezes the round, rather than waiting for frames that never run.
-  `GAME_ONLY_TOOLS` are refused in build mode with an error naming `play`; `status`, `screenshot`,
+  The rows with `in_build: false` are refused in build mode with an error naming `play`; `status`, `screenshot`,
   `overlays`, `map_get`, `lint` (the map linter over the builder's canvas or the round's map, on a
   temporary headless round), `tuning_*`, `lang` (the language on screen: report, or switch to a
   shipped tag at the frame boundary; `status.language` carries it) and `restart` work in both modes;
@@ -2664,8 +2740,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `device_scale`, `cell_mm`, `area`), `builder_touch` (frames of `{id, x, y}` in window coordinates,
   the fingers lifted after the last; refused online), `builder_select` (`rect`, `clear`, `move_by`,
   `action`: copy|cut|delete|flip_h|flip_v|stamp|paste|place|cancel, `at`) and `builder_stamp`
-  (`name`, `at`, `place`) drive the select tool and the STAMPS list (both in
-  `ONLINE_REFUSED_TOOLS`), `builder_tool`/`builder_paint` take `shape` (pen|rect|fill|scatter) and
+  (`name`, `at`, `place`) drive the select tool and the STAMPS list (both
+  `online: false`), `builder_tool`/`builder_paint` take `shape` (pen|rect|fill|scatter) and
   `builder_paint` replies with the status line's `message`, `builder_settings {size, anchor}`, `key
   {zoom_in|zoom_out|arrows|copy|cut|paste|delete}`, and `click` replies with the world point and the
   cell. `status.builder` also carries `buttons` (the plates' by name - `back`, `day` while the
@@ -2715,14 +2791,20 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   calls `capi::keep_alive()` so the symbols survive; `build.rs` emits `-sEXPORTED_FUNCTIONS` and
   `-sSTACK_OVERFLOW_CHECK=2` for the wasm dev build (`capi::EXPORTS` and the build.rs list are
   checked against each other by a test).
-- `bin/bbmcp.rs` *(`required-features = ["dev-tools", "render"]`, excluded from `[dist.binaries]`)*
-  — the stdio MCP adapter `.mcp.json` launches, **once per target**: bare it drives the game
-  window's dev server (`TOOLS`, port 4747), `bbmcp rooms` the room server's (`ROOM_TOOLS`, port 4849) -
-  one binary, one protocol, two tool tables, picked by a `Target` so a name from one can never be
-  called against the other. One request line to the target per call (`handle_line` is the
-  per-message handler, unit-tested with a stubbed game), screenshots as `image` content,
-  `tools/list` carries each tool's annotations, an unreachable game is an `isError` naming `just
-  run-dev`. `bbmcp call <tool> [json]` for shells (`just mcp-call`). stdout is protocol only - log
+- `bin/bbmcp.rs` *(`required-features = ["dev-tools"]`, no `render`; excluded from `[dist.binaries]`)*
+  — the stdio MCP adapter `.mcp.json` launches through `tools/dev/bbmcp.sh` (the built binary,
+  `just build-mcp`), **once per target**: bare it drives the game (`TOOLS`), `bbmcp rooms` the room
+  server's dev socket (`ROOM_TOOLS`, port 4849) - one binary, one protocol, two tool tables, picked
+  by a `Target` so a name from one can never be called against the other. The game's `Backend` is a
+  window (one request line per call to port 4747) or a `devserver::Headless` round in-process,
+  settled on the first call (`Adapter::settle`: `BBMCP_TARGET`, else this checkout's window by its
+  `mode.host.cwd`, else headless). The adapter's own tools (`Target::own`: `help`, `attach`,
+  `batch`, `reload`, `probe`; rows in `devserver/tools.rs`) are answered in `Adapter::call`;
+  `reload` builds, `exec`s the new binary with the call's id in `BBMCP_RELOAD_ID`, and the new
+  process answers it and sends `notifications/tools/list_changed` (`resume`). `handle_line` is the
+  per-message handler, unit-tested with a stubbed window; replies are presented by the row's
+  `present` (compact JSON, a text field, or `image` content), `tools/list` carries each tool's
+  derived schema and annotations, an unreachable window is an `isError` naming `just run-dev`. `bbmcp call <tool> [json]` for shells (`just mcp-call`). stdout is protocol only - log
   with `eprintln!`. Stub `main` for emscripten (a wasm build without `--bin` compiles every bin; the
   web builds name `bongbong` alone).
 

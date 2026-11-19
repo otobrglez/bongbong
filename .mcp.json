@@ -1,29 +1,18 @@
 {
   "mcpServers": {
     "bongbong": {
-      "command": "cargo",
+      "command": "bash",
       "args": [
-        "run",
-        "-q",
-        "--features",
-        "dev-tools",
-        "--bin",
-        "bbmcp"
+        "tools/dev/bbmcp.sh"
       ],
       "env": {
         "BONGBONG_DEV_PORT": "4747"
       }
     },
     "bongbong-rooms": {
-      "command": "cargo",
+      "command": "bash",
       "args": [
-        "run",
-        "-q",
-        "--features",
-        "dev-tools",
-        "--bin",
-        "bbmcp",
-        "--",
+        "tools/dev/bbmcp.sh",
         "rooms"
       ],
       "env": {

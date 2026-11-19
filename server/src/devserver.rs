@@ -118,6 +118,10 @@ async fn reply_line(write: &mut tokio::net::tcp::OwnedWriteHalf, frame: &Value) 
 /// naming a `code` is forwarded to that room's task, which owns the
 /// `Game` and answers between ticks.
 pub async fn dispatch(hub: &Arc<Hub>, method: &str, params: &Value) -> Result<Value, String> {
+    // The row's parameter struct checks the call, as in the game's dev
+    // server: a key it lacks or a value of the wrong type is refused here.
+    let spec = bongbong::devserver::find(ROOM_TOOLS, method).ok_or_else(|| format!("unknown tool {method:?} - `help` lists them"))?;
+    spec.check(params)?;
     match method {
         "server_status" => Ok(server_status(hub)),
         "rooms" => Ok(rooms(hub)),
@@ -125,7 +129,7 @@ pub async fn dispatch(hub: &Arc<Hub>, method: &str, params: &Value) -> Result<Va
         // Everything else is a room's own business.
         "room" | "room_step" | "room_resume" | "seat_intent" | "room_set_tank" | "room_spawn_pickup"
         | "room_tuning" | "room_snapshot" | "room_events" | "room_close" => forward(hub, method, params).await,
-        other => Err(format!("unknown tool {other:?} - `tools/list` has the set")),
+        other => Err(format!("{other} is in the table and has no handler")),
     }
 }
 
@@ -262,26 +266,37 @@ mod tests {
     async fn every_advertised_tool_has_an_arm() {
         let hub = hub();
         for spec in TOOLS {
-            // No code, so a room tool fails on the lookup rather than
-            // doing anything - which is exactly what is being checked.
-            let answer = dispatch(&hub, spec.name, &json!({})).await;
+            // The fields the row requires, filled in so the call passes
+            // its check; no room has this code, so a room tool fails on
+            // the lookup rather than doing anything - which is exactly
+            // what is being checked.
+            let mut params = json!({});
+            for key in spec.schema()["required"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                params[key] = match key {
+                    "code" => json!("ZZZZZ"),
+                    "kind" => json!("health"),
+                    _ => json!(0),
+                };
+            }
+            let answer = dispatch(&hub, spec.name, &params).await;
             if let Err(e) = &answer {
-                assert!(!e.contains("unknown tool"), "{} is advertised but not dispatched: {e}", spec.name);
+                assert!(!e.contains("has no handler"), "{} is advertised but not dispatched: {e}", spec.name);
+                assert!(!e.starts_with(&format!("{}:", spec.name)), "{} refused its own required fields: {e}", spec.name);
             }
         }
         let miss = dispatch(&hub, "no_such_tool", &json!({})).await;
         assert!(miss.unwrap_err().contains("unknown tool"));
     }
 
-    /// Every schema the adapter will hand a model has to be JSON it can
-    /// parse, or `tools/list` panics at the first call.
-    #[test]
-    fn every_schema_is_valid_json() {
+    /// Every schema the adapter will hand a model is an object schema,
+    /// and a key a row does not take is refused before any room hears it.
+    #[tokio::test]
+    async fn every_schema_is_an_object_and_an_unknown_key_is_refused() {
         for spec in TOOLS {
-            let schema: Value = serde_json::from_str(spec.schema)
-                .unwrap_or_else(|e| panic!("{}: {e}", spec.name));
-            assert_eq!(schema["type"], "object", "{}", spec.name);
+            assert_eq!(spec.schema()["type"], "object", "{}", spec.name);
         }
+        let e = dispatch(&hub(), "room_step", &json!({ "code": "ZZZZZ", "tick": 5 })).await.unwrap_err();
+        assert!(e.contains("unknown parameter \"tick\"") && e.contains("ticks"), "{e}");
     }
 
     /// A room tool called without a code says so, rather than panicking

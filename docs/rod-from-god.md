@@ -691,8 +691,8 @@ a press would), and one tool of the rod's own, `rod_call {x, y, enemy}` - a call
 at the map cell nearest (`x`, `y`) at once, a seat's (player 1's, its
 kills credited to it) or with `enemy: true` an enemy's, its countdown from
 now
-(`Game::debug_call_rod`, no RNG; a `GAME_ONLY_TOOLS` and
-`ONLINE_REFUSED_TOOLS` member, refused off the field; replies `{id, cell,
+(`Game::debug_call_rod`, no RNG; its row `in_build: false`,
+`online: false`, refused off the field; replies `{id, cell,
 land}`), so an impact, a crater, a set-off volcano or the pack's herd is
 tried in lockstep without steering a reticle. `status`/`snapshot` carry
 `zones` (id, kind, centre, seconds left, owner) and `craters` (cells), and

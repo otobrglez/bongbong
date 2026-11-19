@@ -344,16 +344,34 @@ view rides with it the view's corner gives up the same fraction
 ground passes under it in whole texels.
 
 - **Follow the local seat.** The base point is the tank, held inside a
-  dead zone of about 0.4 cell so the 4-way corrections and the collision
-  slides do not wobble the view (Keren's camera window).
-- **Look ahead in the facing direction**, ramped by speed (35% at rest,
-  because you fire where you face), eased over about 0.5 s so a turn does
-  not whip the view, and **never further than the room outside the sight
-  box**. On a phone that is up to six cells sideways and almost nothing
-  up or down; on a tablet it is more even. The facing used is
+  dead zone of one cell so a dodge, a 4-way correction or lining up a
+  shot leaves the picture still (Keren's camera window).
+- **Look ahead along the heading the tank has taken**, **never further
+  than the room outside the sight box** and never further than
+  `camera_lead_max_px`. That limit is 0 by default, so the shipped
+  camera has no look-ahead and the view moves only as the tank does:
+  played with 3 cells of it, the picture read as dizzying on top of the
+  round's own motion. With the limit raised: the room alone is eight cells sideways
+  on a monitor, six on a phone and almost nothing up or down, and a view
+  that spends all of it swings that far on every turn. The heading is
   `Tank::rotation`, which snaps on a direction change (not the eased
-  `visual_rotation`), with a short hold before a reversal flips the
-  look-ahead (Keren's dual forward focus).
+  `visual_rotation`), once the tank has driven `camera_lead_commit_px`
+  (40 px) along it: a turn on the spot to line up a shot and a dodge
+  shorter than that leave the view alone, and a reversal also waits out
+  a short hold (Keren's dual forward focus, switched by a threshold).
+  The lead is the same at any speed (`camera_lead_at_rest` 1), so the
+  view moves when the tank does and stands when it stands. It was 35% at
+  rest and all of the room at top speed; measured on longwater (BB-165)
+  that made the view run at 5.6 px a frame beside a tank doing 3.5 on
+  every start, slide back 94 px for more than two seconds after every
+  stop, and cross 260 px at up to 9.2 px a frame on a reversal. The lead
+  swings at a steady pace - from one side to the other in
+  `camera_lead_ease_seconds` (1 s) under a tank at top speed, so a
+  committed turn does not whip the view - and only while the tank
+  drives (`camera_lead_idle_pace` 0): a tank that stops part of the way
+  through a swing leaves the view where it is, and the swing goes on
+  when the tank does. No frame of camera motion comes after the player's
+  hands are still, bar the spring settling the last few pixels.
 - **Smooth with a critically damped spring** (`SmoothDamp`, about 0.5 s),
   frame-rate independent. A spring trails a target moving at constant
   speed by about `v * halflife / ln 2` (30 px at 210 px/s and 0.1 s);
@@ -371,11 +389,40 @@ ground passes under it in whole texels.
   applies the fraction); Celeste's motion-smoothing mod and
   `bevy_smooth_pixel_camera` do the same. The existing shake already
   snaps to 2 px.
+- **A shot kicks the picture** (`camera_fire_kick_px`, 0 by default so off; set,
+  it knocks the picture back against the gun, gone in about a quarter of a second): the camera's
+  own recoil, Vlambeer's "camera kick". It is a layer over the follow -
+  the spring never sees it - under the same sight-box and field rules,
+  only for the seat the view is on, scaled by `screen_fx_intensity`,
+  and off under reduced motion. An arena's view does not move, so it has
+  none.
 - **Shake after the follow**, still snapped to blocks, scaled by
   `screen_fx_intensity`, attenuated by distance from the camera (surviv.io
   shakes fully within 10 units and not at all past 40) so a blast across
   the map does not shake your screen, and switchable off (Apple's "make
-  motion optional", Xbox accessibility guideline 117).
+  motion optional", Xbox accessibility guideline 117). The shake moves
+  what the frame reads of the scene target, which holds the shake's
+  reach of the world round the view (`shockwave::shake_overscan`, 6 px
+  at the default knobs; `Camera::overscanned`), so a shaken screen shows
+  the world that is there and never a bare edge.
+- **Presenting** (`view::Prescale`). A window rarely shows a texel as a
+  whole number of device pixels (2.35 on a Retina laptop's arena, 1.18 on
+  a 720p window), and scaled straight to the window by the nearest texel
+  a 2 px block is then four pixels wide in one column and five in the
+  next. So the frame is drawn first into a picture at the next whole
+  number of pixels to the texel (the one below when within an eighth of
+  it), sampled nearest, and that picture is put on the window smoothly:
+  every block is the same width and an edge is one blended pixel at
+  most. No derivatives extension, so it is the same on GL ES 2 and
+  WebGL 1. The picture is the window's size times `n` over the scale: a
+  1280x720 Retina window's arena (2.35) 3264x1836 at three, a 2532x1170
+  phone at 2.4 about 3170x1465 at three, a 4K desktop at 3.53 about
+  4354x2450 at four. It is capped (`PrescaleLimits`): a 4096 side and
+  six megapixels on a phone or tablet, eight in a browser, an 8192 side
+  and twelve on a desktop - past that it drops to a smaller whole number
+  while that is within 1.25 times the scale, and otherwise the window
+  gets the nearest texel as before. A whole scale needs no picture.
+  Knob `present_prescale`.
 - **Cuts, not pans**, for a teleport through a portal, a seat re-entering
   through a gate (decision 7 of the co-op PRD) and another round coming on
   screen (another map, a room's round); a pan across half the map is
@@ -1162,7 +1209,9 @@ probe.
 
 Landed so far: step 1 whole (`view::Camera`); from step 2 the view rules
 (`framing.rs`), the map's `view` key and the follow camera itself
-(`follow.rs`: the dead zone, the look-ahead inside the sight box, the
+(`follow.rs`: the dead zone, the look-ahead inside the sight box -
+capped, committed by distance driven and the same at any speed since
+BB-165 -, a shot's kick, the
 spring, the sub-block present, cuts, spectating a teammate, the couch's
 shared view and its Voronoi split screen - each half at the local zoom,
 opening and closing with no jump, its arrows on the divider -,

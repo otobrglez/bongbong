@@ -460,7 +460,7 @@ run-server-dev *ARGS:
 # One room-server tool from a shell, the way `just mcp-call` drives the
 # game (`just rooms-mcp-call rooms`, `just rooms-mcp-call room_open '{"seats":2}'`).
 rooms-mcp-call TOOL *PARAMS:
-    cargo run -q --features dev-tools --bin bbmcp -- rooms call {{TOOL}} {{PARAMS}}
+    cargo run -q --no-default-features --features dev-tools --bin bbmcp -- rooms call {{TOOL}} {{PARAMS}}
 
 # netlab (netlab/README.md, docs/online-coop-prd.md §4.16): how far
 # networked play is from local play, measured - the room server in-process
@@ -538,9 +538,17 @@ rooms-logs *ARGS:
 
 # Call one dev-server tool from the shell, e.g.
 # `just mcp-call step '{"frames":120,"move_dir":"up"}'` or `just mcp-call nav_grid`.
-# Same tools the MCP server exposes (src/devserver.rs's TOOLS).
+# Same tools the MCP server exposes (src/devserver/tools.rs's TOOLS). With
+# no game from this checkout running, the call is answered by a fresh
+# headless round, and says so on stderr.
 mcp-call TOOL ARGS='{}':
-    cargo run -q --features dev-tools --bin bbmcp -- call {{TOOL}} '{{ARGS}}'
+    cargo run -q --no-default-features --features dev-tools --bin bbmcp -- call {{TOOL}} '{{ARGS}}'
+
+# Build the MCP adapter .mcp.json starts (tools/dev/bbmcp.sh runs
+# target/debug/bbmcp): headless, no raylib. Run it once in a new checkout
+# or worktree; after that the adapter's own `reload` tool rebuilds it.
+build-mcp:
+    cargo build --no-default-features --features dev-tools --bin bbmcp
 
 # --- Performance instruments (docs/tooling.md, "Performance") ---
 

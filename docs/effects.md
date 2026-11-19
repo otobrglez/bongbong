@@ -131,6 +131,12 @@ on the engine deck behind the turret (`damage_stage::engine_deck`, one of
 
 ## Painting
 
+A translucent block is as bright on the glass as it is drawn: every
+finished target goes onto the next, and onto the window, opaque
+(`render::view::draw_opaque`), so an alpha is the share of the colour
+under it that shows through and nothing more - under a clear sky and
+under a weather pass alike.
+
 `pyro::draw(b, &shapes)` paints puffs, marks and lines alpha-blended and
 leaves glows out; `pyro::draw_glows(b, &shapes, bands)` paints the glows
 and belongs inside an additive blend block. `b` is any `pyro::Blocks`:

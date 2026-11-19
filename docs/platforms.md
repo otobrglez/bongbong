@@ -99,7 +99,8 @@ newline-delimited JSON on `127.0.0.1:4849` (`--dev-port`), the same framing and 
 `mcp__bongbong-rooms__*` beside `mcp__bongbong__*`. The *table* is
 `bongbong::devserver::ROOM_TOOLS`, in the game crate because the dependency runs the other way (a
 table in the server could not be read by a `bbmcp` that lives in the lib); the dispatch is the
-server's and `every_advertised_tool_has_an_arm` holds the two together. Tools: `server_status`,
+server's and `every_advertised_tool_has_an_arm` holds the two together; each call is checked
+against its row first (`ToolSpec::check`: an unknown parameter or a wrong type is refused by name). Tools: `server_status`,
 `rooms`, `room` (seats **with their mailboxes** - `depth`, `acked`, `starvations`, the reading that
 says whether input was lost on the way in), `room_open` (a room and a started round with no client
 at all, `seats` bots, `tuning` rows of its own), `seat_intent` (drive a seat; a standing script fed
@@ -314,7 +315,9 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   and `...&join=CODE` in a second tab.
 - **Shaders need GLSL ES 100 ports**: `static/web/*.fs` are hand-ported twins of `static/*.fs`
   (`#version 100`, `precision mediump float`, `varying`, `texture2D`, `gl_FragColor`);
-  `shader_path()` picks the directory. Change both by hand.
+  every shader is compiled from a source in the binary, the twin on the embedded platforms
+  (`crate::EMBEDDED`). Change both by hand: `the_web_twins_are_the_desktop_shaders` fails a pair
+  whose bodies differ.
 - Audio: none yet. Adding `InitAudioDevice` needs `-sASYNCIFY=1` back in the rustflags, and with it
   the speed cost decision 19 removed.
 - **CI**: `.github/actions/build-web/action.yml` is the shared build (version pins as input defaults -

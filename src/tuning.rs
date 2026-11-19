@@ -641,6 +641,22 @@ tunables! {
         /// of the hull, at its own (faster) turn speed, so it visibly leads
         /// a turn while the heavier hull swings around to catch up.
         tank_turret_visual_turn_speed_deg: f32 = 1800.0 in 30.0 ..= 7200.0;
+        /// How a sprite is drawn at an angle off the quarter turns - a
+        /// hull and its turret through a turn, a tower's top (`turn.rs`, `static/turn.fs`). 0: plain, turned by the GPU's
+        /// nearest sampling, each screen pixel its own texel. 1: clean, on
+        /// the sprite's own design-pixel grid, each whole block the pixel
+        /// under its centre (`turn_corner`). 2: sheared on that grid,
+        /// every pixel of the sprite kept and moved whole. A quarter turn
+        /// is the plain blit in every mode. Plain is the default: clean
+        /// reads better on small hulls and tower tops and worse on a
+        /// large detailed hull mid-turn. Live.
+        turn_mode: i32 = 0 in 0 ..= 2;
+        /// In `turn_mode` 1, how far a design pixel is cut at a corner
+        /// whose two neighbours are one colour, along its two edges: 0
+        /// never, 0.5 the diagonal between the edges' middles, 1 the whole
+        /// quarter (Scale2x). More straightens slanted edges and thins
+        /// what is one pixel wide. Live.
+        turn_corner: f32 = 0.5 in 0.0 ..= 1.0;
     }
 
     group shell {
@@ -3025,7 +3041,7 @@ tunables! {
         /// Opacity of the pulsing glow on a barrel whose fuse is lit.
         barrel_fuse_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
         /// Opacity of the burn mark a blast leaves on the ground.
-        scorch_opacity: f32 = 0.75 in 0.0 ..= 1.0;
+        scorch_opacity: f32 = 1.0 in 0.0 ..= 1.0;
         /// Seconds a fresh scorch mark takes to fade in under the fireball.
         scorch_fade_in_seconds: f32 = 0.25 in 0.0 ..= 2.0;
         /// On-screen scale of the 64px scorch decal cells.
@@ -3225,6 +3241,13 @@ tunables! {
         /// shimmer slightly at a fractional scale, which a static floor
         /// mostly hides.
         view_scale_snap: i32 = 0 in 0 ..= 1;
+        /// Present the world through a picture at a whole number of pixels
+        /// to the texel, scaled smoothly onto the window (`view::Prescale`),
+        /// wherever a texel is not a whole number of device pixels: every
+        /// block of the art is then the same width on the glass. Off: the
+        /// nearest texel to each pixel, a 2 px block two pixels wide in one
+        /// column and three in the next. Live.
+        present_prescale: bool = true in 0 ..= 1;
         /// How much world a field map shows on a screen, in 32 px cells
         /// (`framing`, docs/large-maps-follow-camera.md §3). 578 is the
         /// standard 34 x 17 field's area, the most a landscape phone shows
@@ -3285,21 +3308,44 @@ tunables! {
         /// The follow camera on a field map (`follow.rs`,
         /// docs/large-maps-follow-camera.md section 6): how far the seat
         /// moves inside the view on an axis, in pixels either way, before
-        /// it drags the view along - about 0.4 cell, so four-way
-        /// corrections and slides along a wall do not wobble the view.
-        camera_dead_zone_px: f32 = 12.8 in 0.0 ..= 128.0;
-        /// The look-ahead: the view leads the seat the way its hull faces,
-        /// spending the room the sight box leaves on that axis
-        /// (`Framing::room_outside`) less the dead zone - this fraction of
-        /// it at rest, because a tank fires where it faces, and all of it
-        /// at the tank's top speed. The sight box never leaves the screen
-        /// whatever this says.
-        camera_lead_at_rest: f32 = 0.35 in 0.0 ..= 1.0;
+        /// it drags the view along - one cell, so a dodge, a correction
+        /// or lining up a shot leaves the picture still.
+        camera_dead_zone_px: f32 = 32.0 in 0.0 ..= 128.0;
+        /// The look-ahead: the view leads the seat along the heading it
+        /// has taken, spending the room the sight box leaves on that axis
+        /// (`Framing::room_outside`) less the dead zone, at most
+        /// `camera_lead_max_px` - this fraction of it at rest and all of it
+        /// at the tank's top speed. At 1 the lead is the same at any speed,
+        /// so a stop or a start moves the view no further than the tank;
+        /// under 1 the view runs ahead of a tank picking up speed and
+        /// drifts back for a second or two after it stops. The sight box
+        /// never leaves the screen whatever this says.
+        camera_lead_at_rest: f32 = 1.0 in 0.0 ..= 1.0;
+        /// The longest look-ahead on an axis, in world pixels (3 cells),
+        /// whatever room the sight box leaves: a big monitor has 8 cells of
+        /// room sideways and a phone 6, and a view that swings that far on
+        /// every turn of a four-way tank is never still. 0 is no
+        /// look-ahead, the default: the view moves only as the seat
+        /// does. A number past any room is the room alone.
+        camera_lead_max_px: f32 = 0.0 in 0.0 ..= 1024.0;
+        /// How far, in world pixels, the seat drives along a new heading
+        /// before the look-ahead turns to it: a turn on the spot to line
+        /// up a shot, and a dodge shorter than this, leave the view where
+        /// it is. 0 turns the look-ahead with the hull.
+        camera_lead_commit_px: f32 = 40.0 in 0.0 ..= 512.0;
         /// Seconds the look-ahead takes to swing from one side of its room
-        /// to the other: it moves at that steady pace, so a reversal takes
-        /// about this long, a turn or a change of speed less, and a turn
-        /// does not whip the view across. 0 swings it at once.
-        camera_lead_ease_seconds: f32 = 0.5 in 0.0 ..= 5.0;
+        /// to the other under a tank at top speed: it moves at that steady
+        /// pace, so a reversal takes about this long, a turn half of it,
+        /// and neither whips the view across - at 1 s the 3-cell lead
+        /// slides 3.2 px a frame beside a tank doing 3.5. 0 swings it at
+        /// once.
+        camera_lead_ease_seconds: f32 = 1.0 in 0.0 ..= 5.0;
+        /// The share of that pace the look-ahead keeps while the tank
+        /// stands still, the pace rising with the tank's speed to all of
+        /// it at top speed. At 0 the look-ahead swings only under a
+        /// driving tank, so the view never goes on moving after a stop; 1
+        /// swings it at one pace, standing or driving.
+        camera_lead_idle_pace: f32 = 0.0 in 0.0 ..= 1.0;
         /// Seconds a reversal holds before the look-ahead flips to the
         /// other side, so a quick back-and-forth does not swing the view
         /// each time; a turn to either side swings it at once.
@@ -3337,6 +3383,16 @@ tunables! {
         /// start over this many seconds, eased in and out, while the
         /// banner holds the round still. 0, or reduced motion, cuts there.
         camera_restart_glide_seconds: f32 = 1.0 in 0.0 ..= 5.0;
+        /// A shot the followed seat fires knocks its view this many world
+        /// pixels back against the gun, under `screen_fx_intensity`
+        /// (`follow.rs`): the picture's own recoil, on top of the follow
+        /// and never part of it. A burst never kicks further than one
+        /// shot. Field maps only - an arena's view does not move - and
+        /// none under reduced motion. 0 is no kick, the default.
+        camera_fire_kick_px: f32 = 0.0 in 0.0 ..= 32.0;
+        /// Seconds the kick takes to fall to about a third of itself on
+        /// its way back.
+        camera_fire_kick_seconds: f32 = 0.08 in 0.0 ..= 1.0;
     }
 
     group builder {
@@ -4083,7 +4139,7 @@ tunables! {
         /// simultaneous kills throw the scene far enough that the screen
         /// edge shows through as black.
         camera_shake_max_stack: f32 = 1.5 in 1.0 ..= 5.0;
-        camera_shake_magnitude: f32 = 6.0 in 0.0 ..= 100.0;
+        camera_shake_magnitude: f32 = 3.0 in 0.0 ..= 100.0;
         camera_shake_frequency: f32 = 40.0 in 1.0 ..= 200.0;
         /// The shake falls off with distance from what the screen shows
         /// (`shockwave::camera_shake`, docs/large-maps-follow-camera.md

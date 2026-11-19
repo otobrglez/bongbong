@@ -315,7 +315,7 @@ impl LightCache {
             let want = (held.len() * 2).clamp(CACHE_COLUMNS as usize, CACHE_MAX_TILES);
             let tile = wide.max(self.tile);
             let rows = (want as i32 + CACHE_COLUMNS - 1) / CACHE_COLUMNS;
-            let Ok(atlas) = rl.load_render_texture(thread, (tile * CACHE_COLUMNS) as u32, (tile * rows) as u32) else {
+            let Ok(atlas) = crate::render::target::load(rl, thread, (tile * CACHE_COLUMNS, tile * rows)) else {
                 self.atlas = None;
                 self.tiles.clear();
                 return;
@@ -643,6 +643,8 @@ pub struct PassView<'a> {
 
 /// Draw `source`, a render texture the target's size, over the target
 /// `at` names, a texel to the texel: the whole of it, or only its parts.
+/// Every pass that calls it writes an alpha of 1, so the plain blend
+/// replaces what was there.
 fn copy_over<D: RaylibDraw>(d: &mut D, source: &RenderTexture2D, at: &PassView) {
     if at.parts.is_empty() {
         d.draw_texture_rec(source, whole(at.size), Vector2::new(0.0, 0.0), Color::WHITE);
@@ -860,7 +862,7 @@ impl WeatherFx {
         if self.targets.as_ref().is_some_and(|t| t.size == size) {
             return Ok(());
         }
-        let make = |rl: &mut RaylibHandle, size: (i32, i32)| rl.load_render_texture(thread, size.0 as u32, size.1 as u32).map_err(|e| format!("weather target: {e}"));
+        let make = |rl: &mut RaylibHandle, size: (i32, i32)| crate::render::target::load(rl, thread, size).map_err(|e| format!("weather target: {e}"));
         let light = make(rl, light_map_size(size))?;
         let ground = make(rl, size)?;
         let lit = make(rl, size)?;
@@ -1090,20 +1092,11 @@ pub fn multiply_light<D: RaylibDraw>(d: &mut D, light: &RenderTexture2D, frame: 
 }
 
 /// `weather::plain`'s blocks, alpha-blended, in world pixels: call inside
-/// the world's camera. The target's alpha is left alone - the plain alpha
-/// blend would leave it under 1 wherever a block lies, and pass 2's blit
-/// would darken the fog toward the black behind it.
+/// the world's camera.
 pub fn draw_blocks<D: RaylibDraw>(d: &mut D, blocks: &[Block]) {
-    use sola_raylib::ffi::{RL_FUNC_ADD, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_SRC_ALPHA, RL_ZERO};
-    if blocks.is_empty() {
-        return;
+    for block in blocks {
+        d.draw_rectangle_rec(block.rect, block.color);
     }
-    d.set_blend_factors_separate(RL_SRC_ALPHA as i32, RL_ONE_MINUS_SRC_ALPHA as i32, RL_ZERO as i32, RL_ONE as i32, RL_FUNC_ADD as i32, RL_FUNC_ADD as i32);
-    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_CUSTOM_SEPARATE), |mut bd| {
-        for block in blocks {
-            bd.draw_rectangle_rec(block.rect, block.color);
-        }
-    });
 }
 
 /// A lightning strike's white over the whole target, in its own pixels:

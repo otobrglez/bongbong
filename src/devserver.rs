@@ -43,7 +43,7 @@ use crate::mode::{Driver, Session};
 use crate::net::client::Phase;
 use crate::net::round::AnyRound;
 use crate::obstacle::Obstacle;
-use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, TrackRow, r1, signed_quarter_turn};
+use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TrackRow, r1, signed_quarter_turn};
 use crate::simulation::{Event, Game, Input, Overlays, PlayerCount};
 use crate::tank::{Dir, TankKind};
 use crate::tuning;
@@ -88,33 +88,6 @@ const SHOT_DIR: &str = "target/devshots";
 /// under a 32 px cell, so the stroke crosses every cell on the line.
 const CLICK_DRAG_STEP_PX: f32 = 8.0;
 
-/// The tools that read or drive the round and are refused in build mode
-/// (docs/game-editor-fusion.md section 11) rather than touching a round
-/// the builder has frozen.
-pub const GAME_ONLY_TOOLS: &[&str] = &[
-    "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
-    "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "well_at", "players", "weather",
-];
-
-/// The tools that drive the *local* round or the builder, refused while
-/// the window holds a seat in a room (docs/online-coop-prd.md §4.5): an
-/// online round is the server's to simulate and the replica on screen is
-/// a picture of it, so a write here would change the picture and reach
-/// nobody. Everything that only reads - `status`, `snapshot`, `terrain`,
-/// `events`, `history`, `nav_grid`, `field`, `map_get`, `lint`,
-/// `overlays`, `screenshot`, `mode`, `builder_files` and the `tuning_*`
-/// tools - describes the online round instead (`Session::shown`), and
-/// `key {escape}` gives the seat up, as does a `click` on the corners'
-/// `LEAVE` button - the one thing a click has to press in this mode.
-/// `input` is not here: it stands in for the keyboard, and the keyboard
-/// drives this window's seat in the room (`ONLINE_INPUT_REFUSED` is the
-/// part of it that would reach nobody).
-pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
-    "step", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "spawn_pickup", "rod_call", "well_at", "players", "play",
-    "build", "back", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
-    "builder_map", "builder_save", "builder_touch", "builder_select", "builder_stamp",
-];
-
 /// The `input` fields an online round refuses: a window holds one seat in
 /// a room, which the frame's first intent drives, so player 2's keys
 /// steer nobody, and the I key's overlay cycle is the local round's (the
@@ -125,503 +98,15 @@ const ONLINE_INPUT_REFUSED: &[&str] = &["p2_move_dir", "p2_face", "p2_fire", "p2
 /// has 578 cells; a size-study map can have more).
 const TERRAIN_MAX_TILES: usize = 800;
 
-/// The `key` tool's key names.
-const KEY_NAMES: &[&str] =
-    &["tab", "escape", "enter", "undo", "redo", "copy", "cut", "paste", "delete", "backspace", "1", "2", "left", "right", "up", "down", "zoom_in", "zoom_out"];
+mod headless;
+mod tools;
 
-/// One tool: its wire/MCP name, the description the model reads, and its
-/// input JSON schema (an `object` schema, as a string so this table can be
-/// a `const`).
-pub struct ToolSpec {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub schema: &'static str,
-    /// Reads without changing the round, the builder, tuning or lockstep
-    /// (MCP `readOnlyHint`). `screenshot` is not: it writes a file and
-    /// takes an overlay patch.
-    pub read_only: bool,
-    /// Throws something away a client may want (MCP `destructiveHint`):
-    /// the round (`restart`, `play`, a `players` count change, `kill`),
-    /// every tuning edit (`tuning_reset`) or a map file (`builder_save`).
-    /// Emitted explicitly because the MCP default is *true*.
-    pub destructive: bool,
-}
-
-impl ToolSpec {
-    /// The MCP tool annotations the adapter advertises for this tool.
-    pub fn annotations(&self) -> Value {
-        json!({
-            "readOnlyHint": self.read_only,
-            "destructiveHint": self.destructive,
-            "idempotentHint": self.read_only,
-            "openWorldHint": false,
-        })
-    }
-}
-
-const NO_PARAMS: &str = r#"{"type":"object","properties":{}}"#;
-/// Just a room code: what most of `ROOM_TOOLS` takes.
-const CODE_ONLY: &str = r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"}}}"#;
-const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","description":"Owner slot: 0 = player, enemies from 1 (see snapshot.tanks[].slot)"}},"required":["slot"]}"#;
-
-/// Every tool the server answers, in the order the adapter lists them.
-pub const TOOLS: &[ToolSpec] = &[
-    ToolSpec {
-        name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `frame_stages` (ms a frame by stage averaged over half a second, the `sim.*` groups inside `sim`; `draws`, what the last whole frame drew through the canvas - blits, rects, shapes, texture_switches - and the blend/shader/target scopes it opened; `pace`, the worst frame and the 99th percentile over the last `frames` frames and how many ran 0..4 `steps`), `camera` (the view the window last drew - `whole` for an arena or the builder, `follow` for a field map, `pinned` for the `camera` tool's - with its world `rect`, `scale` (bitmap px per world px), scene `target` and `window_field` (the field area on the window, in points); a followed view adds the `seat` it follows and its `focus` (seat|shared|split|spectating|nobody), whether it `cut` this frame, how far a `glide` from the wreck to a restarted round's start has come (0..1, eased; null with none - a round starting over on the map on screen glides, its first plays the establishing shot), its `lead` and sub-block `offset`, the `split` of a couch pair apart (null for one view: the divider's `line` - a point and the unit normal into the second half in the followed bitmap's pixels - and `window_line`, how far `apart` the halves' views stand and each half's `seat`, `rect`, `offset`, `cut` and `in_view`), the `establishing` shot's `phase` (whole|zoom|follow) and `progress` (view `establishing` while it plays), the `seating` (local|room), the `framing` - `visible_cells`, `device_scale` (device px per world px), `point_scale`, `block_px`, whether the zoom `snapped` to whole blocks, `tank_points`, `tank_mm` and the `bars` past the aspect clamp - and the `sight_box` it keeps: `half`, the `room` left for the look-ahead and whether it is `in_view`; and `motion`, the one motion switch - whether motion is `reduced` (no shake, no whole-screen ripple, the establishing shot cut rather than zoomed), the `reduce_motion` row's `setting` (platform|off|on) and what the `platform` said at startup, null where it says nothing), `ui` (the UI scale - window units per point -, the window and the safe area the chrome keeps to in points, whether it is laid out for `touch`, the input its `hints` name - `keys` or `touch`, the last one used: a touch landing turns them to taps and a key press back -, in play and online the corners' `buttons` and `clusters` and the `minimap` picture under the right cluster (`null` where none is drawn - an arena shown whole, a phone; a press there does nothing), and the `screen_buttons` of whatever stands over the round - the level select's open tiles (`level_N`) and `back`, a dialog's `one`/`two` or `leave`/`stay`, a level's end screen's `levels`/`again`/`next`, the lobby's live buttons (`host`, `join`, `key_a`, `confirm`, `ready`, `start`, `kick_1`, ...) - all in window coordinates, which is what `click` takes), `mode` (play|build|online) with the dialogs and the builder's state (the builder's chrome is laid out on the window in UI points like play's corners - plates in the top corners of the safe area and a tray along its bottom, floating over the canvas, which fills the window as play's field does; the popups under the top plates and rising from the tray -, and its rects come in window coordinates, what `click` and `builder_touch` take, each with its `ui` points; `builder.navigator`: the navigator's picture, `null` at FIT on an arena and while an open popup reaches over its corner; `builder.buttons`: the builder's buttons by name - the plates' `back`, `day` (while the canvas's sky is dark), `play`, `play_here`, `check`, `clear`, `fit`, `map`, `file`, `erase`, `undo`, `redo`, each category's `category_<name>` (its icon half) and `list_<name>` (its list half) and `brush` (BRUSH: the brush's shape, the select tool, the stamps), or the one `tools` button a phone's tray folds the six and BRUSH into; with the select tool the live buttons of the strip under the top plates - `sel_copy`, `sel_cut`, `sel_paste`, `sel_flip_h`, `sel_flip_v`, `sel_delete`, `sel_stamp` (keep the selection as a stamp), `sel_stamps` (the STAMPS list), or with a paste ghost `sel_place`, `sel_flip_h`, `sel_flip_v`, `sel_cancel`; while a popup is open its own - a list's or the palette's `tool_<name>`, BRUSH's list's and the palette's brush row's `shape_<name>`, `tool_select` and `brush_stamps`, the FILE menu's `load`, `save`, `save_as` and `clear_map`, the Load list's `map_<name>`, the STAMPS list's `stamp_<key>`, the MAP panel's - `tab_round`/`tab_tanks`/`tab_field`/`tab_sky` where a short room puts its groups behind a rail of tabs, `reset`, a choice's `<field>_<option>` (`mission_hunt`, `spawn_waves`, `theme_desert`), a stepper's `<field>_dec`/`<field>_inc` (`tanks`, `waves`, `size`, `growth`, `tier_start`, `tier_end`, `tank`, `tank2`, `width`, `height`, `anchor`) and a sky's tile `weather_<sky>`, which puts it in or takes it out -, the CHECK panel's `finding_N` rows and `fix_N` buttons - and a paged popup's `page_back`/`page_next`; `builder.sky`: the sky the canvas is drawn under (its map's, as the paused round's seed picked it, or `clear` while DAY is down) and `builder.day` whether DAY is down; `builder.shape`: how the brush paints (pen, rect, fill or scatter); `builder.rect`: the rectangle a RECT drag is drawing, filled on its release (null with none); `builder.message`: the status line's feedback - a save, a load, a FILL refused for its size - or null; `builder.selection` and `builder.ghost`: the select tool's rectangle and the paste ghost as {col, row, cols, rows} (the ghost with its `cells`), `null` for none; `builder.clipboard`: what COPY and CUT took ({cols, rows, cells}); `builder.stamps`: how many stamps the STAMPS list offers; `builder.check`: the CHECK panel's last report; `builder.clear`: the clear check - the canvas's `revision`, whether it is `cleared` (won from plain PLAY with no edit since) and its `par` in seconds, and the revision PLAY started the local round on (`attempt`); `builder.loupe`: the loupe over a painting finger - where it stands, the `world` it shows, its `device_scale` and the `cell` the stroke paints -, `null` without one; `builder.thumbnails`: while FILE > LOAD's list is open, every map whose thumbnail its pages have made so far, a picture a frame - its `name`, its size in `cells` and whether it has a `picture` (a map that does not parse has none) -, empty while it is closed), and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or bong -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
-        schema: NO_PARAMS,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "snapshot",
-        description: "World state as JSON: every tank (position with its grid `cell`, `rotation` - the sim-side heading - with `facing` as a name and the two drawn angles `hull`/`turret` that ease toward it, real velocity with `speed` and `heading` - the direction it is actually moving, which differs from `rotation` when it is being shoved - damage/hp, ammo, weapon, shield/boost, `ring` - the health ring's opacity 0..1, nearest_ally_px; enemies also `role` - player/hunter/guard - and dist_to_player), projectiles, pickups, `bongs` (a list with `side` player/enemy: the player's bong first, then the enemy bong in a hunt round; `facing` left/right is which way the sprite is drawn - the art is authored facing right and mirrored for the other way, so it says whether a hop or a bite reads correctly), `portals` with `portals_active` (the map's portal anchors; each tank's `portal_cooldown` says when it may enter one again), `engage` (the engagement rings: per enemy its status - engaged/wreck/fleeing/retreating/out_of_range - the ring slot it holds and its target point, on the ring around the player or, for a hunter, the one around the player's bong; an engaged enemy with ring=null steers at its target directly, the pile-up case) and `clusters` (groups of live enemies within 90 px of each other). detail=full adds each enemy's AI memory (role, waypoint, committed heading, last behaviour-tree action, stuck timer, intent), the per-enemy slot rejection tally (claimed/off_map/unreachable/no_los), the player ring's 16-slot table (point, line of sight, who holds it) and `command`, the enemy command layer's last decision (orders by slot, the skipped-conflict tally, the blackboard; `enabled` false while the `c2_enabled` knob is off).",
-        schema: r#"{"type":"object","properties":{"detail":{"type":"string","enum":["compact","full"],"default":"compact"}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), ricochet (a shot off iron or a barrel, with the heading it flies on along), laser_beam (a laser's beam from the muzzle to where it stopped, with its variant), shells_collided, bong_bite (with the biting bong's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), oil_printed (a hull carrying oil out of a pool printed `cell`, going `dir`, with `fade` eighths left; `oil_print_cells` above 0), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), grass_trampled (hulls drove into the grass `cell` `grass_trample_passes` times: it hides nobody for the round), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's bong - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (rounds with more than one seat: the enemy switched to fighting seat `player`). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
-        schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "step",
-        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames (`move_dir`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round; a held `lamp` sets one lantern down, on the press - docs/volcano.md); shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step (first 256; `kinds`/`exclude` filter by event name, see `events`) and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
-        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between (both players)"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "input",
-        description: "Override a player's input for the next `frames` real-time frames (keyboard is ignored meanwhile): `move_dir`/`face`/`fire`/`lamp` for player 1, `p2_move_dir`/`p2_face`/`p2_fire`/`p2_lamp` for player 2 in a two-player round. Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone). **In an online round** it drives this window's seat in the room the way the keyboard does - sent at the tick rate, predicted and drawn as a player's press is - so a weapon can be fired as the rig's or a room's seat and the picture screenshotted; the player-2 fields and `cycle_overlays` are refused there, since they would reach nobody (`overlays` sets the replica's overlays). A shell fires once per press, so to fire again send `fire: false` for a frame, then `fire: true`.",
-        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"lamp":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"p2_lamp":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "pause",
-        description: "Enter lockstep: the game stops advancing (no PAUSED overlay, so screenshots stay clean) until `step` or `resume`.",
-        schema: NO_PARAMS,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "resume",
-        description: "Leave lockstep and clear the P-key pause: the game runs in real time with wall-clock dt again.",
-        schema: NO_PARAMS,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "restart",
-        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player 1's chassis as `tank` (a name - scout, assault, ..., leviathan - the spelling maps and `--tank` use) or `tank_row` (0-11, the sheet order), `players` (1 to 8 - how many seats the round holds, kept for later restarts; the keyboard drives the first two and the rest stand idle in a local round, and `tank2`/`tank2_row` pin seat 1's chassis the way `tank` pins seat 0's), the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given), and the level: `mission` (protect|hunt|destroy), `spawn` (band|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end` (light|medium|heavy|super) - each pinned for later restarts too, overriding the map's own [mission]/[spawn] tables. `intro: true` starts the round frozen behind the mission banner (off by default so `step` counts play frames). Same seed + same steps replays bit-for-bit.",
-        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":0,"maximum":31,"description":"Band plan enemy count; 0 is a sandbox round that never ends by wreck count"},"tank":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 1's chassis by name (or tank_row)"},"tank_row":{"type":"integer","minimum":0,"maximum":11},"players":{"type":"integer","minimum":1,"maximum":8,"description":"Seats the round holds; enemies count from the slot after them"},"tank2":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 2's chassis by name (or tank2_row)"},"tank2_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"spawn":{"type":"string","enum":["band","waves"]},"waves":{"type":"integer","minimum":1},"wave_size":{"type":"integer","minimum":1},"wave_growth":{"type":"integer","minimum":0},"tier_start":{"type":"string","enum":["light","medium","heavy","super"]},"tier_end":{"type":"string","enum":["light","medium","heavy","super"]},"intro":{"type":"boolean"}}}"#,
-        read_only: false,
-        destructive: true,
-    },
-    ToolSpec {
-        name: "map_get",
-        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `bong = \"oggle\"` (the players' bong: spike, oggle or gloop; spike when absent) / `enemy_bong = \"capi\"` (the enemy's in a Hunt round: blip, puff, capi or fuzz; blip when absent), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), optional `weather = \"night\"` (the sky: clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze or random - every sky; or a list, `weather = [\"rain\", \"snow\"]`, of which each round's seed picks one; clear when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` / `\"spruce\"` / `\"scots\"` / `\"fir\"` / `\"birch\"` / `\"willow\"` / `\"palm\"` / `\"snag\"` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it; a fir sapling, a palm and a dead snag hide nothing behind them; on a desert map every tree but the palm is dry), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"bush\" }` / `\"berry_bush\"` / `\"juniper\"` / `\"fern\"` / `\"autumn_bush\"` / `\"reeds\"` (soft cover like tall grass, one bush to a cell), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, bongs hop toward it), `{ kind = \"bong\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2, one, optional - placed beside player 1 when absent, as every seat past the second always is), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"missiles\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"bong_health\" }` (missiles are a four-tube pod firing a salvo of four seeker missiles per pull, one pull a pickup, that climb, lock onto the nearest opposing tank and dive on it over any wall; the flamethrower is player-only: enemies drive over its fuel tank; the bong health pack fully heals the collector's own bong and is left on the ground by a tank whose bong is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
-        schema: NO_PARAMS,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "lint",
-        description: "Run the static map linter (src/maplint.rs, the check CI runs on every shipped map) and reply with its findings. `source: builder` lints the builder's canvas as it stands (the default in build mode - validate a map authored with `builder_paint` before `play`); `source: round` lints the map the current round was built from, fresh (the default in play mode - not the round's current, partly shot-away terrain). The map is set up as a headless round with the session's seed, player count and CLI/restart overrides, so the check sees what PLAY would run. Each finding has `severity` (error|warning|info), `kind` (a tag such as gated-pickup, spawn-band-too-tight, gate-blocked, player2-unreachable) and `message`; `errors`/`warnings` count them. Two limits: the spawn-band check reads the map's own `spawn` table (not a `restart {spawn}` override), and the player-2 kinds appear only in a session with more than one seat.",
-        schema: r#"{"type":"object","properties":{"source":{"type":"string","enum":["builder","round"],"description":"builder = the canvas (default in build mode); round = the round's map (default in play mode)"}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "terrain",
-        description: "The battlefield's tiles and its fire layer as JSON - the numeric view of props, walls and flames that `snapshot` (tanks only) lacks: every live obstacle tile by grid `cell` with material, `hp`/`max_hp`, and when set `drum` (oil|fuel), `burning`/`burn_elapsed`, `fuse` {left, total} (an armed barrel), `heat` (flame exposure), `scorched` (blast-sooted faces, N E S W as bits 0..3), `ram_timer`, `flammable`; plus `fires` (burning ground cells: left, total, pool), `fused` (armed drums' cells), `flames` (this frame's flamethrower jets: shooter slot, origin, direction, range, reach), `burning_tanks`/`burning_wrecks`, and counts of burning tiles, flying drums, oil cells, grass cells and heated cells, `grass_trampled` (the grass cells trampled for the round, as [col, row]; `grass_trample_passes`), plus `portals` (the map's portal anchors by cell) and `portals_active`. `only` keeps just the damaged (hurt, burning, fused, sooted, heated or rammed), burning or fused tiles; `materials` keeps the listed ones. At most 800 tiles (`truncated`).",
-        schema: r#"{"type":"object","properties":{"only":{"type":"string","enum":["all","damaged","burning","fused"],"default":"all"},"materials":{"type":"array","items":{"type":"string","enum":["brick","iron","wood","glass","concrete","sandbag","barrel","fence","target","tree","pine","spruce","scots","fir","birch","willow","palm","snag"]},"description":"Only tiles of these materials"}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "history",
-        description: "Per-tank rows recorded every frame (last 60 s, cleared on restart): position, heading (`rotation`) and the drawn turret angle, behaviour-tree action, ring slot, stuck, touching terrain, is_player. Replies with every N-th frame's rows (`every`) over the last `last` frames, optionally one `slot`, plus per-tank aggregates over the whole window: frames seen, distance travelled, net displacement, cluster_frames (2+ other live enemies within 90 px), stuck_frames, no_ring_frames (engaged without a slot), touching_frames (static terrain), tank_touching_frames (another tank's hull - the jam signal, which unlike a ram count does not saturate), and `round`, the tank's heading-turn counters since the round began: turns (heading changes), u_turns (180 flips), reversals (A->B->A within 2 s, the probe's jitter unit), spins (a full same-direction circle of quarter-turns within 2 s while drifting under 60 px - the probe's spin rule; the turret visibly rotating in place), max_spin_deg, turret_deg (the turret sprite's total sweep) and last_turn_frame. The live-game counterpart of the probe's per-round stats.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer","description":"Only this tank's rows (aggregates still cover every tank)"},"last":{"type":"integer","default":600,"minimum":1,"maximum":3600,"description":"Window in frames, ending at the latest recorded one"},"every":{"type":"integer","default":10,"minimum":1,"description":"Row sampling stride in frames"}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "screenshot",
-        description: "Capture the current frame (the state after the latest step) as a PNG: returned inline and saved under target/devshots/. scale 0.5 (default) halves it; use 1.0 to read overlay text. Optionally set overlay flags in the same call (same as the `overlays` tool). source=scene skips the HUD and overlays.",
-        schema: r#"{"type":"object","properties":{"scale":{"type":"number","default":0.5,"minimum":0.1,"maximum":1},"source":{"type":"string","enum":["screen","scene"],"default":"screen"},"overlays":{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"hitboxes":{"type":"boolean"},"stats":{"type":"boolean"}}}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "overlays",
-        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), hitboxes (each tank's hull and turret damage boxes and its rounded movement collider), stats (each tank's readout card: ammo, weapon, hp, speed, velocity, collider size, an enemy's retreat/fire state). Omitted flags keep their value, an unknown flag is an error; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect = hitboxes + stats -> all); `input {cycle_overlays: true}` presses it.",
-        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"hitboxes":{"type":"boolean"},"stats":{"type":"boolean"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "camera",
-        description: "Pin the part of the world the window draws, for screenshots (docs/large-maps-follow-camera.md): `x`/`y` a world point in field pixels at the view's centre and `zoom` 1 or more - the view shows the field's size divided by the zoom, kept inside the field and snapped to whole 2 px blocks, and fills the field area under the HUD bar, which is drawn as ever. A field left out keeps the pin's own (the field's centre, zoom 1, for a first pin). A pin outranks a field map's follow camera. `reset: true` lets the pin go: the view is the map's again - the whole field for an arena, the follow camera for a field map; no parameters only report. The pin holds across restarts and map changes, clamped to each field, and changes only the picture - the round, the AI and the builder's canvas never see it. Replies like `status.camera`: `view` (whole|follow|pinned), the visible world `rect`, `scale` (bitmap px per world px), the scene `target` size in texels and a pin's `center` and `zoom` (a followed view's position is the one the window last drew, unknown until it has drawn one).",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number","description":"World x at the view's centre"},"y":{"type":"number","description":"World y at the view's centre"},"zoom":{"type":"number","minimum":1,"description":"How many times the field is magnified"},"reset":{"type":"boolean","default":false,"description":"Show the whole field again"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "nav_grid",
-        description: "The AI's pathfinding grid as text (# blocked, . open) with tanks (P player, digits enemies, x wrecks), the bong (F) and pickups (*) marked - the cheapest way to reason about the layout.",
-        schema: NO_PARAMS,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "field",
-        description: "The flow field enemies follow toward a shared target this frame: `arrows` (one line per row: ^ v < > the neighbour each cell steps into, G the goal, # blocked, . unreachable) and `costs` (the cost to the goal per cell, -1 blocked/unreachable, so a priced firing lane or crowd cell shows as a jump). target: player (default), player2 or bong. Errors when that target is not in the round.",
-        schema: r#"{"type":"object","properties":{"target":{"type":"string","enum":["player","player2","bong"],"default":"player"}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "teleport",
-        description: "Move a tank to (x, y) in field pixels (velocity zeroed) and optionally snap its facing.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"},"facing":{"type":"string","enum":["up","down","left","right"]}},"required":["slot","x","y"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "set_tank",
-        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it in place of the one special the tank carries, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer, portal_cooldown (seconds before it may enter a portal again) and charge (seconds a charge weapon's trigger has been held - a gauss rail's charge or a rod's reticle put on a tank carrying it; 0 takes it off). Omitted fields are untouched.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"wells":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "kill",
-        description: "Destroy a tank on the next simulated frame through the normal kill path (explosion, shockwave, wreck event, round end).",
-        schema: SLOT_PARAMS,
-        read_only: false,
-        destructive: true,
-    },
-    ToolSpec {
-        name: "spawn_enemy",
-        description: "Add an enemy at (x, y) with an optional chassis row (0-11) and AI role (player - fights the player, the default; hunter - drives at and shoots the player's bong; guard - stays leashed to the enemy bong). Draws from the round RNG, so the round stops being the seeded replay afterwards. Returns the new slot.",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"row":{"type":"integer","minimum":0,"maximum":11},"role":{"type":"string","enum":["player","hunter","guard"]}},"required":["x","y"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "spawn_pickup",
-        description: "Put a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, bong_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm, rod_from_god, gravity_well, air_heli, air_jet) down at the map cell nearest (x, y), in its air drop. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
-        schema: r#"{"type":"object","properties":{"kind":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}},"required":["kind","x","y"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "rod_call",
-        description: "Call a rod from god onto the map cell nearest (x, y) at once (docs/rod-from-god.md): player 1's call, the kills credited to it, or with enemy=true an enemy's. It stands for rod_countdown_seconds and lands like any other. Refused outside the field. Draws no RNG. Returns the call's id, its cell and the round time it lands at.",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"enemy":{"type":"boolean","default":false}},"required":["x","y"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "well_at",
-        description: "Anchor a gravity well at (x, y) at once (docs/gravity-well.md): player 1's, or with enemy=true an enemy's; it forms for well_form_seconds, pulls for well_pull_seconds and collapses like any other. Refused off the field or inside a solid cell. Draws no RNG. Returns the well's id, its centre and the round time its pull starts.",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"enemy":{"type":"boolean","default":false}},"required":["x","y"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "tuning_get",
-        description: "Current tuning knobs as {name: value}; diff_only=true returns just the knobs that differ from the compiled defaults.",
-        schema: r#"{"type":"object","properties":{"diff_only":{"type":"boolean","default":false}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "tuning_set",
-        description: "Apply a tuning patch {knob: value} (array knobs as name.label or a full array) at this frame boundary. Range-checked; the whole patch is rejected on any bad key.",
-        schema: r#"{"type":"object","properties":{"patch":{"type":"object","additionalProperties":{"type":["number","boolean","array"]}}},"required":["patch"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "tuning_reset",
-        description: "Restore every tuning knob to its compiled default.",
-        schema: NO_PARAMS,
-        read_only: false,
-        destructive: true,
-    },
-    ToolSpec {
-        name: "tuning_schema",
-        description: "The knob table (name, group, type, doc, range, default, when it applies). Several hundred rows, so filter by group and/or a name substring.",
-        schema: r#"{"type":"object","properties":{"group":{"type":"string"},"name_contains":{"type":"string"}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    // ----- the two modes and the map builder (docs/game-editor-fusion.md section 11) -----
-    ToolSpec {
-        name: "mode",
-        description: "Which mode the window is in - play (the round) or build (the map builder in the same window) - plus whether the leave-round dialog is open and the builder's state: dirty (edited since it was loaded), map name, active tool and its category, undo/redo depth. Cheap; `status` carries `mode` too.",
-        schema: NO_PARAMS,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "lang",
-        description: "The language the window draws its text in (docs/localization-prd.md). Without `tag` reports the one in force and every shipped tag; with `tag` (`en`, `sl`) switches to it at this frame boundary - a tag the game has not got is answered with English. Works in every mode; nothing about the round changes.",
-        schema: r#"{"type":"object","properties":{"tag":{"type":"string","description":"A shipped language tag to switch to"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "weather",
-        description: "The sky over the round on screen (docs/weather.md): drawn, and part of the rules - shorter enemy sight at night, in a storm and in fog, less grip in the rain, the water frozen in the snow, gusts in a sandstorm. A sky is settled when a round starts. Without `name` reports `in_force` (the round's sky - never `random`: a random weather is the sky the round's seed picks, the same for the same seed), `map` (the round's map's own `weather` key: a name, or the list of skies the seed picks among), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it; it applies from the next round), `rules` (`on`, `enemy_sight_px`, `grip`, `frozen`, `gust_on_player` - player 1's wind in px/s -, `gust_front` - the sandstorm gust crossing the field, its `start` in round seconds and its `dir`), `without_shaders` (the window draws its skies without the weather's shaders - they would not compile here, or the `weather_without_shaders` knob asks: the light map blended in, the snow, fog, sand, rain and falling snow as plain blocks) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze, random, or a list of them, the round's seed picking one) puts that key on the round's map and changes the sky mid-round, the round running on (`Game::change_weather`: snow ices the water over, but ice stays ice until the next round); with `restart: true` it starts the round over on its own seed instead, frozen like `restart` leaves it, so the water is settled from the new sky. The key lasts through `restart`s on that map, and the override knob still outranks it. An online window only reports: a room's round is fought under its map's sky. The builder's WEATHER checklist is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"` or `weather = [\"rain\", \"snow\"]`.",
-        schema: r#"{"type":"object","properties":{"name":{"type":["string","array"],"items":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random"]},"description":"The sky to draw the round under, or a list of skies the round's seed picks one of; random is every sky"},"restart":{"type":"boolean","description":"Start the round over under the new sky rather than changing it mid-round (default false)"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "build",
-        description: "Press BUILD in play mode: enters the builder at once, mid-round and on the end screen alike, the round paused behind it for `back` to come back to (only `play` puts a new round in its place). With the level select or the players dialog up it closes that instead. A no-op in build mode. Replies like `mode`, whose `back` is then `{puts_away}`.",
-        schema: r#"{"type":"object","properties":{}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "back",
-        description: "Press BACK in build mode (or Escape there with nothing on the canvas to take back): the round BUILD paused comes back exactly where it stood, at once, still frozen in lockstep if it was. Edits made since BUILD are put away - the canvas goes back to the round's map as one undo step, which `builder_undo` (UNDO in the next BUILD) takes back - and `status.ui`'s left cluster carries a line saying so for `ui_put_away_seconds`. `mode.back.puts_away` says beforehand whether it will. A no-op in play mode and where there is no paused round (`mode.back` null). Replies like `mode`.",
-        schema: r#"{"type":"object","properties":{}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "players",
-        description: "The players button in play mode (docs/two-players.md). Without `count`: press it - opens the 'How many players?' dialog (the round is frozen until it is answered) or closes an open one. With `count` (1 to 8): answer it - a different count restarts the round at once with that many seats, frozen in lockstep like `restart`; the current count just closes the dialog. The dialog itself only offers one and two - the couch counts; the rest are a room's, and reach the round through this tool or `restart`. The count sticks for the session (later `restart`s, PLAY from the builder). Two seats: slot 1 is player 2 and enemies count from 2; `step`/`input` take `p2_*` fields for it. Past two, the extra seats stand idle and the bar keeps the two-player readout. Replies like `mode`.",
-        schema: r#"{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":2,"description":"Answer the dialog with this player count"}}}"#,
-        read_only: false,
-        destructive: true,
-    },
-    ToolSpec {
-        name: "play",
-        description: "Press PLAY in build mode: the builder's (edited) map becomes the round's map and a fresh round starts, frozen in lockstep like `restart` (so `step` counts play frames; `resume` for real time). A seed pinned by an earlier `restart` stays pinned. `intro: true` starts the round frozen behind the mission banner. Fails in play mode - `restart` starts a round there. Replies with `status`.",
-        schema: r#"{"type":"object","properties":{"intro":{"type":"boolean","default":false}}}"#,
-        read_only: false,
-        destructive: true,
-    },
-    ToolSpec {
-        name: "builder_tool",
-        description: "Select the builder's brush by name - brick, iron, wood, glass, concrete (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, lava, tall_grass, tree, pine, oil_trail, gate, portal, volcano, lamp (GROUND); start, start2 (player 2's start), bong, enemy_bong (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, bong_health, tower_pack, heat_shield (PICKUP); eraser; or select, the rectangle select tool (BRUSH's list; `builder_select` drives it) - through the category's own selection path, so the bar's category button updates as well. Any tool but select lets the selection go and takes a paste ghost away. `shape` sets how the brush paints, BRUSH's list's shapes (docs/large-maps-follow-camera.md section 9): pen (a stroke, under the toggle-erase rule), rect (a rectangle from the press to the release, filled on the release; the eraser or the right button clears it), fill (a flood from the pressed cell over the cells joined to it edge to edge that hold exactly what it holds, at most `builder_fill_max_cells` - past it nothing changes and `status.builder.message` says why -, under the toggle-erase rule) or scatter (a hashed share, `builder_scatter_density`, of the cells within `builder_scatter_radius_cells` of each cell the stroke crosses, laid on empty cells only; erasing, it thins the brush's object, or anything under the eraser). Picking a shape takes a painting brush back from the select tool; a singleton (start, start2, bong, enemy_bong) paints with the pen whatever the shape. Without `tool` or `shape`, only reports the active tool, the brush's `shape` and every category's current tool and full list (the authoritative spelling of every brush).",
-        schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"},"shape":{"type":"string","enum":["pen","rect","fill","scatter"],"description":"How the brush paints"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_paint",
-        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/start2/bong/enemy_bong) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (the map's `size`, 34 x 17 when absent, from the top-left). `tool` selects a brush first and `shape` how it paints (see `builder_tool`): with rect the stroke's first and last cells are the rectangle's corners, with fill only cells[0] counts, with scatter every cell's footprint is laid. `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty), the undo depth and the status line's `message` (a FILL refused for its size says so there).",
-        schema: r#"{"type":"object","properties":{"cells":{"type":"array","items":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},"minItems":1,"description":"[[col, row], ...] in stroke order"},"tool":{"type":"string"},"shape":{"type":"string","enum":["pen","rect","fill","scatter"]},"button":{"type":"string","enum":["left","right"],"default":"left"}},"required":["cells"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_undo",
-        description: "Undo the builder's last `steps` edits (default 1; a whole stroke, one settings field, a load or a reset is one step each). Replies with how many were undone, the depth left on each side and the cells the last undone step changed.",
-        schema: r#"{"type":"object","properties":{"steps":{"type":"integer","minimum":1,"default":1}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_redo",
-        description: "Redo the builder's last `steps` undone edits (default 1). Replies with how many were redone, the depth left on each side and the cells the last redone step changed.",
-        schema: r#"{"type":"object","properties":{"steps":{"type":"integer","minimum":1,"default":1}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_settings",
-        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), bong (the players' bong: spike|oggle|gloop, null = spike), enemy_bong (the enemy's in a Hunt round: blip|puff|capi|fuzz, null = blip), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super), theme (grass|desert - the look: ground tileset and tall-grass sheet; the canvas redraws in it at once), weather (clear|night|dusk|rain|storm|fog|sandstorm|snow|heat_haze|random, or a list of them - the skies a round may be fought under, each round's seed picking one, docs/weather.md; the panel's WEATHER checklist; the canvas itself stays clear to edit on), anchor (where the old map sits when the size changes: top_left|top|top_right|left|center|right|bottom_left|bottom|bottom_right - the panel's ANCHOR, kept for the session), size ([cols, rows] cells, 16 x 9 up to 250 a side: the map resized with the old one placed by the anchor, cells that land past the new edge dropped - one undo step, which brings them back - and the canvas made again on the new field). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto, `size` in cells) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
-        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"bong":{"type":["string","null"],"enum":["spike","oggle","gloop",null],"description":"The players' bong; null = spike"},"enemy_bong":{"type":["string","null"],"enum":["blip","puff","capi","fuzz",null],"description":"The enemy's bong in a Hunt round; null = blip"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"weather":{"type":["string","array","null"],"items":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random"]},"description":"A weather's name or a list of them (each round's seed picks one); null or [] = clear, the default; random = every sky"},"anchor":{"type":"string","enum":["top_left","top","top_right","left","center","right","bottom_left","bottom","bottom_right"],"description":"Where the old map sits when the size changes"},"size":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[cols, rows] in cells, 16 x 9 to 250 x 250"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_map",
-        description: "Without parameters: the builder's map as TOML (`toml`), its name, `dirty` and `diff` - cells added/removed/changed and the settings fields that differ from the baseline (the map as loaded). With `name` (a Load-list name from `builder_files`), `map` (a path under maps/) or `map_toml` (inline TOML, the `map_get` format): loads that map into the canvas as one undo step and makes it the new baseline - the FILE > LOAD path; the round keeps its map until `play`. With `clear`: FILE > CLEAR MAP - empties the canvas of every placed object as one undo step, keeping the settings, size, theme and name; not a new baseline, so `dirty` is set. `map_get` keeps answering with the map the current round was built from, which differs from this once the builder is dirty.",
-        schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"A name from builder_files"},"map_toml":{"type":"string","description":"Map TOML text to load into the builder"},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"clear":{"type":"boolean","default":false,"description":"Empty the canvas of every placed object (FILE > CLEAR MAP)"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_files",
-        description: "What FILE > LOAD offers: every map the builder can load by name - the files under maps/ on native (`on_disk`) plus the maps shipped inside the binary (default, hunt-basic, waves-basic; all the web build has) - and `can_save`, whether this build keeps maps (with map modding on, every build, in the player's store; off, native only). With modding on, a shipped map the player changed is marked `modified` and opens as their copy.",
-        schema: r#"{"type":"object","properties":{}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_camera",
-        description: "The builder's own camera over its canvas (docs/large-maps-follow-camera.md section 9), the way to frame a screenshot of the builder: `x`/`y` a world point in field pixels to put in the middle of the canvas and `zoom` how many times FIT (1 is FIT, the whole map); a field left out keeps the camera's own. `fit: true` goes back to the whole canvas, as the FIT button does. The zoom is kept between FIT and a cell of `builder_zoom_max_cell_pt` points and the view inside the field, centred on an axis the map does not fill. Independent of the round's `camera` pin. No parameters only reports. Replies like `status.builder.camera`: `fit`, the world `rect` the canvas shows, `scale` (bitmap px per world px), `zoom` (times FIT), `fit_scale`, `device_scale` (device px per world px - whole blocks on the glass when it is a multiple of 0.5), `cell_mm` (a cell's width on a touch screen's glass, what the paint threshold reads) and the canvas `area` (bitmap px).",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number","description":"World x (field px) for the middle of the canvas"},"y":{"type":"number","description":"World y (field px) for the middle of the canvas"},"zoom":{"type":"number","minimum":1,"description":"Times FIT; 1 is the whole map"},"fit":{"type":"boolean","default":false,"description":"Back to the whole canvas"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_touch",
-        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans - except where the view shows the whole map (FIT), where a drag paints. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in window coordinates, as for `click` (`status.builder.buttons` and `status.camera.window_field` give them); a frame with no points lifts every finger, and the tool lifts every finger at its end - unless `hold` is true, which leaves the last frame's fingers down: the window's frames keep them there (a stroke goes on painting under a still finger, the loupe stands over it - `status.builder.loupe`) until the next `builder_touch` carries on from them or lifts them. Each frame is `dt` seconds (default 1/60). Build mode only. Fingers on the glass turn the hints to taps (`status.ui.hints`). Replies like `mode`, with `camera` (as `status.builder.camera`) and `held` (how many fingers are left down).",
-        schema: r#"{"type":"object","properties":{"frames":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["id","x","y"]}},"description":"Frames of touch points, first to last"},"dt":{"type":"number","minimum":0,"description":"Seconds per frame (default 1/60)"},"hold":{"type":"boolean","description":"Leave the last frame's fingers down at the end, for a screenshot mid-gesture (default false)"}},"required":["frames"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_select",
-        description: "The builder's select tool (docs/large-maps-patterns.md, \"Selection, copy and stamps\") as a drag and the strip under the top plates drive it: `rect` [col0, row0, col1, row1] selects those cells (two opposite corners, inclusive; the part on the field) and takes the select tool, as a drag across them does; `clear` lets the selection go and takes a paste ghost away; `move_by` [dx, dy] carries the selection's cells that many cells, kept on the field, as a drag from inside it does; `action` acts as the strip's buttons and the keys do - copy, cut (a copy and a delete), delete, flip_h, flip_v (mirror the selection in place - or the paste ghost while one stands), stamp (keep the selection, trimmed to its cells, as a stamp for this session: `builder_stamp`), paste (the clipboard as the paste ghost with its middle on `at` [col, row], else in the middle of the view), place (put the ghost down where it stands, or with its top-left on `at`), cancel (take the ghost away). Every move, flip, cut, delete and place is one undo step. A clip is transparent: its empty cells leave the map as it was. A start, player 2's start or a bong moves with its cells; a paste puts one down only where the map holds none of it by then - never two. Replies with the `selection` and the `ghost` ({col, row, cols, rows}, null for none), the `clipboard` ({cols, rows, cells}, null), what the call `changes`d (as `builder_paint`) and `undo_depth`.",
-        schema: r#"{"type":"object","properties":{"rect":{"type":"array","items":{"type":"integer"},"minItems":4,"maxItems":4,"description":"[col0, row0, col1, row1]: opposite corners, inclusive"},"clear":{"type":"boolean","default":false},"move_by":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[dx, dy] in cells"},"action":{"type":"string","enum":["copy","cut","delete","flip_h","flip_v","stamp","paste","place","cancel"]},"at":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[col, row]: the ghost's middle for paste, its top-left for place"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_stamp",
-        description: "The builder's STAMPS list: without `name`, every stamp it offers - the shipped ones (maps/stamps/: fort, bunker, river-bend) then the ones kept this session (`saved_N`, `builder_select {action: stamp}`) - each with its `key`, its `name` in the language on screen, its size in cells and how many cells it holds. With `name` (a key): that stamp becomes the paste ghost in the middle of the view, with the select tool, as a press on its row does; `at` [col, row] stands the ghost's top-left there instead, and `place: true` puts it down at once (one undo step). Replies with the `stamps`, the `ghost` and, with `place`, the `changes`.",
-        schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"A stamp's key"},"at":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2,"description":"[col, row]: the ghost's top-left"},"place":{"type":"boolean","default":false,"description":"Put the ghost down at once"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "builder_save",
-        description: "FILE > SAVE / SAVE AS: write the builder's map to maps/<name>.toml (native only; `name` defaults to the map's own name and becomes it) and make the saved state the baseline, so `dirty` clears. Letters, digits, - and _ only. Replies like `builder_map`.",
-        schema: r#"{"type":"object","properties":{"name":{"type":"string"}}}"#,
-        read_only: false,
-        destructive: true,
-    },
-    ToolSpec {
-        name: "click",
-        description: "A raw press at a window position - the window's own coordinates, which `status.ui.buttons` and `status.camera.window_field` give (with no window, the live mode's bitmap at its own size: the builder's in a window 40 px taller than its canvas, play's field alone) - in either mode, on the same hit-tests a mouse or a finger uses: in play mode the corners' buttons (BUILD, the pause button left of it, the players button, ONLINE, RESTART on a keyboard-less build, and the level button on a level - `status.ui.buttons`), either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - `status.ui.screen_buttons` - and a press on the field itself does nothing in play mode; the lobby's buttons (`status.ui.screen_buttons`); online the corners' LEAVE; in build mode the bar's buttons (PLAY starts the round like `play`), an open popup's rows, steppers and pager - `status.builder.buttons` - or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`, with `world` - the world point the press landed on, through the camera - for a press on the field outside the builder. With `touch`, the press is a tap: the hints turn to taps, as a finger landing turns them (`status.ui.hints`). This tests the UI; `build`/`play`/`builder_*` address the model directly.",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"},"touch":{"type":"boolean","default":false,"description":"A tap rather than a mouse press: the hints turn to taps (`status.ui.hints`)"}},"required":["x","y"]}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "key",
-        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup; in play mode with no dialog, open or close the level select), enter (leave the round; in the players dialog, switch to the other count; on a level's end screen, the way on or PLAY AGAIN; in the level select, start the level under the focus; confirm a popup), left / right / up / down (move the level select's focus over the open levels; in the builder, pan the canvas for one frame the way the arrow points), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), copy, cut, paste (Ctrl+C / Ctrl+X / Ctrl+V in the builder: the selection copied or cut, the clipboard pasted as a ghost in the middle of the view - `builder_select {action: paste, at}` stands it elsewhere), delete (the selection's cells cleared; so does backspace outside the Save prompt; in the builder escape also takes a paste ghost away, then the selection), zoom_in / zoom_out (`+` / `-` in the builder: one zoom step about the canvas's middle), backspace; `text` types characters into an open builder prompt. A key press turns the hints back to the keys (`status.ui.hints`). Replies like `mode` (`levels_open`, `levels_focus`).",
-        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","copy","cut","paste","delete","backspace","1","2","left","right","up","down","zoom_in","zoom_out"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-];
-
-/// **The room server's tool table** (`bongbong-server`, CLAUDE.md's room
-/// server section): the same `ToolSpec` rows `TOOLS` is made of, over the
-/// same newline-delimited JSON on a socket - `bbmcp rooms` is this
-/// adapter pointed at the other port.
-///
-/// The *table* lives here rather than in `bongbong-server` because the
-/// dependency runs the other way: the server crate is built on this one,
-/// so a table there could not be read by a `bbmcp` that lives here. Pure
-/// data, so it costs a headless build nothing; the dispatch is the
-/// server's, and a test there holds every row to an arm so the two
-/// cannot drift - `TOOLS`'s own discipline.
-///
-/// **What it is for.** The game's dev server drives the round in *this*
-/// window; in an online round that window holds a replica and every
-/// writing tool refuses by name, because only the server simulates it.
-/// These are the other end - they read and drive the authoritative round
-/// itself, which is the only place a co-op bug can actually be observed.
-pub const ROOM_TOOLS: &[ToolSpec] = &[
-    ToolSpec {
-        name: "server_status",
-        description: "The server as a whole: how many rooms it holds and its cap, whether it is draining, its uptime, the build's `protocol_version`, and the counters `/metrics` publishes (rooms by phase, seats, tick p50/p99 in microseconds, tick overruns, snapshot bytes/s, reconnects, intent starvations). Cheap; call first.",
-        schema: NO_PARAMS,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "rooms",
-        description: "Every room this server holds: `code`, `phase` (waiting|playing|paused|ended), the seat count and how many are connected, the round's `tick`, the map, the seed and how long the room has been alive. The `code` is what every other tool here takes.",
-        schema: NO_PARAMS,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room",
-        description: "One room in full: its lifecycle and how long until the TTL that would end it, the map, seed, mission and resolved spawn plan, the round's tick and outcome, the `tuning_patch` it is being fought under and every `Welcome` carries (a room of two or more scales the waves, a room of one is the empty patch, and `room_tuning`'s rows - `dev_tuning` - go on top), and a row per seat - nick, whether it holds the room, ready, connected, its chassis, and its mailbox. `owns_hull` and `pose_refusals` say whether the seat's client owns its hull (stage 3) and how many of its poses the validator refused. **The mailbox row is the one to read when inputs feel lost**: a `depth` pinned at `BUFFER_MAX` means the client is running ahead and the oldest intents are being dropped, while a climbing `starvations` means it is not stamping far enough ahead and the tick is repeating its last intent.",
-        schema: CODE_ONLY,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_open",
-        description: "Open a room with no client at all and start its round, so a scenario needs no window and no socket: `seats` bot seats are taken (1..=8, each with a mailbox `seat_intent` drives), and the round begins at once rather than waiting for a host to press START. Takes the setup a hosting client takes - a shipped map by name or `map_toml` whole, the mission, and a pinned `seed` so the round replays - plus `tuning`, rows of this room's own (`room_tuning`) the round is set up and fought under from its first tick, `Restart` rows included: `{\"enemy_special_weapon_chance\": 1, \"enemy_special_weapon_emp_share\": 1}` starts it with every enemy carrying an EMP. A bad row refuses the whole call. Replies with the code.",
-        schema: r#"{"type":"object","properties":{"map":{"type":"string","default":"default"},"map_toml":{"type":"string","description":"A whole map, instead of a shipped one by name"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"seed":{"type":"integer"},"seats":{"type":"integer","default":1,"minimum":1,"maximum":8},"tuning":{"type":"object","additionalProperties":{"type":["number","boolean","array"]},"description":"This room's own tuning rows {knob: value}, as `room_tuning` takes them"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_step",
-        description: "Freeze a room's round and advance exactly `ticks` at the fixed 1/60 s timestep, the way the game's `step` drives the local round - so an online round replays deterministically from a pinned seed instead of racing the wall clock. The room stops ticking on real time until `room_resume`; connected clients still get their snapshots, so a window watching it simply sees the round advance in steps. Replies with the events of the step and, by default, a compact snapshot.",
-        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"ticks":{"type":"integer","default":1,"minimum":1,"maximum":100000},"snapshot":{"type":"boolean","default":true},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_resume",
-        description: "Let a frozen room tick on real time again (the opposite of `room_step`).",
-        schema: CODE_ONLY,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "seat_intent",
-        description: "Post an intent into one seat's mailbox for the next `ticks` ticks, exactly as that seat's client would - so a bot seat can be driven, or a real seat's input stood in for. `move_dir`/`face`/`fire` are the human-settable fields the wire carries; nothing else travels. A shell fires once per press and a held trigger can never re-arm it, so set `fire_every=N` to tap every N ticks rather than holding. Posted at the client tick that seat's mailbox is expecting, so the server's `acked` and a client's own replay stay in step.",
-        schema: r#"{"type":"object","required":["code","seat"],"properties":{"code":{"type":"string"},"seat":{"type":"integer","minimum":0,"maximum":7},"ticks":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press on ticks 0, N, 2N... and release in between"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_set_tank",
-        description: "The game's `set_tank` on the room's authoritative round: overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (a special weapon's stock above 0 arms it in place of the one special the tank carries, as its crate would - `sonic_ammo`, `emp_charges`, `gauss_slugs`, `fpv_drones`, `rods`, `wells`, `grenade_ammo`, `missile_ammo`, `plasma_ammo`, `laser_charges`, `minigun_ammo`, `flame_fuel` in seconds), `disabled`/`special_offline` seconds, `charge` (seconds a gauss rail's trigger has been held), `shield_hp`, the speed-boost timer and `portal_cooldown`. `slot` is an owner slot: the seats first (0..seats-1), enemies after, so it arms a seat's hands or an enemy's. Omitted fields are untouched. It reaches every client in the next snapshot - the seat's own window predicts and draws its presses with the weapon from then on. Replies with the tank's row of `room_snapshot`.",
-        schema: r#"{"type":"object","required":["code","slot"],"properties":{"code":{"type":"string"},"slot":{"type":"integer","minimum":0},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"missile_ammo":{"type":"integer"},"grenade_ammo":{"type":"integer"},"sonic_ammo":{"type":"integer"},"emp_charges":{"type":"integer"},"disabled":{"type":"number"},"special_offline":{"type":"number"},"gauss_slugs":{"type":"integer"},"fpv_drones":{"type":"integer"},"rods":{"type":"integer"},"wells":{"type":"integer"},"charge":{"type":"number"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_spawn_pickup",
-        description: "The game's `spawn_pickup` on the room's authoritative round: a crate of `kind` (a map's pickup spelling: health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, bong_health, tower_pack, heat_shield, grenades, sonic_hammer, emp_burst, gauss_rail, fpv_swarm, rod_from_god, gravity_well, air_heli, air_jet) down at the map cell nearest (x, y), in its air drop, for a seat or an enemy to drive over. Not a slot: it never respawns. Refused outside the field, on a solid tile and where a pickup already stands. Draws no RNG. Returns the crate's position.",
-        schema: r#"{"type":"object","required":["code","kind","x","y"],"properties":{"code":{"type":"string"},"kind":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_tuning",
-        description: "This room's own tuning rows, which no other room on the server sees: the room is set up and ticked under the server's table, its seat-count patch and these on top, and every `Welcome` carries them, so a window seated in it predicts and draws with the same numbers. Without `patch` or `reset` it reports `rows` (this room's) and `tuning_patch` (the whole patch its round is fought under). `patch` ({knob: value}, array knobs as `name.label` or the whole array; range-checked, refused whole on any bad row) adds rows, `reset: true` drops them all first. A change in a round is in force from the next tick, each row where the game next reads it - a `live` row at once, a tank's kit (the enemies' special weapons) when the next tank spawns, the wave plan at the next round, so a round's setup goes through `room_open {tuning}` - and every connected window is welcomed again on the live world to take it, its seat and mailbox kept.",
-        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"patch":{"type":"object","additionalProperties":{"type":["number","boolean","array"]}},"reset":{"type":"boolean","default":false}}}"#,
-        read_only: false,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_snapshot",
-        description: "The room's authoritative world as JSON - the reading the game's `snapshot` gives, on the round the server is simulating rather than on a client's replica: every tank with position, rotation, velocity, health, ammo, weapon and (for enemies) role and target, plus projectiles, pickups, bongs, portals and the engagement rings. `detail=full` adds each enemy's AI memory. This is the truth a replica is checked against.",
-        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"detail":{"type":"string","enum":["compact","full"],"default":"compact"}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_events",
-        description: "The room's gameplay events since `since` (0 = everything kept): fired, hit, wreck, ram, pickups, obstacle_destroyed, teleported, round_started, round_ended and the rest - the vocabulary the game's `events` speaks, recorded on the authoritative round. `kinds` keeps only those names, `exclude` drops them. **The way to tell an input that never arrived from a shot the server refused**: no `fired` for a seat that pulled the trigger is the first, a `fired` with nothing after it the second.",
-        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"since":{"type":"integer","default":0},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
-        read_only: true,
-        destructive: false,
-    },
-    ToolSpec {
-        name: "room_close",
-        description: "End a room now: its round stops, its seats are let go and the code stops resolving. For clearing up after a scenario; a room `room_open` made also ages out on its own TTL.",
-        schema: CODE_ONLY,
-        read_only: false,
-        destructive: true,
-    },
-];
+use tools::KEY_NAMES;
+pub use headless::Headless;
+pub use tools::room as room_params;
+pub use tools::{
+    ATTACH, AttachParams, BATCH, BatchParams, HELP, PROBE, Params, Present, ProbeParams, RELOAD, ROOM_TOOLS, STATUS_SECTIONS, TOOLS, ToolSpec, find, help, parse,
+};
 
 /// One queued call from a socket thread; the main loop answers through
 /// `reply` (dropping it without answering reads as "game loop gone").
@@ -654,6 +139,10 @@ struct EventFilter {
 }
 
 impl EventFilter {
+    fn of(kinds: Option<Vec<String>>, exclude: Option<Vec<String>>) -> EventFilter {
+        EventFilter { kinds: kinds.unwrap_or_default(), exclude: exclude.unwrap_or_default() }
+    }
+
     fn keeps(&self, kind: &str) -> bool {
         (self.kinds.is_empty() || self.kinds.iter().any(|k| k == kind)) && !self.exclude.iter().any(|k| k == kind)
     }
@@ -817,6 +306,10 @@ struct PendingStep {
     filter: EventFilter,
     events: Vec<EventRecord>,
     restarted: bool,
+    /// Stop after the frame one of these events happens on (`step {until}`).
+    until: Vec<String>,
+    /// Stop after the frame the round ends on (`step {until_outcome}`).
+    until_outcome: bool,
     reply: Reply,
 }
 
@@ -886,6 +379,8 @@ pub struct DevServer {
     /// hints turn to (`take_hints`, `hud::Hints`); a server with no window
     /// lays its chrome out with it.
     hints: Option<crate::hud::Hints>,
+    /// No window drives this server: `devserver::Headless` does.
+    windowless: bool,
 }
 
 /// A view the `camera` tool pinned: the world point at its centre and how
@@ -960,6 +455,7 @@ impl DevServer {
             drawn_ui: None,
             held_touches: Vec::new(),
             hints: None,
+            windowless: false,
         }
     }
 
@@ -1102,21 +598,19 @@ impl DevServer {
     /// `camera`: pin a view, let it go, or say where it is. A pin's field
     /// left out keeps the one it had (the field's centre at zoom 1 for a
     /// first pin).
-    fn pin_camera(&mut self, params: &Value, session: &Session, field: (f32, f32)) -> Result<Value, String> {
-        if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+    fn pin_camera(&mut self, params: &tools::CameraParams, session: &Session, field: (f32, f32)) -> Result<Value, String> {
+        if params.reset.unwrap_or(false) {
             self.camera = None;
             return Ok(self.camera_json(session, field));
         }
-        let number = |key: &str| -> Result<Option<f32>, String> {
-            match params.get(key) {
-                None | Some(Value::Null) => Ok(None),
-                Some(v) => match v.as_f64() {
-                    Some(n) if n.is_finite() => Ok(Some(n as f32)),
-                    _ => Err(format!("{key} must be a number, got {v}")),
-                },
+        let number = |key: &str, given: Option<f64>| -> Result<Option<f32>, String> {
+            match given {
+                None => Ok(None),
+                Some(n) if n.is_finite() => Ok(Some(n as f32)),
+                Some(n) => Err(format!("{key} must be a number, got {n}")),
             }
         };
-        let (x, y, zoom) = (number("x")?, number("y")?, number("zoom")?);
+        let (x, y, zoom) = (number("x", params.x)?, number("y", params.y)?, number("zoom", params.zoom)?);
         if x.is_some() || y.is_some() || zoom.is_some() {
             let pin = self.camera.unwrap_or(CameraPin { center: Vec2::new(field.0 / 2.0, field.1 / 2.0), zoom: 1.0 });
             let zoom = zoom.unwrap_or(pin.zoom);
@@ -1187,6 +681,18 @@ impl DevServer {
             }),
             _ => plain("whole", Camera::whole(field)),
         }
+    }
+
+    /// `status.host` and `mode.host`: what answers - a window or a
+    /// headless round - with its process and the directory it runs in,
+    /// which is how `bbmcp` tells this checkout's game from another's on
+    /// the same port.
+    fn host_json(&self) -> Value {
+        json!({
+            "kind": if self.windowless { "headless" } else { "window" },
+            "pid": std::process::id(),
+            "cwd": std::env::current_dir().ok().map(|dir| dir.display().to_string()),
+        })
     }
 
     /// The port actually bound (differs from the request only for 0).
@@ -1264,6 +770,7 @@ impl DevServer {
     /// frame of several steps drops none of their events.
     pub fn advance(&mut self, game: &mut Game, input: Input, steps: u32, width: f32, height: f32, after_step: &mut dyn FnMut(&Game)) {
         if let Some(mut step) = self.pending_step.take() {
+            let (mut frames_run, mut stopped) = (0, "frames");
             for i in 0..step.remaining {
                 let mut player1 = step.intent.unwrap_or(input.seat(0));
                 let mut player2 = step.intent2.unwrap_or(input.seat(1));
@@ -1277,10 +784,21 @@ impl DevServer {
                     step.restarted = true;
                 }
                 let mut sink = std::mem::take(&mut step.events);
+                let first = self.next_seq;
                 self.drain_events(game, Some((&mut sink, &step.filter)));
                 step.events = sink;
                 self.record_history(game);
                 after_step(game);
+                frames_run = i + 1;
+                // The frame is whole either way: a stop is between frames.
+                if self.events.iter().rev().take_while(|e| e.seq >= first).any(|e| step.until.contains(&e.kind)) {
+                    stopped = "event";
+                    break;
+                }
+                if step.until_outcome && game.outcome() != crate::simulation::Outcome::Playing {
+                    stopped = "outcome";
+                    break;
+                }
             }
             let snapshot = step.want_snapshot.then(|| to_value(game.debug_snapshot(width, height, step.detail)));
             let _ = step.reply.send(Ok(json!({
@@ -1289,6 +807,8 @@ impl DevServer {
                 "outcome": game.outcome(),
                 "restarted": step.restarted,
                 "lockstep": true,
+                "frames_run": frames_run,
+                "stopped": stopped,
                 "events": step.events,
                 "snapshot": snapshot,
             })));
@@ -1512,13 +1032,8 @@ impl DevServer {
             "enemies_alive": snap.tanks.iter().filter(|t| !t.is_player && !t.wreck).count(),
             "width": width,
             "height": height,
-            "overlays": overlays_json(game),
             "players": game.players.count(),
             "map": map_json(&game.map),
-            "weather": weather_json(game),
-            "camera": self.camera_json(session, (width, height)),
-            "frame_stages": frame_stages_json(),
-            "ui": self.ui_json(session, width, height),
             "mode": session.mode().name(),
             "language": crate::text::language(),
             "back": back_json(session),
@@ -1529,17 +1044,44 @@ impl DevServer {
             // The builder's PLAY HERE spot the local round started from,
             // `null` for a round from the map's own start.
             "play_here": session.game.start_override.map(|(c, r)| [c, r]),
-            "stats": game.round_stats(),
-            "builder": self.builder_json(session, width, height),
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
             "history_frames": self.history.len(),
-            "turns": self.turns_summary(),
         });
         // Past the macro's recursion limit, so set here.
+        status["host"] = self.host_json();
         status["question"] = question_json(session);
         status["map_modding"] = json!(crate::mapstore::enabled());
         status
+    }
+
+    /// `status`: the core (`status()`) plus the sections asked for - the
+    /// heavy parts a caller rarely needs all of (`STATUS_SECTIONS`; `all`
+    /// is every one).
+    fn status_with(&self, session: &Session, width: f32, height: f32, sections: &[String]) -> Result<Value, String> {
+        if let Some(unknown) = sections.iter().find(|name| *name != "all" && !STATUS_SECTIONS.contains(&name.as_str())) {
+            return Err(format!("status: no section is called {unknown:?}; there are {}, or all", STATUS_SECTIONS.join(", ")));
+        }
+        let mut status = self.status(session, width, height);
+        let all = sections.iter().any(|name| name == "all");
+        let game = session.shown();
+        for &section in STATUS_SECTIONS {
+            if !all && !sections.iter().any(|name| name == section) {
+                continue;
+            }
+            status[section] = match section {
+                "camera" => self.camera_json(session, (width, height)),
+                "ui" => self.ui_json(session, width, height),
+                "builder" => self.builder_json(session, width, height),
+                "frame_stages" => frame_stages_json(),
+                "weather" => weather_json(game),
+                "stats" => to_value(game.round_stats()),
+                "turns" => self.turns_summary(),
+                "overlays" => overlays_json(game),
+                _ => unreachable!("every STATUS_SECTIONS name has an arm"),
+            };
+        }
+        Ok(status)
     }
 
     /// `status.builder`: the builder's state - see the `status` tool.
@@ -1569,9 +1111,16 @@ impl DevServer {
 
     fn dispatch(&mut self, session: &mut Session, req: Request, width: f32, height: f32) {
         let Request { method, params, reply } = req;
-        // The game-only tools refuse while the builder is live rather than
-        // touching a frozen round (docs/game-editor-fusion.md section 11).
-        if session.mode() == Driver::Build && GAME_ONLY_TOOLS.contains(&method.as_str()) {
+        // The row is the tool: its parameter struct checks the call, and
+        // its `in_build`/`online` say where it may run.
+        let Some(spec) = find(TOOLS, &method) else {
+            let _ = reply.send(Err(format!("unknown tool {method:?}; `help` lists them")));
+            return;
+        };
+        // A tool of the round refuses while the builder is live rather
+        // than touching a frozen round (docs/game-editor-fusion.md
+        // section 11).
+        if session.mode() == Driver::Build && !spec.in_build {
             let _ = reply.send(Err(format!("{method} needs play mode: the builder is live - call `play` first")));
             return;
         }
@@ -1594,7 +1143,7 @@ impl DevServer {
         // The same refusal for a round that belongs to a room: only the
         // server simulates it, so a write would move the picture and
         // reach nobody.
-        if session.mode() == Driver::Online && ONLINE_REFUSED_TOOLS.contains(&method.as_str()) {
+        if session.mode() == Driver::Online && !spec.online {
             let room = session.online.as_ref().and_then(AnyRound::code).unwrap_or("-----");
             let _ = reply.send(Err(format!(
                 "{method} needs a local round: this window holds a seat in room {room}, whose round only the server \
@@ -1602,6 +1151,11 @@ impl DevServer {
                  `key {{\"key\": \"escape\"}}` to come back to the local round; the reading tools (status, snapshot, \
                  terrain, events, history, nav_grid, field, screenshot) already describe the online one"
             )));
+            return;
+        }
+        // Where it may run is settled; now what it was asked.
+        if let Err(e) = spec.check(&params) {
+            let _ = reply.send(Err(e));
             return;
         }
         // The tools that work on the whole session - the mode switch and
@@ -1619,38 +1173,45 @@ impl DevServer {
         // through it, and only drawing flags.
         let game = session.shown_mut();
         let result = match method.as_str() {
-            "snapshot" => detail_param(&params).map(|d| to_value(game.debug_snapshot(width, height, d))),
-            "events" => event_filter(&params).and_then(|filter| {
-                let since = params.get("since").and_then(Value::as_u64).unwrap_or(0);
-                let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
+            "snapshot" => parse::<tools::SnapshotParams>(&params)
+                .and_then(|p| detail_of(p.detail.as_deref()))
+                .map(|d| to_value(game.debug_snapshot(width, height, d))),
+            "events" => parse::<tools::EventsParams>(&params).map(|p| {
+                let filter = EventFilter::of(p.kinds, p.exclude);
+                let since = p.since.unwrap_or(0);
+                let limit = p.limit.unwrap_or(200) as usize;
                 let events: Vec<&EventRecord> =
                     self.events.iter().filter(|e| e.seq > since && filter.keeps(&e.kind)).take(limit).collect();
                 let next = events.last().map_or(since, |e| e.seq);
-                Ok(json!({ "next": next, "events": events }))
+                json!({ "next": next, "events": events })
             }),
             "step" => {
                 if self.pending_step.is_some() {
                     Err("a step is already in progress".to_string())
                 } else {
-                    let intents = parse_intent(&params, "").and_then(|p1| parse_intent(&params, "p2_").map(|p2| (p1, p2)));
-                    match (frames_param(&params, 1), intents, detail_param(&params), event_filter(&params)) {
-                        (Ok(remaining), Ok((intent, intent2)), Ok(detail), Ok(filter)) => {
+                    let armed = parse::<tools::StepParams>(&params).and_then(|p| {
+                        Ok(PendingStep {
+                            remaining: frames_of(p.frames, 1)?,
+                            intent: p.intent.seat(0)?,
+                            intent2: p.intent.seat(1)?,
+                            fire_every: p.fire_every.filter(|&n| n >= 1),
+                            want_snapshot: p.snapshot.unwrap_or(false),
+                            detail: detail_of(p.detail.as_deref())?,
+                            filter: EventFilter::of(p.kinds, p.exclude),
+                            events: Vec::new(),
+                            restarted: false,
+                            until: p.until.unwrap_or_default(),
+                            until_outcome: p.until_outcome.unwrap_or(false),
+                            reply: reply.clone(),
+                        })
+                    });
+                    match armed {
+                        Ok(step) => {
                             self.lockstep = true;
-                            self.pending_step = Some(PendingStep {
-                                remaining,
-                                intent,
-                                intent2,
-                                fire_every: params.get("fire_every").and_then(Value::as_u64).filter(|&n| n >= 1),
-                                want_snapshot: params.get("snapshot").and_then(Value::as_bool).unwrap_or(true),
-                                detail,
-                                filter,
-                                events: Vec::new(),
-                                restarted: false,
-                                reply,
-                            });
+                            self.pending_step = Some(step);
                             return;
                         }
-                        (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => Err(e),
+                        Err(e) => Err(e),
                     }
                 }
             }
@@ -1659,259 +1220,199 @@ impl DevServer {
                  lamp drive - give the seat up with `key {{\"key\": \"escape\"}}` to drive the local round",
                 online_refused.unwrap_or_default()
             )),
-            "input" => match (parse_intent(&params, ""), parse_intent(&params, "p2_"), frames_param(&params, 1)) {
-                (Ok(intent), Ok(intent2), Ok(frames)) => {
-                    if let Some(intent) = intent {
-                        self.injected = Some((intent, frames.min(u32::MAX as u64) as u32));
-                    }
-                    if let Some(intent) = intent2 {
-                        self.injected2 = Some((intent, frames.min(u32::MAX as u64) as u32));
-                    }
-                    self.cycle_overlays_pending = params.get("cycle_overlays").and_then(Value::as_bool).unwrap_or(false);
-                    Ok(json!({ "frames": frames, "cycle_overlays": self.cycle_overlays_pending }))
+            "input" => parse::<tools::InputParams>(&params).and_then(|p| {
+                let (intent, intent2, frames) = (p.intent.seat(0)?, p.intent.seat(1)?, frames_of(p.frames, 1)?);
+                let held = frames.min(u32::MAX as u64) as u32;
+                if let Some(intent) = intent {
+                    self.injected = Some((intent, held));
                 }
-                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
-            },
+                if let Some(intent) = intent2 {
+                    self.injected2 = Some((intent, held));
+                }
+                self.cycle_overlays_pending = p.cycle_overlays.unwrap_or(false);
+                Ok(json!({ "frames": frames, "cycle_overlays": self.cycle_overlays_pending }))
+            }),
             "screenshot" => {
                 if self.pending_shot.is_some() {
                     Err("a screenshot is already pending".to_string())
                 } else {
-                    let scale = params.get("scale").and_then(Value::as_f64).unwrap_or(0.5) as f32;
-                    let source = match params.get("source").and_then(Value::as_str).unwrap_or("screen") {
-                        "screen" => Ok(ShotSource::Screen),
-                        "scene" => Ok(ShotSource::Scene),
-                        other => Err(format!("unknown source {other:?} (screen|scene)")),
-                    };
-                    match source {
-                        Ok(source) => {
-                            if let Some(flags) = params.get("overlays") {
-                                if let Err(e) = apply_overlays(game, flags) {
-                                    let _ = reply.send(Err(e));
-                                    return;
-                                }
-                            }
-                            self.pending_shot = Some(PendingShot { scale: scale.clamp(0.1, 1.0), source, presented: false, reply });
+                    let armed = parse::<tools::ScreenshotParams>(&params).and_then(|p| {
+                        let source = match p.source.as_deref().unwrap_or("screen") {
+                            "screen" => ShotSource::Screen,
+                            "scene" => ShotSource::Scene,
+                            other => return Err(format!("unknown source {other:?} (screen|scene)")),
+                        };
+                        if let Some(flags) = &p.overlays {
+                            flags.apply(&mut game.debug_overlays);
+                        }
+                        Ok(PendingShot { scale: (p.scale.unwrap_or(0.5) as f32).clamp(0.1, 1.0), source, presented: false, reply: reply.clone() })
+                    });
+                    match armed {
+                        Ok(shot) => {
+                            self.pending_shot = Some(shot);
                             return;
                         }
                         Err(e) => Err(e),
                     }
                 }
             }
-            "overlays" => apply_overlays(game, &params).map(|()| overlays_json(game)),
+            "overlays" => parse::<tools::OverlayFlags>(&params).map(|flags| {
+                flags.apply(&mut game.debug_overlays);
+                overlays_json(game)
+            }),
             "nav_grid" => Ok(json!({ "grid": game.nav_grid_ascii(width, height) })),
-            "field" => {
-                let target = match params.get("target").and_then(Value::as_str).unwrap_or("player") {
-                    "player" => Ok(FieldTarget::Player(0)),
-                    "player2" => Ok(FieldTarget::Player(1)),
-                    "bong" => Ok(FieldTarget::Bong),
-                    other => Err(format!("unknown field target {other:?}: player, player2 or bong")),
+            "field" => parse::<tools::FieldParams>(&params).and_then(|p| {
+                let target = match p.target.as_deref().unwrap_or("player") {
+                    "player" => FieldTarget::Player(0),
+                    "player2" => FieldTarget::Player(1),
+                    "bong" => FieldTarget::Bong,
+                    other => return Err(format!("unknown field target {other:?}: player, player2 or bong")),
                 };
-                target.and_then(|target| {
-                    game.field_dump(width, height, target)
-                        .map(|dump| serde_json::to_value(dump).expect("FieldDump serialises"))
-                        .ok_or_else(|| format!("no {target:?} in the round to build a field toward"))
-                })
-            }
-            "terrain" => terrain_json(game, &params),
+                game.field_dump(width, height, target)
+                    .map(|dump| serde_json::to_value(dump).expect("FieldDump serialises"))
+                    .ok_or_else(|| format!("no {target:?} in the round to build a field toward"))
+            }),
+            "terrain" => parse::<tools::TerrainParams>(&params).and_then(|p| terrain_json(game, &p)),
             "map_get" => game.map.to_toml_string().map(|toml| {
                 let mut v = map_json(&game.map);
                 v["toml"] = Value::String(toml);
                 v
             }),
-            "history" => {
-                let last = params.get("last").and_then(Value::as_u64).unwrap_or(600).clamp(1, HISTORY_FRAMES as u64) as usize;
-                let every = params.get("every").and_then(Value::as_u64).unwrap_or(10).max(1) as usize;
-                let slot = params.get("slot").and_then(Value::as_u64).map(|s| s as usize);
-                Ok(self.history_json(last, every, slot))
-            }
-            "teleport" => match (slot_param(&params), f32_param(&params, "x"), f32_param(&params, "y")) {
-                (Ok(slot), Some(x), Some(y)) => {
-                    let facing = match params.get("facing").and_then(Value::as_str) {
-                        Some(s) => Dir::parse(s).map(|d| Some(d.rotation())).ok_or_else(|| format!("unknown facing {s:?}")),
-                        None => Ok(None),
-                    };
-                    facing
-                        .and_then(|rotation| game.debug_teleport(slot, Position::new(x, y), rotation))
-                        .map(|()| json!({ "slot": slot, "x": x, "y": y }))
-                }
-                (Err(e), _, _) => Err(e),
-                _ => Err("x and y are required".to_string()),
-            },
-            "set_tank" => slot_param(&params).and_then(|slot| {
-                // `TankPatch` is `serde(default)`, so an unknown key would
-                // parse, do nothing, and still report success. Catch the one
-                // field that was renamed rather than let a cached schema or
-                // an old script silently no-op.
-                if params.get("shield_timer").is_some() {
-                    return Err("shield_timer is not settable: a pickup sets the shield's clock - use shield_hp (damage points, over shield_capacity), which no clock ends".to_string());
-                }
-                let patch: TankPatch = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
-                game.debug_set_tank(slot, &patch)?;
+            "history" => parse::<tools::HistoryParams>(&params).map(|p| {
+                let last = p.last.unwrap_or(600).clamp(1, HISTORY_FRAMES as u64) as usize;
+                let every = p.every.unwrap_or(10).max(1) as usize;
+                self.history_json(last, every, p.slot.map(|s| s as usize))
+            }),
+            "teleport" => parse::<tools::TeleportParams>(&params).and_then(|p| {
+                let rotation = match p.facing.as_deref() {
+                    Some(s) => Some(Dir::parse(s).map(|d| d.rotation()).ok_or_else(|| format!("unknown facing {s:?}"))?),
+                    None => None,
+                };
+                let (slot, x, y) = (p.slot as usize, p.x as f32, p.y as f32);
+                game.debug_teleport(slot, Position::new(x, y), rotation).map(|()| json!({ "slot": slot, "x": x, "y": y }))
+            }),
+            "set_tank" => parse::<tools::SetTankParams>(&params).and_then(|p| {
+                let slot = p.slot as usize;
+                game.debug_set_tank(slot, &p.patch)?;
                 let snap = game.debug_snapshot(width, height, Detail::Compact);
                 Ok(to_value(snap.tanks.into_iter().find(|t| t.slot == slot)))
             }),
-            "kill" => slot_param(&params).and_then(|slot| game.debug_kill(slot).map(|()| json!({ "slot": slot, "applied_on_next_frame": true }))),
-            "spawn_enemy" => match (f32_param(&params, "x"), f32_param(&params, "y")) {
-                (Some(x), Some(y)) => {
-                    let row = params.get("row").and_then(Value::as_i64).map(|r| r as i32);
-                    let role = match params.get("role") {
-                        None | Some(Value::Null) => Ok(None),
-                        Some(v) => serde_json::from_value::<crate::ai::Role>(v.clone())
-                            .map(Some)
-                            .map_err(|_| format!("role: expected player, hunter or guard, got {v}")),
-                    };
-                    role.and_then(|role| {
-                        game.debug_spawn_enemy(Position::new(x, y), row, role).map(|slot| json!({ "slot": slot }))
-                    })
-                }
-                _ => Err("x and y are required".to_string()),
-            },
-            "spawn_pickup" => {
-                let kind = params.get("kind").and_then(Value::as_str).unwrap_or("");
-                match (crate::pickup::PickupKind::parse(kind), f32_param(&params, "x"), f32_param(&params, "y")) {
-                    (None, _, _) => Err(format!("kind: no pickup is called {kind:?}")),
-                    (Some(kind), Some(x), Some(y)) => {
-                        game.debug_spawn_pickup(kind, Position::new(x, y)).map(|at| json!({ "kind": kind.name(), "x": at.x, "y": at.y }))
-                    }
-                    _ => Err("x and y are required".to_string()),
-                }
-            }
-            "rod_call" => match (f32_param(&params, "x"), f32_param(&params, "y")) {
-                (Some(x), Some(y)) => {
-                    let enemy = params.get("enemy").and_then(Value::as_bool).unwrap_or(false);
-                    let at = Position::new(x, y);
-                    match game.debug_call_rod(at, enemy) {
-                        Some(id) => {
-                            let cell = crate::map::world_to_cell(at);
-                            let land = game.zones().iter().find(|z| z.id == id).map_or(0.0, |z| z.until);
-                            Ok(json!({ "id": id, "cell": [cell.0, cell.1], "land": land }))
-                        }
-                        None => Err("(x, y) is off the field".to_string()),
-                    }
-                }
-                _ => Err("x and y are required".to_string()),
-            },
-            "well_at" => match (f32_param(&params, "x"), f32_param(&params, "y")) {
-                (Some(x), Some(y)) => {
-                    let enemy = params.get("enemy").and_then(Value::as_bool).unwrap_or(false);
-                    match game.debug_well(Position::new(x, y), enemy) {
-                        Some((id, until)) => Ok(json!({ "id": id, "x": x, "y": y, "pulls_at": until })),
-                        None => Err("(x, y) is off the field or inside a solid cell".to_string()),
-                    }
-                }
-                _ => Err("x and y are required".to_string()),
-            },
-            "tuning_get" => {
-                let diff_only = params.get("diff_only").and_then(Value::as_bool).unwrap_or(false);
-                let text = if diff_only { tuning::diff_json() } else { tuning::current_json() };
+            "kill" => parse::<tools::SlotParams>(&params).and_then(|p| {
+                let slot = p.slot as usize;
+                game.debug_kill(slot).map(|()| json!({ "slot": slot, "applied_on_next_frame": true }))
+            }),
+            "spawn_enemy" => parse::<tools::SpawnEnemyParams>(&params).and_then(|p| {
+                let role = match p.role.as_deref() {
+                    None => None,
+                    Some(name) => Some(
+                        serde_json::from_value::<crate::ai::Role>(json!(name))
+                            .map_err(|_| format!("role: expected player, hunter or guard, got {name:?}"))?,
+                    ),
+                };
+                game.debug_spawn_enemy(Position::new(p.x as f32, p.y as f32), p.row.map(|r| r as i32), role).map(|slot| json!({ "slot": slot }))
+            }),
+            "spawn_pickup" => parse::<tools::SpawnPickupParams>(&params).and_then(|p| {
+                let kind = crate::pickup::PickupKind::parse(&p.kind).ok_or_else(|| format!("kind: no pickup is called {:?}", p.kind))?;
+                game.debug_spawn_pickup(kind, Position::new(p.x as f32, p.y as f32)).map(|at| json!({ "kind": kind.name(), "x": at.x, "y": at.y }))
+            }),
+            "rod_call" => parse::<tools::StrikeParams>(&params).and_then(|p| {
+                let at = Position::new(p.x as f32, p.y as f32);
+                let id = game.debug_call_rod(at, p.enemy.unwrap_or(false)).ok_or("(x, y) is off the field")?;
+                let cell = crate::map::world_to_cell(at);
+                let land = game.zones().iter().find(|z| z.id == id).map_or(0.0, |z| z.until);
+                Ok(json!({ "id": id, "cell": [cell.0, cell.1], "land": land }))
+            }),
+            "well_at" => parse::<tools::StrikeParams>(&params).and_then(|p| {
+                let (x, y) = (p.x as f32, p.y as f32);
+                let (id, until) =
+                    game.debug_well(Position::new(x, y), p.enemy.unwrap_or(false)).ok_or("(x, y) is off the field or inside a solid cell")?;
+                Ok(json!({ "id": id, "x": x, "y": y, "pulls_at": until }))
+            }),
+            "tuning_get" => parse::<tools::TuningGetParams>(&params).and_then(|p| {
+                let text = if p.diff_only.unwrap_or(false) { tuning::diff_json() } else { tuning::current_json() };
                 serde_json::from_str(&text).map_err(|e| e.to_string())
-            }
-            "tuning_set" => match params.get("patch") {
-                Some(patch) if patch.is_object() => tuning::submit_json(&patch.to_string()).map(|n| json!({ "staged": n })),
-                _ => Err("params.patch must be an object of {knob: value}".to_string()),
-            },
+            }),
+            "tuning_set" => parse::<tools::TuningSetParams>(&params)
+                .and_then(|p| tuning::submit_json(&json!(p.patch).to_string()).map(|n| json!({ "staged": n }))),
             "tuning_reset" => {
                 tuning::submit_reset();
                 Ok(json!({ "reset": true }))
             }
-            "tuning_schema" => {
-                let group = params.get("group").and_then(Value::as_str);
-                let needle = params.get("name_contains").and_then(Value::as_str);
-                serde_json::from_str::<Vec<Value>>(&tuning::schema_json())
-                    .map_err(|e| e.to_string())
-                    .map(|rows| {
-                        let rows: Vec<Value> = rows
-                            .into_iter()
-                            .filter(|r| group.is_none_or(|g| r.get("group").and_then(Value::as_str) == Some(g)))
-                            .filter(|r| {
-                                needle.is_none_or(|n| r.get("name").and_then(Value::as_str).is_some_and(|name| name.contains(n)))
-                            })
-                            .collect();
-                        json!({ "count": rows.len(), "rows": rows })
-                    })
-            }
-            other => Err(format!("unknown method {other:?}; see TOOLS")),
+            "tuning_schema" => parse::<tools::TuningSchemaParams>(&params).and_then(|p| {
+                let rows: Vec<Value> = serde_json::from_str(&tuning::schema_json()).map_err(|e| e.to_string())?;
+                let named = |r: &Value, key: &str| r.get(key).and_then(Value::as_str).map(str::to_string);
+                let rows: Vec<Value> = rows
+                    .into_iter()
+                    .filter(|r| p.group.is_none() || named(r, "group") == p.group)
+                    .filter(|r| p.name_contains.as_ref().is_none_or(|n| named(r, "name").is_some_and(|name| name.contains(n.as_str()))))
+                    .collect();
+                Ok(json!({ "count": rows.len(), "rows": rows }))
+            }),
+            other => Err(format!("{other} is in the table and has no handler")),
         };
         let _ = reply.send(result);
     }
 
-    fn restart(&mut self, session: &mut Session, params: &Value) -> Result<Value, String> {
+    fn restart(&mut self, session: &mut Session, params: &tools::RestartParams) -> Result<Value, String> {
         let game = &mut session.game;
-        match params.get("seed") {
-            None | Some(Value::Null) => {}
-            Some(Value::Number(n)) => game.seed_override = Some(n.as_u64().ok_or("seed must be a non-negative integer")?),
-            Some(Value::String(s)) => game.seed_override = Some(parse_seed(s)?),
-            Some(other) => return Err(format!("seed must be a number or string, got {other}")),
+        match &params.seed {
+            None => {}
+            Some(tools::SeedParam::Number(n)) => game.seed_override = Some(*n),
+            Some(tools::SeedParam::Text(s)) => game.seed_override = Some(parse_seed(s)?),
         }
-        if let Some(n) = params.get("enemies") {
-            game.enemy_count_override = Some(n.as_u64().ok_or("enemies must be an integer")? as usize);
+        if let Some(n) = params.enemies {
+            game.enemy_count_override = Some(n as usize);
         }
         // A chassis as a row (the sheet order) or as its name (the spelling
         // maps, `builder_settings` and `--tank` use); not both.
-        let chassis = |name_key: &str, row_key: &str| -> Result<Option<i32>, String> {
-            match (params.get(name_key).filter(|v| !v.is_null()), params.get(row_key).filter(|v| !v.is_null())) {
+        let chassis = |name_key: &str, name: &Option<String>, row_key: &str, row: Option<i64>| -> Result<Option<i32>, String> {
+            match (name, row) {
                 (Some(_), Some(_)) => Err(format!("give {name_key} (a name) or {row_key} (0-11), not both")),
-                (Some(Value::String(s)), None) => parse_tank(s).map(|k| Some(k.row())).ok_or_else(|| {
+                (Some(s), None) => parse_tank(s).map(|k| Some(k.row())).ok_or_else(|| {
                     format!("unknown {name_key} {s:?}; one of {}", TankKind::ALL.iter().map(|k| k.name()).collect::<Vec<_>>().join(", "))
                 }),
-                (Some(other), None) => Err(format!("{name_key} must be a chassis name, got {other}")),
-                (None, Some(row)) => Ok(Some(row.as_i64().ok_or_else(|| format!("{row_key} must be an integer"))? as i32)),
+                (None, Some(row)) => Ok(Some(row as i32)),
                 (None, None) => Ok(None),
             }
         };
-        if let Some(row) = chassis("tank", "tank_row")? {
+        if let Some(row) = chassis("tank", &params.tank, "tank_row", params.tank_row)? {
             game.player_row_override = Some(row);
         }
-        if let Some(row) = chassis("tank2", "tank2_row")? {
+        if let Some(row) = chassis("tank2", &params.tank2, "tank2_row", params.tank2_row)? {
             game.player2_row_override = Some(row);
         }
-        if let Some(n) = params.get("players") {
-            game.players = n
-                .as_u64()
-                .and_then(|n| PlayerCount::from_count(n as usize))
-                .ok_or_else(|| format!("players must be 1 to {}, got {n}", crate::MAX_SEATS))?;
+        if let Some(n) = params.players {
+            game.players =
+                PlayerCount::from_count(n as usize).ok_or_else(|| format!("players must be 1 to {}, got {n}", crate::MAX_SEATS))?;
         }
-        let enum_param = |key: &str| -> Result<Option<String>, String> {
-            match params.get(key) {
-                None | Some(Value::Null) => Ok(None),
-                Some(Value::String(s)) => Ok(Some(s.clone())),
-                Some(other) => Err(format!("{key} must be a string, got {other}")),
-            }
-        };
-        let u32_param = |key: &str| -> Result<Option<u32>, String> {
-            match params.get(key) {
-                None | Some(Value::Null) => Ok(None),
-                Some(v) => v.as_u64().map(|n| Some(n as u32)).ok_or_else(|| format!("{key} must be a non-negative integer")),
-            }
-        };
         use clap::ValueEnum;
-        if let Some(m) = enum_param("mission")? {
-            game.level_overrides.mission = Some(Mission::from_str(&m, true).map_err(|e| format!("mission: {e}"))?);
+        if let Some(m) = &params.mission {
+            game.level_overrides.mission = Some(Mission::from_str(m, true).map_err(|e| format!("mission: {e}"))?);
         }
-        if let Some(k) = enum_param("spawn")? {
-            game.level_overrides.spawn = Some(SpawnKind::from_str(&k, true).map_err(|e| format!("spawn: {e}"))?);
+        if let Some(k) = &params.spawn {
+            game.level_overrides.spawn = Some(SpawnKind::from_str(k, true).map_err(|e| format!("spawn: {e}"))?);
         }
-        if let Some(t) = enum_param("tier_start")? {
-            game.level_overrides.tier_start = Some(Tier::from_str(&t, true).map_err(|e| format!("tier_start: {e}"))?);
+        if let Some(t) = &params.tier_start {
+            game.level_overrides.tier_start = Some(Tier::from_str(t, true).map_err(|e| format!("tier_start: {e}"))?);
         }
-        if let Some(t) = enum_param("tier_end")? {
-            game.level_overrides.tier_end = Some(Tier::from_str(&t, true).map_err(|e| format!("tier_end: {e}"))?);
+        if let Some(t) = &params.tier_end {
+            game.level_overrides.tier_end = Some(Tier::from_str(t, true).map_err(|e| format!("tier_end: {e}"))?);
         }
-        if let Some(n) = u32_param("waves")? {
+        if let Some(n) = params.waves {
             game.level_overrides.waves = Some(n);
         }
-        if let Some(n) = u32_param("wave_size")? {
+        if let Some(n) = params.wave_size {
             game.level_overrides.wave_size = Some(n);
         }
-        if let Some(n) = u32_param("wave_growth")? {
+        if let Some(n) = params.wave_growth {
             game.level_overrides.wave_growth = Some(n);
         }
         // Headless default: no frozen intro, so `step` counts are play
         // frames. Ask for it to screenshot the banner.
-        game.show_intro = params.get("intro").and_then(Value::as_bool).unwrap_or(false);
+        game.show_intro = params.intro.unwrap_or(false);
         // A restart is a play-mode thing: a builder session ends here, and
         // a new map replaces the builder's canvas as well as the round's.
-        if let Some(map) = map_param(params)? {
+        if let Some(map) = map_param(params.map.as_deref(), params.map_toml.as_deref())? {
             session.replace_map(map);
         }
         session.driver = Driver::Play;
@@ -1929,15 +1430,15 @@ impl DevServer {
     /// (docs/weather.md) - frozen in lockstep as `restart` leaves it. A
     /// room's round is fought under the room's sky, so an online window
     /// only reports.
-    fn weather(&mut self, session: &mut Session, params: &Value) -> Result<Value, String> {
-        if let Some(sky) = weather_name(params)? {
+    fn weather(&mut self, session: &mut Session, params: &tools::WeatherParams) -> Result<Value, String> {
+        if let Some(sky) = weather_name(params.name.as_ref())? {
             if session.mode() == Driver::Online {
                 return Err("weather: this window holds a seat in a room, whose round is fought under the room's map's sky - \
                             only reporting works here"
                     .into());
             }
             let game = &mut session.game;
-            if params.get("restart").and_then(Value::as_bool).unwrap_or(false) {
+            if params.restart.unwrap_or(false) {
                 game.map.weather = sky;
                 let pinned = game.seed_override.replace(game.round_seed());
                 let (width, height) = game.map.field_size();
@@ -1974,7 +1475,8 @@ impl DevServer {
         height: f32,
     ) -> Option<Result<Value, String>> {
         let result = match method {
-            "status" => Ok(self.status(session, width, height)),
+            "status" => parse::<tools::StatusParams>(params)
+                .and_then(|p| self.status_with(session, width, height, p.sections.as_deref().unwrap_or_default())),
             "pause" => {
                 self.lockstep = true;
                 Ok(self.status(session, width, height))
@@ -1984,20 +1486,24 @@ impl DevServer {
                 session.game.paused = false;
                 Ok(self.status(session, width, height))
             }
-            "restart" => self.restart(session, params),
-            "weather" => self.weather(session, params),
-            "camera" => self.pin_camera(params, session, (width, height)),
-            "lint" => lint_json(session, params.get("source").and_then(Value::as_str)),
-            "mode" => Ok(mode_json(session)),
-            "lang" => {
-                if let Some(tag) = params.get("tag").and_then(Value::as_str) {
+            "restart" => parse::<tools::RestartParams>(params).and_then(|p| self.restart(session, &p)),
+            "weather" => parse::<tools::WeatherParams>(params).and_then(|p| self.weather(session, &p)),
+            "camera" => parse::<tools::CameraParams>(params).and_then(|p| self.pin_camera(&p, session, (width, height))),
+            "lint" => parse::<tools::LintParams>(params).and_then(|p| lint_json(session, &p)),
+            "mode" => {
+                let mut mode = mode_json(session);
+                mode["host"] = self.host_json();
+                Ok(mode)
+            }
+            "lang" => parse::<tools::LangParams>(params).map(|p| {
+                if let Some(tag) = p.tag.as_deref() {
                     crate::text::set_language(tag);
                 }
-                Ok(json!({
+                json!({
                     "language": crate::text::language(),
                     "shipped": crate::text::SHIPPED_LANGS.iter().map(|(tag, _)| *tag).collect::<Vec<_>>(),
-                }))
-            }
+                })
+            }),
             "build" => {
                 session.press_build();
                 Ok(mode_json(session))
@@ -2006,56 +1512,60 @@ impl DevServer {
                 session.back();
                 Ok(mode_json(session))
             }
-            "players" => match params.get("count") {
-                None | Some(Value::Null) => {
+            "players" => parse::<tools::PlayersParams>(params).and_then(|p| match p.count {
+                None => {
                     session.press_players();
                     Ok(mode_json(session))
                 }
-                Some(v) => match v.as_u64().and_then(|n| PlayerCount::from_count(n as usize)) {
-                    Some(count) => {
-                        let before = session.game.players;
-                        if !session.players_dialog {
-                            session.press_players();
-                        }
-                        session.answer_players(count);
-                        if session.game.players != before {
-                            self.round_started(session);
-                        }
-                        Ok(mode_json(session))
+                Some(n) => {
+                    let count =
+                        PlayerCount::from_count(n as usize).ok_or_else(|| format!("count must be 1 to {}, got {n}", crate::MAX_SEATS))?;
+                    let before = session.game.players;
+                    if !session.players_dialog {
+                        session.press_players();
                     }
-                    None => Err(format!("count must be 1 to {}, got {v}", crate::MAX_SEATS)),
-                },
-            },
-            "play" => {
+                    session.answer_players(count);
+                    if session.game.players != before {
+                        self.round_started(session);
+                    }
+                    Ok(mode_json(session))
+                }
+            }),
+            "play" => parse::<tools::PlayParams>(params).and_then(|p| {
                 if session.mode() == Driver::Play {
                     Err("already in play mode: `restart` starts a fresh round here, `build` enters the builder".to_string())
                 } else {
-                    session.game.show_intro = params.get("intro").and_then(Value::as_bool).unwrap_or(false);
+                    session.game.show_intro = p.intro.unwrap_or(false);
                     session.play();
                     self.round_started(session);
                     Ok(self.status(session, width, height))
                 }
-            }
-            "builder_tool" => match (tool_param(params), shape_param(params)) {
-                (Ok(tool), Ok(shape)) => {
-                    brush_from_params(&mut session.builder, tool, shape);
-                    Ok(tool_json(&session.builder))
+            }),
+            "builder_tool" => parse::<tools::BuilderToolParams>(params).and_then(|p| {
+                let (tool, shape) = (tool_named(p.tool.as_deref())?, shape_named(p.shape.as_deref())?);
+                brush_from_params(&mut session.builder, tool, shape);
+                Ok(tool_json(&session.builder))
+            }),
+            "builder_paint" => parse::<tools::BuilderPaintParams>(params).and_then(|p| {
+                if p.cells.is_empty() {
+                    return Err("cells must hold at least one [col, row] pair".to_string());
                 }
-                (Err(e), _) | (_, Err(e)) => Err(e),
-            },
-            "builder_paint" => match (cells_param(params), button_param(params), tool_param(params), shape_param(params)) {
-                (Ok(cells), Ok(right), Ok(tool), Ok(shape)) => {
-                    brush_from_params(&mut session.builder, tool, shape);
-                    let changes = session.builder.stroke(&cells, right);
-                    Ok(json!({
-                        "changes": changes_json(&changes),
-                        "undo_depth": session.builder.history().undo_depth(),
-                        "message": session.builder.status(),
-                    }))
-                }
-                (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => Err(e),
-            },
-            "builder_undo" | "builder_redo" => steps_param(params).map(|steps| {
+                let cells: Vec<(i32, i32)> = p.cells.iter().map(|c| (c[0] as i32, c[1] as i32)).collect();
+                let (right, tool, shape) = (right_button(p.button.as_deref())?, tool_named(p.tool.as_deref())?, shape_named(p.shape.as_deref())?);
+                brush_from_params(&mut session.builder, tool, shape);
+                let changes = session.builder.stroke(&cells, right);
+                Ok(json!({
+                    "changes": changes_json(&changes),
+                    "undo_depth": session.builder.history().undo_depth(),
+                    "message": session.builder.status(),
+                }))
+            }),
+            "builder_undo" | "builder_redo" => parse::<tools::StepsParams>(params).and_then(|p| {
+                let steps = match p.steps {
+                    None => 1,
+                    Some(n) if n >= 1 => n,
+                    Some(n) => return Err(format!("steps must be a positive integer, got {n}")),
+                };
                 let undo = method == "builder_undo";
                 let mut done = 0;
                 for _ in 0..steps {
@@ -2076,46 +1586,32 @@ impl DevServer {
                     "cells": changes_json(&last.map(|s| s.cells()).unwrap_or_default()),
                 });
                 v[if undo { "undone" } else { "redone" }] = json!(done);
-                v
+                Ok(v)
             }),
-            "builder_settings" => builder_settings(session, params),
-            "builder_map" => {
-                let by_name = match params.get("name") {
-                    None | Some(Value::Null) => Ok(None),
-                    Some(Value::String(n)) => Ok(Some(n.clone())),
-                    Some(other) => Err(format!("name must be a string, got {other}")),
-                };
-                let clear = params.get("clear").and_then(Value::as_bool).unwrap_or(false);
-                let loads_one = params.get("map").is_some() || params.get("map_toml").is_some();
-                by_name.and_then(|name| match name {
-                    _ if clear => {
-                        if name.is_some() || loads_one {
-                            return Err("clear takes no map: give one of name, map, map_toml or clear".to_string());
-                        }
-                        session.builder.clear();
-                        builder_map_json(&session.builder)
+            "builder_settings" => parse::<tools::BuilderSettingsParams>(params).and_then(|p| builder_settings(session, &p)),
+            "builder_map" => parse::<tools::BuilderMapParams>(params).and_then(|p| {
+                let loads_one = p.map.is_some() || p.map_toml.is_some();
+                if p.clear.unwrap_or(false) {
+                    if p.name.is_some() || loads_one {
+                        return Err("clear takes no map: give one of name, map, map_toml or clear".to_string());
                     }
-                    Some(name) => {
-                        if loads_one {
-                            return Err("give one of name, map or map_toml".to_string());
-                        }
-                        session.builder.load_named(&name)?;
-                        builder_map_json(&session.builder)
+                    session.builder.clear();
+                } else if let Some(name) = &p.name {
+                    if loads_one {
+                        return Err("give one of name, map or map_toml".to_string());
                     }
-                    None => map_param(params).and_then(|map| {
-                        if let Some(map) = map {
-                            session.builder.load(map);
-                        }
-                        builder_map_json(&session.builder)
-                    }),
-                })
-            }
-            "builder_camera" => {
+                    session.builder.load_named(name)?;
+                } else if let Some(map) = map_param(p.map.as_deref(), p.map_toml.as_deref())? {
+                    session.builder.load(map);
+                }
+                builder_map_json(&session.builder)
+            }),
+            "builder_camera" => parse::<tools::BuilderCameraParams>(params).map(|p| {
                 let b = &mut session.builder;
-                if params.get("fit").and_then(Value::as_bool).unwrap_or(false) {
+                if p.fit.unwrap_or(false) {
                     b.fit_camera();
                 } else {
-                    let (x, y, zoom) = (f32_param(params, "x"), f32_param(params, "y"), f32_param(params, "zoom"));
+                    let (x, y, zoom) = (p.x.map(|v| v as f32), p.y.map(|v| v as f32), p.zoom.map(|v| v as f32));
                     if x.is_some() || y.is_some() || zoom.is_some() {
                         let vp = b.viewport();
                         let center = b.camera().center(&vp);
@@ -2123,8 +1619,8 @@ impl DevServer {
                         b.frame_camera(Vec2::new(x.unwrap_or(center.x), y.unwrap_or(center.y)), zoom);
                     }
                 }
-                Ok(builder_camera_json(&session.builder))
-            }
+                builder_camera_json(&session.builder)
+            }),
             "builder_touch" => {
                 if session.mode() != Driver::Build {
                     Err("builder_touch needs build mode - call `build` first".to_string())
@@ -2132,8 +1628,9 @@ impl DevServer {
                     // Fingers on the glass: the hints turn to taps.
                     self.hints = Some(crate::hud::Hints::Touch);
                     let frame = self.builder_frame(session, width, height);
-                    let hold = params.get("hold").and_then(Value::as_bool).unwrap_or(false);
-                    touch_frames(params).map(|(frames, dt)| {
+                    parse::<tools::BuilderTouchParams>(params).and_then(|p| {
+                        let hold = p.hold.unwrap_or(false);
+                        let (frames, dt) = touch_frames(&p)?;
                         // Fingers a held call left down are still down.
                         let mut down = !self.held_touches.is_empty();
                         let mut last = Vec::new();
@@ -2156,22 +1653,20 @@ impl DevServer {
                         let mut reply = mode_json(session);
                         reply["camera"] = builder_camera_json(&session.builder);
                         reply["held"] = json!(self.held_touches.len());
-                        reply
+                        Ok(reply)
                     })
                 }
             }
-            "builder_select" => builder_select(&mut session.builder, params),
-            "builder_stamp" => builder_stamp(&mut session.builder, params),
+            "builder_select" => parse::<tools::BuilderSelectParams>(params).and_then(|p| builder_select(&mut session.builder, &p)),
+            "builder_stamp" => parse::<tools::BuilderStampParams>(params).and_then(|p| builder_stamp(&mut session.builder, &p)),
             "builder_files" => Ok(json!({
                 "maps": crate::map::available_maps(),
                 "can_save": crate::map::saving_available(),
             })),
-            "builder_save" => {
-                let name = params.get("name").and_then(Value::as_str);
-                session.builder.save(name).and_then(|_| builder_map_json(&session.builder))
-            }
-            "click" => self.click(session, params, width, height),
-            "key" => self.key(session, params, width, height),
+            "builder_save" => parse::<tools::BuilderSaveParams>(params)
+                .and_then(|p| session.builder.save(p.name.as_deref()).and_then(|_| builder_map_json(&session.builder))),
+            "click" => parse::<tools::ClickParams>(params).and_then(|p| self.click(session, &p, width, height)),
+            "key" => parse::<tools::KeyParams>(params).and_then(|p| self.key(session, &p, width, height)),
             _ => return None,
         };
         Some(result)
@@ -2182,23 +1677,12 @@ impl DevServer {
     /// buttons in UI points, the dialogs and the builder in the bitmap's
     /// pixels, each through the frame the window last drew
     /// (`click_frame`).
-    fn click(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
-        let (Some(x), Some(y)) = (f32_param(params, "x"), f32_param(params, "y")) else {
-            return Err("click needs numeric x and y (window coordinates, as `status.ui` and `status.camera` give them)".to_string());
-        };
-        let right = button_param(params)?;
-        let drag_to = match params.get("drag_to") {
-            None | Some(Value::Null) => None,
-            Some(v) => match v.as_array().map(Vec::as_slice) {
-                Some([dx, dy]) => match (dx.as_f64(), dy.as_f64()) {
-                    (Some(dx), Some(dy)) => Some(Vec2::new(dx as f32, dy as f32)),
-                    _ => return Err(format!("drag_to must be [x, y] numbers, got {v}")),
-                },
-                _ => return Err(format!("drag_to must be [x, y], got {v}")),
-            },
-        };
+    fn click(&mut self, session: &mut Session, params: &tools::ClickParams, width: f32, height: f32) -> Result<Value, String> {
+        let (x, y) = (params.x as f32, params.y as f32);
+        let right = right_button(params.button.as_deref())?;
+        let drag_to = params.drag_to.map(|[dx, dy]| Vec2::new(dx as f32, dy as f32));
         // A tap rather than a mouse press: the hints turn to taps.
-        if params.get("touch").and_then(Value::as_bool).unwrap_or(false) {
+        if params.touch.unwrap_or(false) {
             self.hints = Some(crate::hud::Hints::Touch);
         }
         let (layout, view, ui) = self.click_frame(session, width, height);
@@ -2338,20 +1822,16 @@ impl DevServer {
 
     /// `key`: one key for one frame, or typed text, through the same
     /// paths `app.rs` takes for the keyboard.
-    fn key(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
+    fn key(&mut self, session: &mut Session, params: &tools::KeyParams, width: f32, height: f32) -> Result<Value, String> {
         let (layout, view, ui) = self.click_frame(session, width, height);
         let frame = BuilderFrame { layout, view, ui };
-        let key = match params.get("key") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(s)) => Some(s.as_str()),
-            Some(other) => return Err(format!("key must be one of {}, got {other}", KEY_NAMES.join("|"))),
-        };
+        let key = params.key.as_deref();
         if let Some(k) = key
             && !KEY_NAMES.contains(&k)
         {
             return Err(format!("unknown key {k:?}; one of {}", KEY_NAMES.join("|")));
         }
-        let text = params.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+        let text = params.text.clone().unwrap_or_default();
         if key.is_none() && text.is_empty() {
             return Err(format!("key needs `key` ({}) or `text`", KEY_NAMES.join("|")));
         }
@@ -2468,17 +1948,26 @@ impl DevServer {
 /// each set up as a fresh headless round the way PLAY would (the session's
 /// seed, player count and overrides), since `maplint::lint` reads the
 /// terrain a `Game::init` laid out.
-fn lint_json(session: &Session, source: Option<&str>) -> Result<Value, String> {
-    let source = match source {
-        None if session.mode() == Driver::Build => "builder",
-        None => "round",
-        Some(s @ ("builder" | "round")) => s,
-        Some(other) => return Err(format!("source must be builder|round, got {other:?}")),
+fn lint_json(session: &Session, params: &tools::LintParams) -> Result<Value, String> {
+    // A map given by path or as text is linted as it is, loaded nowhere.
+    let given = map_param(params.map.as_deref(), params.map_toml.as_deref())?;
+    let source = match (params.source.as_deref(), &given) {
+        (Some(_), Some(_)) => return Err("give a source (builder|round) or a map (map|map_toml), not both".to_string()),
+        (None, Some(_)) if params.map.is_some() => "file",
+        (None, Some(_)) => "text",
+        (None, None) if session.mode() == Driver::Build => "builder",
+        (None, None) => "round",
+        (Some(s @ ("builder" | "round")), None) => s,
+        (Some(other), None) => return Err(format!("source must be builder|round, got {other:?}")),
     };
     // In an online round the map to lint is the room's, as the replica
     // was built from it.
     let live = session.shown();
-    let map = if source == "builder" { session.builder.map() } else { &live.map };
+    let map = match &given {
+        Some(map) => map,
+        None if source == "builder" => session.builder.map(),
+        None => &live.map,
+    };
     let (game, findings) = crate::maplint::lint_map(map, &crate::maplint::LintSetup::of(live));
     let count = |severity: LintSeverity| findings.iter().filter(|f| f.severity == severity).count();
     Ok(json!({
@@ -2545,19 +2034,12 @@ fn lint_finding_json(f: &crate::maplint::LintFinding) -> Value {
 /// `terrain`: every live tile plus the fire layer - see the tool's
 /// description for the shape. Tiles are sorted by row then column, quiet
 /// fields left out, so an untouched wall is one short line.
-fn terrain_json(game: &Game, params: &Value) -> Result<Value, String> {
-    let only = params.get("only").and_then(Value::as_str).unwrap_or("all");
+fn terrain_json(game: &Game, params: &tools::TerrainParams) -> Result<Value, String> {
+    let only = params.only.as_deref().unwrap_or("all");
     if !["all", "damaged", "burning", "fused"].contains(&only) {
         return Err(format!("only must be all|damaged|burning|fused, got {only:?}"));
     }
-    let materials: Vec<String> = match params.get("materials") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|v| v.as_str().map(str::to_string).ok_or_else(|| "materials must be an array of material names".to_string()))
-            .collect::<Result<_, _>>()?,
-        Some(other) => Err(format!("materials must be an array of material names, got {other}"))?,
-    };
+    let materials: &[String] = params.materials.as_deref().unwrap_or_default();
     let material_name = |m: crate::obstacle::Material| to_value(m).as_str().unwrap_or("?").to_string();
     let cell_of = |p: Position| {
         let (c, r) = crate::map::world_to_cell(p);
@@ -2830,32 +2312,13 @@ fn select_json(b: &MapEditor, changes: &[CellChange]) -> Value {
 }
 
 /// `n` integers under `key`, `None` when absent.
-fn ints_param(params: &Value, key: &str, n: usize) -> Result<Option<Vec<i32>>, String> {
-    match params.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Array(items)) if items.len() == n => items
-            .iter()
-            .map(|v| v.as_i64().map(|i| i as i32).ok_or_else(|| format!("{key} must be {n} integers, got {v}")))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Some),
-        Some(v) => Err(format!("{key} must be an array of {n} integers, got {v}")),
-    }
-}
-
-/// `builder_select`: the select tool, as the `builder_select` tool's
-/// description has it - a rectangle, a clear, a move, then an action, in
-/// that order.
-fn builder_select(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
-    let rect = ints_param(params, "rect", 4)?;
-    let move_by = ints_param(params, "move_by", 2)?;
-    let at = ints_param(params, "at", 2)?.map(|v| (v[0], v[1]));
-    let action = match params.get("action") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(other) => return Err(format!("action must be a string, got {other}")),
-    };
+fn builder_select(b: &mut MapEditor, params: &tools::BuilderSelectParams) -> Result<Value, String> {
+    let rect = params.rect.map(|r| r.map(|v| v as i32));
+    let move_by = params.move_by.map(|v| v.map(|v| v as i32));
+    let at = params.at.map(|v| (v[0] as i32, v[1] as i32));
+    let action = params.action.as_deref();
     let mut changes = Vec::new();
-    if params.get("clear").and_then(Value::as_bool).unwrap_or(false) {
+    if params.clear.unwrap_or(false) {
         b.cancel_ghost();
         b.clear_selection();
     }
@@ -2869,7 +2332,7 @@ fn builder_select(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
         selected(b, "move_by")?;
         changes.extend(b.move_selection((by[0], by[1])));
     }
-    match action.as_deref() {
+    match action {
         None => {}
         Some("copy") => {
             selected(b, "copy")?;
@@ -2916,25 +2379,21 @@ fn builder_select(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
 }
 
 /// `builder_stamp`: the STAMPS list, or one of them as the paste ghost.
-fn builder_stamp(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
-    let at = ints_param(params, "at", 2)?.map(|v| (v[0], v[1]));
+fn builder_stamp(b: &mut MapEditor, params: &tools::BuilderStampParams) -> Result<Value, String> {
+    let at = params.at.map(|v| (v[0] as i32, v[1] as i32));
     let mut changes = Vec::new();
-    match params.get("name") {
-        None | Some(Value::Null) => {}
-        Some(Value::String(name)) => {
-            let Some(index) = b.stamps().iter().position(|s| s.key() == *name) else {
-                let keys: Vec<String> = b.stamps().iter().map(|s| s.key()).collect();
-                return Err(format!("no stamp {name:?}; one of {}", keys.join(", ")));
-            };
-            b.use_stamp(index);
-            if let Some(at) = at {
-                b.move_ghost(at);
-            }
-            if params.get("place").and_then(Value::as_bool).unwrap_or(false) {
-                changes = b.place_ghost();
-            }
+    if let Some(name) = &params.name {
+        let Some(index) = b.stamps().iter().position(|s| s.key() == *name) else {
+            let keys: Vec<String> = b.stamps().iter().map(|s| s.key()).collect();
+            return Err(format!("no stamp {name:?}; one of {}", keys.join(", ")));
+        };
+        b.use_stamp(index);
+        if let Some(at) = at {
+            b.move_ghost(at);
         }
-        Some(other) => return Err(format!("name must be a stamp's key, got {other}")),
+        if params.place.unwrap_or(false) {
+            changes = b.place_ghost();
+        }
     }
     let stamps: Vec<Value> = b
         .stamps()
@@ -2951,30 +2410,17 @@ fn builder_stamp(b: &mut MapEditor, params: &Value) -> Result<Value, String> {
 
 /// `builder_touch`'s frames - each a list of `{id, x, y}` touch points in
 /// bitmap pixels - and its seconds per frame.
-fn touch_frames(params: &Value) -> Result<(Vec<Vec<crate::touch::TouchPoint>>, f32), String> {
-    let dt = match params.get("dt") {
-        None | Some(Value::Null) => PHYSICS_FIXED_DT,
-        Some(v) => match v.as_f64() {
-            Some(s) if s.is_finite() && s >= 0.0 => s as f32,
-            _ => return Err(format!("dt must be seconds, 0 or more, got {v}")),
-        },
+fn touch_frames(params: &tools::BuilderTouchParams) -> Result<(Vec<Vec<crate::touch::TouchPoint>>, f32), String> {
+    let dt = match params.dt {
+        None => PHYSICS_FIXED_DT,
+        Some(s) if s.is_finite() && s >= 0.0 => s as f32,
+        Some(s) => return Err(format!("dt must be seconds, 0 or more, got {s}")),
     };
-    let Some(frames) = params.get("frames").and_then(Value::as_array) else {
-        return Err("builder_touch needs `frames`: a list of frames, each a list of {id, x, y}".to_string());
-    };
-    let point = |p: &Value| -> Result<crate::touch::TouchPoint, String> {
-        let (Some(id), Some(x), Some(y)) = (p.get("id").and_then(Value::as_i64), p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) else {
-            return Err(format!("a touch point is {{id, x, y}} (an integer id and two numbers), got {p}"));
-        };
-        Ok(crate::touch::TouchPoint { id: id as i32, pos: Vec2::new(x as f32, y as f32) })
-    };
-    let frames = frames
+    let frames = params
+        .frames
         .iter()
-        .map(|f| match f.as_array() {
-            Some(points) => points.iter().map(point).collect::<Result<Vec<_>, _>>(),
-            None => Err(format!("a frame is a list of touch points, got {f}")),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|points| points.iter().map(|p| crate::touch::TouchPoint { id: p.id as i32, pos: Vec2::new(p.x as f32, p.y as f32) }).collect())
+        .collect();
     Ok((frames, dt))
 }
 
@@ -3015,26 +2461,7 @@ fn builder_map_json(b: &MapEditor) -> Result<Value, String> {
 
 /// `builder_settings`: apply each given field as its own undo step, in
 /// field order, then an optional reset; reply with the current values.
-fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, String> {
-    /// `None` = absent (untouched), `Some(None)` = null (auto), `Some(Some)` = a value.
-    fn u32_field(params: &Value, key: &str) -> Result<Option<Option<u32>>, String> {
-        match params.get(key) {
-            None => Ok(None),
-            Some(Value::Null) => Ok(Some(None)),
-            Some(v) => v
-                .as_u64()
-                .map(|n| Some(Some(n.min(u32::MAX as u64) as u32)))
-                .ok_or_else(|| format!("{key} must be a non-negative integer or null, got {v}")),
-        }
-    }
-    fn str_field(params: &Value, key: &str) -> Result<Option<Option<String>>, String> {
-        match params.get(key) {
-            None => Ok(None),
-            Some(Value::Null) => Ok(Some(None)),
-            Some(Value::String(s)) => Ok(Some(Some(s.clone()))),
-            Some(v) => Err(format!("{key} must be a string or null, got {v}")),
-        }
-    }
+fn builder_settings(session: &mut Session, params: &tools::BuilderSettingsParams) -> Result<Value, String> {
     fn parse_or<T>(key: &str, s: &str, parse: impl Fn(&str) -> Option<T>, valid: &[&str]) -> Result<T, String> {
         parse(s).ok_or_else(|| format!("unknown {key} {s:?}; one of {}", valid.join(", ")))
     }
@@ -3048,23 +2475,23 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
     // One `apply_settings` per field so each change is its own step (and
     // the clamped result is re-read before the next).
     let mut s = b.settings();
-    if let Some(v) = u32_field(params, "tanks")? {
+    if let Some(v) = params.tanks {
         s.tanks = v;
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = str_field(params, "tank")? {
+    if let Some(v) = params.tank.clone() {
         s.tank = v.map(|n| parse_or("tank", &n, parse_tank, &tanks)).transpose()?;
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = str_field(params, "tank2")? {
+    if let Some(v) = params.tank2.clone() {
         s.tank2 = v.map(|n| parse_or("tank2", &n, parse_tank, &tanks)).transpose()?;
         b.apply_settings(s);
         s = b.settings();
     }
-    for (key, side) in [("bong", Side::Player), ("enemy_bong", Side::Enemy)] {
-        if let Some(v) = str_field(params, key)? {
+    for (key, side, given) in [("bong", Side::Player, params.bong.clone()), ("enemy_bong", Side::Enemy, params.enemy_bong.clone())] {
+        if let Some(v) = given {
             let kinds: Vec<&str> = BongKind::of(side).iter().map(|k| k.name()).collect();
             let pick = |n: &str| BongKind::parse(n).filter(|k| k.side() == side);
             let kind = v.map(|n| parse_or(key, &n, pick, &kinds)).transpose()?;
@@ -3076,42 +2503,42 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
             s = b.settings();
         }
     }
-    if let Some(v) = str_field(params, "mission")? {
+    if let Some(v) = params.mission.clone() {
         s.mission = v.map(|n| parse_or("mission", &n, parse_mission, MISSIONS)).transpose()?.unwrap_or_default();
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = str_field(params, "spawn")? {
+    if let Some(v) = params.spawn.clone() {
         s.spawn = v.map(|n| parse_or("spawn", &n, parse_spawn, SPAWNS)).transpose()?.unwrap_or_default();
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = u32_field(params, "waves")? {
+    if let Some(v) = params.waves {
         s.waves = v;
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = u32_field(params, "wave_size")? {
+    if let Some(v) = params.wave_size {
         s.size = v;
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = u32_field(params, "wave_growth")? {
+    if let Some(v) = params.wave_growth {
         s.growth = v;
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = str_field(params, "tier_start")? {
+    if let Some(v) = params.tier_start.clone() {
         s.tier_start = v.map(|n| parse_or("tier_start", &n, parse_tier, TIERS)).transpose()?;
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = str_field(params, "tier_end")? {
+    if let Some(v) = params.tier_end.clone() {
         s.tier_end = v.map(|n| parse_or("tier_end", &n, parse_tier, TIERS)).transpose()?;
         b.apply_settings(s);
         s = b.settings();
     }
-    if let Some(v) = str_field(params, "theme")? {
+    if let Some(v) = params.theme.clone() {
         s.theme = v
             .map(|n| parse_or("theme", &n, crate::map::Theme::parse, THEMES))
             .transpose()?
@@ -3119,40 +2546,30 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
         b.apply_settings(s);
         s = b.settings();
     }
-    match params.get("weather") {
+    match &params.weather {
         None => {}
-        Some(Value::Null) => {
+        Some(None) => {
             s.weather = crate::map::Skies::CLEAR;
             b.apply_settings(s);
         }
-        Some(value) => {
+        Some(Some(value)) => {
             s.weather = skies_value("weather", value)?;
             b.apply_settings(s);
         }
     }
     // The anchor first, so a size in the same call is placed by it.
-    match params.get("anchor") {
-        None | Some(Value::Null) => {}
-        Some(Value::String(name)) => {
-            let names: Vec<&str> = crate::editor::Anchor::ALL.iter().map(|a| a.name()).collect();
-            b.set_resize_anchor(parse_or("anchor", name, crate::editor::Anchor::parse, &names)?);
+    if let Some(name) = params.anchor.as_deref() {
+        let names: Vec<&str> = crate::editor::Anchor::ALL.iter().map(|a| a.name()).collect();
+        b.set_resize_anchor(parse_or("anchor", name, crate::editor::Anchor::parse, &names)?);
+    }
+    if let Some([cols, rows]) = params.size {
+        if !cols.is_finite() || !rows.is_finite() {
+            return Err(format!("size must be [cols, rows] numbers, got [{cols}, {rows}]"));
         }
-        Some(v) => return Err(format!("anchor must be a string, got {v}")),
+        let anchor = b.resize_anchor();
+        b.resize(cols as f32, rows as f32, anchor);
     }
-    match params.get("size") {
-        None | Some(Value::Null) => {}
-        Some(v) => match v.as_array().map(Vec::as_slice) {
-            Some([cols, rows]) => match (cols.as_f64(), rows.as_f64()) {
-                (Some(cols), Some(rows)) if cols.is_finite() && rows.is_finite() => {
-                    let anchor = b.resize_anchor();
-                    b.resize(cols as f32, rows as f32, anchor);
-                }
-                _ => return Err(format!("size must be [cols, rows] numbers, got {v}")),
-            },
-            _ => return Err(format!("size must be [cols, rows], got {v}")),
-        },
-    }
-    if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+    if params.reset.unwrap_or(false) {
         b.reset();
     }
     Ok(settings_json(session))
@@ -3209,45 +2626,32 @@ fn changes_json(changes: &[CellChange]) -> Value {
     )
 }
 
-/// `map`/`map_toml` from `params` (`restart` and `builder_map`): `None`
-/// when neither is given, an error for both.
-fn map_param(params: &Value) -> Result<Option<MapFile>, String> {
-    let map_path = params.get("map").filter(|v| !v.is_null());
-    let map_toml = params.get("map_toml").filter(|v| !v.is_null());
-    match (map_path, map_toml) {
+/// The map a `map` path or a `map_toml` text names (`restart` and
+/// `builder_map`): `None` when neither is given, an error for both.
+fn map_param(path: Option<&str>, toml: Option<&str>) -> Result<Option<MapFile>, String> {
+    match (path, toml) {
         (Some(_), Some(_)) => Err("give either map (a path) or map_toml (inline TOML), not both".to_string()),
-        (Some(path), None) => {
-            let path = path.as_str().ok_or("map must be a path string")?;
-            MapFile::load(Path::new(path)).map(Some)
-        }
-        (None, Some(text)) => {
-            let text = text.as_str().ok_or("map_toml must be a string of map TOML")?;
-            MapFile::from_toml_str(text).map(Some).map_err(|e| format!("map_toml: {e}"))
-        }
+        (Some(path), None) => MapFile::load(Path::new(path)).map(Some),
+        (None, Some(text)) => MapFile::from_toml_str(text).map(Some).map_err(|e| format!("map_toml: {e}")),
         (None, None) => Ok(None),
     }
 }
 
-/// `tool` from `params`: `None` when absent, an error naming every valid
-/// spelling for an unknown name.
-fn tool_param(params: &Value) -> Result<Option<Tool>, String> {
-    match params.get("tool") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Tool::parse(s).map(Some).ok_or_else(|| {
+/// A builder tool by name: `None` when none is given, an error naming
+/// every valid spelling for an unknown one.
+fn tool_named(name: Option<&str>) -> Result<Option<Tool>, String> {
+    name.map(|s| {
+        Tool::parse(s).ok_or_else(|| {
             let names: Vec<&str> = crate::editor::TOOLS.iter().map(|t| t.name()).collect();
             format!("unknown tool {s:?}; one of {}", names.join(", "))
-        }),
-        Some(other) => Err(format!("tool must be a string, got {other}")),
-    }
+        })
+    })
+    .transpose()
 }
 
-/// `shape` from `params`: how the brush paints (`Shape::parse`).
-fn shape_param(params: &Value) -> Result<Option<Shape>, String> {
-    match params.get("shape") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Shape::parse(s).map(Some).ok_or_else(|| format!("unknown shape {s:?}; one of pen, rect, fill, scatter")),
-        Some(other) => Err(format!("shape must be a string, got {other}")),
-    }
+/// How the brush paints, by name (`Shape::parse`).
+fn shape_named(name: Option<&str>) -> Result<Option<Shape>, String> {
+    name.map(|s| Shape::parse(s).ok_or_else(|| format!("unknown shape {s:?}; one of pen, rect, fill, scatter"))).transpose()
 }
 
 /// `builder_tool`'s and `builder_paint`'s brush: the tool first, then the
@@ -3262,44 +2666,12 @@ fn brush_from_params(b: &mut MapEditor, tool: Option<Tool>, shape: Option<Shape>
     }
 }
 
-/// `cells` from `params`: a non-empty list of `[col, row]` pairs.
-fn cells_param(params: &Value) -> Result<Vec<(i32, i32)>, String> {
-    let Some(Value::Array(items)) = params.get("cells") else {
-        return Err("cells must be an array of [col, row] pairs".to_string());
-    };
-    if items.is_empty() {
-        return Err("cells must hold at least one [col, row] pair".to_string());
-    }
-    items
-        .iter()
-        .map(|v| match v.as_array().map(Vec::as_slice) {
-            Some([c, r]) => match (c.as_i64(), r.as_i64()) {
-                (Some(c), Some(r)) => Ok((c as i32, r as i32)),
-                _ => Err(format!("each cell must be [col, row] integers, got {v}")),
-            },
-            _ => Err(format!("each cell must be [col, row], got {v}")),
-        })
-        .collect()
-}
-
-/// `button` from `params`: `true` for the secondary (right) button.
-fn button_param(params: &Value) -> Result<bool, String> {
-    match params.get("button") {
-        None | Some(Value::Null) => Ok(false),
-        Some(Value::String(s)) if s == "left" => Ok(false),
-        Some(Value::String(s)) if s == "right" => Ok(true),
-        Some(other) => Err(format!("button must be left|right, got {other}")),
-    }
-}
-
-/// `steps` from `params` (undo/redo): at least 1, default 1.
-fn steps_param(params: &Value) -> Result<usize, String> {
-    match params.get("steps") {
-        None | Some(Value::Null) => Ok(1),
-        Some(v) => match v.as_u64() {
-            Some(n) if n >= 1 => Ok(n as usize),
-            _ => Err(format!("steps must be a positive integer, got {v}")),
-        },
+/// A mouse button by name: `true` for the secondary (right) one.
+fn right_button(name: Option<&str>) -> Result<bool, String> {
+    match name {
+        None | Some("left") => Ok(false),
+        Some("right") => Ok(true),
+        Some(other) => Err(format!("button must be left|right, got {other:?}")),
     }
 }
 
@@ -3487,8 +2859,8 @@ fn weather_json(game: &Game) -> Value {
 }
 
 /// The `weather` tool's `name`, if it gave one.
-fn weather_name(params: &Value) -> Result<Option<crate::map::Skies>, String> {
-    match params.get("name") {
+fn weather_name(name: Option<&Value>) -> Result<Option<crate::map::Skies>, String> {
+    match name {
         None | Some(Value::Null) => Ok(None),
         Some(value) => skies_value("name", value).map(Some),
     }
@@ -3503,109 +2875,70 @@ fn skies_value(key: &str, value: &Value) -> Result<crate::map::Skies, String> {
     }
 }
 
-/// `kinds`/`exclude` from `params`: string arrays, both optional.
-fn event_filter(params: &Value) -> Result<EventFilter, String> {
-    let list = |key: &str| -> Result<Vec<String>, String> {
-        match params.get(key) {
-            None | Some(Value::Null) => Ok(Vec::new()),
-            Some(Value::Array(items)) => items
-                .iter()
-                .map(|v| v.as_str().map(str::to_string).ok_or_else(|| format!("{key} must be an array of event names")))
-                .collect(),
-            Some(other) => Err(format!("{key} must be an array of event names, got {other}")),
-        }
-    };
-    Ok(EventFilter { kinds: list("kinds")?, exclude: list("exclude")? })
-}
-
 fn overlays_json(game: &Game) -> Value {
     to_value(game.debug_overlays)
 }
 
-/// The overlay flags a tool may set, one per `Overlays` field.
-const OVERLAY_FLAGS: [&str; 7] = ["nav_grid", "ai", "projectiles", "engage", "pickups", "hitboxes", "stats"];
-
-/// Set only the overlay flags present in `flags`. A key that is not an
-/// `OVERLAY_FLAGS` entry is an error naming them, and nothing is applied.
-fn apply_overlays(game: &mut Game, flags: &Value) -> Result<(), String> {
-    if let Some(unknown) = flags.as_object().and_then(|map| map.keys().find(|k| !OVERLAY_FLAGS.contains(&k.as_str()))) {
-        return Err(format!("unknown overlay flag {unknown:?}; flags: {}", OVERLAY_FLAGS.join(", ")));
-    }
-    let flag = |name: &str| flags.get(name).and_then(Value::as_bool);
-    let o: &mut Overlays = &mut game.debug_overlays;
-    if let Some(b) = flag("nav_grid") {
-        o.nav_grid = b;
-    }
-    if let Some(b) = flag("ai") {
-        o.ai = b;
-    }
-    if let Some(b) = flag("projectiles") {
-        o.projectiles = b;
-    }
-    if let Some(b) = flag("engage") {
-        o.engage = b;
-    }
-    if let Some(b) = flag("pickups") {
-        o.pickups = b;
-    }
-    if let Some(b) = flag("hitboxes") {
-        o.hitboxes = b;
-    }
-    if let Some(b) = flag("stats") {
-        o.stats = b;
-    }
-    Ok(())
-}
-
-fn detail_param(params: &Value) -> Result<Detail, String> {
-    match params.get("detail") {
-        None | Some(Value::Null) => Ok(Detail::Compact),
-        Some(v) => serde_json::from_value(v.clone()).map_err(|_| format!("detail must be compact|full, got {v}")),
+impl tools::OverlayFlags {
+    /// Set the flags this patch names; one it leaves out keeps its value.
+    fn apply(&self, o: &mut Overlays) {
+        let set = |to: &mut bool, flag: Option<bool>| {
+            if let Some(on) = flag {
+                *to = on;
+            }
+        };
+        set(&mut o.nav_grid, self.nav_grid);
+        set(&mut o.ai, self.ai);
+        set(&mut o.projectiles, self.projectiles);
+        set(&mut o.engage, self.engage);
+        set(&mut o.pickups, self.pickups);
+        set(&mut o.hitboxes, self.hitboxes);
+        set(&mut o.stats, self.stats);
     }
 }
 
-fn frames_param(params: &Value, default: u64) -> Result<u64, String> {
-    match params.get("frames") {
-        None | Some(Value::Null) => Ok(default),
-        Some(v) => match v.as_u64() {
-            Some(n) if (1..=MAX_STEP_FRAMES).contains(&n) => Ok(n),
-            _ => Err(format!("frames must be 1..={MAX_STEP_FRAMES}, got {v}")),
-        },
+/// A snapshot's detail by name; compact when none is given.
+fn detail_of(name: Option<&str>) -> Result<Detail, String> {
+    match name {
+        None | Some("compact") => Ok(Detail::Compact),
+        Some("full") => Ok(Detail::Full),
+        Some(other) => Err(format!("detail must be compact|full, got {other:?}")),
     }
 }
 
-fn slot_param(params: &Value) -> Result<usize, String> {
-    params
-        .get("slot")
-        .and_then(Value::as_u64)
-        .map(|s| s as usize)
-        .ok_or_else(|| "slot (0 = player, enemies from 1) is required".to_string())
+/// A frame count within what one `step` may run; `default` when none is
+/// given.
+fn frames_of(frames: Option<u64>, default: u64) -> Result<u64, String> {
+    match frames {
+        None => Ok(default),
+        Some(n) if (1..=MAX_STEP_FRAMES).contains(&n) => Ok(n),
+        Some(n) => Err(format!("frames must be 1..={MAX_STEP_FRAMES}, got {n}")),
+    }
 }
 
-fn f32_param(params: &Value, key: &str) -> Option<f32> {
-    params.get(key).and_then(Value::as_f64).map(|v| v as f32)
-}
-
-/// One player's intent from `move_dir`/`face`/`fire`/`lamp` under
-/// `prefix` (`""` for player 1, `"p2_"` for player 2); `None` when none of
-/// them is present, so the keyboard keeps that player; an error for an
-/// unknown direction.
-fn parse_intent(params: &Value, prefix: &str) -> Result<Option<Intent>, String> {
-    let dir = |key: &str| -> Result<Option<Dir>, String> {
-        let key = format!("{prefix}{key}");
-        match params.get(&key).and_then(Value::as_str) {
-            None => Ok(None),
-            Some(s) => Dir::parse(s).map(Some).ok_or_else(|| format!("{key} must be up|down|left|right, got {s:?}")),
+impl tools::IntentParams {
+    /// One seat's intent from `move_dir`/`face`/`fire`/`lamp` - seat 0's -
+    /// or from the same under `p2_` - seat 1's; `None` when none of them is
+    /// given, so the keyboard keeps that seat; an error for an unknown
+    /// direction.
+    fn seat(&self, seat: usize) -> Result<Option<Intent>, String> {
+        let (prefix, move_dir, face, fire, lamp) = if seat == 0 {
+            ("", &self.move_dir, &self.face, self.fire, self.lamp)
+        } else {
+            ("p2_", &self.p2_move_dir, &self.p2_face, self.p2_fire, self.p2_lamp)
+        };
+        let dir = |key: &str, name: &Option<String>| -> Result<Option<Dir>, String> {
+            match name.as_deref() {
+                None => Ok(None),
+                Some(s) => Dir::parse(s).map(Some).ok_or_else(|| format!("{prefix}{key} must be up|down|left|right, got {s:?}")),
+            }
+        };
+        let (move_dir, face) = (dir("move_dir", move_dir)?, dir("face", face)?);
+        if move_dir.is_none() && face.is_none() && fire.is_none() && lamp.is_none() {
+            return Ok(None);
         }
-    };
-    let move_dir = dir("move_dir")?;
-    let face = dir("face")?;
-    let fire = params.get(format!("{prefix}fire")).and_then(Value::as_bool);
-    let lamp = params.get(format!("{prefix}lamp")).and_then(Value::as_bool);
-    if move_dir.is_none() && face.is_none() && fire.is_none() && lamp.is_none() {
-        return Ok(None);
+        Ok(Some(Intent { move_dir, face, fire: fire.unwrap_or(false), lamp: lamp.unwrap_or(false), ..Intent::default() }))
     }
-    Ok(Some(Intent { move_dir, face, fire: fire.unwrap_or(false), lamp: lamp.unwrap_or(false), ..Intent::default() }))
 }
 
 /// Standard base64 (RFC 4648, padded) - the one encoder this crate needs,
@@ -3690,10 +3023,9 @@ mod tests {
     fn overlay_schemas_match_the_struct() {
         let fields: std::collections::BTreeSet<String> = to_value(Overlays::ALL).as_object().unwrap().keys().cloned().collect();
         let keys = |schema: &Value| -> std::collections::BTreeSet<String> { schema["properties"].as_object().unwrap().keys().cloned().collect() };
-        let spec = |name: &str| serde_json::from_str::<Value>(TOOLS.iter().find(|t| t.name == name).unwrap().schema).unwrap();
+        let spec = |name: &str| find(TOOLS, name).unwrap().schema();
         assert_eq!(keys(&spec("overlays")), fields);
         assert_eq!(keys(&spec("screenshot")["properties"]["overlays"]), fields);
-        assert_eq!(OVERLAY_FLAGS.iter().map(|f| f.to_string()).collect::<std::collections::BTreeSet<_>>(), fields);
     }
 
     #[test]
@@ -3702,7 +3034,7 @@ mod tests {
         for tool in TOOLS {
             assert!(names.insert(tool.name), "duplicate tool {}", tool.name);
             assert!(tool.name.chars().all(|c| c.is_ascii_lowercase() || c == '_'), "{}", tool.name);
-            let schema: Value = serde_json::from_str(tool.schema).unwrap_or_else(|e| panic!("{}: {e}", tool.name));
+            let schema = tool.schema();
             assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"), "{}", tool.name);
             assert!(!tool.description.is_empty());
             assert!(!(tool.read_only && tool.destructive), "{} cannot be both", tool.name);
@@ -3733,7 +3065,7 @@ mod tests {
     fn status_reports_a_fresh_round() {
         let (mut server, tx) = DevServer::headless();
         let mut game = game(11);
-        let rx = call(&tx, "status", json!({}));
+        let rx = call(&tx, "status", json!({ "sections": ["all"] }));
         server.before_frame(&mut game, W, H);
         let status = rx.recv().unwrap().unwrap();
         assert_eq!(status["frame"], 0);
@@ -3754,7 +3086,7 @@ mod tests {
         let mut s = arena(7);
         let field = (W, H);
         let before = s.game.frame();
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["camera"]["view"], "whole", "{status}");
         assert_eq!(status["camera"]["scale"], 1.0);
         assert_eq!(status["camera"]["target"], json!([1280, 720]));
@@ -3766,7 +3098,7 @@ mod tests {
         assert_eq!(pinned["rect"], json!({ "x": 320.0, "y": 180.0, "w": 640.0, "h": 360.0 }));
         assert_eq!(pinned["scale"], 2.0);
         assert_eq!(server.camera(field), Camera::zoomed(field, Vec2::new(640.0, 360.0), 2.0));
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["camera"], pinned);
 
         ask(&mut server, &tx, &mut s, "camera", json!({ "zoom": 4.0 })).unwrap();
@@ -3778,7 +3110,7 @@ mod tests {
         assert_eq!(report, corner, "no parameters only report");
 
         assert!(ask(&mut server, &tx, &mut s, "camera", json!({ "zoom": 0.5 })).unwrap_err().contains("zoom"));
-        assert!(ask(&mut server, &tx, &mut s, "camera", json!({ "x": "left" })).unwrap_err().contains("x must be a number"));
+        assert!(ask(&mut server, &tx, &mut s, "camera", json!({ "x": "left" })).unwrap_err().contains("camera: x: invalid type"));
         assert_eq!(server.camera(field), Camera::zoomed(field, Vec2::new(0.0, 0.0), 4.0), "a refused call changes nothing");
 
         let whole = ask(&mut server, &tx, &mut s, "camera", json!({ "reset": true })).unwrap();
@@ -3808,7 +3140,7 @@ mod tests {
             server.before_frame(s, field.0, field.1);
             rx.recv().unwrap()
         };
-        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        let status = at(&mut server, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["camera"]["view"], "follow", "{status}");
         assert_eq!(status["camera"]["rect"], Value::Null, "no frame drawn yet");
 
@@ -3841,7 +3173,7 @@ mod tests {
             follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot, establishing: crate::establish::Phase::Follow, second: None }),
         });
         server.publish_ui(UiFrame::plain((1920.0, 1080.0)));
-        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        let status = at(&mut server, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let c = status["camera"].clone();
         assert_eq!(c["view"], "follow", "{c}");
         assert_eq!(c["seat"], 0);
@@ -3932,7 +3264,7 @@ mod tests {
             follow: Some(FollowReport { framing, seating: Seating::Local, sight, shot, establishing: crate::establish::Phase::Follow, second: Some(second) }),
         });
         server.publish_ui(UiFrame::plain((1920.0, 1080.0)));
-        let status = at(&mut server, &mut s, "status", json!({})).unwrap();
+        let status = at(&mut server, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let c = &status["camera"];
         assert_eq!(c["focus"], "split", "{c}");
         let sp = &c["split"];
@@ -3977,7 +3309,7 @@ mod tests {
         assert!(s.playing());
         assert_eq!(s.game.frame(), 0);
         assert!(s.game.seat(1).is_some());
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["players"], 2);
         assert_eq!(st["enemies_alive"], 4, "both players excluded from the enemy count");
         let snap = ask(&mut server, &tx, &mut s, "snapshot", json!({})).unwrap();
@@ -4080,7 +3412,7 @@ mod tests {
         let rx = call(&tx, "teleport", json!({ "slot": 0, "x": 400.0, "y": 300.0, "facing": "left" }));
         server.before_frame(&mut game, W, H);
         rx.recv().unwrap().unwrap();
-        let rx = call(&tx, "step", json!({ "frames": 1 }));
+        let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": true }));
         server.before_frame(&mut game, W, H);
         server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
@@ -4105,7 +3437,7 @@ mod tests {
         let rx = call(&tx, "kill", json!({ "slot": 2 }));
         server.before_frame(&mut game, W, H);
         rx.recv().unwrap().unwrap();
-        let rx = call(&tx, "step", json!({ "frames": 1 }));
+        let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": true }));
         server.before_frame(&mut game, W, H);
         server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
@@ -4230,7 +3562,7 @@ mod tests {
         let flags = set(&mut server, &mut game, json!({ "hitboxes": false }));
         assert_eq!(flags["hitboxes"], false, "{flags}");
         assert_eq!(flags["stats"], true, "{flags}");
-        let rx = call(&tx, "status", json!({}));
+        let rx = call(&tx, "status", json!({ "sections": ["all"] }));
         server.before_frame(&mut game, W, H);
         let status = rx.recv().unwrap().unwrap();
         assert_eq!(status["overlays"]["hitboxes"], false, "{status}");
@@ -4313,7 +3645,7 @@ mod tests {
             assert_eq!(w["in_force"], crate::weather::random_sky(0xB0B5).name(), "{w}");
         }
         ask(&mut server, &mut game, "weather", json!({ "name": "storm" })).unwrap();
-        let status = ask(&mut server, &mut game, "status", json!({})).unwrap();
+        let status = ask(&mut server, &mut game, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["weather"]["in_force"], "storm", "{status}");
         assert_eq!(status["map"]["weather"], "storm", "{status}");
         let map = ask(&mut server, &mut game, "map_get", json!({})).unwrap();
@@ -4343,7 +3675,7 @@ mod tests {
         let _ = crate::frame_stages::target(());
         crate::frame_stages::steps(2);
         crate::frame_stages::frame_done(20.0);
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let stages = &status["frame_stages"];
         assert_eq!(stages["frame"], json!(20.0));
         assert_eq!(stages["draws"], json!({ "blits": 1, "rects": 1, "shapes": 0, "texture_switches": 2, "blend_scopes": 0, "shader_scopes": 0, "target_scopes": 1 }));
@@ -4482,7 +3814,7 @@ mod tests {
         assert!(lines[..23].iter().all(|l| l.len() == 40));
         assert!(grid.contains('P') && grid.contains('F'));
 
-        let rx = call(&tx, "step", json!({ "frames": 120, "detail": "full" }));
+        let rx = call(&tx, "step", json!({ "frames": 120, "snapshot": true, "detail": "full" }));
         server.before_frame(&mut game, W, H);
         server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
@@ -4571,7 +3903,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(tanks.len(), 2, "wave 1's first tank is rolling in: {stepped}");
         assert_eq!(tanks[1]["entering"], true);
         assert_eq!(tanks[0]["entering"], false);
-        let rx = call(&tx, "status", json!({}));
+        let rx = call(&tx, "status", json!({ "sections": ["all"] }));
         server.before_frame(&mut game, W, H);
         let status = rx.recv().unwrap().unwrap();
         assert_eq!(status["wave"]["index"], 1, "{status}");
@@ -4665,7 +3997,7 @@ cells."1,1" = { kind = "wall" }"#;
             let status = rx.recv().unwrap().unwrap();
             assert_eq!(status["seed"], "0xc0ffee");
             assert_eq!(status["tanks"], 4);
-            let rx = call(&tx, "step", json!({ "frames": 300 }));
+            let rx = call(&tx, "step", json!({ "frames": 300, "snapshot": true }));
             server.before_frame(&mut game, W, H);
             server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
             runs.push(rx.recv().unwrap().unwrap()["snapshot"].to_string());
@@ -4712,7 +4044,7 @@ cells."1,1" = { kind = "wall" }"#;
     }
 
     fn ui_button(server: &mut DevServer, tx: &mpsc::Sender<Request>, session: &mut Session, list: &str, name: &str) -> Value {
-        let status = ask(server, tx, session, "status", json!({})).unwrap();
+        let status = ask(server, tx, session, "status", json!({ "sections": ["all"] })).unwrap();
         let b = &status["ui"][list][name];
         let at = |k: &str| b[k].as_f64().unwrap_or_else(|| panic!("no {name} in `ui.{list}` of {status}"));
         json!({ "x": at("x") + at("w") / 2.0, "y": at("y") + at("h") / 2.0 })
@@ -4741,10 +4073,10 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(!s.playing());
         let err = ask(&mut server, &tx, &mut s, "step", json!({ "frames": 1 })).unwrap_err();
         assert!(err.contains("play"), "{err}");
-        for tool in GAME_ONLY_TOOLS {
+        for tool in TOOLS.iter().filter(|t| !t.in_build).map(|t| t.name) {
             assert!(ask(&mut server, &tx, &mut s, tool, json!({})).is_err(), "{tool} must refuse in build mode");
         }
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["mode"], "build", "{status}");
         assert_eq!(status["back"], json!({ "puts_away": false }), "{status}");
         assert_eq!(status["builder"]["dirty"], false);
@@ -4763,8 +4095,7 @@ cells."1,1" = { kind = "wall" }"#;
             ask(&mut server, &tx, &mut s, tool, params).unwrap_or_else(|e| panic!("{tool} in build mode: {e}"));
         }
         for tool in ["status", "mode", "screenshot", "overlays", "map_get", "tuning_get", "tuning_set", "tuning_reset", "tuning_schema", "restart", "build", "back", "play", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings", "builder_map", "builder_files", "builder_save", "click", "key"] {
-            assert!(!GAME_ONLY_TOOLS.contains(&tool), "{tool} must not be game-only");
-            assert!(TOOLS.iter().any(|t| t.name == tool), "{tool} is advertised");
+            assert!(find(TOOLS, tool).unwrap_or_else(|| panic!("{tool} is advertised")).in_build, "{tool} must run in build mode");
         }
         // A second BUILD press in build mode is a no-op; `back` comes back
         // to the round where it stood, a paint since put away first.
@@ -4893,7 +4224,7 @@ cells."1,1" = { kind = "wall" }"#;
         room.tick(30, 4_000);
         online_frame(&mut server, &mut s);
 
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["mode"], "online", "{st}");
         let round = &st["round"];
         assert_eq!(round["kind"], "online", "{round}");
@@ -4939,7 +4270,7 @@ cells."1,1" = { kind = "wall" }"#;
         }
         // The replica's own events and track rows are banked as the
         // snapshots move it on, since nothing `advance`s it here.
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert!(st["events_kept"].as_u64().unwrap() > 0, "no event of the replica's was kept: {st}");
         assert!(st["history_frames"].as_u64().unwrap() > 0, "no history of the replica's: {st}");
         // An overlay flag landed on the round that is drawn.
@@ -4954,8 +4285,8 @@ cells."1,1" = { kind = "wall" }"#;
     fn the_writing_tools_refuse_in_an_online_round() {
         let (mut s, _room) = online(52);
         let (mut server, tx) = DevServer::headless();
-        for tool in ONLINE_REFUSED_TOOLS {
-            let spec = TOOLS.iter().find(|t| t.name == *tool).unwrap_or_else(|| panic!("{tool} is not advertised"));
+        for spec in TOOLS.iter().filter(|t| !t.online) {
+            let tool = spec.name;
             assert!(!spec.read_only, "{tool} reads only - it should describe the online round, not refuse");
             let err = ask(&mut server, &tx, &mut s, tool, json!({})).unwrap_err();
             assert!(err.contains("AK7QX"), "{tool}: {err}");
@@ -4966,12 +4297,12 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(s.game.frame(), 0, "the local round took a step");
         assert!(!server.lockstep(), "a refused `pause` still froze the game");
         // Naming a tool that does not exist still reads as unknown.
-        assert!(ask(&mut server, &tx, &mut s, "nonsense", json!({})).unwrap_err().contains("unknown method"));
+        assert!(ask(&mut server, &tx, &mut s, "nonsense", json!({})).unwrap_err().contains("unknown tool"));
 
         // Esc gives the seat up; the local round is back and answers.
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["round"]["kind"], "local", "{st}");
         assert!(st["round"]["room"].is_null());
         assert_eq!(st["tanks"], 5, "the local round is the one on screen again: {st}");
@@ -5027,7 +4358,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(m["mode"], "online", "{m}");
         let m = ask(&mut server, &tx, &mut s, "click", leave).unwrap();
         assert_eq!(m["mode"], "play", "{m}");
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["round"]["kind"], "local", "{st}");
     }
 
@@ -5112,7 +4443,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(changes.iter().all(|c| c["after"]["kind"] == "water"), "{r}");
         assert_eq!(r["undo_depth"], base + 1);
         assert!(r["message"].is_null());
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!((&st["builder"]["shape"], &st["builder"]["rect"]), (&json!("rect"), &Value::Null), "{}", st["builder"]);
         // A fill of road over the water: the six cells joined to the one pressed.
         let r = ask(&mut server, &tx, &mut s, "builder_paint", json!({ "cells": [[11, 8]], "tool": "road", "shape": "fill" })).unwrap();
@@ -5131,7 +4462,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(r["undo_depth"], depth);
         let max = crate::tuning::Tuning::DEFAULT.builder_fill_max_cells.to_string();
         assert!(r["message"].as_str().is_some_and(|m| m.contains(&max)), "{r}");
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["builder"]["message"], r["message"]);
     }
 
@@ -5144,13 +4475,13 @@ cells."1,1" = { kind = "wall" }"#;
         let mut s = game(36);
         enter_build(&mut server, &tx, &mut s);
         let press = |name: &str, server: &mut DevServer, s: &mut Session| {
-            let st = ask(server, &tx, s, "status", json!({})).unwrap();
+            let st = ask(server, &tx, s, "status", json!({ "sections": ["all"] })).unwrap();
             let b = &st["builder"]["buttons"][name];
             assert!(b.is_object(), "no {name}: {}", st["builder"]["buttons"]);
             let (x, y) = (b["x"].as_f64().unwrap() + b["w"].as_f64().unwrap() / 2.0, b["y"].as_f64().unwrap() + b["h"].as_f64().unwrap() / 2.0);
             ask(server, &tx, s, "click", json!({ "x": x, "y": y })).unwrap();
         };
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["builder"]["thumbnails"], json!([]), "nothing while the list is closed");
         press("file", &mut server, &mut s);
         press("load", &mut server, &mut s);
@@ -5158,7 +4489,7 @@ cells."1,1" = { kind = "wall" }"#;
         for _ in 0..12 {
             ask(&mut server, &tx, &mut s, "key", json!({ "key": "left" })).unwrap();
         }
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let thumbs = st["builder"]["thumbnails"].as_array().expect("a list").clone();
         assert!(thumbs.len() >= 2, "{thumbs:?}");
         let buttons = &st["builder"]["buttons"];
@@ -5170,7 +4501,7 @@ cells."1,1" = { kind = "wall" }"#;
             }
         }
         ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["builder"]["thumbnails"], json!([]), "none once it closes");
     }
 
@@ -5192,7 +4523,7 @@ cells."1,1" = { kind = "wall" }"#;
         let r = ask(&mut server, &tx, &mut s, "builder_select", json!({ "rect": [21, 9, 19, 7] })).unwrap();
         assert_eq!(r["tool"], "select", "{r}");
         assert_eq!(r["selection"], json!({ "col": 19, "row": 7, "cols": 3, "rows": 3 }));
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let b = &st["builder"];
         assert_eq!((&b["tool"], &b["shape"], &b["selection"]["cols"]), (&json!("select"), &json!("pen"), &json!(3)), "{b}");
         assert!(b["buttons"]["sel_copy"].is_object() && b["buttons"]["sel_paste"].is_null(), "PASTE is dim with nothing copied: {}", b["buttons"]);
@@ -5228,7 +4559,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(ask(&mut server, &tx, &mut s, "builder_stamp", json!({ "name": "castle" })).is_err());
         // The strip's DELETE by a click on it.
         ask(&mut server, &tx, &mut s, "builder_select", json!({ "rect": [21, 7, 23, 9] })).unwrap();
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let del = &st["builder"]["buttons"]["sel_delete"];
         let (x, y) = (del["x"].as_f64().unwrap() + del["w"].as_f64().unwrap() / 2.0, del["y"].as_f64().unwrap() + del["h"].as_f64().unwrap() / 2.0);
         ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y })).unwrap();
@@ -5407,7 +4738,7 @@ cells."1,1" = { kind = "wall" }"#;
         game.init(w, h);
         let mut s = Session::new(game);
         s.set_campaign(campaign);
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["level"]["number"], 1, "{status}");
         assert_eq!(status["level"]["map"], "lotus-lagoon");
         assert_eq!(status["stats"]["enemies"], 1);
@@ -5415,7 +4746,7 @@ cells."1,1" = { kind = "wall" }"#;
         let enemy = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().unwrap();
         s.game.debug_kill(enemy).unwrap();
         s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(1)), "{status}");
         let at = screen_button(&mut server, &tx, &mut s, "next");
         let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
@@ -5481,7 +4812,7 @@ cells."1,1" = { kind = "wall" }"#;
         // Only the open tiles are buttons: level 2 is locked, and a press
         // on it - where the window draws it, the chrome's area of a window
         // the size of play's bitmap - does nothing.
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let screen = &status["ui"]["screen_buttons"];
         assert!(screen["level_1"].is_object() && screen["level_2"].is_null() && screen["back"].is_object(), "{screen}");
         let (ww, wh) = Layout::bare(w, h).window_size();
@@ -5511,7 +4842,7 @@ cells."1,1" = { kind = "wall" }"#;
         let mut s = game(42);
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
         enter_build(&mut server, &tx, &mut s);
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let cam = &status["builder"]["camera"];
         assert_eq!((cam["fit"].as_bool(), cam["zoom"].as_f64()), (Some(true), Some(1.0)), "{status}");
         assert_eq!(cam["rect"], json!({ "x": 0.0, "y": 0.0, "w": 1088.0, "h": 544.0 }));
@@ -5576,7 +4907,7 @@ cells."1,1" = { kind = "wall" }"#;
         let zoomed = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": pinch })).unwrap();
         assert_eq!(zoomed["camera"]["fit"], false, "{zoomed}");
         assert!(zoomed["camera"]["zoom"].as_f64().unwrap() > 2.0, "{zoomed}");
-        assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1 }]] })).unwrap_err().contains("{id, x, y}"));
+        assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1 }]] })).unwrap_err().contains("frames: missing field `x`"));
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({})).unwrap_err().contains("frames"));
     }
 
@@ -5597,18 +4928,18 @@ cells."1,1" = { kind = "wall" }"#;
         game.init(w, h);
         let mut s = Session::new(game);
         enter_build(&mut server, &tx, &mut s);
-        let before = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        let before = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap()["builder"]["clear"].clone();
         assert_eq!(before["cleared"], false, "{before}");
         assert_eq!(before["par"], Value::Null);
         assert_eq!(before["revision"].as_str().map(str::len), Some(16), "{before}");
         // The flag opens the CHECK panel.
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let flag = &status["builder"]["buttons"]["clear"];
         let (x, y) = (flag["x"].as_f64().unwrap() + flag["w"].as_f64().unwrap() / 2.0, flag["y"].as_f64().unwrap() + flag["h"].as_f64().unwrap() / 2.0);
         ask(&mut server, &tx, &mut s, "click", json!({ "x": x, "y": y })).unwrap();
         assert_eq!(s.builder.open_menu(), Some("check"));
         ask(&mut server, &tx, &mut s, "play", json!({})).unwrap();
-        let playing = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        let playing = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap()["builder"]["clear"].clone();
         assert_eq!(playing["attempt"], before["revision"], "{playing}");
         let enemy = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().expect("an enemy");
         ask(&mut server, &tx, &mut s, "kill", json!({ "slot": enemy })).unwrap();
@@ -5617,7 +4948,7 @@ cells."1,1" = { kind = "wall" }"#;
         }
         // What `app.rs` does after every frame's steps.
         s.note_outcome();
-        let after = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap()["builder"]["clear"].clone();
+        let after = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap()["builder"]["clear"].clone();
         assert_eq!(after["cleared"], true, "{after}");
         assert_eq!(after["revision"], before["revision"]);
         assert!(after["par"].as_f64().is_some_and(|par| par >= 0.0), "{after}");
@@ -5640,13 +4971,13 @@ cells."1,1" = { kind = "wall" }"#;
         s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &frame);
         ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "brick" })).unwrap();
         let base = s.builder.history().undo_depth() as u64;
-        let none = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let none = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(none["builder"]["loupe"], Value::Null, "no finger, no loupe");
         let stroke: Vec<Value> = (0..=10).map(|i| json!([{ "id": 1, "x": 300.0 + 10.0 * i as f32, "y": 300.0 }])).collect();
         let held = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": stroke, "hold": true })).unwrap();
         assert_eq!(held["held"], 1, "{held}");
         assert_eq!(server.held_touches().len(), 1);
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let loupe = &status["builder"]["loupe"];
         // The canvas at FIT on an arena: a bitmap pixel a world pixel.
         let under = crate::map::world_to_cell(frame.to_canvas(crate::math::Vec2::new(400.0, 300.0)));
@@ -5655,7 +4986,7 @@ cells."1,1" = { kind = "wall" }"#;
         let lifted = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[]] })).unwrap();
         assert_eq!(lifted["held"], 0, "{lifted}");
         assert_eq!(lifted["undo_depth"], base + 1, "the stroke is one step: {lifted}");
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["builder"]["loupe"], Value::Null, "lifted, gone");
         // Held fingers are build mode's alone.
         let stroke: Vec<Value> = (0..=10).map(|i| json!([{ "id": 2, "x": 300.0 + 10.0 * i as f32, "y": 400.0 }])).collect();
@@ -5675,7 +5006,7 @@ cells."1,1" = { kind = "wall" }"#;
         use crate::hud::Hints;
         let (mut server, tx) = DevServer::headless();
         let mut s = game(46);
-        let hints = |server: &mut DevServer, s: &mut Session| ask(server, &tx, s, "status", json!({})).unwrap()["ui"]["hints"].clone();
+        let hints = |server: &mut DevServer, s: &mut Session| ask(server, &tx, s, "status", json!({ "sections": ["all"] })).unwrap()["ui"]["hints"].clone();
         assert_eq!(hints(&mut server, &mut s), "keys", "a window with a keyboard opens on the keys");
         ask(&mut server, &tx, &mut s, "click", json!({ "x": 600.0, "y": 300.0, "touch": true })).unwrap();
         assert_eq!(hints(&mut server, &mut s), "touch");
@@ -5709,12 +5040,12 @@ cells."40,30" = { kind = "bong" }
         let mut s = game(44);
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
         enter_build(&mut server, &tx, &mut s);
-        let arena = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let arena = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(arena["builder"]["navigator"], Value::Null, "none at FIT on an arena");
 
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": FIELD_MAP, "seed": 1 })).unwrap();
         enter_build(&mut server, &tx, &mut s);
-        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let nav = status["builder"]["navigator"].clone();
         assert!(nav.is_object() && nav["ui"].is_object(), "a field map's navigator stands at FIT too: {status}");
         let n = |v: &Value, k: &str| v[k].as_f64().unwrap() as f32;
@@ -5769,7 +5100,7 @@ cells."40,30" = { kind = "bong" }
         ask(&mut server, &tx, &mut s, "builder_undo", json!({})).unwrap();
         assert_eq!(s.builder.map(), &before);
         assert!(ask(&mut server, &tx, &mut s, "builder_settings", json!({ "anchor": "nowhere" })).unwrap_err().contains("top_left"));
-        assert!(ask(&mut server, &tx, &mut s, "builder_settings", json!({ "size": [24] })).unwrap_err().contains("[cols, rows]"));
+        assert!(ask(&mut server, &tx, &mut s, "builder_settings", json!({ "size": [24] })).unwrap_err().contains("size:"));
     }
 
     #[test]
@@ -5783,7 +5114,7 @@ cells."40,30" = { kind = "bong" }
         let build = corner_button(&mut server, &tx, &mut s, "build");
         let m = ask(&mut server, &tx, &mut s, "click", build).unwrap();
         assert_eq!(m["mode"], "build", "{m}");
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let b = &st["builder"]["buttons"]["back"];
         let back = json!({ "x": b["x"].as_f64().unwrap() + b["w"].as_f64().unwrap() / 2.0, "y": b["y"].as_f64().unwrap() + b["h"].as_f64().unwrap() / 2.0 });
         let m = ask(&mut server, &tx, &mut s, "click", back).unwrap();
@@ -5942,7 +5273,7 @@ cells."40,30" = { kind = "bong" }
         assert!(err.contains("not both"), "{err}");
         // The schema's enum is the chassis list, so the const string cannot drift.
         let spec = TOOLS.iter().find(|t| t.name == "restart").unwrap();
-        let schema: Value = serde_json::from_str(spec.schema).unwrap();
+        let schema = spec.schema();
         let names: Vec<&str> = TankKind::ALL.iter().map(|k| k.name()).collect();
         for key in ["tank", "tank2"] {
             let listed: Vec<&str> = schema["properties"][key]["enum"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
@@ -6039,7 +5370,7 @@ cells."40,30" = { kind = "bong" }
         // Turning right while still carrying upward momentum: the hull
         // faces 90 but the real heading sits between up and right - the
         // difference `heading` exists to show.
-        let player = step(&mut server, &tx, &mut s, json!({ "frames": 10, "move_dir": "right" }))["snapshot"]["tanks"][0].clone();
+        let player = step(&mut server, &tx, &mut s, json!({ "frames": 10, "move_dir": "right", "snapshot": true }))["snapshot"]["tanks"][0].clone();
         assert_eq!(player["facing"], "right", "{player}");
         assert_eq!(player["rotation"], 90.0);
         assert!(player["speed"].as_f64().unwrap() > 10.0, "{player}");
@@ -6056,7 +5387,7 @@ cells."40,30" = { kind = "bong" }
         assert_eq!(r["max_spin_deg"], 360.0, "{r}");
         assert!(r["turret_deg"].as_f64().unwrap() > 90.0, "{r}");
         assert_eq!(r["last_turn_frame"], 41, "{r}");
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["turns"]["spins"], 1, "{}", st["turns"]);
         // Up, down, up: two U-turns and one A->B->A reversal, no spin.
         for dir in ["down", "up"] {
@@ -6069,7 +5400,7 @@ cells."40,30" = { kind = "bong" }
         assert_eq!(r["spins"], 1, "{r}");
         // A restart zeroes the counters.
         ask(&mut server, &tx, &mut s, "restart", json!({ "seed": 1 })).unwrap();
-        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(st["turns"]["turns"], 0, "{}", st["turns"]);
         assert_eq!(st["turns"]["spins"], 0);
     }

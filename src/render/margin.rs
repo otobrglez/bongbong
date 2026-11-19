@@ -248,18 +248,19 @@ impl MarginFx {
             }
         };
         // The step the field's scene takes into its bitmap (`Game::render`'s
-        // pass 2): onto black, alpha-blended - where a translucent draw left
-        // the alpha under one, that darkens the picture as it darkens the
-        // field, and `present_into` lays the two on the backdrop alike.
+        // pass 2): the parts as they are, replacing what is under them
+        // (`render::view::draw_opaque`).
         let picture: &RenderTexture2D = if in_a { a } else { b };
         rl.draw_texture_mode(thread, crate::frame_stages::target(out), |mut d| {
             d.clear_background(Color::BLACK);
-            for part in &local {
-                // Read the right way up: a render texture is stored
-                // bottom-up.
-                let rows = Rectangle::new(part.x, size.1 as f32 - part.y - part.height, part.width, -part.height);
-                d.draw_texture_rec(picture, rows, Vector2::new(part.x, part.y), Color::WHITE);
-            }
+            crate::render::view::draw_opaque(&mut d, |d| {
+                for part in &local {
+                    // Read the right way up: a render texture is stored
+                    // bottom-up.
+                    let rows = Rectangle::new(part.x, size.1 as f32 - part.y - part.height, part.width, -part.height);
+                    d.draw_texture_rec(picture, rows, Vector2::new(part.x, part.y), Color::WHITE);
+                }
+            });
         });
         Some(&*out)
     }
@@ -268,13 +269,13 @@ impl MarginFx {
         if self.targets.as_ref().is_some_and(|t| t.size == size) {
             return Ok(());
         }
-        let make = |rl: &mut RaylibHandle| rl.load_render_texture(thread, size.0.max(1) as u32, size.1.max(1) as u32).map_err(|e| format!("margin target: {e}"));
+        let make = |rl: &mut RaylibHandle| crate::render::target::load(rl, thread, size).map_err(|e| format!("margin target: {e}"));
         let a = make(rl)?;
         let b = make(rl)?;
         let ground = make(rl)?;
         let out = make(rl)?;
         if self.light.is_none() {
-            self.light = Some(rl.load_render_texture(thread, 1, 1).map_err(|e| format!("margin light map: {e}"))?);
+            self.light = Some(crate::render::target::load(rl, thread, (1, 1)).map_err(|e| format!("margin light map: {e}"))?);
         }
         self.targets = Some(Targets { size, a, b, ground, out });
         self.kept = None;
