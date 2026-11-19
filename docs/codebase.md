@@ -2081,12 +2081,22 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   round advanced and answers the exact corner, the `ShotKind` (Seat; Shared for a couch pair while
   both sight boxes fit the view as far as the field reaches, else Split; Spectating after
   `camera_spectate_delay_seconds`; Nobody), the lead and the cut: a dead zone
-  (`camera_dead_zone_px`), a look-ahead along the facing (`camera_lead_at_rest` of
-  `Framing::room_outside` less the dead zone, all of it at top speed, swinging at the pace of
-  `camera_lead_ease_seconds`, a reversal held `camera_lead_reverse_hold_seconds`), an exact
+  (`camera_dead_zone_px`), a look-ahead along the heading the seat has taken - its facing once it
+  has driven `camera_lead_commit_px` that way (`Tracker::turned`/`turned_px`), so a turn on the spot
+  and a short dodge move nothing; `Framing::room_outside` less the dead zone, at most
+  `camera_lead_max_px`, `camera_lead_at_rest` of it at rest (1: the same at any speed, so a stop
+  drifts nowhere) and all of it at top speed, swinging at the pace of
+  `camera_lead_ease_seconds` under a tank at top speed and `camera_lead_idle_pace` of that under one
+  standing (0: only a driving tank swings it), a reversal also held `camera_lead_reverse_hold_seconds` -, an exact
   critically damped `spring` (`camera_spring_seconds`) with velocity feed-forward toward a goal
   eased into the field over `camera_edge_ease_px`, then hard rules: the sight box stays on screen
-  (`Shot::boxes_in`), then the field, a short axis centred. It cuts on a followed seat's
+  (`Shot::boxes_in`), then the field, a short axis centred. **The kick**: `observe_events` notes
+  each seat's `Event::Fired`; the view on that seat (`ShotKind::Seat` or its half of a split, never
+  a shared or spectating view) is knocked `camera_fire_kick_px * screen_fx_intensity` back against
+  the gun, decaying over `camera_fire_kick_seconds`, never longer than one kick however fast the
+  gun - `Tracker::kick`, added to the centre `step` returns after the spring and put through the
+  same two rules, never written into `Tracker::center`; `FollowRules::reduced` (reduced motion)
+  has none. It cuts on a followed seat's
   `Teleported`/`TankEntered` (`observe_events`, after every step), on a jump, on a far hand-over and
   on `Follow::cut` (`app.rs`: another round on screen - another map, a room's replica or back). A
   restart - `RoundStarted` or a frame counter going back - cuts the tracker to the new start while
@@ -2108,9 +2118,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   along, none in the dead zone or against the field's edge, eased over `TEXEL_LOCK_SECONDS`), so
   the tank holds its place and the ground passes in whole texels. One per view (`app.rs` keeps the
   first half's and the split's second); a shared, spectating or cut view gets its exact corner.
-  Tests: 27 in `follow::tests` (dead zone, lead cap, the box under a slow spring, the spring
+  Tests: 34 in `follow::follow_tests` (dead zone, lead cap, the box under a slow spring, the spring
   at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, the restart glide, spectating, the couch,
-  the texel lock).
+  the texel lock; a stop and a start, the pixel cap, the commit, a dodge, the kick at 30/60/120 Hz,
+  under a burst, under reduced motion and at the field's edge). Their `rules()` are the table's
+  with the look-ahead by speed, uncapped and uncommitted and no kick - what the older cases
+  measure; `defaults()` are the table's own.
 - `establish.rs` (docs/large-maps-follow-camera.md §6) — the establishing shot: a local round on a
   field map whose view shows part of it, opening behind its mission banner, on a field no more than
   `MAX_TEXELS` (4096) a side (and on a phone or a tablet no more than `EMBEDDED_MAX_AREA`, 2048 x
