@@ -305,10 +305,6 @@ pub enum BongAnim {
 }
 
 impl Bong {
-    /// A bong of `kind` fighting for `side`, as a round sets one down at
-    /// `position`: at full health, facing right, nothing under way. `body`
-    /// is its collider; the builder's canvas, which only draws one, passes
-    /// `RigidBodyHandle::invalid()`.
     /// The position a frame draws this at: between the last two steps
     /// when the frame loop asked for that (`Game::pose_at`), else where
     /// it is.
@@ -316,6 +312,10 @@ impl Bong {
         self.smooth.drawn(crate::pose::Pose::at(self.position)).position
     }
 
+    /// A bong of `kind` fighting for `side`, as a round sets one down at
+    /// `position`: at full health, facing right, nothing under way. `body`
+    /// is its collider; the builder's canvas, which only draws one, passes
+    /// `RigidBodyHandle::invalid()`.
     pub fn at_rest(side: Side, position: Position, kind: BongKind, body: RigidBodyHandle) -> Bong {
         Bong {
             side,
