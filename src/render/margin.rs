@@ -113,7 +113,7 @@ impl MarginFx {
         let reach = parts.iter().copied().reduce(bounds).unwrap_or(rect);
         let floor = Floor { margin, shade: shade_texture, textures, parts: &parts, reach, time: scene.time };
         let ground_and_shade = |rl: &mut RaylibHandle, a: &mut RenderTexture2D| {
-            rl.draw_texture_mode(thread, a, |mut d| {
+            rl.draw_texture_mode(thread, crate::frame_stages::target(a), |mut d| {
                 d.clear_background(backdrop);
                 d.draw_mode2D(world, |mut d, _| {
                     floor.ground(&mut d);
@@ -135,7 +135,7 @@ impl MarginFx {
                 // lightning's white.
                 let plan = sky.plan;
                 let mut blocks = Vec::new();
-                rl.draw_texture_mode(thread, a, |mut d| {
+                rl.draw_texture_mode(thread, crate::frame_stages::target(a), |mut d| {
                     d.clear_background(backdrop);
                     d.draw_mode2D(world, |mut d, _| {
                         floor.ground(&mut d);
@@ -168,7 +168,7 @@ impl MarginFx {
                     }
                     Some(mut passes) => {
                         let light = light.as_mut().expect("made with the targets");
-                        rl.draw_texture_mode(thread, light, |mut d| d.clear_background(sky.ambient_texel()));
+                        rl.draw_texture_mode(thread, crate::frame_stages::target(light), |mut d| d.clear_background(sky.ambient_texel()));
                         let at = PassView { origin: crate::math::Vec2::new(rect.x, rect.y), size, light: *light.as_ref(), parts: &local };
                         if plan.ground {
                             let made = weather::MaskFor { round: scene.made.clone(), origin: margin.ground.origin() };
@@ -178,11 +178,11 @@ impl MarginFx {
                                 return None;
                             };
                             let cells = CellMask { texture: *texture.as_ref(), cells: (cols, rows), origin: margin.ground.origin() };
-                            rl.draw_texture_mode(thread, bare, |mut d| {
+                            rl.draw_texture_mode(thread, crate::frame_stages::target(bare), |mut d| {
                                 d.clear_background(backdrop);
                                 d.draw_mode2D(world, |mut d, _| floor.ground(&mut d));
                             });
-                            rl.draw_texture_mode(thread, a, |mut d| {
+                            rl.draw_texture_mode(thread, crate::frame_stages::target(a), |mut d| {
                                 d.clear_background(backdrop);
                                 passes.ground(&mut d, bare, sky, &at, &cells);
                                 d.draw_mode2D(world, |mut d, _| floor.shade(&mut d));
@@ -192,14 +192,14 @@ impl MarginFx {
                         }
                         let mut in_a = true;
                         if plan.lit {
-                            rl.draw_texture_mode(thread, b, |mut d| passes.lit(&mut d, a, sky, &at));
+                            rl.draw_texture_mode(thread, crate::frame_stages::target(b), |mut d| passes.lit(&mut d, a, sky, &at));
                             in_a = false;
                         }
                         if plan.sky {
                             if in_a {
-                                rl.draw_texture_mode(thread, b, |mut d| passes.sky(&mut d, a, sky, &at));
+                                rl.draw_texture_mode(thread, crate::frame_stages::target(b), |mut d| passes.sky(&mut d, a, sky, &at));
                             } else {
-                                rl.draw_texture_mode(thread, a, |mut d| passes.sky(&mut d, b, sky, &at));
+                                rl.draw_texture_mode(thread, crate::frame_stages::target(a), |mut d| passes.sky(&mut d, b, sky, &at));
                             }
                             in_a = !in_a;
                         }
@@ -213,7 +213,7 @@ impl MarginFx {
         // the alpha under one, that darkens the picture as it darkens the
         // field, and `present_into` lays the two on the backdrop alike.
         let picture: &RenderTexture2D = if in_a { a } else { b };
-        rl.draw_texture_mode(thread, out, |mut d| {
+        rl.draw_texture_mode(thread, crate::frame_stages::target(out), |mut d| {
             d.clear_background(Color::BLACK);
             for part in &local {
                 // Read the right way up: a render texture is stored

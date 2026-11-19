@@ -413,6 +413,9 @@ impl Fx {
         self.trail_last.clear();
         self.impacts.clear();
         self.impacts_seen.clear();
+        // A round's hits are salted from one again, so a replayed round
+        // draws the hits it drew the first time.
+        self.impacts_started = 0;
         self.opens.clear();
         self.flashes.clear();
         self.burning.clear();

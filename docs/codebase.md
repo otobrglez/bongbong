@@ -641,7 +641,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     "Debugging enemy clustering").
   - `debug.rs` — the tooling surface the dev server calls between frames: `debug_snapshot`,
     teleport, `debug_set_tank`, `debug_kill` (queued into `Frame::kills` so it explodes like a real
-    kill), `debug_spawn_enemy` (the one mutator that draws round RNG), `nav_grid_ascii`,
+    kill), `debug_mend_bong` (the players' bong back to full health, for the probe's `survive`
+    scenario), `debug_spawn_enemy` (the one mutator that draws round RNG), `nav_grid_ascii`,
     `field_dump` (the flow field toward a player or the bong as arrows and costs),
     `debug_track_rows`, `clusters`/`CLUSTER_RADIUS_PX` (shared with the probe).
   - `props.rs` (docs/sandbags-barrels-fences.md, docs/barrel-explosion-variety.md) —
@@ -1026,7 +1027,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`ActiveWeapon::full_load`), the vitals' own readout (`hud::WeaponSlot`) -
   (`ammo_pips`/`draw_ammo_pips`, `AMMO_PIPS` 10, drawn in `paint_field_glowing`), the shield ring,
   the locate ripple and `P1`..`P8` labels, all centred on the hull's `position` (no lag behind it). `Tank::hit_by_seat` is the per-frame twin of
-  `last_hit_by` (the probe's fire tally). **One special weapon at a time** (`Tank::take_weapon`,
+  `last_hit_by` and `Tank::hit_by_enemy` the other enemy that damaged an enemy this frame (the probe's fire tally; nothing in the round reads either). **One special weapon at a time** (`Tank::take_weapon`,
   `SPECIAL_WEAPONS`): a weapon crate replaces the special carried (its ammo lost) and stacks a
   crate's worth (`*_per_pickup`) on the same one, up to its carry limit (`*_max`, never under a
   crate - `ActiveWeapon::crate_load`); `active_weapon` is that special while it has ammo, else
@@ -1706,12 +1707,24 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   each split half shakes by its own view, and nothing shakes or bends under reduced motion;
   `screen_fx_intensity` scales flash, ripple and shake together. Shaders: `static/*.fs` with
   hand-ported GLSL ES 100 twins in `static/web/`.
-- `frame_stages.rs` — where a frame's time goes, in a dev-tools build (every call is empty without
-  it): `stage(name)` guards in `app.rs` and `Game::render` (`sim`, `fx`, `pictures`, `lights`,
-  `world`, `post`, `chrome`, `swap`) and `frame_done` at the top of the loop, kept as averages over
-  about half a second; read by `status.frame_stages`, the line under the left cluster with
-  `ui_frame_stages` on (the `ui` group, so a PR preview's tuning panel shows it on a phone) and a
-  phone's `FrameStats` log line. Processor time issuing each stage; the GPU's lands in the swap.
+- `frame_stages.rs` — where a frame's time goes, in a dev-tools build (every call is empty and
+  every reading zero without it): `stage(name)` guards in `app.rs` and `Game::render` (`sim`, `fx`,
+  `pictures`, `lights`, `world`, `post`, `chrome`, `swap`) and in `Game::update` round its groups
+  of phases (`sim.terrain`, `sim.nav`, `sim.seats`, `sim.enemies`, `sim.weapons`, `sim.physics`,
+  `sim.rams`, `sim.shots`, `sim.fire`, `sim.grass`, `sim.end`; a dotted stage stays off the on-screen
+  line), and `frame_done` at the top of the loop, kept as averages over about half a second and as
+  totals (`totals`, the probe's `phases:` line). Beside them `Draws` - what the last whole frame
+  drew, counted where `GpuCanvas` and `render::pyro::Rl` forward to raylib (`blit`, `rect`,
+  `shape`; `texture_switches` from the id of each draw's texture, 0 for the shapes texture) and
+  where a blend, shader or render-target scope opens (`blend`/`shader`/`target` hand their argument
+  back, so the count sits in the call: `d.draw_blend_mode(frame_stages::blend(mode), ..)` - a new
+  scope is written the same way) - and `Pace`, the last `WINDOW` (600) frames' worst and 99th
+  percentile and a histogram of the steps each ran (`steps`, called where `StepClock` pays out).
+  Read by `status.frame_stages` (the stages, `draws`, `pace`), the two lines under the left cluster
+  with `ui_frame_stages` on (`line`, `draws_line`; the `ui` group, so a PR preview's tuning panel
+  shows them on a phone) and a phone's `FrameStats` log line. Processor time issuing each stage; the
+  GPU's lands in the swap. The state is a thread-local, so the window's is the main thread's and a
+  test's its own. docs/tooling.md, Performance instruments, has the recipes and the baseline.
   `render/batch.rs` is `RenderBatch`: rlgl's batch raised to the desktop's 8192 quads on the GLES
   builds (the web, iOS, Android; ES 2's own is 2048), loaded after the window opens and held by the
   frame closure.

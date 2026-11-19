@@ -2404,7 +2404,9 @@ pub fn run(args: Args) {
                 clock.reset();
                 0
             } else {
-                clock.advance(scaled_dt)
+                let steps = clock.advance(scaled_dt);
+                crate::frame_stages::steps(steps);
+                steps
             };
             let steps_stage = crate::frame_stages::stage("sim");
             let seats = local_seats(&session);
@@ -2902,7 +2904,7 @@ fn take_swap_picture(
         crate::render::view::Margins { target, rect: in_bitmap(frame.rect), parts: frame.parts(0.0).into_iter().map(in_bitmap).collect() }
     });
     let Some((picture, _)) = picture.as_mut() else { return };
-    rl.draw_texture_mode(thread, picture, |mut d| match (from, play_camera) {
+    rl.draw_texture_mode(thread, crate::frame_stages::target(picture), |mut d| match (from, play_camera) {
         (Driver::Build, _) => builder_scene.present_last(&mut d, composite, &view, BAR_FILL, margins.as_ref()),
         (_, Some(camera)) if camera.follows() => crate::render::view::present_world(&mut d, composite, &camera, &view, &layout, BAR_FILL),
         _ => crate::render::view::present_into(&mut d, composite, &view, BAR_FILL, margins.as_ref()),
@@ -2941,13 +2943,14 @@ impl FrameStats {
         self.frames += 1;
         if now - self.last_report >= Self::REPORT_EVERY_SECONDS && self.frames > 0 {
             eprintln!(
-                "bongbong: frame avg {:.2} ms, max {:.2} ms, {} fps, {} fx over {} frames; {}",
+                "bongbong: frame avg {:.2} ms, max {:.2} ms, {} fps, {} fx over {} frames; {}; {}",
                 self.sum / self.frames as f32 * 1000.0,
                 self.max * 1000.0,
                 fps,
                 live_fx,
                 self.frames,
-                crate::frame_stages::line()
+                crate::frame_stages::line(),
+                crate::frame_stages::draws_line()
             );
             *self = Self { last_report: now, ..Self::default() };
         }

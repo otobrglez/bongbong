@@ -90,7 +90,7 @@ pub fn draw_tesla_bolt(d: &mut impl RaylibDraw, bolt: &TeslaBolt) {
     let jolt = ((1.0 - alpha) * 3.0).floor() as u32;
     let seed = bolt.seed.wrapping_add(jolt.wrapping_mul(977));
     let main = jagged(bolt.start, bolt.end, seed, 7.0);
-    d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
         if strength > 0.0 {
             band(&mut bd, &main, 14.0, 18.0, fade(BOLT_BLOOM, 0.3 * k * strength));
             band(&mut bd, &main, 6.0, 8.0, fade(BOLT_BLOOM, 0.55 * k * strength));

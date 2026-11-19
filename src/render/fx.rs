@@ -27,7 +27,7 @@ pub fn draw(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
         draw_particle(d, p);
     }
     if fx.particles().iter().filter(shown).any(|p| p.kind.additive()) {
-        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+        d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
             for p in fx.particles().iter().filter(|p| p.kind.additive()).filter(shown) {
                 draw_particle(&mut bd, p);
             }

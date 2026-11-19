@@ -2294,15 +2294,22 @@ impl Game {
         self.tick_nightfall();
         self.tick_timers(dt, &mut rng);
         self.tick_smoke_cover();
+        // A build with the dev tools times the step in groups of phases
+        // (`frame_stages.rs`, the `sim.*` stages), so a map's cost can be
+        // laid at the walk that makes it.
+        let stage = crate::frame_stages::stage("sim.terrain");
         let terrain = Terrain::build(&self.world, width, height, &self.cover_cells(), &self.water);
+        drop(stage);
         // One nav grid for the whole frame - labelled, priced and with a
         // flow field per shared target (`route_grid_on`), on the occupancy
         // and labels the round keeps across frames (`refresh_nav`) -
         // passed to the phases that need it rather than parked on `Frame`:
         // a borrow living there would alias every `&mut Frame` the other
         // phases take.
+        let stage = crate::frame_stages::stage("sim.nav");
         self.refresh_nav(width, height);
         let grid = self.route_grid_on(self.nav.base().without_fields(), width, height);
+        drop(stage);
         #[cfg(test)]
         let grid = if self.scratch_nav { self.route_grid(width, height) } else { grid };
         let mut f = Frame::new(dt, width, height, rng, terrain);
@@ -2316,6 +2323,7 @@ impl Game {
         f.stage(eruption);
 
         if self.outcome == Outcome::Playing {
+            let stage = crate::frame_stages::stage("sim.seats");
             self.apply_debug_kills(&mut f);
             self.apply_debug_detonations(&mut f);
             self.bong_phase(&mut f);
@@ -2324,7 +2332,11 @@ impl Game {
             self.player_phase(input, &mut f);
             self.rollin_phase(&mut f);
             self.tick_seat_still(f.dt);
+            drop(stage);
+            let stage = crate::frame_stages::stage("sim.enemies");
             self.enemy_phase(&mut f, &grid);
+            drop(stage);
+            let stage = crate::frame_stages::stage("sim.weapons");
             self.wave_phase(&mut f);
             self.tower_phase(&mut f);
             self.volcano_phase(&mut f);
@@ -2341,11 +2353,17 @@ impl Game {
             self.tick_emp_pulses(&mut f, true);
             self.resolve_zones(&mut f, true);
             self.well_phase(&mut f, true);
+            drop(stage);
+            let stage = crate::frame_stages::stage("sim.physics");
             self.step_world(&mut f, true);
+            drop(stage);
+            let stage = crate::frame_stages::stage("sim.rams");
             self.sync_tanks_and_ram(&mut f);
             self.print_oil(&mut f);
             self.trample_grass(&mut f);
             self.ram_props(&mut f);
+            drop(stage);
+            let stage = crate::frame_stages::stage("sim.shots");
             self.roll_grenades(&mut f);
             self.shell_vs_shell(&mut f);
             self.resolve_projectiles::<Shell>(&mut f, true);
@@ -2356,6 +2374,8 @@ impl Game {
             self.resolve_drones(&mut f, true);
             self.resolve_grenades(&mut f, true);
             self.resolve_globs(&mut f, true);
+            drop(stage);
+            let stage = crate::frame_stages::stage("sim.fire");
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f, true);
             self.relight_beds(&mut f);
@@ -2367,13 +2387,18 @@ impl Game {
             self.tick_launches(&mut f);
             self.tick_lava_bombs(&mut f);
             self.tick_crates(&mut f);
+            drop(stage);
+            let stage = crate::frame_stages::stage("sim.grass");
             self.tick_grass(f.dt);
+            drop(stage);
+            let stage = crate::frame_stages::stage("sim.end");
             self.drain_shield_breaks(&mut f);
             self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
             self.training_phase(&mut f);
             self.cleanup_done();
             self.check_round_end(&mut f);
+            drop(stage);
         } else {
             // Round over: the scene keeps animating (wrecks burn, in-flight
             // shots land without dealing damage, a barrel cascade finishes
@@ -2539,6 +2564,7 @@ impl Game {
         let shells_held = self.training.as_ref().is_some_and(|run| run.shells_held);
         for tank in self.world.query::<&mut Tank>().iter() {
             tank.hit_by_seat = None;
+            tank.hit_by_enemy = None;
             if !(shells_held && tank.owner().is_player()) {
                 tank.tick_recharge(dt);
             }
@@ -5849,6 +5875,7 @@ impl Game {
                     is_wreck: tank.is_wreck(),
                     shot_at_seat: ai.and_then(Ai::shot_at_seat),
                     hit_by_seat: tank.hit_by_seat,
+                    hit_by_enemy: tank.hit_by_enemy,
                     asleep: self.field_map && ai.is_some_and(|ai| !ai.field.awake),
                     leashed: self.field_map
                         && ai.is_some_and(|ai| {
@@ -5980,6 +6007,9 @@ pub struct TankSnapshot {
     /// The seat that damaged this tank this frame, if one did
     /// (`Tank::hit_by_seat`).
     pub hit_by_seat: Option<u8>,
+    /// The owner slot of the other enemy that damaged this enemy tank this
+    /// frame, if one did (`Tank::hit_by_enemy`): a shot, a blast or a ram.
+    pub hit_by_enemy: Option<usize>,
     /// A field map's enemy nothing has woken yet (`simulation::field`): it
     /// holds still and thinks nothing, by design. Always false on an arena.
     pub asleep: bool,

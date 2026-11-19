@@ -257,6 +257,9 @@ fn snow(air: &Air, view: Rectangle, out: &mut Vec<Block>) {
                 if h > amount {
                     continue;
                 }
+                // 6.28 is the phase's own scale, not a rounded TAU (as an
+                // f32 the two differ, and the sway with them).
+                #[allow(clippy::approx_constant)]
                 let sway = (air.time * (1.1 + h) + h * 6.28).sin() * 5.0;
                 let fx = ((x * cs + hash(x + 1.1, y + 1.1) * (cs - 8.0) + 4.0 + sway) / 2.0).floor() * 2.0 + 1.0;
                 let fy = ((y * cs + hash(x + 2.2, y + 2.2) * (cs - 8.0) + 4.0) / 2.0).floor() * 2.0 + 1.0;
