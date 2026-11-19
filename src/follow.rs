@@ -177,6 +177,10 @@ impl Seats {
                 }
                 let velocity = if velocity.x.is_finite() && velocity.y.is_finite() { velocity } else { Vec2::new(0.0, 0.0) };
                 let (wreck, top_speed) = crate::simulation::with_tank(&game.world, entity, |t| (t.is_wreck(), t.base_speed()));
+                // The view follows the tank where the frame draws it
+                // (`pose.rs`), before its texel anchor: the live position
+                // on a round nobody posed.
+                let position = seat_anchor(game, seat).map_or(position, |(at, _)| at);
                 Some(SeatTank {
                     seat,
                     position,
@@ -192,6 +196,93 @@ impl Seats {
 
     fn tank(&self, seat: usize) -> Option<SeatTank> {
         self.tanks.iter().find(|t| t.seat == seat).copied()
+    }
+}
+
+/// Where the frame draws seat `seat`'s tank before its texel anchor, and
+/// what the anchor dropped (`Smooth::residual`): the drawn position is the
+/// first less the second. `None` for a seat the round does not hold or a
+/// position that is not a number.
+pub fn seat_anchor(game: &Game, seat: usize) -> Option<(Vec2, Vec2)> {
+    let entity = game.seat(seat)?;
+    let (drawn, residual) = crate::simulation::with_tank(&game.world, entity, |t| (t.drawn().position, t.smooth.residual(t.pose())));
+    let at = Vec2::new(drawn.x + residual.x, drawn.y + residual.y);
+    (at.x.is_finite() && at.y.is_finite()).then_some((at, residual))
+}
+
+/// Seconds a `TexelLock` takes to change how much of the tank's residual
+/// the view carries.
+const TEXEL_LOCK_SECONDS: f32 = 0.1;
+
+/// Keeps a followed tank and the ground on one texel grid.
+///
+/// The scene is drawn one texel per world pixel and put on the screen
+/// shifted by the view's corner in device pixels, which are finer. A tank
+/// is drawn on a whole texel (`Game::pose_at`), so while the view rides
+/// along with it the corner slides smoothly under a tank that moves a
+/// texel at a time, and the tank shakes against the screen. The fix is to
+/// take what the tank's anchor dropped - its residual - off the corner
+/// too: the tank then stands still on the screen and the ground passes in
+/// whole texels, as one picture.
+///
+/// That is only right while the view moves with the tank. Inside the dead
+/// zone or against the field's edge the view stands still, and carrying
+/// the residual there would shake the ground instead. So the lock carries
+/// the share of the residual that the view's own motion is of the tank's,
+/// per axis: all of it riding along, none standing still, eased between
+/// the two over `TEXEL_LOCK_SECONDS`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TexelLock {
+    /// The corner and the tank's position the last frame, to measure both
+    /// motions from.
+    last: Option<(Vec2, Vec2)>,
+    /// The share of the residual carried on each axis, 0..=1.
+    share: Vec2,
+}
+
+impl TexelLock {
+    /// Forget the last frame: the view cut, or follows no tank of its own.
+    pub fn cut(&mut self) {
+        self.last = None;
+    }
+
+    /// The corner to present a view at: `corner`, the exact one
+    /// (`Shot::corner`), less the carried share of the followed tank's
+    /// residual, kept on the field. `anchor` is that tank's
+    /// `seat_anchor`, `None` for a view that follows no single tank (it
+    /// gets `corner` back); `dt` the time the view moved by.
+    pub fn corner(&mut self, corner: Vec2, anchor: Option<(Vec2, Vec2)>, dt: f32, stage: &Stage) -> Vec2 {
+        let Some((tank, residual)) = anchor else {
+            self.cut();
+            return corner;
+        };
+        if let Some((last_corner, last_tank)) = self.last {
+            // The share moves at a steady pace: all the way in
+            // `TEXEL_LOCK_SECONDS`.
+            let pace = if dt > 0.0 { (dt / TEXEL_LOCK_SECONDS).min(1.0) } else { 0.0 };
+            let axis = |share: f32, view: f32, tank: f32| {
+                // A tank that did not move says nothing about the view.
+                if tank.abs() < 1e-4 { share } else { share + ((view / tank).clamp(0.0, 1.0) - share).clamp(-pace, pace) }
+            };
+            self.share = Vec2::new(
+                axis(self.share.x, corner.x - last_corner.x, tank.x - last_tank.x),
+                axis(self.share.y, corner.y - last_corner.y, tank.y - last_tank.y),
+            );
+        }
+        self.last = Some((corner, tank));
+        if residual.x == 0.0 && residual.y == 0.0 {
+            return corner;
+        }
+        // The corner's own range on each axis: the field less the view,
+        // or the centred spot of an axis the view is wider than.
+        let keep = |at: f32, field: f32, visible: f32| {
+            let far = field - visible;
+            at.clamp(far.min(0.0), far.max(0.0))
+        };
+        Vec2::new(
+            keep(corner.x - residual.x * self.share.x, stage.field.0, stage.visible.0),
+            keep(corner.y - residual.y * self.share.y, stage.field.1, stage.visible.1),
+        )
     }
 }
 
@@ -1881,4 +1972,78 @@ mod follow_tests {
             assert!(t.live && t.top_speed > 0.0);
         }
     }
+    fn lock_stage() -> Stage {
+        Stage { visible: (400.0, 240.0), field: (2000.0, 1200.0), sight: SightBox::new(100.0, 60.0) }
+    }
+
+    /// `TexelLock`: a view riding along with its tank carries all of the
+    /// tank's texel residual, so the tank stands still on the screen - the
+    /// drawn tank less the presented corner never moves, where less the
+    /// exact corner it shakes by a texel.
+    #[test]
+    fn a_view_riding_with_its_tank_keeps_the_tank_still_on_the_screen() {
+        let stage = lock_stage();
+        let mut lock = TexelLock::default();
+        let (mut steady, mut shaky): (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
+        for frame in 0..240 {
+            // 1.37 px a frame, the view exactly 200 px behind it.
+            let tank = Vec2::new(600.0 + 1.37 * frame as f32, 500.0);
+            let anchor = Vec2::new(tank.x.round(), tank.y.round());
+            let residual = Vec2::new(tank.x - anchor.x, tank.y - anchor.y);
+            let exact = Vec2::new(tank.x - 200.0, tank.y - 120.0);
+            let corner = lock.corner(exact, Some((tank, residual)), 1.0 / 60.0, &stage);
+            if frame >= 60 {
+                steady.push(anchor.x - corner.x);
+                shaky.push(anchor.x - exact.x);
+            }
+        }
+        let spread = |v: &[f32]| v.iter().cloned().fold(f32::MIN, f32::max) - v.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(spread(&steady) < 0.01, "the tank holds its place on the screen: {}", spread(&steady));
+        assert!(spread(&shaky) > 0.8, "without the lock it shakes by a texel: {}", spread(&shaky));
+    }
+
+    /// A view standing still - the dead zone, the field's edge - carries
+    /// none of it: the ground does not shake under a tank driving about.
+    #[test]
+    fn a_view_standing_still_leaves_the_ground_alone() {
+        let stage = lock_stage();
+        let mut lock = TexelLock::default();
+        let exact = Vec2::new(400.0, 380.0);
+        // It rode along first, so the lock holds the whole residual.
+        for frame in 0..60 {
+            let tank = Vec2::new(600.0 + 1.37 * frame as f32, 500.0);
+            let residual = Vec2::new(tank.x - tank.x.round(), 0.0);
+            lock.corner(Vec2::new(tank.x - 200.0, 380.0), Some((tank, residual)), 1.0 / 60.0, &stage);
+        }
+        let mut worst = 0.0_f32;
+        for frame in 0..120 {
+            let tank = Vec2::new(700.0 + 1.37 * frame as f32, 500.0);
+            let residual = Vec2::new(tank.x - tank.x.round(), 0.0);
+            let corner = lock.corner(exact, Some((tank, residual)), 1.0 / 60.0, &stage);
+            if frame >= 12 {
+                worst = worst.max((corner.x - exact.x).abs());
+            }
+        }
+        assert!(worst < 0.01, "the corner stays put: {worst}");
+        // No tank of its own, or no anchor: the exact corner, untouched.
+        assert_eq!(lock.corner(exact, None, 1.0 / 60.0, &stage), exact);
+        assert_eq!(lock.corner(exact, Some((Vec2::new(650.5, 500.0), Vec2::new(0.0, 0.0))), 1.0 / 60.0, &stage), exact);
+    }
+
+    /// The presented corner stays on the field: at the edge the residual
+    /// cannot push the view past it.
+    #[test]
+    fn a_texel_lock_never_leaves_the_field() {
+        let stage = lock_stage();
+        let mut lock = TexelLock::default();
+        for frame in 0..60 {
+            let tank = Vec2::new(150.0 + 1.37 * frame as f32, 500.0);
+            let residual = Vec2::new(tank.x - tank.x.round(), 0.3);
+            let exact = Vec2::new((tank.x - 232.0).max(0.0), 0.0);
+            let corner = lock.corner(exact, Some((tank, residual)), 1.0 / 60.0, &stage);
+            assert!(corner.x >= 0.0 && corner.y >= 0.0, "frame {frame}: {corner:?}");
+            assert!(corner.x <= stage.field.0 - stage.visible.0);
+        }
+    }
+
 }

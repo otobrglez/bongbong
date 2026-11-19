@@ -230,7 +230,15 @@ fn draw_vitals(d: &mut impl RaylibDraw, block: Rectangle, row_h: f32, hud: &Play
     let text_y = y + (row - HUD_TEXT_SIZE) / 2;
 
     draw_symbol(d, textures, PickupKind::Health, x + V_HEALTH_SYMBOL, y, row, hud.hp > 0, a);
-    d.draw_text(&hud.hp.to_string(), x + V_HP, text_y, HUD_TEXT_SIZE, faded(hud.hp_color, a));
+    // The tick of a seat just hurt (`PlayerHud::hurt`): the number lit
+    // white, then pale, then its own colour again, and nudged down a
+    // point or two on the way.
+    let (hp_color, nudge) = match hud.hurt {
+        Some((3, nudge)) => (Color::WHITE, if nudge { 2 } else { 0 }),
+        Some((2, nudge)) => (crate::pyro::FIRE[6], if nudge { 1 } else { 0 }),
+        _ => (hud.hp_color, 0),
+    };
+    d.draw_text(&hud.hp.to_string(), x + V_HP, text_y + nudge, HUD_TEXT_SIZE, faded(hp_color, a));
     let health = (hud.hp as f32 / MAX_DAMAGE).clamp(0.0, 1.0);
     let ramp = HealthRamp::player(seat);
     draw_gauge(d, x + V_HEALTH, y + (row - GAUGE_H) / 2, V_HEALTH_W, GAUGE_H, health, faded(ramp.color(health), a), faded(DIM, a));

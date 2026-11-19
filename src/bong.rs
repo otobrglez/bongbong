@@ -225,6 +225,10 @@ fn cell_center_x() -> f32 {
 pub struct Bong {
     pub side: Side,
     pub position: Position,
+    /// The position a frame between two steps draws this at (`pose.rs`).
+    /// Presentation only: the drawing reads it through `drawn`, and
+    /// nothing that plays reads it at all.
+    pub smooth: crate::pose::Smooth,
     pub health: f32,
     pub max_health: f32,
     /// Which character this bong is, the map's choice for its side
@@ -301,6 +305,13 @@ pub enum BongAnim {
 }
 
 impl Bong {
+    /// The position a frame draws this at: between the last two steps
+    /// when the frame loop asked for that (`Game::pose_at`), else where
+    /// it is.
+    pub fn drawn(&self) -> Position {
+        self.smooth.drawn(crate::pose::Pose::at(self.position)).position
+    }
+
     /// A bong of `kind` fighting for `side`, as a round sets one down at
     /// `position`: at full health, facing right, nothing under way. `body`
     /// is its collider; the builder's canvas, which only draws one, passes
@@ -309,6 +320,7 @@ impl Bong {
         Bong {
             side,
             position,
+            smooth: crate::pose::Smooth::default(),
             health: tuning().bong_max_health,
             max_health: tuning().bong_max_health,
             kind,
@@ -555,7 +567,7 @@ pub fn stun_marks(bong: &Bong, t: f32) -> Vec<crate::pyro::Shape> {
     if !bong.is_stunned() || bong.is_dead() {
         return out;
     }
-    let head = Position::new(bong.position.x, bong.position.y - bong.size() * 0.32);
+    let head = Position::new(bong.drawn().x, bong.drawn().y - bong.size() * 0.32);
     for i in 0..3 {
         let a = t * 6.0 + i as f32 * std::f32::consts::TAU / 3.0;
         let at = Position::new(head.x + math::cos(a) * 10.0, head.y + math::sin(a) * 3.0);
@@ -583,7 +595,7 @@ pub fn draw_bong_ring(c: &mut impl Canvas, bong: &Bong, time: f32) {
     };
     let base = with_opacity(ramp.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
     let style = RingStyle::Gauge { frac: bong.health_fraction(), ramp, base };
-    draw_ground_ring_at(c, bong.position, bong.size(), 0.0, time, style, 1.0);
+    draw_ground_ring_at(c, bong.drawn(), bong.size(), 0.0, time, style, 1.0);
 }
 
 /// Draw the bong: whichever of its variant's five clips `Bong::anim` picks
@@ -603,7 +615,7 @@ pub fn draw_bong(c: &mut impl Canvas, bong: &Bong, t: f32) {
         BONG_TEXTURE_SIZE,
     );
     let size = bong.size();
-    let dest = Rectangle::new(bong.position.x + offset, bong.position.y, size, size);
+    let dest = Rectangle::new(bong.drawn().x + offset, bong.drawn().y, size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
 }
@@ -616,6 +628,7 @@ mod facing_tests {
         Bong {
             side: Side::Player,
             position: Position::new(x, 300.0),
+            smooth: crate::pose::Smooth::default(),
             health: 100.0,
             max_health: 100.0,
             kind: BongKind::Spike,

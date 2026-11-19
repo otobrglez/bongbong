@@ -89,7 +89,7 @@ pub fn draw_plasma(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma
     };
     let src = source_rec(col, plasma.variant);
     let size = PLASMA_TEXTURE_SIZE * PLASMA_SCALE;
-    let dest = Rectangle::new(plasma.position.x, plasma.position.y, size, size);
+    let dest = Rectangle::new(plasma.drawn().x, plasma.drawn().y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
     d.draw_texture_pro(texture, src, dest, origin, plasma.rotation, Color::WHITE);
 }
@@ -106,8 +106,8 @@ pub fn draw_plasma(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma
 pub fn draw_plasma_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma, orb: bool) {
     if orb {
         let at = Position::new(
-            plasma.position.x + tuning().shadow_dir_x * plasma.shadow_offset,
-            plasma.position.y + tuning().shadow_dir_y * plasma.shadow_offset,
+            plasma.drawn().x + tuning().shadow_dir_x * plasma.shadow_offset,
+            plasma.drawn().y + tuning().shadow_dir_y * plasma.shadow_offset,
         );
         let a = (255.0 * tuning().plasma_shadow_opacity) as u8;
         crate::pyro::block_disc(&mut crate::render::pyro::Rl(d), at, tuning().plasma_orb_radius * 0.95, Color::new(0, 0, 0, a));
@@ -116,8 +116,8 @@ pub fn draw_plasma_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: 
     let src = source_rec(flying_col(plasma.timer), plasma.variant);
     let size = PLASMA_TEXTURE_SIZE * PLASMA_SCALE;
     let dest = Rectangle::new(
-        plasma.position.x + tuning().shadow_dir_x * plasma.shadow_offset,
-        plasma.position.y + tuning().shadow_dir_y * plasma.shadow_offset,
+        plasma.drawn().x + tuning().shadow_dir_x * plasma.shadow_offset,
+        plasma.drawn().y + tuning().shadow_dir_y * plasma.shadow_offset,
         size,
         size,
     );

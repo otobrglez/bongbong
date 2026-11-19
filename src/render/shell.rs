@@ -31,7 +31,7 @@ pub fn draw_shell(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &Shell) {
     let src = source_rec(shell.variant, state_col(shell.state));
     let size = SHELL_TEXTURE_SIZE * SHELL_SCALE;
 
-    let dest = Rectangle::new(shell.position.x, shell.position.y, size, size);
+    let dest = Rectangle::new(shell.drawn().x, shell.drawn().y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
 
     d.draw_texture_pro(texture, src, dest, origin, shell.rotation, Color::WHITE);
@@ -50,8 +50,8 @@ pub fn draw_shell_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &S
     let size = SHELL_TEXTURE_SIZE * SHELL_SCALE;
 
     let dest = Rectangle::new(
-        shell.position.x + tuning().shadow_dir_x * shell.shadow_offset,
-        shell.position.y + tuning().shadow_dir_y * shell.shadow_offset,
+        shell.drawn().x + tuning().shadow_dir_x * shell.shadow_offset,
+        shell.drawn().y + tuning().shadow_dir_y * shell.shadow_offset,
         size,
         size,
     );
@@ -73,7 +73,7 @@ pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell, wells: &crate::w
     }
     let dir = heading(shell.rotation);
     let length = tuning().shell_tracer_length;
-    let tail = Position::new(shell.position.x - dir.x * 4.0, shell.position.y - dir.y * 4.0);
+    let tail = Position::new(shell.drawn().x - dir.x * 4.0, shell.drawn().y - dir.y * 4.0);
     let (outer, ember) = (crate::pyro::alpha(FIRE[3], 0.86), crate::pyro::alpha(FIRE[2], 0.0));
     // In a gravity well's pull the tracer follows the curve it came by.
     let t = tuning();
@@ -84,5 +84,5 @@ pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell, wells: &crate::w
         streak(d, tail, dir, length, 4.0, fade(outer, strength), ember);
         streak(d, tail, dir, length * 0.8, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[5], 0.6), strength));
     }
-    glow(d, shell.position, 11.0, fade(crate::pyro::alpha(FIRE[5], 0.47), strength));
+    glow(d, shell.drawn(), 11.0, fade(crate::pyro::alpha(FIRE[5], 0.47), strength));
 }
