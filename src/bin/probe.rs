@@ -2737,6 +2737,15 @@ fn main() -> ExitCode {
         update_seconds * 1000.0 / ticks.max(1) as f64,
         if cfg!(debug_assertions) { " (debug build)" } else { "" },
     );
+    // The phases `Game::update` times itself (`frame_stages.rs`), in a
+    // build with the dev tools: ms a tick each, the rest of the tick last.
+    let phases = bongbong::frame_stages::totals();
+    if !phases.is_empty() {
+        let per_tick = |ms: f64| ms / ticks.max(1) as f64;
+        let timed: f64 = phases.iter().map(|(_, ms)| ms).sum();
+        let line: Vec<String> = phases.iter().map(|(name, ms)| format!("{} {:.4}", name.trim_start_matches("sim."), per_tick(*ms))).collect();
+        println!("probe: phases: {} other {:.4} ms/tick", line.join(" "), per_tick(update_seconds * 1000.0 - timed));
+    }
 
     if args.heatmap {
         print_heatmaps(&args, &heat);

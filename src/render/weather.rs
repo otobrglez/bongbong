@@ -345,7 +345,7 @@ impl LightCache {
         }
         let Some(atlas) = self.atlas.as_mut() else { return };
         let fresh = places.len() == self.tiles.iter().flatten().count();
-        rl.draw_texture_mode(thread, atlas, |mut d| {
+        rl.draw_texture_mode(thread, crate::frame_stages::target(atlas), |mut d| {
             if fresh {
                 d.clear_background(Color::new(0, 0, 0, 0));
             }
@@ -359,7 +359,7 @@ impl LightCache {
                 let camera = Camera2D { offset: middle, target: Vector2::new(light.at.x, light.at.y), rotation: 0.0, zoom: 1.0 / LIGHT_MAP_SCALE };
                 let white = Light { color: [2.0, 2.0, 2.0], ..(*light).clone() };
                 d.draw_mode2D(camera, |mut d, _| {
-                    d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| draw_light(&mut bd, &white));
+                    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| draw_light(&mut bd, &white));
                 });
             }
         });
@@ -494,7 +494,7 @@ impl WeatherFrame {
 pub fn multiply_ambient<D: RaylibDraw>(d: &mut D, frame: &WeatherFrame, size: (i32, i32)) {
     use sola_raylib::ffi::{RL_DST_COLOR, RL_FUNC_ADD, RL_SRC_COLOR};
     d.set_blend_factors(RL_DST_COLOR as i32, RL_SRC_COLOR as i32, RL_FUNC_ADD as i32);
-    d.draw_blend_mode(BlendMode::BLEND_CUSTOM, |mut bd| {
+    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_CUSTOM), |mut bd| {
         bd.draw_rectangle(0, 0, size.0, size.1, frame.ambient_texel());
     });
 }
@@ -803,7 +803,7 @@ impl WeatherFx {
         }
         let targets = self.targets.as_mut().expect("ensure_targets made them");
         if ground {
-            rl.draw_texture_mode(thread, &mut targets.ground, |mut d| {
+            rl.draw_texture_mode(thread, crate::frame_stages::target(&mut targets.ground), |mut d| {
                 d.clear_background(Color::WHITE);
                 d.draw_mode2D(camera.in_target(), |mut d, _| scene.paint_ground(&mut GpuCanvas::culled(&mut d, textures, camera.cull())));
             });
@@ -966,10 +966,10 @@ fn draw_light_map(
     disc: Option<&Texture2D>,
     cache: &LightCache,
 ) {
-    rl.draw_texture_mode(thread, target, |mut d| {
+    rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| {
         d.clear_background(stored(ambient, 255));
         d.draw_mode2D(light_camera(camera), |mut d, _| {
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                 let mut fans = Vec::new();
                 let mut kept = Vec::new();
                 for light in lights {
@@ -1082,7 +1082,7 @@ unsafe fn push_triangle(a: (Vec2, Color), b: (Vec2, Color), c: (Vec2, Color)) {
 pub fn multiply_light<D: RaylibDraw>(d: &mut D, light: &RenderTexture2D, frame: &WeatherFrame) {
     use sola_raylib::ffi::{RL_DST_COLOR, RL_FUNC_ADD, RL_SRC_COLOR};
     d.set_blend_factors(RL_DST_COLOR as i32, RL_SRC_COLOR as i32, RL_FUNC_ADD as i32);
-    d.draw_blend_mode(BlendMode::BLEND_CUSTOM, |mut bd| {
+    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_CUSTOM), |mut bd| {
         let map = light_map_size(frame.size);
         let dest = Rectangle::new(0.0, 0.0, frame.size.0 as f32, frame.size.1 as f32);
         bd.draw_texture_pro(light, whole(map), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
@@ -1099,7 +1099,7 @@ pub fn draw_blocks<D: RaylibDraw>(d: &mut D, blocks: &[Block]) {
         return;
     }
     d.set_blend_factors_separate(RL_SRC_ALPHA as i32, RL_ONE_MINUS_SRC_ALPHA as i32, RL_ZERO as i32, RL_ONE as i32, RL_FUNC_ADD as i32, RL_FUNC_ADD as i32);
-    d.draw_blend_mode(BlendMode::BLEND_CUSTOM_SEPARATE, |mut bd| {
+    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_CUSTOM_SEPARATE), |mut bd| {
         for block in blocks {
             bd.draw_rectangle_rec(block.rect, block.color);
         }
@@ -1122,7 +1122,7 @@ pub fn draw_flash_over<D: RaylibDraw>(d: &mut D, frame: &WeatherFrame, size: (i3
     }
     let c = |v: f32| (v * k * 255.0).round().clamp(0.0, 255.0) as u8;
     let white = Color::new(c(0.75), c(0.82), c(1.0), 255);
-    d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
         bd.draw_rectangle(0, 0, size.0, size.1, white);
     });
 }
@@ -1223,7 +1223,7 @@ impl PassShaders {
         s.set_shader_value(l.snow, (frame.look.snow * t.snow_cover).clamp(0.0, 1.0));
         s.set_shader_value(l.frozen, if frame.frozen { 1.0f32 } else { 0.0 });
         let (raw, mask_loc, mask_tex) = (*s.as_ref(), l.cell_mask, mask.texture);
-        d.draw_shader_mode(s, |mut sd| {
+        d.draw_shader_mode(crate::frame_stages::shader(s), |mut sd| {
             // SAFETY: a copy of the bound shader's handle and a live
             // texture; raylib binds the sampler for this batch (it has to
             // be set inside the shader mode, which resets the extra units).
@@ -1250,7 +1250,7 @@ impl PassShaders {
         s.set_shader_value(l.vignette, frame.look.vignette.clamp(0.0, 1.0));
         s.set_shader_value(l.sun, [0.3 * frame.look.sun, 0.15 * frame.look.sun, 0.03 * frame.look.sun]);
         let (raw, light_loc, light_tex) = (*s.as_ref(), l.light_map, at.light);
-        d.draw_shader_mode(s, |mut sd| {
+        d.draw_shader_mode(crate::frame_stages::shader(s), |mut sd| {
             // SAFETY: as in `ground`.
             unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, light_loc, light_tex) };
             copy_over(&mut sd, source, at);
@@ -1288,7 +1288,7 @@ impl PassShaders {
         s.set_shader_value(l.gust_front, t.sand_gust_front_speed.max(1.0));
         s.set_shader_value(l.gust_len, t.sand_gust_seconds.max(0.05));
         let (raw, light_loc, light_tex) = (*s.as_ref(), l.light_map, at.light);
-        d.draw_shader_mode(s, |mut sd| {
+        d.draw_shader_mode(crate::frame_stages::shader(s), |mut sd| {
             // SAFETY: as in `ground`.
             unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, light_loc, light_tex) };
             copy_over(&mut sd, source, at);
