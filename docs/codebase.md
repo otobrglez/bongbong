@@ -640,7 +640,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     turret grown by `player_shot_hit_pad_px` (read into the snapshot at `build`), while enemy shots,
     the seats, tiles and walls keep the exact boxes. A tower's shot flies over the tiles its aim
     sees past (sandbags and fences, `Material::blocks_sight`). Projectiles have no physics body;
-    rapier is never consulted for hits. A shot is swept only up to the portal it goes into
+    rapier is never consulted for hits. `Terrain` holds its tiles in cell order, its bongs in
+    `bong_order` and sweeps enemies by slot, so an exact tie on entry time is settled by place,
+    never by storage order. A shot is swept only up to the portal it goes into
     (`portals.rs`). `Terrain::line_of_sight` is the AI's fire gate. **Lag compensation**
     (docs/online-coop-prd.md §4.16, favour the shooter): `HitBoxHistory` is a ring of the last
     `REWIND_MAX_TICKS` (15, 250 ms) ticks of every live enemy's hull and turret boxes and every
@@ -1139,7 +1141,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`solid_box`: the standing 16 px quadrants), and the order a fire takes a burning plank's chunks in
   (`burn_ranks`, `burn_state`; BB-84, docs/WALLS_SPEC.md §12). Plain data, no RNG. `Terrain::sweep` tests a chunked
   tile's standing chunks (`hits::segment_hits_chunks`), so a hole lets shots through - a loophole -
-  while `Game::fit_tile_body` keeps the tile's body over its standing quadrants. Every chunk a blow
+  while `Game::fit_tile_body` keeps the tile's body over its standing quadrants and
+  `Game::refit_neighbours` hands the four tiles beside a dead one their own width back (one rule,
+  `tile_fit`; a breach is as wide for a hull as for a shot; trees and lamp posts close no seam). Every chunk a blow
   breaks is an `Event::ChunksBroken`. What a breach does besides (BB-82, docs/WALLS_SPEC.md §10)
   lives in `props.rs`: `Game::spall` (a shell's breach hurts the tank sheltering behind,
   `HitCause::Spall`), `lay_rubble` (`chunks::Rubble`, `Game::rubble`: it slows a hull through

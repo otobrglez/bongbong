@@ -261,7 +261,6 @@ use crate::{
     MAX_SEATS,
     PATHFIND_CELL_SIZE,
     PHYSICS_FIXED_DT,
-    PHYSICS_MAX_CATCHUP_SECONDS,
     Position,
     TANK_SHELL_VARIANT_BY_ROW,
     TANK_WRECK_COLS,
@@ -1323,8 +1322,6 @@ pub struct Game {
     pub shadows_enabled: bool,
     /// The rapier world: tank bodies plus wall/obstacle/bong colliders.
     physics: Physics,
-    /// Real time not yet consumed by a fixed physics step.
-    physics_accumulator: f32,
     /// `--enemies`: pins the enemy count instead of the map's `tanks`
     /// default or a random roll. Set before the first `init`; persists
     /// across restarts.
@@ -1505,8 +1502,6 @@ struct Frame {
     muzzle_flashes: Vec<Shockwave>,
     impact_flashes: Vec<Shockwave>,
     shocks: Vec<Shockwave>,
-    /// Whether at least one fixed physics step ran this frame.
-    physics_stepped: bool,
     /// Events this frame's phases recorded; merged onto `Game::events`.
     events: Vec<Event>,
     /// The velocity changes put on client-owned seats this frame, which
@@ -1601,7 +1596,6 @@ impl Frame {
             muzzle_flashes: Vec::new(),
             impact_flashes: Vec::new(),
             shocks: Vec::new(),
-            physics_stepped: false,
             events: Vec::new(),
             shoves: Shoves::default(),
         }
@@ -1796,7 +1790,6 @@ impl Game {
         self.intro_fade = 0.0;
 
         self.physics = Physics::new();
-        self.physics_accumulator = 0.0;
         battlefield::spawn_walls(&mut self.physics, width, height);
 
         // --- Water (docs/water.md) ---
@@ -2255,8 +2248,10 @@ impl Game {
     }
 
     /// Step the simulation one frame: `input` is this frame's player input,
-    /// `dt` its elapsed seconds, `width`/`height` the battlefield size.
+    /// `dt` the step - always `PHYSICS_FIXED_DT`, which every driver passes
+    /// and a debug build checks - `width`/`height` the battlefield size.
     pub fn update(&mut self, input: Input, dt: f32, width: f32, height: f32) {
+        debug_assert!(dt == PHYSICS_FIXED_DT, "Game::update steps by PHYSICS_FIXED_DT, got {dt}");
         debug_assert!(self.rng.is_some(), "Game::rng missing at update entry - init has not run");
         self.frame += 1;
         self.events.clear();
@@ -2563,7 +2558,8 @@ impl Game {
         // A training round that starts its seats with no shells holds
         // their refill until they have opened an ammo crate (`training.rs`).
         let shells_held = self.training.as_ref().is_some_and(|run| run.shells_held);
-        for tank in self.world.query::<&mut Tank>().iter() {
+        // By owner slot: a tank that becomes a wreck here draws the RNG.
+        for tank in ordered(self.world.query::<&mut Tank>().iter(), |t| t.owner_slot()) {
             tank.hit_by_seat = None;
             tank.hit_by_enemy = None;
             if !(shells_held && tank.owner().is_player()) {
@@ -3315,14 +3311,12 @@ impl Game {
             with_bong(&self.world, bong_entity, |fr| {
                 (fr.side, fr.can_attack(), fr.can_hop(), fr.position, fr.attack_range(), fr.avoid_range(), fr.hop_distance())
             });
-        let live: Vec<(Entity, Position, f32, Owner)> = self
-            .world
-            .query::<(Entity, &Tank)>()
-            .without::<&RollIn>()
-            .iter()
-            .filter(|(_, t)| !t.is_wreck())
-            .map(|(e, t)| (e, t.position, t.position.distance_to(bong_pos), t.owner()))
-            .collect();
+        // By owner slot: of two tanks as near, the lower slot is the nearest.
+        let live: Vec<(Entity, Position, f32, Owner)> =
+            ordered(self.world.query::<(Entity, &Tank)>().without::<&RollIn>().iter().filter(|(_, t)| !t.is_wreck()), |(_, t)| t.owner_slot())
+                .into_iter()
+                .map(|(e, t)| (e, t.position, t.position.distance_to(bong_pos), t.owner()))
+                .collect();
         let by_distance = |a: &(Entity, Position, f32, Owner), b: &(Entity, Position, f32, Owner)| a.2.total_cmp(&b.2);
         let nearest_foe = live.iter().filter(|(.., owner)| side.bites(*owner)).min_by(|a, b| by_distance(a, b)).copied();
         let nearest_any = live.iter().min_by(|a, b| by_distance(a, b)).copied();
@@ -3506,22 +3500,19 @@ impl Game {
 
     fn pickup_phase(&mut self, f: &mut Frame) {
         let pad = tuning().pickup_collect_pad_px;
-        let living_tanks: Vec<(Entity, Position, Position)> = self
-            .world
-            .query::<(Entity, &Tank)>()
-            .without::<&RollIn>()
-            .iter()
-            .filter(|(_, t)| !t.is_wreck())
-            .map(|(e, t)| {
-                let (center, half) = t.hull_bbox_world();
-                (e, center, half)
-            })
-            .collect();
+        // By owner slot: of two hulls over one crate the lower slot takes it.
+        let living_tanks: Vec<(Entity, Position, Position)> =
+            ordered(self.world.query::<(Entity, &Tank)>().without::<&RollIn>().iter().filter(|(_, t)| !t.is_wreck()), |(_, t)| t.owner_slot())
+                .into_iter()
+                .map(|(e, t)| {
+                    let (center, half) = t.hull_bbox_world();
+                    (e, center, half)
+                })
+                .collect();
         let rules = self.take_rules();
-        let collected: Vec<(Entity, Entity, PickupKind, Position, bool)> = self
-            .world
-            .query::<(Entity, &Pickup)>()
-            .iter()
+        // In cell order: a crate taken may draw the RNG (a laser's colour).
+        let collected: Vec<(Entity, Entity, PickupKind, Position, bool)> = ordered(self.world.query::<(Entity, &Pickup)>().iter(), |(_, p)| cell_order(p.position))
+            .into_iter()
             .filter_map(|(pickup_entity, pickup)| {
                 living_tanks
                     .iter()
@@ -3681,7 +3672,7 @@ impl Game {
                 .iter()
                 .filter(|(_, p)| p.kind == PickupKind::BongHealth && p.in_reach(center, half, pad))
                 .map(|(e, p)| (e, p.at()))
-                .min_by(|a, b| a.1.distance_to(center).total_cmp(&b.1.distance_to(center)));
+                .min_by(|a, b| a.1.distance_to(center).total_cmp(&b.1.distance_to(center)).then(a.1.x.total_cmp(&b.1.x)).then(a.1.y.total_cmp(&b.1.y)));
             let Some((pack, at)) = pack else { continue };
             let (amount, pos) = with_bong_mut(&self.world, bong, |fr| {
                 let before = fr.health;
@@ -3694,6 +3685,43 @@ impl Game {
             f.events.push(Event::BongTookPack { side, x: at.x, y: at.y });
             self.world.despawn(pack).ok();
         }
+    }
+
+    /// Put `entity`'s tank at `pos` with its velocity zeroed and its ring
+    /// snapped, optionally facing `rotation` degrees. Goes through the
+    /// physics body - `sync_tanks_and_ram` would otherwise overwrite the
+    /// position next frame - and re-orients the movement collider when
+    /// the facing axis changed, the same way `drive_tank` does on a turn.
+    /// The one placement path for a jump: a portal (`Game::portal_phase`)
+    /// and the dev server's `teleport` both go through it. The caller
+    /// keeps `tank.position` and the body in step *before* `step_world`,
+    /// so `press_treads` sees no travel.
+    pub(crate) fn place_tank(&mut self, entity: Entity, pos: Position, rotation: Option<f32>) -> Result<(), String> {
+        let (body, half_extents) = {
+            let mut q = self.world.query_one::<&mut Tank>(entity);
+            let tank = q.get().map_err(|e| e.to_string())?;
+            tank.position = pos;
+            // A placement is a jump: the frame draws it where it lands.
+            tank.smooth.cut();
+            tank.velocity = Vec2::new(0.0, 0.0);
+            tank.skid = 0.0;
+            // Arriving facing some way is no pivot.
+            tank.tread.heading = None;
+            // Nor a step: the oil on its treads prints nothing across the
+            // gap (`simulation::oil`).
+            tank.oil_cell = None;
+            if let Some(rot) = rotation {
+                tank.rotation = rot;
+                tank.visual_rotation = rot;
+                tank.turret_visual_rotation = rot;
+            }
+            let body = tank.body.expect("tank should always have a physics body once spawned");
+            (body, tank.move_half_extents(tank.facing_along_x()))
+        };
+        self.physics.set_position(body, pos);
+        let collider = self.physics.collider_of(body);
+        self.physics.resize_collider(collider, half_extents);
+        Ok(())
     }
 
     /// Portals (docs/teleporting.md): a live tank whose centre comes
@@ -3964,7 +3992,7 @@ impl Game {
         // current target is still eligible.
         if players.len() >= 2 {
             let margin = tuning().enemy_target_switch_margin_px;
-            for (tank, ai) in self.world.query::<(&Tank, &mut Ai)>().iter() {
+            for (tank, ai) in ordered(self.world.query::<(&Tank, &mut Ai)>().iter(), |(t, _)| t.owner_slot()) {
                 // A disabled tank's brain is off: it keeps the seat it had.
                 if tank.is_disabled() {
                     continue;
@@ -4082,7 +4110,8 @@ impl Game {
         let mut report = EngageReport::default();
         let mut engaged: Vec<Vec<(Entity, Position)>> = vec![Vec::new(); players.len()];
         let mut engaged_bong: Vec<(Entity, Position)> = Vec::new();
-        for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
+        // By owner slot, so each ring's greedy claim order is the slots'.
+        for (entity, tank, ai) in ordered(self.world.query::<(Entity, &Tank, &Ai)>().iter(), |(_, t, _)| t.owner_slot()) {
             let (target, hunting) = target_of(ai, tank);
             // A seat in the light is seen from further; a bong by the sky.
             let sight = if hunting.is_some() { view_range } else { players[(ai.target_player() as usize).min(players.len() - 1)].sight };
@@ -4097,11 +4126,6 @@ impl Game {
             }
         }
         report.tanks.sort_by_key(|t| t.owner);
-        // Sorted by entity so the greedy claim order is stable frame to frame.
-        for ring in &mut engaged {
-            ring.sort_by_key(|(e, _)| *e);
-        }
-        engaged_bong.sort_by_key(|(e, _)| *e);
         let reachable = |a: Position, b: Position| grid.connected(a, b);
         // One worst-case tank clear of the wall, plus a little.
         let margin = battlefield::max_tank_clearance_half_extent() + 8.0;
@@ -4374,7 +4398,8 @@ impl Game {
         // Tanks whose target the routing cannot reach, due a fresh plan
         // through the walls (`ai::Sap`), planned once the query is done.
         let mut sap_wanted: Vec<(Entity, Position, Position)> = Vec::new();
-        for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
+        // By owner slot: thinking and firing draw the round RNG.
+        for (entity, tank, ai) in ordered(self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter(), |(_, t, _)| t.owner_slot()) {
             let my_index = enemy_indices[&entity];
             // An EMP has its brain off (docs/emp-burst.md): it coasts on
             // its last intent, the trigger released, and does not think -
@@ -4624,26 +4649,17 @@ impl Game {
             })
             .collect();
         // `plan` requires its input sorted by owner slot - the caller's
-        // contract, as `EngageRing::assign` documents, and what makes its
-        // greedy passes deterministic. The collect pass walks raw ECS order,
-        // so sort a copy here rather than reordering `pending`, which must
-        // keep the order the firing RNG was drawn in.
-        let mut sorted = units;
-        sorted.sort_by_key(|u| u.slot);
-        self.commander.plan(&sorted, &command::CommandCtx {
+        // contract, and what makes its greedy passes deterministic - which
+        // is the order the collect pass walked.
+        debug_assert!(units.windows(2).all(|w| w[0].slot <= w[1].slot), "the collect pass walks by owner slot");
+        self.commander.plan(&units, &command::CommandCtx {
             dt: f.dt,
             blocked: &|from, dir| grid.blocked_ahead(from, dir.vec()),
         });
 
         // --- apply pass: the impulse, in the order the collect pass ran ---
-        // Walks `pending` rather than re-running the query. Two reasons, and
-        // both are load-bearing: `motion_snapshot`'s doc comment records that
-        // "a later query over the same archetype has no guaranteed iteration
-        // order", and `tick_queued_shots`/`dispatch_fire` above draw from the
-        // round RNG, so the order tanks are processed in is part of the
-        // seeded stream. Replaying the captured order keeps it exactly what
-        // it was before the split; sorting here would look tidier and would
-        // shift every existing replay.
+        // Walks `pending`, which holds the collect pass's owner-slot order
+        // and what it captured for each tank.
         for p in &pending {
             with_tank_mut(&self.world, p.entity, |tank| {
                 // The commander's order is never the last word on a tank
@@ -4800,35 +4816,29 @@ impl Game {
         }
     }
 
-    /// Advance the world in fixed PHYSICS_FIXED_DT steps: projectiles are
-    /// integrated inside the same loop as the rapier step, so a frame-time
-    /// hitch moves them exactly as far as it moves the tanks. Each
+    /// Advance the world by the one `PHYSICS_FIXED_DT` step an update is:
+    /// projectiles, missiles and drones first, then the rapier step. Each
     /// projectile's `prev_position` is captured first, giving the hit test
-    /// the whole frame's segment. `step_physics` is false on the end screen.
+    /// the whole step's segment. `step_physics` is false on the end screen.
     fn step_world(&mut self, f: &mut Frame, step_physics: bool) {
         self.begin_projectile_frame::<Shell>();
         self.begin_projectile_frame::<Bullet>();
         self.begin_projectile_frame::<Plasma>();
-        self.physics_accumulator = (self.physics_accumulator + f.dt).min(PHYSICS_MAX_CATCHUP_SECONDS);
-        while self.physics_accumulator >= PHYSICS_FIXED_DT {
-            self.advance_projectiles::<Shell>(PHYSICS_FIXED_DT, &f.wells);
-            self.advance_projectiles::<Bullet>(PHYSICS_FIXED_DT, &f.wells);
-            self.advance_projectiles::<Plasma>(PHYSICS_FIXED_DT, &f.wells);
-            self.advance_orbs(PHYSICS_FIXED_DT, &f.wells);
-            for missile in self.world.query::<&mut Missile>().iter() {
-                missile.advance(PHYSICS_FIXED_DT);
+        self.advance_projectiles::<Shell>(PHYSICS_FIXED_DT, &f.wells);
+        self.advance_projectiles::<Bullet>(PHYSICS_FIXED_DT, &f.wells);
+        self.advance_projectiles::<Plasma>(PHYSICS_FIXED_DT, &f.wells);
+        self.advance_orbs(PHYSICS_FIXED_DT, &f.wells);
+        for missile in self.world.query::<&mut Missile>().iter() {
+            missile.advance(PHYSICS_FIXED_DT);
+        }
+        self.advance_drones(PHYSICS_FIXED_DT, (f.width, f.height));
+        self.pull_air(f, PHYSICS_FIXED_DT);
+        if step_physics {
+            self.physics.step();
+            let (bodies, colliders) = self.physics.quarantined();
+            if bodies > 0 || colliders > 0 {
+                f.events.push(Event::PhysicsQuarantine { bodies, colliders });
             }
-            self.advance_drones(PHYSICS_FIXED_DT, (f.width, f.height));
-            self.pull_air(f, PHYSICS_FIXED_DT);
-            if step_physics {
-                self.physics.step();
-                let (bodies, colliders) = self.physics.quarantined();
-                if bodies > 0 || colliders > 0 {
-                    f.events.push(Event::PhysicsQuarantine { bodies, colliders });
-                }
-            }
-            self.physics_accumulator -= PHYSICS_FIXED_DT;
-            f.physics_stepped = true;
         }
     }
 
@@ -4860,8 +4870,7 @@ impl Game {
         }
     }
 
-    /// Read tank positions back from physics, lay tread marks on frames the
-    /// physics actually stepped, and resolve ram damage for every enemy
+    /// Read tank positions back from physics, lay tread marks, and resolve ram damage for every enemy
     /// touching a player (`ram` gates on both cooldowns, so a player takes
     /// at most one ram hit per frame), then for the two players against
     /// each other, then enemy against enemy.
@@ -4872,22 +4881,16 @@ impl Game {
             .flatten()
             .map(|p| (p, with_tank(&self.world, p, |t| t.position)))
             .collect();
-        let enemies_before: Vec<(Entity, Position)> = self
-            .world
-            .query::<(Entity, &Tank)>()
-            .with::<&Ai>()
-            .iter()
-            .map(|(e, t)| (e, t.position))
-            .collect();
+        // By owner slot: a ram draws the RNG.
+        let enemies_before: Vec<(Entity, Position)> =
+            ordered(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()).into_iter().map(|(e, t)| (e, t.position)).collect();
         for tank in self.world.query::<&mut Tank>().iter() {
             sync_tank_from_physics(&self.physics, tank);
         }
         let (look, now) = (self.wear_look(), self.time);
-        if f.physics_stepped {
-            let floor = wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
-            for &(player, before) in &players {
-                with_tank_mut(&self.world, player, |t| wear::press_treads(&mut self.wear, t, before, f.dt, &floor, look, now));
-            }
+        let floor = wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
+        for &(player, before) in &players {
+            with_tank_mut(&self.world, player, |t| wear::press_treads(&mut self.wear, t, before, f.dt, &floor, look, now));
         }
         for (enemy, before) in enemies_before {
             for &(player, _) in &players {
@@ -4907,10 +4910,7 @@ impl Game {
                     }
                 }
             }
-            if f.physics_stepped {
-                let floor = wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
-                with_tank_mut(&self.world, enemy, |t| wear::press_treads(&mut self.wear, t, before, f.dt, &floor, look, now));
-            }
+            with_tank_mut(&self.world, enemy, |t| wear::press_treads(&mut self.wear, t, before, f.dt, &floor, look, now));
         }
         // The two players: friendly fire, at the same factor a shell gets.
         if let [(p1, _), (p2, _)] = players[..] {
@@ -4985,13 +4985,12 @@ impl Game {
     /// head-on can pass through each other between frames. Same-side pairs
     /// (a twin volley, two different enemies' shells) never cancel.
     fn shell_vs_shell(&mut self, f: &mut Frame) {
-        let flying: Vec<(Entity, Position, Vec2, Owner)> = self
-            .world
-            .query::<(Entity, &Shell)>()
-            .iter()
-            .filter(|(_, s)| s.state == ShellState::Flying)
-            .map(|(e, s)| (e, s.prev_position, s.position - s.prev_position, s.owner))
-            .collect();
+        // By shot id: a shell meets the earliest-fired one it crosses.
+        let flying: Vec<(Entity, Position, Vec2, Owner)> =
+            ordered(self.world.query::<(Entity, &Shell)>().iter().filter(|(_, s)| s.state == ShellState::Flying), |(_, s)| s.id())
+                .into_iter()
+                .map(|(e, s)| (e, s.prev_position, s.position - s.prev_position, s.owner))
+                .collect();
         let collide_dist = tuning().shell_hit_half_extent * 2.0;
         let mut claimed: HashSet<Entity> = HashSet::new();
         let mut collisions: Vec<(Entity, Entity, Position)> = Vec::new();
@@ -5054,11 +5053,14 @@ impl Game {
             rewind: u8,
             portals: portals::ShotPortals,
         }
-        let flying: Vec<Flight> = self
-            .world
-            .query::<(Entity, &P, Option<&Rewind>, Option<&portals::ShotPortals>)>()
-            .iter()
-            .filter(|(_, p, _, _)| p.is_flying())
+        // By shot id: a pass-over roll and a hit's damage draw the RNG, and
+        // a shot carrying a `Rewind` or a portal's mark is stored apart
+        // from one that does not.
+        let flying: Vec<Flight> = ordered(
+            self.world.query::<(Entity, &P, Option<&Rewind>, Option<&portals::ShotPortals>)>().iter().filter(|(_, p, _, _)| p.is_flying()),
+            |(_, p, _, _)| p.id(),
+        )
+            .into_iter()
             .map(|(entity, p, rewind, portals)| Flight {
                 entity,
                 prev: p.prev_position(),
@@ -5396,11 +5398,10 @@ impl Game {
         self.despawn_done::<Shell>();
         self.despawn_done::<Bullet>();
         self.despawn_done::<Plasma>();
-        let destroyed: Vec<_> = self
-            .world
-            .query::<(Entity, &Obstacle)>()
-            .iter()
-            .filter(|(_, o)| o.destroyed)
+        // In cell order: the order rapier's handles are freed in is the
+        // order it hands them out again.
+        let destroyed: Vec<_> = ordered(self.world.query::<(Entity, &Obstacle)>().iter().filter(|(_, o)| o.destroyed), |(_, o)| cell_order(o.position))
+            .into_iter()
             .map(|(e, o)| (e, o.body))
             .collect();
         let removed = !destroyed.is_empty();
@@ -5579,8 +5580,7 @@ impl Game {
 
     /// Every tank's motion for the AI's predictive avoidance: the players
     /// first, in index order (so index `i` is player `i`), then the
-    /// enemies, plus a map from enemy entity to index (a later query over
-    /// the same archetype has no guaranteed iteration order). Wrecks are
+    /// enemies by owner slot, plus a map from enemy entity to index. Wrecks are
     /// included at zero velocity so tanks steer around them as fixed
     /// obstacles.
     fn motion_snapshot(&self) -> (Vec<Mover>, HashMap<Entity, usize>) {
@@ -5595,11 +5595,17 @@ impl Game {
             with_tank(&self.world, player, |t| movers.push(to_mover(t)));
         }
         let mut enemy_indices = HashMap::new();
-        for (entity, tank) in self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
+        for (entity, tank) in ordered(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()) {
             enemy_indices.insert(entity, movers.len());
             movers.push(to_mover(tank));
         }
         (movers, enemy_indices)
+    }
+
+    /// Every enemy - a tank with an `Ai` - by owner slot: the order a walk
+    /// over the enemies takes, after the seats.
+    pub(crate) fn enemies_by_slot(&self) -> Vec<Entity> {
+        ordered(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()).into_iter().map(|(e, _)| e).collect()
     }
 
     /// The map cell nearest `near` a tank can be put down on in this
@@ -5883,9 +5889,8 @@ impl Game {
         // A hunter with the players' bong to hunt is on its way to a fight
         // whatever its alert says (`TankSnapshot::leashed`).
         let quarry = self.bong.is_some_and(|e| self.world.get::<&Bong>(e).is_ok_and(|fr| !fr.is_dead()));
-        self.world
-            .query::<(Entity, &Tank, Option<&Ai>)>()
-            .iter()
+        ordered(self.world.query::<(Entity, &Tank, Option<&Ai>)>().iter(), |(_, t, _)| t.owner_slot())
+            .into_iter()
             .map(|(entity, tank, ai)| {
                 // A tank still rolling in has no body: its kinematic
                 // velocity stands in and it touches nothing.
@@ -6558,7 +6563,7 @@ impl Game {
                 }
             });
         }
-        for tank in self.world.query_mut::<&mut Tank>().with::<&Ai>() {
+        for tank in ordered(self.world.query_mut::<&mut Tank>().with::<&Ai>().into_iter(), |t| t.owner_slot()) {
             if std::mem::take(&mut tank.shield_broke) {
                 broken.push((tank.owner_slot(), tank.position));
             }
@@ -6808,6 +6813,41 @@ impl Game {
     pub fn first_enemy_slot(&self) -> usize {
         self.players.count()
     }
+}
+
+/// `items` sorted by `key`, ties left in the order given. hecs hands a
+/// query back in storage order, which moves with every spawn, despawn and
+/// component a round adds or takes, so a walk whose order shows - it draws
+/// the round RNG, spawns, queues or breaks a tie - goes through here,
+/// keyed by owner slot (seats first, then enemies), by cell (`cell_order`)
+/// or by shot id.
+pub(crate) fn ordered<T, K: Ord>(items: impl Iterator<Item = T>, key: impl FnMut(&T) -> K) -> Vec<T> {
+    let mut items: Vec<T> = items.collect();
+    items.sort_by_key(key);
+    items
+}
+
+/// Where a tile or a crate at `at` comes in a walk over cells: row by row,
+/// left to right, the order `MapFile::iter_cells` spawns them in.
+pub(crate) fn cell_order(at: Position) -> (i32, i32) {
+    let (col, row) = battlefield::pos_to_cell(at);
+    (row, col)
+}
+
+/// The tiles of `tiles` within `radius` of `center`, in cell order: the
+/// order a blast rolls its damage on them in.
+pub(crate) fn tiles_near<T: std::ops::Deref<Target = Obstacle>>(
+    tiles: impl Iterator<Item = (Entity, T)>,
+    center: Position,
+    radius: f32,
+) -> Vec<(Entity, T)> {
+    ordered(tiles.filter(|(_, o)| o.position.distance_to(center) <= radius), |(_, o)| cell_order(o.position))
+}
+
+/// A bong's place in a walk over the bongs: the players', then the
+/// enemy's, each side's by cell.
+pub(crate) fn bong_order(bong: &Bong) -> (bool, (i32, i32)) {
+    (bong.side == Side::Enemy, cell_order(bong.position))
 }
 
 pub(crate) fn with_tank<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&Tank) -> R) -> R {
@@ -11967,6 +12007,74 @@ cells."30,20" = { kind = "bong" }
         assert_eq!(ai.last_action, Some("seek_laser"), "the case this is about: a searched route");
         let (frame, _) = through_the_gap(&mut game, slot, 6 * 60).expect("the hull never turned into the gap");
         assert!(frame < 5 * 60, "took {frame} frames to get through");
+    }
+
+    /// A breach is as wide for a hull as what is left standing beside it
+    /// (`Game::refit_neighbours`): with the fence between two iron posts
+    /// gone - one cell of it, or two - a hull driving through a
+    /// quarter of a pixel clear of a post's own box goes straight through,
+    /// never shoved aside or held by a box still reaching for the fence.
+    #[test]
+    fn a_hull_drives_through_a_breach_without_catching() {
+        const FW: f32 = 1088.0;
+        const FH: f32 = 544.0;
+        for fences in [1, 2] {
+            let mut game = Game::default();
+            game.seed_override = Some(7);
+            game.show_intro = false;
+            game.level_overrides.mission = Some(Mission::Destroy);
+            // Row 6: an iron post, the fence, an iron post.
+            let mut map = String::from("version = 1\ntanks = 0\ntank = \"scout\"\ncells.\"10,12\" = { kind = \"start\" }\n");
+            map.push_str("cells.\"9,6\" = { kind = \"wall\", material = \"iron\" }\n");
+            for c in 0..fences {
+                map.push_str(&format!("cells.\"{},6\" = {{ kind = \"fence\" }}\n", 10 + c));
+            }
+            map.push_str(&format!("cells.\"{},6\" = {{ kind = \"wall\", material = \"iron\" }}\n", 10 + fences));
+            game.map = MapFile::from_toml_str(&map).expect("test map parses");
+            game.init(FW, FH);
+            let seat = game.player().expect("a seat");
+            let go = |game: &mut Game, intent: Intent| {
+                let mut input = Input::default();
+                input.seats[0] = intent;
+                game.update(input, 1.0 / 60.0, FW, FH);
+            };
+            let post = map::cell_to_world(9, 6);
+            let own = game
+                .world
+                .query::<&Obstacle>()
+                .iter()
+                .find(|o| o.position == post)
+                .map(|o| o.hull_size() * 0.5)
+                .expect("the west post");
+            // The posts close their seams with the fence while it stands.
+            let reach = |game: &Game| {
+                let terrain = hits::Terrain::build(&game.world, FW, FH, &[], &game.water);
+                game.world.query::<(Entity, &Obstacle)>().iter().find(|(_, o)| o.position == post).and_then(|(e, _)| terrain.obstacle(e)).map(|b| b.half.x).expect("the west post")
+            };
+            assert!(reach(&game) > own, "{fences}: the post reaches for the fence: {} against its own {own}", reach(&game));
+            // The fence goes, a cell at a time.
+            let fence: Vec<Entity> = game.world.query::<(Entity, &Obstacle)>().iter().filter(|(_, o)| o.material == crate::obstacle::Material::Fence).map(|(e, _)| e).collect();
+            assert_eq!(fence.len(), fences);
+            let mut f = Frame::new(1.0 / 60.0, FW, FH, SmallRng::seed_from_u64(1), hits::Terrain::build(&game.world, FW, FH, &[], &game.water));
+            for entity in fence {
+                assert!(game.damage_obstacle(&mut f, entity, f32::MAX, props::DamageCause::Fire), "{fences}: the fence dies");
+            }
+            go(&mut game, Intent::default());
+            assert!(game.world.query::<&Obstacle>().iter().all(|o| o.material != crate::obstacle::Material::Fence), "{fences}: the fence is gone");
+            assert_eq!(reach(&game), own, "{fences}: a shot sees the post at its own width");
+            // Up through the breach, a quarter of a pixel clear of the west
+            // post's own box: inside the box it had while the fence stood.
+            let (hx, hy) = with_tank(&game.world, seat, |t| t.move_half_extents(false));
+            let x = post.x + own + hx + 0.25;
+            game.place_tank(seat, Position::new(x, post.y + 2.0 * OBSTACLE_GRID_SIZE), Some(0.0)).expect("placed");
+            for frame in 0..120 {
+                go(&mut game, Intent { move_dir: Some(Dir::Up), ..Intent::default() });
+                let at = with_tank(&game.world, seat, |t| t.position);
+                assert!((at.x - x).abs() < 0.05, "{fences}: shoved aside to x {} from {x} on frame {frame}", at.x);
+            }
+            let at = with_tank(&game.world, seat, |t| t.position);
+            assert!(at.y + hy < post.y - OBSTACLE_GRID_SIZE * 0.5, "{fences}: through the breach, at y {} past the row at {}", at.y, post.y);
+        }
     }
 
     /// Every hull looks a step ahead (`physics::HULL_LOOK_AHEAD`), so

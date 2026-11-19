@@ -381,6 +381,7 @@ impl Game {
                 o.destroyed = true;
             }
             f.events.push(Event::ObstacleDestroyed { material: Material::Barrel, x: at.x, y: at.y });
+            self.refit_neighbours(Material::Barrel, at);
             let id = self.take_shot_id();
             self.held_drums.push(HeldDrum { id, well: zone.id, cell, drum: Drum::from_variant(variant), fuse, lifted_at: self.time, centre: zone.centre });
         }
@@ -528,7 +529,7 @@ impl Game {
         let r = t.well_radius_px;
         let terrain = &f.terrain;
         let mut hurt = Vec::new();
-        for bong in self.world.query_mut::<&mut Bong>() {
+        for bong in super::ordered(self.world.query_mut::<&mut Bong>().into_iter(), |b| super::bong_order(b)) {
             if bong.is_dead() {
                 continue;
             }

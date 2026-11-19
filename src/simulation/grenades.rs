@@ -57,13 +57,13 @@ impl Game {
         for player in self.players().into_iter().flatten() {
             super::with_tank(&self.world, player, |t| add(t, &self.physics));
         }
-        for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
+        for tank in super::ordered(self.world.query::<&Tank>().with::<&Ai>().iter(), |t| t.owner_slot()) {
             add(tank, &self.physics);
         }
         let t = crate::tuning::tuning();
         let (wells, now) = (&f.wells, self.time);
         let zones = &self.zones;
-        for grenade in self.world.query::<&mut Grenade>().iter() {
+        for grenade in super::ordered(self.world.query::<&mut Grenade>().iter(), |g| g.id) {
             // On a well's ring (docs/gravity-well.md "Grenades"): placed by
             // the clock, its fuse burning on; a ring whose well is gone
             // lets it go where it is.

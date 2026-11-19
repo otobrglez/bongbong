@@ -184,8 +184,8 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   deploys `site/dist/`.
 - **`game_loop::run`'s fps means different things**: native `SetTargetFPS`; on web any `fps > 0`
   selects a setTimeout driver and only `0` selects rAF (timers are unsynced, throttled and judder),
-  so `app.rs` passes 0 on emscripten. Physics runs on its own fixed-dt accumulator, so a lower loop
-  rate is safe.
+  so `app.rs` passes 0 on emscripten. The round steps in whole `PHYSICS_FIXED_DT` steps owed by
+  `StepClock`, so a lower loop rate is safe.
 - `.cargo/config.toml` carries the emscripten link flags (GLFW3, memory growth, `--preload-file
   static@/static` so `static/...` paths resolve, **no `-sASYNCIFY`** (it instruments every function
   and halved the web client; docs/online-coop-prd.md decision 19), and **`-sSTACK_SIZE=4194304`**:
