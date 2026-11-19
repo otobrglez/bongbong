@@ -110,10 +110,6 @@ Non-goals, for now
   game sets it (src/app.rs:636).
 
 ### Precedents in the tree
-- `ntk/src/bin/06_explosions.rs` opens its own raylib window, loads the
-  same ~25 textures by hand, configures a `Game` with `show_intro = false`,
-  `enemy_count_override = Some(0)`, `plain_canvas`, `hide_players`, and
-  calls `game.render` with its own handle.
 - The devserver's `screenshot` (src/devserver.rs:859) reads a render
   texture back with `scene.load_image()` + `flip_vertical()` and encodes
   with `export_image_to_memory(".png")`. Its one-frame lag is a *screen*
@@ -168,8 +164,8 @@ Walls/Props/Trees enum) so there are not two enums of that name; the
 pickup `match` at src/game.rs:317-329 folds into `Sheet::Pickup(kind)`,
 and `Sheet::Bong` addresses `textures.bong_variants[variant].<clip>`. A
 single path table (`Sheet::path()` or `pub const` items beside it) is the
-one list the GPU loaders in src/app.rs:477-560, the ntk demo and the CPU
-loader all read.
+one list the GPU loaders in src/app.rs:477-560 and the CPU loader both
+read.
 
 `Canvas` is the whole drawing vocabulary the static field needs:
 
