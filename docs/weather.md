@@ -249,8 +249,7 @@ on stderr, and every sky is then drawn plainly, straight into
    round every seat (a gust's wall fills the clearing as it does there),
    the sand's grains, rain in three depths as one-block streaks slanting
    down the wind, snow in three depths - then lightning's white as one
-   additive rectangle. The blocks are drawn with the target's alpha left
-   alone, since pass 2 blits it over black.
+   additive rectangle. The blocks are plain alpha-blended rectangles.
 
 Fog, sand and snow cover are worked out per 8 px tile (`TILE_PX`) rather
 than per 2 px block, stepped hard rather than dithered, and a run of

@@ -166,16 +166,22 @@ pub struct Camera {
     pub size: (f32, f32),
     /// Bitmap pixels per world pixel.
     pub scale: f32,
-    /// World pixels the scene target holds past the view's far edges, so
-    /// the picture can be shifted by `offset` and still cover the view:
-    /// one block for a followed view, none otherwise.
-    pub margin: f32,
+    /// World pixels the scene target holds beyond the view's own size on
+    /// each axis, so the picture can be shifted by `offset` and still
+    /// cover the view: one block for a followed view - more once it is
+    /// `overscanned` -, none otherwise.
+    pub margin: (f32, f32),
 }
+
+/// The step a followed view's scene target is rounded up to once it holds
+/// its overscan (`Camera::overscanned`), texels: a window dragged by its
+/// edge then asks for another target once every step, not every frame.
+pub const TARGET_STEP: f32 = 32.0;
 
 impl Camera {
     /// The whole field at its own size: what an arena shows.
     pub fn whole(field: (f32, f32)) -> Self {
-        Camera { field, origin: Vec2::new(0.0, 0.0), offset: Vec2::new(0.0, 0.0), size: field, scale: 1.0, margin: 0.0 }
+        Camera { field, origin: Vec2::new(0.0, 0.0), offset: Vec2::new(0.0, 0.0), size: field, scale: 1.0, margin: (0.0, 0.0) }
     }
 
     /// Whether this is the whole field at its own size (`whole`): an
@@ -211,13 +217,36 @@ impl Camera {
         };
         let (x, dx) = axis(corner.x);
         let (y, dy) = axis(corner.y);
-        Camera { field, origin: Vec2::new(x, y), offset: Vec2::new(dx, dy), size, scale, margin: block }
+        Camera { field, origin: Vec2::new(x, y), offset: Vec2::new(dx, dy), size, scale, margin: (block, block) }
     }
 
     /// Whether this is a followed view (`following`), presented with its
     /// sub-block offset rather than through the bitmap.
     pub fn follows(&self) -> bool {
-        self.margin > 0.0
+        self.margin.0 > 0.0
+    }
+
+    /// A followed view with `pad` world pixels of the world round it in
+    /// its scene target, on every side (docs/effects.md, the camera
+    /// shake): the picture can then land up to `pad` off its place and
+    /// still cover the view with what is really there. The target's
+    /// corner moves `pad` back - `pad` in whole blocks, so it stays on the
+    /// block grid - and `offset` grows by as much, so the view itself
+    /// (`rect`) is where it was; the target's size is rounded up to whole
+    /// `TARGET_STEP`s, the spare texels past the far edges. Any other view
+    /// is handed back as it is: an arena's scene target is its field, and
+    /// what lies past that is the margins' (`margin.rs`).
+    pub fn overscanned(mut self, pad: f32) -> Self {
+        if !self.follows() {
+            return self;
+        }
+        let block = crate::pyro::BLOCK;
+        let pad = if pad.is_finite() { (pad.max(0.0) / block).ceil() * block } else { 0.0 };
+        self.origin = Vec2::new(self.origin.x - pad, self.origin.y - pad);
+        self.offset = Vec2::new(self.offset.x + pad, self.offset.y + pad);
+        let held = |size: f32| ((size + block + 2.0 * pad) / TARGET_STEP).ceil() * TARGET_STEP - size;
+        self.margin = (held(self.size.0), held(self.size.1));
+        self
     }
 
     /// The field magnified `zoom` times around `center`: the view shows
@@ -234,7 +263,7 @@ impl Camera {
             (at / crate::pyro::BLOCK).floor() * crate::pyro::BLOCK
         };
         let origin = Vec2::new(corner(center.x, size.0, field.0), corner(center.y, size.1, field.1));
-        Camera { field, origin, offset: Vec2::new(0.0, 0.0), size, scale: zoom, margin: 0.0 }
+        Camera { field, origin, offset: Vec2::new(0.0, 0.0), size, scale: zoom, margin: (0.0, 0.0) }
     }
 
     /// Whether the scene target takes in the whole field, which leaves
@@ -247,7 +276,7 @@ impl Camera {
     /// The scene target's size: the view and its margin in whole texels,
     /// one per world pixel - the field's own size for the whole field.
     pub fn target_size(&self) -> (i32, i32) {
-        (((self.size.0 + self.margin).ceil() as i32).max(1), ((self.size.1 + self.margin).ceil() as i32).max(1))
+        (((self.size.0 + self.margin.0).ceil() as i32).max(1), ((self.size.1 + self.margin.1).ceil() as i32).max(1))
     }
 
     /// The world rectangle the view shows.
@@ -349,12 +378,13 @@ impl FollowFrame {
         FollowFrame { framing, seating, sight, layout: Layout::bare(w, h), view: View::fill((w, h), window) }
     }
 
-    /// The scene target a view of this frame needs: the view and the
-    /// block of margin `Camera::following` gives it, whole texels. It does
-    /// not move with the view, so the target lives as long as the window
-    /// keeps its size.
-    pub fn target_size(&self) -> (i32, i32) {
-        Camera::following((1.0, 1.0), Vec2::new(0.0, 0.0), self.framing.visible, 1.0, 1.0).target_size()
+    /// The scene target a view of this frame needs: the view, the block
+    /// of margin `Camera::following` gives it and `overscan` world pixels
+    /// round it (`Camera::overscanned`), whole texels. It does not move
+    /// with the view, so the target lives as long as the window stays
+    /// within a `TARGET_STEP` of its size.
+    pub fn target_size(&self, overscan: f32) -> (i32, i32) {
+        Camera::following((1.0, 1.0), Vec2::new(0.0, 0.0), self.framing.visible, 1.0, 1.0).overscanned(overscan).target_size()
     }
 
     /// Device pixels per world pixel on a window of `framebuffer` device
@@ -362,6 +392,129 @@ impl FollowFrame {
     /// followed view's sub-block shift is rounded to.
     pub fn device_scale(&self, framebuffer: f32) -> f32 {
         self.view.scale * framebuffer
+    }
+}
+
+/// How the world is put on a window whose device pixels are not a whole
+/// number to the texel (docs/large-maps-follow-camera.md §6, "Presenting"):
+/// drawn first into a picture at `n` pixels to the texel, sampled nearest
+/// so every texel is the same `n` pixels wide, and that picture then drawn
+/// onto the window smoothly. A texel's edge on the glass is then one
+/// blended device pixel at most, and no column of the art is a pixel wider
+/// than its neighbour - where scaling straight to the window gives a 2 px
+/// block two device pixels in one column and three in the next.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Prescale {
+    /// Picture pixels to the texel, whole.
+    pub n: i32,
+    /// Picture pixels to the window unit: `n` over the window units a
+    /// texel takes.
+    pub zoom: f32,
+    /// The window point the texel grid starts from (`anchor`) and the
+    /// whole picture pixel it is drawn at, so every texel's edge is a
+    /// pixel's edge in the picture.
+    pub anchor: Vec2,
+    pub origin: Vec2,
+    /// The picture's size, pixels: the window and a pixel round it, which
+    /// the smooth sampling reads at the window's own edge.
+    pub size: (i32, i32),
+}
+
+/// What a `Prescale`'s picture may cost: the longest side a texture has on
+/// the platform's oldest GPUs, and the most pixels worth their fill and
+/// memory there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrescaleLimits {
+    pub side: i32,
+    pub pixels: i64,
+}
+
+impl PrescaleLimits {
+    /// A desktop's: an 8K side, twelve megapixels - a 4K window's picture
+    /// at four pixels to the texel.
+    pub const DESKTOP: PrescaleLimits = PrescaleLimits { side: 8192, pixels: 12_000_000 };
+    /// A browser's: WebGL 1's common 4096 side, eight megapixels.
+    pub const WEB: PrescaleLimits = PrescaleLimits { side: 4096, pixels: 8_000_000 };
+    /// A phone's or a tablet's (GL ES 2): the 4096 side, six megapixels -
+    /// twice a phone's screen, which is what its fill rate has to spare.
+    pub const PHONE: PrescaleLimits = PrescaleLimits { side: 4096, pixels: 6_000_000 };
+
+    /// This build's.
+    pub fn here() -> PrescaleLimits {
+        if cfg!(any(target_os = "ios", target_os = "android")) {
+            PrescaleLimits::PHONE
+        } else if cfg!(target_os = "emscripten") {
+            PrescaleLimits::WEB
+        } else {
+            PrescaleLimits::DESKTOP
+        }
+    }
+}
+
+impl Prescale {
+    /// How far past a whole number of device pixels a texel may be and
+    /// still be drawn at that number: the picture is then scaled up by at
+    /// most this much more, an edge a tenth of a pixel softer, for a
+    /// picture smaller than the window instead of up to twice its side.
+    const NEAR_WHOLE: f32 = 0.125;
+    /// The most a picture is scaled up onto the window where the limits
+    /// kept it small: past this it would blur, and the window is better
+    /// served by the nearest texel.
+    const MOST_STRETCH: f32 = 1.25;
+
+    /// The picture for a `window` (its own units) that shows a texel
+    /// `scale` window units wide, `device` device pixels to the unit, the
+    /// texel grid starting at the window point `anchor`. `None` where the
+    /// window needs none - a texel is a whole number of device pixels
+    /// already, which nearest sampling draws exactly - or where `limits`
+    /// leave no picture that would be sharper than that.
+    pub fn of(window: (f32, f32), scale: f32, device: f32, anchor: Vec2, limits: PrescaleLimits) -> Option<Prescale> {
+        let texel = scale * device;
+        let sane = |v: f32| v.is_finite() && v > 0.0;
+        if !sane(texel) || !sane(scale) || !sane(window.0) || !sane(window.1) || !anchor.x.is_finite() || !anchor.y.is_finite() {
+            return None;
+        }
+        if texel >= 1.0 && (texel - texel.round()).abs() < 1e-3 {
+            return None;
+        }
+        let whole = texel.floor();
+        let mut n = if texel < 1.0 {
+            1
+        } else if texel - whole <= Self::NEAR_WHOLE {
+            whole as i32
+        } else {
+            whole as i32 + 1
+        };
+        loop {
+            let plan = Self::at(window, scale, anchor, n);
+            let fits = plan.size.0 <= limits.side && plan.size.1 <= limits.side && plan.size.0 as i64 * plan.size.1 as i64 <= limits.pixels;
+            if fits {
+                return (texel / n as f32 <= Self::MOST_STRETCH).then_some(plan);
+            }
+            if n == 1 {
+                return None;
+            }
+            n -= 1;
+        }
+    }
+
+    /// The picture at `n` pixels to the texel.
+    fn at(window: (f32, f32), scale: f32, anchor: Vec2, n: i32) -> Prescale {
+        let zoom = n as f32 / scale;
+        let origin = Vec2::new((anchor.x * zoom).ceil() + 1.0, (anchor.y * zoom).ceil() + 1.0);
+        let side = |origin: f32, anchor: f32, window: f32| ((origin + (window - anchor) * zoom).ceil() as i32 + 1).max(1);
+        Prescale { n, zoom, anchor, origin, size: (side(origin.x, anchor.x, window.0), side(origin.y, anchor.y, window.1)) }
+    }
+
+    /// Where the picture goes on the window, in the window's units: over
+    /// all of it and a pixel past.
+    pub fn dest(&self) -> Rectangle {
+        Rectangle::new(self.anchor.x - self.origin.x / self.zoom, self.anchor.y - self.origin.y / self.zoom, self.size.0 as f32 / self.zoom, self.size.1 as f32 / self.zoom)
+    }
+
+    /// A window point as a point of the picture.
+    pub fn to_picture(&self, window: Vec2) -> Vec2 {
+        Vec2::new((window.x - self.anchor.x) * self.zoom + self.origin.x, (window.y - self.anchor.y) * self.zoom + self.origin.y)
     }
 }
 
@@ -636,10 +789,90 @@ mod view_tests {
         // Nonsense in, the field's corner out.
         let c = Camera::following(field, Vec2::new(f32::NAN, f32::INFINITY), (1280.0, 688.0), 1.0, f32::NAN);
         assert_eq!((c.origin, c.offset), (Vec2::new(0.0, 0.0), Vec2::new(0.0, 0.0)));
+        // Overscanned by the shake's reach: the same view, with that much
+        // of the world round it in a target a whole step a side.
+        let plain = Camera::following(field, Vec2::new(301.3, 120.9), (1280.0, 688.0), 1.0, 1.5);
+        let c = plain.overscanned(9.0);
+        assert_eq!(c.rect(), plain.rect(), "the view is where it was");
+        assert_eq!(c.origin, Vec2::new(290.0, 110.0), "ten pixels back: nine rounded up to whole blocks");
+        let (t, r) = (c.target_rect(), c.rect());
+        assert!(r.x - t.x >= 10.0 && r.y - t.y >= 10.0, "{c:?}");
+        assert!(t.x + t.width - (r.x + r.width) >= 10.0 && t.y + t.height - (r.y + r.height) >= 10.0, "{c:?}");
+        assert_eq!(c.target_size(), (1312, 736), "whole steps");
+        assert_eq!(c.target_size(), Camera::following(field, Vec2::new(0.0, 7.0), (1280.0, 688.0), 1.0, 1.5).overscanned(9.0).target_size(), "wherever the view is");
+        assert!(c.follows());
+        assert_eq!(Camera::whole(field).overscanned(9.0), Camera::whole(field), "an arena's target is its field");
         // A followed view inside the field culls; one past it on both axes
         // holds the whole field and culls nothing.
         assert!(Camera::following(field, Vec2::new(100.0, 40.0), (1280.0, 688.0), 1.0, 1.5).cull().is_some());
         assert_eq!(Camera::following((1280.0, 640.0), Vec2::new(-10.0, -24.0), (1300.0, 688.0), 1.0, 1.0).cull(), None);
+    }
+
+    #[test]
+    fn a_window_off_a_whole_scale_gets_a_whole_picture() {
+        let desk = PrescaleLimits::DESKTOP;
+        // A whole number of device pixels to the texel needs no picture.
+        assert_eq!(Prescale::of((1088.0, 544.0), 1.0, 1.0, Vec2::new(0.0, 0.0), desk), None);
+        assert_eq!(Prescale::of((1088.0, 544.0), 1.0, 2.0, Vec2::new(0.0, 0.0), desk), None);
+        assert_eq!(Prescale::of((1632.0, 816.0), 1.5, 2.0, Vec2::new(0.0, 0.0), desk), None);
+        // The 1280x720 window over the standard arena: 1.176 device pixels
+        // to the texel, drawn at two and scaled down.
+        let view = View::fit((1088.0, 544.0), (1280.0, 720.0));
+        let p = Prescale::of(view.window, view.scale, 1.0, view.offset, desk).expect("a picture");
+        assert_eq!(p.n, 2);
+        // The bitmap's corner is a whole pixel of the picture, and its
+        // every texel two.
+        let corner = p.to_picture(view.offset);
+        assert_eq!((corner.x.fract(), corner.y.fract()), (0.0, 0.0));
+        let next = p.to_picture(view.to_window(Vec2::new(1.0, 1.0)));
+        assert!((next.x - corner.x - 2.0).abs() < 1e-3 && (next.y - corner.y - 2.0).abs() < 1e-3, "{corner:?} {next:?}");
+        // The picture covers the window with a pixel to spare on every
+        // side, and lands where the window is.
+        let (near, far) = (p.to_picture(Vec2::new(0.0, 0.0)), p.to_picture(Vec2::new(1280.0, 720.0)));
+        assert!(near.x >= 1.0 && near.y >= 1.0 && far.x <= p.size.0 as f32 - 1.0 && far.y <= p.size.1 as f32 - 1.0, "{p:?}");
+        assert!(p.size.0 <= 2180 && p.size.1 <= 1228, "{:?}", p.size);
+        let d = p.dest();
+        let back = Vec2::new(d.x + near.x / p.zoom, d.y + near.y / p.zoom);
+        assert!(back.x.abs() < 1e-3 && back.y.abs() < 1e-3, "{back:?}");
+        // A Retina window at 2.5 device pixels to the texel: three.
+        let p = Prescale::of((1280.0, 720.0), 1.25, 2.0, Vec2::new(-1.2, 0.0), desk).expect("a picture");
+        assert_eq!(p.n, 3);
+        assert!((3074..=3076).contains(&p.size.0) && (1730..=1732).contains(&p.size.1), "{:?}", p.size);
+        // Just past a whole number the picture stays at it, smaller than
+        // the window.
+        let p = Prescale::of((1280.0, 720.0), 2.05, 1.0, Vec2::new(0.0, 0.0), desk).expect("a picture");
+        assert_eq!(p.n, 2);
+        assert!(p.size.0 < 1280);
+        // A window smaller than its bitmap: a texel a pixel, scaled down.
+        let p = Prescale::of((544.0, 272.0), 0.5, 1.0, Vec2::new(0.0, 0.0), desk).expect("a picture");
+        assert_eq!((p.n, p.zoom), (1, 2.0));
+    }
+
+    #[test]
+    fn a_picture_past_the_limits_is_smaller_or_none() {
+        // A 4K window at 3.53 device pixels to the texel: four on a
+        // desktop, three in a browser (a 4096 side, eight megapixels).
+        let window = (3840.0, 2160.0);
+        let desk = Prescale::of(window, 3.53, 1.0, Vec2::new(0.0, 120.0), PrescaleLimits::DESKTOP).expect("a picture");
+        assert_eq!((desk.n, desk.size), (4, (4354, 2450)));
+        let web = Prescale::of(window, 3.53, 1.0, Vec2::new(0.0, 120.0), PrescaleLimits::WEB).expect("a picture");
+        assert_eq!((web.n, web.size), (3, (3266, 1838)));
+        // A phone: 2532x1170 device pixels, 844x390 points, three to the
+        // point - 2.4 to the texel is three, 4.9 megapixels.
+        let phone = Prescale::of((844.0, 390.0), 0.8, 3.0, Vec2::new(0.0, 0.0), PrescaleLimits::PHONE).expect("a picture");
+        assert_eq!((phone.n, phone.size), (3, (3167, 1465)));
+        // A tablet at 2.2 to the texel: three would be ten megapixels,
+        // two is 1.1 times off, which still reads sharp.
+        let tablet = Prescale::of((1366.0, 1024.0), 1.1, 2.0, Vec2::new(0.0, 0.0), PrescaleLimits::PHONE).expect("a picture");
+        assert_eq!(tablet.n, 2);
+        assert!(tablet.size.0 as i64 * tablet.size.1 as i64 <= PrescaleLimits::PHONE.pixels);
+        // Where the limits would leave a picture stretched to a blur, none:
+        // 1.5 to the texel with no room for two.
+        let tight = PrescaleLimits { side: 4096, pixels: 1_000_000 };
+        assert_eq!(Prescale::of((1280.0, 720.0), 1.5, 1.0, Vec2::new(0.0, 0.0), tight), None);
+        // Nonsense in, no picture out.
+        assert_eq!(Prescale::of((1280.0, 720.0), f32::NAN, 1.0, Vec2::new(0.0, 0.0), PrescaleLimits::DESKTOP), None);
+        assert_eq!(Prescale::of((0.0, 720.0), 1.3, 1.0, Vec2::new(0.0, 0.0), PrescaleLimits::DESKTOP), None);
     }
 
     #[test]
@@ -663,8 +896,10 @@ mod view_tests {
                 assert!((f.device_scale(dpr) - f.framing.point_scale * dpr).abs() < 1e-3);
                 let d = f.view.dest();
                 assert!((d.width - w).abs() < 0.01 && (d.height - h).abs() < 0.01, "{w} x {h}: {d:?}");
-                let (tw, th) = f.target_size();
+                let (tw, th) = f.target_size(0.0);
                 assert!(tw as f32 >= vw + 2.0 && th as f32 >= vh + 2.0);
+                let (ow, oh) = f.target_size(10.0);
+                assert!(ow as f32 >= vw + 22.0 && oh as f32 >= vh + 22.0, "the shake's reach on every side");
             }
         }
         // Past the aspect clamp a 32:9 screen gets side bars, centred.

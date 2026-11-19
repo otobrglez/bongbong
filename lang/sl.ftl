@@ -38,6 +38,7 @@ round-lost = PORAZ
 round-restarting = Nova igra čez { $seconds }...
 round-back-to-lobby = Nazaj v sobo čez { $seconds }...
 paused = PAVZA
+render-trouble = Težava z grafiko: { $name }
 
 mission-protect = BRANI
 mission-hunt = LOV

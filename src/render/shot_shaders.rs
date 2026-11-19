@@ -242,32 +242,94 @@ mod tests {
         assert_eq!(OrbLook::of(7), OrbLook::of(7), "a bolt keeps its look");
     }
 
-    /// The GLSL ES 100 twins in `static/web/` are ported by hand: each
-    /// declares every uniform its desktop shader does, so the web build
-    /// never draws with a zero where a value should be, and writes
-    /// `gl_FragColor`.
+    /// What a shader says once the differences between GLSL 330 and GLSL
+    /// ES 100 are taken out: no comments, no `#` lines or what an `#if`
+    /// guards, no `precision` line, no `in`/`out`/`varying`/`attribute`
+    /// declaration, `texture2D` read as `texture` and `gl_FragColor` as
+    /// `finalColor`, the white space between what is left collapsed.
+    fn normalised(source: &str) -> String {
+        let mut words: Vec<&str> = Vec::new();
+        let mut guarded = 0;
+        for line in source.lines() {
+            let line = line.split("//").next().unwrap_or("").trim();
+            if line.starts_with("#if") {
+                guarded += 1;
+            } else if line.starts_with("#endif") {
+                guarded -= 1;
+            } else if guarded == 0
+                && !line.starts_with('#')
+                && !["precision ", "in ", "out ", "varying ", "attribute "].iter().any(|declared| line.starts_with(declared))
+            {
+                words.extend(line.split_whitespace());
+            }
+        }
+        words.join(" ").replace("texture2D(", "texture(").replace("gl_FragColor", "finalColor")
+    }
+
+    /// The GLSL ES 100 twins in `static/web/` are ported by hand: each is
+    /// its desktop shader statement for statement (`normalised`) - the
+    /// uniforms, the constants and the arithmetic - so the web, iOS and
+    /// Android never draw another picture than the desktop, and each
+    /// writes `gl_FragColor`.
     #[test]
-    fn the_web_twins_declare_the_desktop_uniforms() {
-        fn uniforms(source: &str) -> Vec<String> {
-            let mut out: Vec<String> = source
-                .lines()
-                .filter_map(|line| line.trim().strip_prefix("uniform "))
-                .map(|rest| rest.split(';').next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "))
-                .collect();
-            out.sort();
-            out
-        }
+    fn the_web_twins_are_the_desktop_shaders() {
         let pairs = [
-            (include_str!("../../static/plasma_orb.fs"), include_str!("../../static/web/plasma_orb.fs")),
-            (include_str!("../../static/flame_jet.fs"), include_str!("../../static/web/flame_jet.fs")),
-            (include_str!("../../static/impact.fs"), include_str!("../../static/web/impact.fs")),
-            (include_str!("../../static/muzzle_flash.fs"), include_str!("../../static/web/muzzle_flash.fs")),
-            (include_str!("../../static/shockwave.fs"), include_str!("../../static/web/shockwave.fs")),
+            ("dissolve", include_str!("../../static/dissolve.fs"), include_str!("../../static/web/dissolve.fs")),
+            ("flame_jet", include_str!("../../static/flame_jet.fs"), include_str!("../../static/web/flame_jet.fs")),
+            ("impact", include_str!("../../static/impact.fs"), include_str!("../../static/web/impact.fs")),
+            ("muzzle_flash", include_str!("../../static/muzzle_flash.fs"), include_str!("../../static/web/muzzle_flash.fs")),
+            ("plasma_orb", include_str!("../../static/plasma_orb.fs"), include_str!("../../static/web/plasma_orb.fs")),
+            ("shockwave", include_str!("../../static/shockwave.fs"), include_str!("../../static/web/shockwave.fs")),
+            ("turn", include_str!("../../static/turn.fs"), include_str!("../../static/web/turn.fs")),
+            ("weather_ground", include_str!("../../static/weather_ground.fs"), include_str!("../../static/web/weather_ground.fs")),
+            ("weather_light", include_str!("../../static/weather_light.fs"), include_str!("../../static/web/weather_light.fs")),
+            ("weather_sky", include_str!("../../static/weather_sky.fs"), include_str!("../../static/web/weather_sky.fs")),
         ];
-        for (desktop, web) in pairs {
-            assert!(desktop.starts_with("#version 330") && web.starts_with("#version 100"));
-            assert_eq!(uniforms(desktop), uniforms(web));
-            assert!(web.contains("gl_FragColor") && !web.contains("finalColor ="), "the twin writes gl_FragColor");
+        for (name, desktop, web) in pairs {
+            assert!(desktop.starts_with("#version 330") && web.starts_with("#version 100"), "{name}: the versions");
+            assert!(web.contains("gl_FragColor") && !web.contains("finalColor ="), "{name}: the twin writes gl_FragColor");
+            let (desktop, web) = (normalised(desktop), normalised(web));
+            assert!(desktop.contains("uniform ") && desktop.contains("void main()"), "{name}: nothing left to compare");
+            if desktop != web {
+                let at = desktop.bytes().zip(web.bytes()).position(|(a, b)| a != b).unwrap_or(desktop.len().min(web.len()));
+                let from = desktop[..at].rfind(';').map_or(0, |i| i + 1);
+                let part = |s: &str| s[from..].chars().take(160).collect::<String>();
+                panic!("{name}: static/web/{name}.fs is not static/{name}.fs from\n  desktop: {}\n  web:     {}", part(&desktop), part(&web));
+            }
         }
+    }
+
+    /// The one vertex shader has a twin too, and each declares what the
+    /// other does under its own keyword: the batch's four attributes, the
+    /// four values handed to the fragment shader.
+    #[test]
+    fn the_turn_vertex_shader_has_its_twin() {
+        let (desktop, web) = (include_str!("../../static/turn.vs"), include_str!("../../static/web/turn.vs"));
+        assert!(desktop.starts_with("#version 330") && web.starts_with("#version 100"));
+        assert_eq!(normalised(desktop), normalised(web));
+        assert!(normalised(desktop).contains("gl_Position = mvp"));
+        let declared = |source: &str, keyword: &str| -> Vec<String> {
+            source.lines().map(|l| l.split("//").next().unwrap_or("").trim()).filter_map(|l| l.strip_prefix(keyword)).map(str::to_string).collect()
+        };
+        assert_eq!(declared(desktop, "in "), declared(web, "attribute "));
+        assert_eq!(declared(desktop, "out "), declared(web, "varying "));
+        assert_eq!(declared(desktop, "in ").len(), 4);
+        // What the vertex shader hands on is what the fragment shader takes.
+        let fragment = include_str!("../../static/turn.fs");
+        let mut taken = declared(fragment, "in ");
+        let mut handed = declared(desktop, "out ");
+        taken.sort();
+        handed.sort();
+        assert_eq!(taken, handed);
+    }
+
+    /// `normalised` keeps what a port must not change and drops only what
+    /// it must.
+    #[test]
+    fn a_twin_with_another_constant_is_not_the_shader() {
+        let desktop = "#version 330\nin vec2 fragTexCoord;\nout vec4 finalColor;\nuniform sampler2D texture0; // scene\nvoid main() {\n    finalColor = texture(texture0, fragTexCoord) * 0.5;\n}\n";
+        let web = "#version 100\n#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\nvarying vec2 fragTexCoord;\nuniform sampler2D texture0;\nvoid main() {\n    gl_FragColor = texture2D(texture0, fragTexCoord) * 0.5;\n}\n";
+        assert_eq!(normalised(desktop), normalised(web));
+        assert_ne!(normalised(desktop), normalised(&web.replace("0.5", "0.6")));
     }
 }

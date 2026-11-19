@@ -194,7 +194,7 @@ impl BuilderScene {
             Some((target, source, area)) => {
                 d.clear_background(Color::BLACK);
                 crate::render::view::letterbox(d, view, backdrop);
-                d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                crate::render::view::draw_opaque(d, |d| d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE));
             }
             None => crate::render::view::present_into(d, composite, view, backdrop, margins),
         }
@@ -213,7 +213,7 @@ fn hold<'a>(
     let fits = |size: (i32, i32)| size.0 >= need.0 && size.1 >= need.1 && size.0 * size.1 <= 4 * need.0 * need.1;
     if !slot.as_ref().is_some_and(|(_, size)| fits(*size)) {
         *slot = None;
-        let texture = rl.load_render_texture(thread, need.0 as u32, need.1 as u32).ok()?;
+        let texture = crate::render::target::load(rl, thread, need).ok()?;
         *slot = Some((texture, need));
     }
     slot.as_mut().map(|(texture, _)| texture)
@@ -251,7 +251,7 @@ fn hold_exact<'a>(
     let size = (size.0.max(1), size.1.max(1));
     if !slot.as_ref().is_some_and(|(_, held)| *held == size) {
         *slot = None;
-        let texture = rl.load_render_texture(thread, size.0 as u32, size.1 as u32).ok()?;
+        let texture = crate::render::target::load(rl, thread, size).ok()?;
         *slot = Some((texture, size));
     }
     slot.as_mut().map(|(texture, _)| texture)
@@ -260,6 +260,10 @@ fn hold_exact<'a>(
 /// The builder's `Sheet` lookup: the round's (`game::Textures`), its
 /// blocks the canvas's own.
 impl Sheets for EditorTextures<'_> {
+    fn turn_shader(&self) -> Option<&crate::render::turn::TurnShader> {
+        self.sheets.turn_shader()
+    }
+
     fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
         self.sheets.blocks_texture(stamp)
     }
@@ -333,7 +337,7 @@ impl MapEditor {
                 offset: crate::math::Vec2::new(0.0, 0.0),
                 size: (size.0 as f32, size.1 as f32),
                 scale: 1.0,
-                margin: 0.0,
+                margin: (0.0, 0.0),
             })
         };
         let weather = match (sky.weather.as_deref_mut(), under) {
@@ -375,6 +379,7 @@ impl MapEditor {
                 }
                 let slide = swap.as_ref().map_or(1.0, |s| s.slide);
                 self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units, question, slide);
+                crate::render::target::draw_trouble(&mut d, (frame.ui.screen.w * frame.ui.scale, frame.ui.screen.h * frame.ui.scale), 14.0 * frame.ui.scale);
             });
             return;
         }
@@ -420,12 +425,13 @@ impl MapEditor {
         rl.draw(thread, |mut d| {
             d.clear_background(Color::BLACK);
             crate::render::view::letterbox(&mut d, view, backdrop);
-            d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            crate::render::view::draw_opaque(&mut d, |d| d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE));
             if let Some(swap) = &swap {
                 draw_swap_picture(&mut d, swap.picture, swap.alpha);
             }
             let slide = swap.as_ref().map_or(1.0, |s| s.slide);
             self.draw_window_chrome(&mut d, frame, &chrome, textures, cursor, &camera, magnified.as_ref().map(|(l, p)| (l, *p)), units, question, slide);
+            crate::render::target::draw_trouble(&mut d, (frame.ui.screen.w * frame.ui.scale, frame.ui.screen.h * frame.ui.scale), 14.0 * frame.ui.scale);
         });
         scene.last = Some(last);
     }
@@ -1575,7 +1581,7 @@ fn draw_loupe(d: &mut impl RaylibDraw, loupe: &Loupe, picture: &RenderTexture2D)
     let height = picture.texture.height as f32;
     // A render texture reads back bottom-up.
     let texels = Rectangle::new(0.0, height - w.height, w.width, -w.height);
-    d.draw_texture_pro(picture, texels, loupe.rect, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+    crate::render::view::draw_opaque(d, |d| d.draw_texture_pro(picture, texels, loupe.rect, Vector2::new(0.0, 0.0), 0.0, Color::WHITE));
     let k = loupe.rect.width / w.width;
     let cell = LintCell::Map(loupe.cell.0, loupe.cell.1).rect();
     let (left, top) = (loupe.rect.x + (cell.x - w.x) * k, loupe.rect.y + (cell.y - w.y) * k);

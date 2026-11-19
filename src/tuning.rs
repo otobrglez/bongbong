@@ -567,6 +567,22 @@ tunables! {
         /// of the hull, at its own (faster) turn speed, so it visibly leads
         /// a turn while the heavier hull swings around to catch up.
         tank_turret_visual_turn_speed_deg: f32 = 1800.0 in 30.0 ..= 7200.0;
+        /// How a sprite is drawn at an angle off the quarter turns - a
+        /// hull and its turret through a turn, a tower's top (`turn.rs`, `static/turn.fs`). 0: plain, turned by the GPU's
+        /// nearest sampling, each screen pixel its own texel. 1: clean, on
+        /// the sprite's own design-pixel grid, each whole block the pixel
+        /// under its centre (`turn_corner`). 2: sheared on that grid,
+        /// every pixel of the sprite kept and moved whole. A quarter turn
+        /// is the plain blit in every mode. Plain is the default: clean
+        /// reads better on small hulls and tower tops and worse on a
+        /// large detailed hull mid-turn. Live.
+        turn_mode: i32 = 0 in 0 ..= 2;
+        /// In `turn_mode` 1, how far a design pixel is cut at a corner
+        /// whose two neighbours are one colour, along its two edges: 0
+        /// never, 0.5 the diagonal between the edges' middles, 1 the whole
+        /// quarter (Scale2x). More straightens slanted edges and thins
+        /// what is one pixel wide. Live.
+        turn_corner: f32 = 0.5 in 0.0 ..= 1.0;
     }
 
     group shell {
@@ -2934,7 +2950,7 @@ tunables! {
         /// Opacity of the pulsing glow on a barrel whose fuse is lit.
         barrel_fuse_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
         /// Opacity of the burn mark a blast leaves on the ground.
-        scorch_opacity: f32 = 0.75 in 0.0 ..= 1.0;
+        scorch_opacity: f32 = 1.0 in 0.0 ..= 1.0;
         /// Seconds a fresh scorch mark takes to fade in under the fireball.
         scorch_fade_in_seconds: f32 = 0.25 in 0.0 ..= 2.0;
         /// On-screen scale of the 64px scorch decal cells.
@@ -3134,6 +3150,13 @@ tunables! {
         /// shimmer slightly at a fractional scale, which a static floor
         /// mostly hides.
         view_scale_snap: i32 = 0 in 0 ..= 1;
+        /// Present the world through a picture at a whole number of pixels
+        /// to the texel, scaled smoothly onto the window (`view::Prescale`),
+        /// wherever a texel is not a whole number of device pixels: every
+        /// block of the art is then the same width on the glass. Off: the
+        /// nearest texel to each pixel, a 2 px block two pixels wide in one
+        /// column and three in the next. Live.
+        present_prescale: bool = true in 0 ..= 1;
         /// How much world a field map shows on a screen, in 32 px cells
         /// (`framing`, docs/large-maps-follow-camera.md §3). 578 is the
         /// standard 34 x 17 field's area, the most a landscape phone shows

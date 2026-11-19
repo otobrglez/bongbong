@@ -64,7 +64,7 @@ impl Sheets for WithShade<'_> {
 /// (top row first, like the CPU canvas).
 pub fn render_gpu(rl: &mut RaylibHandle, thread: &RaylibThread, sheets: &GpuSheets, game: &Game) -> Result<Image, String> {
     let (w, h) = field_pixels(game);
-    let mut scene = rl.load_render_texture(thread, w as u32, h as u32).map_err(|e| e.to_string())?;
+    let mut scene = crate::render::target::load(rl, thread, (w as i32, h as i32))?;
     let mut upload = BlockTexture::default();
     let shade = upload.sync(rl, thread, game.ground.shade());
     let mut upload_banks = BlockTexture::default();

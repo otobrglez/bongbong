@@ -400,7 +400,29 @@ ground passes under it in whole texels.
   `screen_fx_intensity`, attenuated by distance from the camera (surviv.io
   shakes fully within 10 units and not at all past 40) so a blast across
   the map does not shake your screen, and switchable off (Apple's "make
-  motion optional", Xbox accessibility guideline 117).
+  motion optional", Xbox accessibility guideline 117). The shake moves
+  what the frame reads of the scene target, which holds the shake's
+  reach of the world round the view (`shockwave::shake_overscan`, 6 px
+  at the default knobs; `Camera::overscanned`), so a shaken screen shows
+  the world that is there and never a bare edge.
+- **Presenting** (`view::Prescale`). A window rarely shows a texel as a
+  whole number of device pixels (2.35 on a Retina laptop's arena, 1.18 on
+  a 720p window), and scaled straight to the window by the nearest texel
+  a 2 px block is then four pixels wide in one column and five in the
+  next. So the frame is drawn first into a picture at the next whole
+  number of pixels to the texel (the one below when within an eighth of
+  it), sampled nearest, and that picture is put on the window smoothly:
+  every block is the same width and an edge is one blended pixel at
+  most. No derivatives extension, so it is the same on GL ES 2 and
+  WebGL 1. The picture is the window's size times `n` over the scale: a
+  1280x720 Retina window's arena (2.35) 3264x1836 at three, a 2532x1170
+  phone at 2.4 about 3170x1465 at three, a 4K desktop at 3.53 about
+  4354x2450 at four. It is capped (`PrescaleLimits`): a 4096 side and
+  six megapixels on a phone or tablet, eight in a browser, an 8192 side
+  and twelve on a desktop - past that it drops to a smaller whole number
+  while that is within 1.25 times the scale, and otherwise the window
+  gets the nearest texel as before. A whole scale needs no picture.
+  Knob `present_prescale`.
 - **Cuts, not pans**, for a teleport through a portal, a seat re-entering
   through a gate (decision 7 of the co-op PRD) and another round coming on
   screen (another map, a room's round); a pan across half the map is

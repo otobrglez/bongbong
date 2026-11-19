@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 use crate::canvas::{BlockImage, Canvas, CpuCanvas, Pixels, Sheet};
 use crate::frame_stages;
 use crate::math::{Color, Rectangle, Vec2};
+use crate::render::turn::{Fit, TurnShader};
+use crate::turn::Turned;
 use crate::Position;
 
 /// Where a [`GpuCanvas`] finds the texture behind a [`Sheet`]:
@@ -19,6 +21,13 @@ pub trait Sheets {
     /// The uploaded copy of the [`BlockImage`] baked under `stamp`, if this
     /// lookup holds it ([`BlockTexture::sync`]). None draws nothing.
     fn blocks_texture(&self, _stamp: u64) -> Option<&Texture2D> {
+        None
+    }
+
+    /// The shader a sprite turned off the quarters is drawn with
+    /// (`render::turn`), if this lookup turns its sprites on their grid.
+    /// None turns them the plain way.
+    fn turn_shader(&self) -> Option<&TurnShader> {
         None
     }
 }
@@ -111,11 +120,18 @@ impl BlockTextures {
 
 /// A [`Canvas`] over a raylib draw handle: every call forwards to the
 /// raylib call the trait is named after, and a dev-tools build counts it
-/// (`frame_stages::Draws`).
-pub struct GpuCanvas<'a, D, S> {
+/// (`frame_stages::Draws`). A sprite turned off the quarters, from a
+/// sheet with a design-pixel grid (`turn::block`), is drawn on that grid
+/// by the turn shader instead (`turned`); the shader stays open over a
+/// run of them and closes before anything else is drawn, and when the
+/// canvas is dropped.
+pub struct GpuCanvas<'a, D, S: Sheets> {
     d: &'a mut D,
     sheets: &'a S,
     cull: Option<Rectangle>,
+    /// What the open turn shader's uniforms hold; `None` while the batch
+    /// draws with its default shader.
+    turning: Option<Fit>,
 }
 
 impl<'a, D: RaylibDraw, S: Sheets> GpuCanvas<'a, D, S> {
@@ -127,38 +143,94 @@ impl<'a, D: RaylibDraw, S: Sheets> GpuCanvas<'a, D, S> {
     /// A canvas over a camera's view: `cull` is the world rectangle worth
     /// drawing (`view::Camera::cull`), `None` for everything.
     pub fn culled(d: &'a mut D, sheets: &'a S, cull: Option<Rectangle>) -> Self {
-        GpuCanvas { d, sheets, cull }
+        GpuCanvas { d, sheets, cull, turning: None }
+    }
+}
+
+impl<D, S: Sheets> GpuCanvas<'_, D, S> {
+    /// Draw the blit turned on its sheet's grid, if it is one that is:
+    /// off the quarters, from a sheet with a grid, with the shader there
+    /// and `turn_mode` not the plain one. False leaves it to the plain blit.
+    #[allow(clippy::too_many_arguments)]
+    fn turned(&mut self, sheet: Sheet, texture: &Texture2D, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color) -> bool {
+        if crate::turn::is_quarter(rotation) {
+            return false;
+        }
+        let sheets = self.sheets;
+        let (Some(block), Some(shader)) = (crate::turn::block(sheet), sheets.turn_shader()) else { return false };
+        let t = crate::tuning::tuning();
+        if t.turn_mode == 0 {
+            return false;
+        }
+        let Some(turned) = Turned::of(src, dest, origin, rotation, block) else { return false };
+        let fit = Fit::of(texture, &turned, block, t.turn_mode == 2, t.turn_corner);
+        if self.turning.is_none() {
+            shader.open();
+            frame_stages::shader(());
+        }
+        if self.turning != Some(fit) {
+            shader.fit(&fit);
+            self.turning = Some(fit);
+        }
+        shader.draw(texture, &turned, tint);
+        true
+    }
+
+    /// Close the turn shader if a run of turned sprites left it open:
+    /// what is drawn next is drawn the plain way.
+    fn plain(&mut self) {
+        if self.turning.take().is_some()
+            && let Some(shader) = self.sheets.turn_shader()
+        {
+            shader.close();
+        }
+    }
+}
+
+impl<D, S: Sheets> Drop for GpuCanvas<'_, D, S> {
+    fn drop(&mut self) {
+        self.plain();
     }
 }
 
 impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
     fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color) {
-        let texture = self.sheets.texture(sheet);
+        let sheets = self.sheets;
+        let texture = sheets.texture(sheet);
         frame_stages::blit(texture.id);
+        if self.turned(sheet, texture, src, dest, origin, rotation, tint) {
+            return;
+        }
+        self.plain();
         self.d.draw_texture_pro(texture, src, dest, origin, rotation, tint);
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color) {
+        self.plain();
         frame_stages::rect();
         self.d.draw_rectangle(x, y, width, height, color);
     }
 
     fn gradient_v(&mut self, x: i32, y: i32, width: i32, height: i32, top: Color, bottom: Color) {
+        self.plain();
         frame_stages::rect();
         self.d.draw_rectangle_gradient_v(x, y, width, height, top, bottom);
     }
 
     fn gradient_h(&mut self, x: i32, y: i32, width: i32, height: i32, left: Color, right: Color) {
+        self.plain();
         frame_stages::rect();
         self.d.draw_rectangle_gradient_h(x, y, width, height, left, right);
     }
 
     fn disc(&mut self, center: Position, radius: f32, color: Color) {
+        self.plain();
         frame_stages::shape();
         self.d.draw_circle_v(center, radius, color);
     }
 
     fn ring(&mut self, center: Position, inner: f32, outer: f32, start_deg: f32, end_deg: f32, segments: i32, color: Color) {
+        self.plain();
         frame_stages::shape();
         self.d.draw_ring(center, inner, outer, start_deg, end_deg, segments, color);
     }
@@ -167,6 +239,7 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
         let Some(texture) = self.sheets.blocks_texture(image.stamp) else { return };
         let (w, h) = (image.width as f32, image.height as f32);
         let b = image.block as f32;
+        self.plain();
         frame_stages::blit(texture.id);
         self.d.draw_texture_pro(texture, Rectangle::new(0.0, 0.0, w, h), Rectangle::new(0.0, 0.0, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
     }
@@ -175,6 +248,7 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
         let Some(texture) = self.sheets.blocks_texture(image.stamp) else { return };
         let (x, y, w, h) = (src.0 as f32, src.1 as f32, src.2 as f32, src.3 as f32);
         let b = image.block as f32;
+        self.plain();
         frame_stages::blit(texture.id);
         self.d.draw_texture_pro(texture, Rectangle::new(x, y, w, h), Rectangle::new(at.0 as f32, at.1 as f32, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
     }

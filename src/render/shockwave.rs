@@ -56,6 +56,38 @@ pub struct RippleTuning {
     pub duration: f32,
 }
 
+/// The fragment shader a `RippleFx` bends the scene with. Its source is
+/// in the binary: the GLSL 330 file on the desktop, its GLSL ES 100 twin
+/// in `static/web/` where `EMBEDDED` (the web, iOS, Android).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RippleShader {
+    Shockwave,
+    MuzzleFlash,
+    Impact,
+}
+
+impl RippleShader {
+    /// The file under `static/` (and `static/web/`).
+    pub fn name(self) -> &'static str {
+        match self {
+            RippleShader::Shockwave => "shockwave.fs",
+            RippleShader::MuzzleFlash => "muzzle_flash.fs",
+            RippleShader::Impact => "impact.fs",
+        }
+    }
+
+    fn source(self) -> &'static str {
+        match (self, crate::EMBEDDED) {
+            (RippleShader::Shockwave, false) => include_str!("../../static/shockwave.fs"),
+            (RippleShader::Shockwave, true) => include_str!("../../static/web/shockwave.fs"),
+            (RippleShader::MuzzleFlash, false) => include_str!("../../static/muzzle_flash.fs"),
+            (RippleShader::MuzzleFlash, true) => include_str!("../../static/web/muzzle_flash.fs"),
+            (RippleShader::Impact, false) => include_str!("../../static/impact.fs"),
+            (RippleShader::Impact, true) => include_str!("../../static/web/impact.fs"),
+        }
+    }
+}
+
 impl RippleFx {
     /// A ripple's start (ripple units) and pace as a multiple of this
     /// effect's speed, for `static/shockwave.fs` (`Shockwave::ring`).
@@ -63,37 +95,28 @@ impl RippleFx {
         shock.ring(self.speed, crate::tuning::tuning().well_form_seconds)
     }
 
-    /// Compile `shader_path` and set up the uniforms that never change after
+    /// Compile `which` and set up the uniforms that never change after
     /// startup: the ripple frame (`shockwave::RIPPLE_FRAME`) and this
     /// instance's `tuning`. Every
     /// ripple effect (kill shockwave, muzzle flash, shell impact, ...) is its
-    /// own `RippleFx`, and each may point at its own fragment shader file as
+    /// own `RippleFx`, and each may name its own fragment shader as
     /// well as its own tuning, so a new effect can look genuinely different
-    /// rather than just differently timed.
+    /// rather than just differently timed. A driver that will not compile
+    /// the source gets raylib's default shader in its place, which draws
+    /// the scene as it is: the round plays without that ripple's bend, and
+    /// the failure is said on screen (`render::target::trouble`).
     pub fn load(
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
-        shader_path: &str,
+        which: RippleShader,
         tuning: RippleTuning,
     ) -> Self {
-        #[cfg(not(target_os = "android"))]
-        let mut shader = rl
-            .load_shader(thread, None, Some(shader_path))
-            .expect("failed loading ripple shader");
-        // Android keeps its assets inside the APK, where raylib's own
-        // loaders see them but the wrapper's `load_shader` does not (it
-        // checks the path with `std::fs` first); the three ripple shaders
-        // are small, so the GLSL ES 100 ports travel in the binary instead.
-        #[cfg(target_os = "android")]
-        let mut shader = {
-            let source = match shader_path.rsplit('/').next() {
-                Some("shockwave.fs") => include_str!("../../static/web/shockwave.fs"),
-                Some("muzzle_flash.fs") => include_str!("../../static/web/muzzle_flash.fs"),
-                Some("impact.fs") => include_str!("../../static/web/impact.fs"),
-                other => panic!("no embedded ripple shader for {other:?}"),
-            };
-            rl.load_shader_from_memory(thread, None, Some(source))
-                .expect("failed compiling the embedded ripple shader")
+        let mut shader = match rl.load_shader_from_memory(thread, None, Some(which.source())) {
+            Ok(shader) => shader,
+            Err(e) => {
+                crate::render::target::trouble(which.name(), &e.to_string());
+                rl.load_shader_from_memory(thread, None, None).expect("raylib's default shader")
+            }
         };
 
         let center_loc = shader.get_shader_location("center");
