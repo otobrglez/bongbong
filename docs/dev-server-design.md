@@ -1,11 +1,13 @@
 # Dev server + MCP adapter
 
 A local-only debug server embedded in the native game (`--features dev-tools`)
-and a thin stdio MCP adapter (`bbmcp`) so an AI coding agent - or a shell
-script - can drive, inspect and screenshot the *running windowed game*.
-The headless probe (`src/bin/probe.rs`) covers logic; this covers the rest:
-the rendered frame, frame-by-frame stepping with the numbers and the pixels
-side by side, direct scenario setup, and live tuning.
+and a stdio MCP adapter (`bbmcp`) so an AI coding agent - or a shell
+script - can drive, inspect and screenshot a round: the *running windowed
+game*, or with no window a headless round the adapter hosts itself
+(section 3.1). The headless probe (`src/bin/probe.rs`) covers logic across
+seeds; this covers the rest: the rendered frame, frame-by-frame stepping
+with the numbers and the pixels side by side, direct scenario setup, and
+live tuning.
 
 Never in a release build: `src/devserver.rs` is gated on
 `all(feature = "dev-tools", not(target_os = "emscripten"))`, `bbmcp` has
@@ -14,7 +16,7 @@ Never in a release build: `src/devserver.rs` is gated on
 ## 1. Pieces
 
 ```
-Claude Code ──stdio JSON-RPC (MCP)──> bbmcp (src/bin/bbmcp.rs)
+Claude Code ──stdio JSON-RPC (MCP)──> bbmcp (src/bin/bbmcp.rs) ──in-process──> Headless (src/devserver/headless.rs)
                                           │ TCP 127.0.0.1:4747, one JSON line per request/reply
                                           ▼
                                   DevServer (src/devserver.rs)  socket threads ──mpsc──> main loop
@@ -24,20 +26,41 @@ Claude Code ──stdio JSON-RPC (MCP)──> bbmcp (src/bin/bbmcp.rs)
 ```
 
 - `src/devserver.rs` - `DevServer`: the listener, the request queue, lockstep
-  state, the tool dispatcher, screenshot capture, the event ring. Also the
-  tool table `TOOLS` (name, description, JSON schema) that the adapter
-  advertises, so the two cannot drift. `before_frame` and the dispatcher
-  take the whole `mode::Session` (the round, the map builder and which of
-  the two is live), so the mode switch and the builder are tools too
-  (section 4.1); `advance`/`after_render` still take the bare `Game`.
+  state, the tool dispatcher, screenshot capture, the event ring.
+  `before_frame` and the dispatcher take the whole `mode::Session` (the
+  round, the map builder and which of the two is live), so the mode switch
+  and the builder are tools too (section 4.1); `advance`/`after_render`
+  still take the bare `Game`.
+- `src/devserver/tools.rs` - the tool tables `TOOLS` and `ROOM_TOOLS` the
+  adapter advertises, so server and adapter cannot drift. A tool is one
+  `ToolSpec` row: `name`, a short `description` (what the tool list
+  carries), `help` (the long form - the reply's shape, the edge cases -
+  served by the `help` tool), `params` (a parameter struct: the input
+  schema is derived from it with `schemars`, and the handler parses the
+  same struct), `read_only`/`destructive` (the MCP annotations), `in_build`
+  and `online` (whether it answers in build mode and in an online round)
+  and `present` (JSON, one text field, or an image). `ToolSpec::check` runs
+  before every handler and refuses a parameter the row does not name and a
+  value of the wrong type, naming it - a misspelt parameter is an error,
+  never silently ignored.
+- `src/devserver/headless.rs` - `Headless`: the same server and session with
+  no window (section 3.1).
 - `src/bin/bbmcp.rs` - MCP over stdio (`initialize`, `ping`, `tools/list`,
-  `tools/call`); each call is one request line to the game. `tools/list`
-  carries each tool's MCP annotations from `ToolSpec::read_only`/
-  `destructive` (`readOnlyHint`, `destructiveHint` - emitted explicitly
-  because the MCP default for destructive is *true*). The per-line
-  handling is `handle_line`, unit-tested with a stubbed game
-  (`cargo test --features dev-tools --bin bbmcp`). Also
-  `bbmcp call <tool> [json]` for the shell (`just mcp-call`).
+  `tools/call`). A game tool goes to the window as one request line, or to
+  the adapter's own headless round. `tools/list` carries each tool's
+  derived schema and its MCP annotations (`readOnlyHint`,
+  `destructiveHint` - emitted explicitly because the MCP default for
+  destructive is *true*); JSON replies go out compact. The adapter answers
+  `help`, `attach`, `batch`, `reload` and `probe` itself (section 4.4). It
+  needs no `render`: `just build-mcp` builds it with no raylib in its
+  graph. The per-line handling is `handle_line`, unit-tested with a
+  stubbed window (`cargo test --no-default-features --features dev-tools
+  --bin bbmcp`). Also `bbmcp call <tool> [json]` for the shell (`just
+  mcp-call`).
+- `tools/dev/bbmcp.sh` - what `.mcp.json` runs: it starts the built
+  `target/debug/bbmcp`, so the client's connect timeout is never spent in
+  cargo. A worktree with no binary yet borrows the main checkout's (the
+  adapter then reports itself stale; `reload` builds its own).
 - `src/simulation/debug.rs` - the read/mutate surface on `Game` the server
   uses: `debug_snapshot`, `debug_teleport`, `debug_set_tank`, `debug_kill`,
   `debug_spawn_enemy`, `nav_grid_ascii`. Always compiled (cheap, unit-tested
@@ -55,9 +78,10 @@ Claude Code ──stdio JSON-RPC (MCP)──> bbmcp (src/bin/bbmcp.rs)
   presets off -> inspect (hitboxes + stats) -> all (`Overlays::next_preset`, via
   `Input::cycle_overlays_pressed`); the drawing code is dev-only
   (`#[cfg(feature = "dev-tools")]`), so a release build has none of it.
-- `.mcp.json` - registers the `bongbong` MCP server for Claude Code
-  (`cargo run -q --features dev-tools --bin bbmcp`).
-- `justfile`: `run-dev` (game with the server), `watch-dev`, `mcp-call`.
+- `.mcp.json` - registers the `bongbong` and `bongbong-rooms` MCP servers
+  for Claude Code (`bash tools/dev/bbmcp.sh [rooms]`).
+- `justfile`: `run-dev` (game with the server), `watch-dev`, `build-mcp`,
+  `mcp-call`.
 
 ## 2. Wire protocol (game side)
 
@@ -130,22 +154,55 @@ request still lands in `before_frame`.
   after the request; in lockstep that frame is identical and already
   carries overlay flags passed with the request.
 
+### 3.1 A headless round
+
+With no window from its own checkout listening, `bbmcp` hosts the round
+itself: `devserver::Headless` owns a `Session` and a `DevServer` with no
+socket and makes the calls the window's loop makes around a frame -
+`before_frame` to answer, `advance` to run a pending `step`. So every
+session, and every worktree, has a private deterministic round with no
+port to collide on and nothing to start.
+
+- Which target: the adapter asks the dev port's `mode` for its `host`
+  (`{kind: window|headless, pid, cwd}`, also in `status`). A window whose
+  `cwd` is the adapter's working directory is driven; any other - a
+  peer's game from another checkout - is left alone and the round is
+  headless. `attach` reports the target and switches it (`{target:
+  "window", port}` drives a window whichever checkout started it);
+  `BBMCP_TARGET=headless|window` pins it.
+- There is no clock, so the round moves only by `step`: `resume` and
+  `input` refuse by name. `restart {seed}` + the same `step`s replays bit
+  for bit, exactly as in the window
+  (`headless::tests::a_headless_round_restarts_steps_and_replays`).
+- Nothing draws, so `screenshot` is the whole field painted on the CPU
+  canvas (`thumbnail::render_cpu`, the sheets decoded with the `png`
+  crate): no HUD, chrome, debug overlays, particles or shaders, and the
+  reply says so (`renderer: "cpu"`). Anything about those needs a window.
+- The headless round runs the code the adapter was built from. When the
+  source is newer than the binary `attach.adapter.stale` is true and the
+  `initialize` instructions open with a note; `reload` rebuilds and
+  restarts the adapter in place.
+
 ## 4. Tools
+
+Every tool's input schema and full documentation come from its `ToolSpec`
+row: `help {tool}` (or `just mcp-call help '{"tool":"step"}'`) is the
+reference, and this table a map of it.
 
 | tool | params | reply |
 |---|---|---|
-| `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), `frame_stages` (ms a frame by stage, averaged over half a second, the `sim.*` groups inside `sim`; `draws` - the last whole frame's `blits`, `rects`, `shapes`, `texture_switches`, `blend_scopes`, `shader_scopes`, `target_scopes`; `pace` - `frames`, `max_ms`, `p99_ms` and `steps`, how many of those frames ran 0..4 steps; docs/tooling.md, Performance instruments), `mode` (play\|build\|online), `back` (`{puts_away}` in build mode with a paused round, else null), `builder` (dirty, tool, `sky` - the sky the canvas is drawn under, its map's as the paused round's seed picked it or `clear` while DAY is down - and `day`, whether DAY is down; `buttons` names each button's window rect, DAY's `day` among them while the canvas's sky is dark), history depth, `turns` (turns/u_turns/reversals/spins summed over the live tanks - see "Debugging spinning tanks"), and `round` - whose round all of the above describes: `{kind: "local"}`, or `{kind: "online", room, seat, phase, buffer_ms, server_tick, replica, interpolation, prediction}` (section 4.2; the last two are the stage-2 readings of docs/online-coop-prd.md section 4.12: the delay in force, its target, the jitter, the cadence and the frames extrapolated, and the predictor's corrections by bucket, nudges, snaps, shots drawn/refused/on screen, inputs in flight, the lead's adjustments, and `crossings`/`crossings_hit`/`crossings_missed` - provisional shots the client drew stopping against a live tank or bong, `crossings_hit` when the room's copy burst within `HIT_MATCH_PX` of that stop, `crossings_missed` when it flew on past `MISS_MARGIN_PX` or burst elsewhere) |
+| `status` | `sections` (camera, ui, builder, frame_stages, weather, stats, turns, overlays, or all - the heavy parts, left out unless named) | `host` (what answers: `{kind: window\|headless, pid, cwd}`), seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), `frame_stages` (ms a frame by stage, averaged over half a second, the `sim.*` groups inside `sim`; `draws` - the last whole frame's `blits`, `rects`, `shapes`, `texture_switches`, `blend_scopes`, `shader_scopes`, `target_scopes`; `pace` - `frames`, `max_ms`, `p99_ms` and `steps`, how many of those frames ran 0..4 steps; docs/tooling.md, Performance instruments), `mode` (play\|build\|online), `back` (`{puts_away}` in build mode with a paused round, else null), `builder` (dirty, tool, `sky` - the sky the canvas is drawn under, its map's as the paused round's seed picked it or `clear` while DAY is down - and `day`, whether DAY is down; `buttons` names each button's window rect, DAY's `day` among them while the canvas's sky is dark), history depth, `turns` (turns/u_turns/reversals/spins summed over the live tanks - see "Debugging spinning tanks"), and `round` - whose round all of the above describes: `{kind: "local"}`, or `{kind: "online", room, seat, phase, buffer_ms, server_tick, replica, interpolation, prediction}` (section 4.2; the last two are the stage-2 readings of docs/online-coop-prd.md section 4.12: the delay in force, its target, the jitter, the cadence and the frames extrapolated, and the predictor's corrections by bucket, nudges, snaps, shots drawn/refused/on screen, inputs in flight, the lead's adjustments, and `crossings`/`crossings_hit`/`crossings_missed` - provisional shots the client drew stopping against a live tank or bong, `crossings_hit` when the room's copy burst within `HIT_MATCH_PX` of that stop, `crossings_missed` when it flew on past `MISS_MARGIN_PX` or burst elsewhere) |
 | `snapshot` | `detail: compact\|full` | tanks (slot, chassis, x/y and the grid `cell`, `rotation` with `facing` as a name, the drawn `hull`/`turret` angles, real velocity with `speed` and `heading` - the direction it is actually moving, null when still - damage/hp, ammo, weapon, shield, boost, `ring` (the health ring's opacity, 0..1), `nearest_ally_px`, enemies' `dist_to_player`; `full` adds `ai`), projectiles (cap 64), pickups, bong, `engage` (per enemy: status `engaged\|wreck\|fleeing\|retreating\|out_of_range`, `ring` slot index or null, target x/y, `sticky`; `full` adds the rejection tally and the 16-slot table), `clusters` (live enemies within 90 px, as slot groups) |
 | `events` | `since`, `limit`, `kinds`, `exclude` | ring of `{seq, frame, event, ...}` (cap 4096); `kinds`/`exclude` filter by event name |
-| `step` | `frames`, `move_dir`, `face`, `fire`, `p2_move_dir`, `p2_face`, `p2_fire` (player 2, two-player rounds), `fire_every`, `snapshot`, `detail`, `kinds`, `exclude` | frame, time, outcome, restarted, events of the step (filtered like `events`), snapshot |
+| `step` | `frames`, `move_dir`, `face`, `fire`, `p2_move_dir`, `p2_face`, `p2_fire` (player 2, two-player rounds), `fire_every`, `until` (event names: stop after the frame one happens on), `until_outcome` (stop after the frame the round ends on), `snapshot` (default false), `detail`, `kinds`, `exclude` | frame, time, outcome, restarted, `frames_run`, `stopped` (frames\|event\|outcome), events of the step (filtered like `events`), the snapshot when asked for |
 | `input` | `move_dir`, `face`, `fire`, `p2_move_dir`, `p2_face`, `p2_fire`, `frames`, `cycle_overlays` | override the keyboard for N real-time frames; `cycle_overlays: true` presses the I key once |
 | `pause` / `resume` | - | status |
 | `restart` | `seed`, `enemies`, `tank` (a chassis name) or `tank_row`, `players` (1\|2, kept for later restarts), `tank2` or `tank2_row`, `map` (path) or `map_toml` (inline TOML), `mission` (protect\|hunt\|destroy), `spawn` (band\|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end`, `intro` (start frozen behind the mission banner; default false) | status; neither map param keeps the current map; level params override the map's own tables and stay pinned. Always returns to play mode; a new map replaces the builder's canvas and baseline too |
 | `map_get` | - | the current map: name, cells, tanks, `toml` (edit and hand back via `restart {map_toml}`) |
-| `lint` | `source: builder\|round` (default: the live mode's) | `maplint::lint` over the builder's canvas or the round's map, each set up as a fresh headless round with the session's seed, player count and overrides: `errors`/`warnings`/`infos` and `findings` `{severity, kind, message}`. Works in both modes. The spawn-band check reads the map's own `spawn` table, not a `restart {spawn}` override |
+| `lint` | `source: builder\|round` (default: the live mode's), or `map` (a file) / `map_toml` (text) to lint a map that is loaded nowhere | `maplint::lint` over the builder's canvas or the round's map, each set up as a fresh headless round with the session's seed, player count and overrides: `errors`/`warnings`/`infos` and `findings` `{severity, kind, message}`. Works in both modes. The spawn-band check reads the map's own `spawn` table, not a `restart {spawn}` override |
 | `terrain` | `only: all\|damaged\|burning\|fused`, `materials` | every live tile by `cell` (material, hp/max_hp, and when set drum, burning/burn_elapsed, fuse, heat, scorched, ram_timer), capped at 800 (`truncated`, `total` is the live count), plus `fires`, `fused`, `flames`, `burning_tanks`/`burning_wrecks` and the burning-tile/flying-drum/oil/grass/heated-cell counts |
 | `history` | `slot`, `last` (600), `every` (10) | sampled per-tank rows (frame, x/y, rotation, turret, action, ring, stuck, touching, is_player) over the last N frames plus per-tank aggregates: frames, distance, net, cluster_frames, stuck_frames, no_ring_frames, touching_frames, tank_touching_frames, and `round` - the turn counters since the round began (turns, u_turns, reversals, spins, max_spin_deg, turret_deg, last_turn_frame) |
-| `screenshot` | `scale` (0.5), `source: screen\|scene`, `overlays` | PNG (base64) + path under `target/devshots/` |
+| `screenshot` | `scale` (0.5), `source: screen\|scene`, `overlays` | PNG (base64) + path under `target/devshots/`; a headless round's is the field on the CPU canvas (section 3.1) |
 | `overlays` | `nav_grid`, `ai`, `projectiles`, `engage`, `pickups`, `hitboxes`, `stats` (individual flags, an unknown one is an error; the I key cycles presets off -> inspect = hitboxes + stats -> all) | current flags |
 | `nav_grid` | - | ASCII grid with tanks/bong/pickups marked |
 | `field` | `target: player\|player2\|bong` (player) | the flow field enemies follow toward that target: `arrows` (`^ v < >` per cell, `G` goal, `#` blocked, `.` unreachable) and `costs` (cost to the goal per cell, -1 blocked/unreachable) - a priced firing lane or crowd cell shows as a jump in the costs |
@@ -189,7 +246,7 @@ the field - so take them from `status.builder.buttons` and `status.camera.window
 
 **The refusal rule.** There are two, one per mode that is not play; see
 section 4.2 for the online one. In build mode the tools that read or
-drive the round - `GAME_ONLY_TOOLS`: `snapshot`, `events`, `step`, `input`,
+drive the round - the rows with `in_build: false`: `snapshot`, `events`, `step`, `input`,
 `pause`, `resume`, `history`, `nav_grid`, `field`, `terrain`, `teleport`,
 `set_tank`, `kill`, `spawn_enemy`, `players` - return an error naming
 `play` rather than touching a frozen game. Everything else works in both
@@ -217,7 +274,7 @@ which round that is - the room code, the seat, the phase, `buffer_ms`
 picture has run past everything that arrived) and `server_tick` (the
 newest tick the room has sent, against `frame`, the tick being drawn).
 
-Everything that would **write** refuses by name - `ONLINE_REFUSED_TOOLS`:
+Everything that would **write** refuses by name - the rows with `online: false`:
 `step`, `pause`, `resume`, `restart`, `teleport`, `set_tank`, `kill`,
 `spawn_enemy`, `spawn_pickup`, `players`, `play`, `build` and the
 `builder_*` tools bar `builder_files`. Only the server simulates an
@@ -404,20 +461,39 @@ the cheap flag), `history {slot}` names the tank and shows `rotation` per
 sampled row, and `snapshot` shows `rotation`, `facing`, the drawn
 `hull`/`turret` angles and the real `heading` side by side.
 
+### 4.4 The adapter's own tools
+
+Answered by `bbmcp`, not the game, so they work with nothing running.
+
+| tool | params | reply |
+|---|---|---|
+| `help` | `tool` | that tool's long form (`help`, `input_schema`, the flags), or with no `tool` every tool's name and description |
+| `attach` | `target: headless\|window`, `port` | the target in force, its `host`, what listens on the dev port (`window: {cwd, pid, same_checkout}`) and `adapter: {exe, cwd, stale}`; with `target` it switches first (section 3.1) |
+| `batch` | `calls: [{tool, params}]`, `keep_going` | `results` (each `{tool, result}` or `{tool, error}`), `completed`, `failed` - a whole scenario in one call, stopping at the first error unless told to keep going; a screenshot inside one is its file's path |
+| `reload` | - | rebuilds the adapter (`cargo build --no-default-features --features dev-tools --bin bbmcp`), replaces its own process with the new binary and sends `notifications/tools/list_changed`; a failed build changes nothing and replies with the compiler's last lines. An MCP call of its own only - not the CLI, not inside a batch |
+| `probe` | `scenario`, `args` (the probe's flags), `timeout_seconds` (300) | runs `src/bin/probe.rs` and returns its `ANOMALY` lines (first 200), `anomaly_count`, the output's tail and the command |
+
+The room server's adapter (`bbmcp rooms`) has `help`, `batch` and `reload`.
+
 ## 5. Using it from Claude Code
 
-1. `just run-dev` (or `just watch-dev`) - the game prints
-   `[dev] listening on 127.0.0.1:4747`.
-2. Approve the project's `.mcp.json` server when Claude Code asks; `/mcp`
-   lists `bongbong` and the tools appear as `mcp__bongbong__<tool>`.
-3. Typical loop: `restart {seed}` → `overlays {...}` → `step {frames}` →
-   `snapshot`/`events`/`nav_grid` → `screenshot` → change code → the game
-   relaunches (`watch-dev`) → repeat. With the game closed every tool
-   returns an `isError` result naming `just run-dev`.
+1. `just build-mcp` once in a new checkout or worktree (a worktree
+   without one borrows the main checkout's binary until `reload`).
+2. Approve the project's `.mcp.json` servers when Claude Code asks; `/mcp`
+   lists `bongbong` and the tools appear as `mcp__bongbong__<tool>`. They
+   answer at once, from a headless round.
+3. For anything on screen - the HUD, overlays, feel - `just run-dev` (or
+   `just watch-dev`); the game prints `[dev] listening on 127.0.0.1:4747`
+   and, started from the adapter's checkout, becomes the target of an
+   adapter that has not settled on one yet (`attach {target: "window"}`
+   for one that has).
+4. Typical loop: `restart {seed}` → `step {frames, until}` →
+   `snapshot`/`events`/`nav_grid` → `screenshot` → change code → `reload`
+   (headless) or the game relaunches (`watch-dev`) → repeat. `batch` runs
+   the whole of it in one call.
 
-The adapter is started through `cargo run`, which blocks on cargo's build
-lock while `cargo watch` is compiling; `./target/debug/bbmcp` works as the
-`command` too once built.
+After a change to a tool's row the client's cached tool list is stale:
+`reload` sends the notice, and `/mcp` reconnects where a client ignores it.
 
 ## 6. Tests
 
@@ -444,7 +520,7 @@ describe the replica rather than the frozen local round - another seed,
 another tank count - that `status.round` names the room, the seat, the
 phase, the buffer and the server's tick, that the replica's events and
 track rows are banked, that an overlay flag lands on the round that is
-drawn, and that every `ONLINE_REFUSED_TOOLS` entry refuses by name until
+drawn, and that every `online: false` row refuses by name until
 `key {escape}` gives the seat up) plus one real socket round-trip on an
 ephemeral port. `simulation::engage::tests` covers the report (slot
 indices, sticky flag, rejection tallies); `simulation::mechanics_tests` the

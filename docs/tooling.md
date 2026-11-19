@@ -13,6 +13,17 @@ things when forgotten; this is the detail. Update it with the tool.
   co-op bug can actually be observed, since the window's own tools describe a replica it never
   simulates. `just rooms-mcp-call <tool> '{json}'` is the shell path. A scenario needs no browser
   and no second machine: `room_open {seats: 2}`, `seat_intent`, `room_step`, `room_events`.
+- **The MCP adapter**: `.mcp.json` starts the built `target/debug/bbmcp` through
+  `tools/dev/bbmcp.sh` (never `cargo run`, whose build can outlast the client's connect timeout):
+  `just build-mcp` once per checkout or worktree, headless, no raylib. With no window from its own
+  checkout on the dev port the adapter hosts a **headless round** itself - private, deterministic,
+  stepped only by `step`, `screenshot` the field on the CPU canvas (no HUD, overlays, particles or
+  shaders) - so a peer session's game on 4747 is never driven by accident; `attach` reports and
+  switches the target. The tool list carries a line or two per tool: `help {tool}` has the reply's
+  shape. A parameter a tool does not take is refused by name. `batch` runs a scenario in one call,
+  `step {until: [events], until_outcome}` stops at what you are waiting for, `probe {scenario,
+  args}` runs the probe, `lint {map}` lints a file, and `reload` rebuilds and restarts the adapter
+  in place after a source change (docs/dev-server-design.md sections 3.1 and 4.4).
 - **Driving the windowed game**: `just run-dev` starts the dev-tools build with the dev server;
   `.mcp.json` registers `bbmcp`, so the `mcp__bongbong__*` tools (`status`, `restart {seed,
   map_toml, mission, spawn, players, intro, ...}`, `step {frames, move_dir, fire, ...}`, `snapshot`,

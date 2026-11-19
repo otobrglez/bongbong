@@ -70,7 +70,7 @@ def counters(port, name, params):
     for i in range(STEPS):
         call(port, "step", {"frames": FRAMES, "move_dir": LEGS[i % len(LEGS)], "fire": True, "fire_every": 10})
         time.sleep(SETTLE)
-        status = call(port, "status")
+        status = call(port, "status", {"sections": ["frame_stages"]})
         draws = status["frame_stages"]["draws"]
         rows.append((status["frame"], draws))
     return rows
@@ -82,7 +82,7 @@ def main():
     args = parser.parse_args()
     port = int(os.environ.get("BONGBONG_DEV_PORT", "4747"))
 
-    status = call(port, "status")
+    status = call(port, "status", {"sections": ["frame_stages"]})
     if status["mode"] != "play":
         raise SystemExit(f"perf-scene: the window is in {status['mode']} mode; `just mcp-call play` first")
     if "draws" not in status.get("frame_stages", {}):
@@ -107,13 +107,13 @@ def main():
             if args.seconds > 0:
                 # The second pass's round, let go: the same state every run
                 # at the moment it starts.
-                ui = call(port, "status")["ui"]
+                ui = call(port, "status", {"sections": ["ui"]})["ui"]
                 window = f"{ui['screen']['w'] * ui['scale']:.0f}x{ui['screen']['h'] * ui['scale']:.0f}"
                 # Timed as it is played: the particles and pieces back on.
                 call(port, "tuning_set", {"patch": kept})
                 call(port, "resume")
                 time.sleep(args.seconds)
-                stages = call(port, "status")["frame_stages"]
+                stages = call(port, "status", {"sections": ["frame_stages"]})["frame_stages"]
                 call(port, "pause")
                 call(port, "tuning_set", {"patch": PINNED})
                 pace = stages.pop("pace")
