@@ -12116,7 +12116,7 @@ cells."30,20" = { kind = "bong" }
             // The fence goes, a cell at a time.
             let fence: Vec<Entity> = game.world.query::<(Entity, &Obstacle)>().iter().filter(|(_, o)| o.material == crate::obstacle::Material::Fence).map(|(e, _)| e).collect();
             assert_eq!(fence.len(), fences);
-            let mut f = Frame::new(1.0 / 60.0, FW, FH, SmallRng::seed_from_u64(1), hits::Terrain::build(&game.world, FW, FH, &[], &game.water));
+            let mut f = Frame::new(1.0 / 60.0, FW, FH, RoundRng::seed_from_u64(1), hits::Terrain::build(&game.world, FW, FH, &[], &game.water));
             for entity in fence {
                 assert!(game.damage_obstacle(&mut f, entity, f32::MAX, props::DamageCause::Fire), "{fences}: the fence dies");
             }
