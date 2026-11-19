@@ -719,3 +719,62 @@ fn an_enemy_a_tower_hurt_fires_back() {
     assert!(shot_back, "the struck tank turned on the tesla");
 }
 
+
+// A gun tower holds its fire while its own side's bong is in the line to
+// its target, as it does for a friendly tank.
+#[test]
+fn a_gun_tower_holds_fire_while_its_own_bong_is_in_the_line() {
+    let map = map_with("cells.\"20,8\" = { kind = \"gun_tower\" }\n");
+    let mut game = game_on(&map, PlayerCount::ONE, 5);
+    let enemy = game.first_enemy_slot();
+    // The enemy parked in the open below the tower, unable to drive or
+    // shoot: the tower's only target, and nothing else hurts the bong.
+    let tank = game.tank_entity_by_slot(enemy).expect("the enemy");
+    with_tank_mut(&game.world, tank, |t| {
+        t.speed_scale = 0.0;
+        t.shells_ammo = 0;
+        t.disarm();
+    });
+    let bong = game.bong.expect("the player's bong");
+    // Beside the line, its box clear of it: the tower sees the enemy past
+    // it, but a bullet's width and spread would not all get by.
+    let beside = cell_to_world(20, 11) + Vec2::new(BONG_COLLIDER_HALF_EXTENT.0 + 6.0, 0.0);
+    let health = with_bong(&game.world, bong, |b| b.health);
+    let mut events = Vec::new();
+    for _ in 0..90 {
+        place(&mut game, enemy, (20, 14));
+        with_bong_mut(&game.world, bong, |b| {
+            b.position = beside;
+            b.hop_timer = 0.0;
+        });
+        step(&mut game, Input::default());
+        events.extend(game.events().iter().cloned());
+    }
+    assert_eq!(tower(&game, (20, 8)).target, Some(tank), "it has the enemy in its sights");
+    assert_eq!(tower_fired(&events, TowerKind::Gun), 0, "its own bong in the line holds its fire");
+    assert_eq!(with_bong(&game.world, bong, |b| b.health), health, "so the bong is never hit");
+
+    // With the bong back in its corner the line is clear and it opens up.
+    with_bong_mut(&game.world, bong, |b| b.position = cell_to_world(2, 2));
+    let mut fired = false;
+    for _ in 0..90 {
+        place(&mut game, enemy, (20, 14));
+        step(&mut game, Input::default());
+        if tower_fired(game.events(), TowerKind::Gun) > 0 {
+            fired = true;
+            break;
+        }
+    }
+    assert!(fired, "fires once the bong is out of the line");
+}
+
+// A chain factor of 0 ends a strike at the first tank; the default carries
+// its share of the damage on.
+#[test]
+fn a_zero_chain_factor_ends_the_strike_at_the_first_tank() {
+    let defaults = *tuning();
+    assert_eq!(super::towers::chain_factor(1.0, defaults.tesla_chain_factor), Some(defaults.tesla_chain_factor));
+    let t = crate::tuning::Tuning { tesla_chain_factor: 0.0, ..defaults };
+    assert_eq!(super::towers::chain_factor(1.0, t.tesla_chain_factor), None, "no jump for no damage");
+    assert_eq!(super::towers::chain_factor(0.0, defaults.tesla_chain_factor), None);
+}

@@ -65,15 +65,27 @@ pub fn sample_clear_position(
     mut valid: impl FnMut(Position) -> bool,
 ) -> Option<Position> {
     for _ in 0..PLACEMENT_MAX_ATTEMPTS {
-        let pos = Position::new(
-            rng.random_range(margin_min..(width - margin_min)),
-            rng.random_range(margin_min..(height - margin_min)),
-        );
+        let pos = sample_band_position(rng, width, height, margin_min);
         if valid(pos) {
             return Some(pos);
         }
     }
     None
+}
+
+/// One uniform sample of `margin_min..(width-margin_min)` x
+/// `margin_min..(height-margin_min)`: x drawn first, then y. An axis the
+/// margin leaves no room on (`margin_min` at least half its length) is its
+/// centre line and draws nothing, so `enemy_spawn_margin_min` at 0.5
+/// collapses the band onto the field's middle instead of panicking.
+pub fn sample_band_position(rng: &mut SmallRng, width: f32, height: f32, margin_min: f32) -> Position {
+    let mut axis = |length: f32| {
+        let (lo, hi) = (margin_min, length - margin_min);
+        if lo < hi { rng.random_range(lo..hi) } else { length * 0.5 }
+    };
+    let x = axis(width);
+    let y = axis(height);
+    Position::new(x, y)
 }
 
 /// Whether `pos` is a legal enemy spawn point on its own merits (the

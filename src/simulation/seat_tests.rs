@@ -580,3 +580,104 @@ fn an_owned_pose_inside_a_tile_is_refused() {
     assert_eq!(game.accept_seat_pose(0, step, 1), Err("inside a solid tile"));
     assert_eq!(game.seat_pose(0).expect("the seat").position, from.position);
 }
+
+// --- A seat driving back in through a gate (docs/online-coop-prd.md
+// section 4.11): ordnance leaves it alone until it is on the field ---
+
+/// A two-seat waves round of one tank a wave with seat 1 wrecked and
+/// already driving back in with wave 2; seat 1's tank.
+fn round_with_seat_one_rolling_in() -> (Game, Entity) {
+    let mut game = Game::default();
+    game.seed_override = Some(7);
+    game.player_row_override = Some(0);
+    game.players = PlayerCount::TWO;
+    game.level_overrides.mission = Some(Mission::Destroy);
+    game.level_overrides.spawn = Some(crate::level::SpawnKind::Waves);
+    game.level_overrides.waves = Some(3);
+    game.level_overrides.wave_size = Some(1);
+    game.level_overrides.wave_growth = Some(0);
+    game.map = MapFile::from_toml_str("version = 1\ntanks = 1\ncells.\"20,11\" = { kind = \"start\" }\ncells.\"30,20\" = { kind = \"bong\" }\n")
+        .expect("test map parses");
+    game.init(W, H);
+    for seat in game.players().into_iter().flatten() {
+        with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+    }
+    let entered = |game: &Game| {
+        game.events().iter().find_map(|e| match e {
+            Event::TankEntered { slot } => Some(*slot),
+            _ => None,
+        })
+    };
+    let mut wave_one = None;
+    for _ in 0..600 {
+        step(&mut game, Input::default());
+        wave_one = entered(&game);
+        if wave_one.is_some() {
+            break;
+        }
+    }
+    let wave_one = wave_one.expect("wave 1's tank drives in");
+    game.debug_kill(1).expect("seat 1 is alive");
+    step(&mut game, Input::default());
+    game.debug_kill(wave_one).expect("wave 1's tank");
+    let seat1 = game.seat(1).expect("seat 1");
+    for _ in 0..900 {
+        step(&mut game, Input::default());
+        if game.is_entering(seat1) {
+            return (game, seat1);
+        }
+    }
+    panic!("seat 1 never started back in");
+}
+
+/// A missile of `owner` on the ground at `at`, to burst on the next frame.
+fn landed_missile(game: &mut Game, at: Position, owner: Owner) {
+    let mut missile = crate::missile::Missile::spawn(at, Vec2::new(0.0, 1.0), owner, 0, at);
+    missile.locked = true;
+    missile.arrived = true;
+    game.world.spawn((missile,));
+}
+
+#[test]
+fn a_blast_beside_a_seat_driving_back_in_neither_hurts_nor_shoves_it() {
+    let (mut game, seat1) = round_with_seat_one_rolling_in();
+    // An enemy's burst would hurt a seat on the field and a seat's own
+    // side's would only shove it; out in the gate lane neither does either.
+    for owner in [Owner::Enemy(game.first_enemy_slot()), Owner::Player(0)] {
+        assert!(game.is_entering(seat1), "still in the gate lane");
+        let before = with_tank(&game.world, seat1, |t| (t.position, t.damage, t.shield_hp, t.hull_points()));
+        landed_missile(&mut game, before.0, owner);
+        step(&mut game, Input::default());
+        assert!(game.events().iter().any(|e| matches!(e, Event::MissileBlast { .. })), "the missile burst: {:?}", game.events());
+        let after = with_tank(&game.world, seat1, |t| (t.damage, t.shield_hp, t.hull_points(), t.is_wreck()));
+        assert_eq!(after, (before.1, before.2, before.3, false), "{owner:?}'s blast left it whole");
+        assert!(!game.events().iter().any(|e| matches!(e, Event::Shoved { seat: 1, .. })), "and unshoved: {:?}", game.events());
+    }
+}
+
+#[test]
+fn an_enemy_missile_does_not_lock_a_seat_driving_back_in() {
+    let (mut game, seat1) = round_with_seat_one_rolling_in();
+    // A launcher on the field just inside the gate, so the seat in the
+    // lane is well inside its sight box, and its missile at the top of the
+    // climb right over that seat - the nearest tank to it by far.
+    let inside = game.world.get::<&RollIn>(seat1).expect("rolling in").to;
+    let launcher = game.debug_spawn_enemy(inside, None, None).expect("spawns");
+    let at = with_tank(&game.world, seat1, |t| t.position);
+    assert!(crate::ai::in_sight_box(at, inside), "the launcher could see a seat standing there");
+    let mut missile = crate::missile::Missile::spawn(at, Vec2::new(0.0, 1.0), Owner::Enemy(launcher), 0, at);
+    missile.stage = crate::missile::MissileStage::Seek;
+    game.world.spawn((missile,));
+    step(&mut game, Input::default());
+    let locks: Vec<Option<usize>> = game
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            Event::MissileLocked { slot, target, .. } if *slot == launcher => Some(*target),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(locks.len(), 1, "the missile made its pick: {:?}", game.events());
+    assert_ne!(locks[0], Some(1), "not the seat in the gate lane");
+    assert!(game.world.query::<&crate::missile::Missile>().iter().all(|m| m.target != Some(seat1)));
+}

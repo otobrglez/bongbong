@@ -88,7 +88,7 @@ sections named in the last column.
 | 4 | Is a destroyed tower gone? | Agreed: **yes, for the round.** It leaves a passable ruin decal and a scorch, and the pack does not rebuild it. | 7, 9, 13 |
 | 5 | How big is a tower? | Proposed: **one cell**, like a tree: a 32 px collider and nav-grid cell, a 48 px sprite that overhangs its neighbours. | 3, 11, 12 |
 | 6 | Does the tesla chain or stun? | Proposed: **one chain jump at half damage, no stun.** | 4 |
-| 7 | Do towers hurt their own side? | Proposed: **no.** A tower never targets its own side, holds fire while a friendly hull is in its line, and its bullets pass through its own side's tanks. The one exception is ooze already on the ground (row 14). | 5, 6, 10 |
+| 7 | Do towers hurt their own side? | Proposed: **no.** A tower never targets its own side, holds fire while a friendly hull or its own side's bong is in its line (`friend_in_line`, `own_bong_in_line`), and its bullets pass through its own side's tanks. A bullet that does reach a bong hurts it, whoever's it is. The one exception is ooze already on the ground (row 14). | 5, 6, 10 |
 | 8 | Do towers see through tall grass? | Proposed: **the tesla does; the gun and the bio slush do not.** The tesla senses proximity; the other two need to see their target, like an enemy tank does (`Terrain::conceals`). | 4, 5, 6 |
 | 9 | How do enemies treat towers? | Agreed: **they avoid a player tower's reach and shoot back when one hits them.** No enemy hunts towers as an objective. | 10 |
 | 10 | Can a tank ram a tower down? | Proposed: **no.** A tower is a building; ramming it does nothing. | 7 |

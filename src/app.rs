@@ -666,10 +666,11 @@ impl crate::mapstore::Backend for PageMaps {
 }
 
 /// The level progress the page kept in `localStorage`: the map name of
-/// the furthest level reached (docs/levels.md).
+/// the furthest level reached under `bongbong.level` and, once the last
+/// level is won, `1` under `bongbong.complete` (docs/levels.md). Read as
+/// `<level>|<complete>`; a map name holds no `|`.
 #[cfg(target_os = "emscripten")]
-const PAGE_PROGRESS: &std::ffi::CStr =
-    c"(function(){try{return String(localStorage.getItem('bongbong.level')||'')}catch(e){return ''}})()";
+const PAGE_PROGRESS: &std::ffi::CStr = c"(function(){try{return String(localStorage.getItem('bongbong.level')||'')+'|'+String(localStorage.getItem('bongbong.complete')||'')}catch(e){return ''}})()";
 
 /// Where a desktop or a phone keeps its level progress: the platform's
 /// data directory (`levels::progress_path`), or on Android the activity's
@@ -686,14 +687,16 @@ fn progress_path() -> Option<std::path::PathBuf> {
     }
 }
 
-/// The furthest level this player reached in an earlier session, as its
-/// map's name: the page's `localStorage` on the web, a file elsewhere.
-/// `None` for a first session, or a store that cannot be read.
-fn load_progress() -> Option<String> {
+/// The progress this player made in an earlier session: the page's
+/// `localStorage` on the web, a file elsewhere. `None` for a first
+/// session, or a store that cannot be read.
+fn load_progress() -> Option<crate::levels::Progress> {
     #[cfg(target_os = "emscripten")]
     {
-        let level = page_string(PAGE_PROGRESS).trim().to_string();
-        (!level.is_empty()).then_some(level)
+        let kept = page_string(PAGE_PROGRESS);
+        let (level, complete) = kept.split_once('|').unwrap_or((&kept, ""));
+        let level = level.trim();
+        (!level.is_empty()).then(|| crate::levels::Progress { level: level.to_string(), complete: complete.trim() == "1" })
     }
     #[cfg(not(target_os = "emscripten"))]
     {
@@ -701,10 +704,11 @@ fn load_progress() -> Option<String> {
     }
 }
 
-/// Keep `level` as the furthest level reached, where `load_progress`
-/// will find it. A store that cannot be written is logged and skipped:
-/// the session plays on, it only forgets.
-fn save_progress(level: &str) {
+/// Keep `progress` where `load_progress` will find it. A store that
+/// cannot be written is logged and skipped: the session plays on, it only
+/// forgets.
+fn save_progress(progress: &crate::levels::Progress) {
+    let level = progress.level.as_str();
     #[cfg(target_os = "emscripten")]
     {
         unsafe extern "C" {
@@ -715,7 +719,8 @@ fn save_progress(level: &str) {
         if !level.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
             return;
         }
-        let script = format!("(function(){{try{{localStorage.setItem('bongbong.level','{level}')}}catch(e){{}}}})()");
+        let complete = if progress.complete { "localStorage.setItem('bongbong.complete','1');" } else { "" };
+        let script = format!("(function(){{try{{localStorage.setItem('bongbong.level','{level}');{complete}}}catch(e){{}}}})()");
         let Ok(script) = std::ffi::CString::new(script) else { return };
         // SAFETY: a NUL-terminated script, evaluated synchronously; it
         // catches its own exceptions, so nothing unwinds into the runtime.
@@ -723,7 +728,7 @@ fn save_progress(level: &str) {
     }
     #[cfg(not(target_os = "emscripten"))]
     match progress_path() {
-        Some(path) => match crate::levels::write_progress(&path, level) {
+        Some(path) => match crate::levels::write_progress(&path, progress) {
             Ok(()) => eprintln!("[levels] reached {level} ({})", path.display()),
             Err(e) => eprintln!("[levels] {e}"),
         },
@@ -1305,7 +1310,7 @@ pub fn run(args: Args) {
     // The levels (docs/levels.md): a session opens on the furthest one
     // this player has reached, or on `--level`; `-m` is free play on the
     // map it names.
-    let campaign = Campaign::new(Levels::shipped(), load_progress().as_deref());
+    let campaign = Campaign::new(Levels::shipped(), load_progress().as_ref());
     let map = match &args.map {
         Some(map) => map.clone(),
         None => {
@@ -2429,8 +2434,8 @@ pub fn run(args: Args) {
         // A won level is progress, kept the frame it is won - a player who
         // closes the window on the end screen has still reached the next.
         session.note_outcome();
-        if let Some(level) = session.take_progress() {
-            save_progress(&level);
+        if let Some(progress) = session.take_progress() {
+            save_progress(&progress);
         }
         // A level's end screen that has counted down takes its way: the
         // next level after a win, the same one again after a loss. Then

@@ -1336,8 +1336,9 @@ pub fn players_dialog_rects(area: Rect) -> PlayersDialogRects {
 /// banner and its title under it, half the banner's size.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LevelBanner {
-    /// Counted from 1.
+    /// As shown (`Levels::number`): from 1, the training stage 0.
     pub number: usize,
+    /// How many levels the campaign counts (`Levels::count`).
     pub count: usize,
     /// In the language on screen (`levels::Level::title`).
     pub title: String,
@@ -1353,6 +1354,19 @@ pub struct ResultView {
     pub seats: usize,
     /// `None` in free play.
     pub buttons: Option<ResultButtons>,
+}
+
+/// The round's numbers as the end screen shows them. `Game::round_stats`
+/// totals the spawn plan - the band, or the waves - and a training
+/// script's enemies are outside any plan (Boot Camp's plan brings none),
+/// so the total here is never under the enemies wrecked plus the ones
+/// still out: `DESTROYED 2 / 2` where the plan alone would say `2 / 0`.
+pub fn result_stats(game: &Game) -> RoundStats {
+    let mut stats = game.round_stats();
+    let first_enemy = game.first_enemy_slot();
+    let out = game.world.query::<&Tank>().iter().filter(|tank| !tank.is_wreck() && tank.owner_slot() >= first_enemy).count() as u32;
+    stats.enemies = stats.enemies.max(stats.destroyed + out);
+    stats
 }
 
 /// A level's end-screen buttons: `PLAY AGAIN` always, and after a win the
@@ -1374,8 +1388,9 @@ pub struct ResultButtons {
 pub enum NextLevel {
     /// `NEXT LEVEL`.
     Next,
-    /// The last of `levels` levels was won: the line says every level is
-    /// complete and the button goes back to the first.
+    /// The last of `levels` levels (`Levels::count`, the banner's count
+    /// too) was won: the line says every level is complete and the button
+    /// goes back to the first.
     FirstAgain { levels: usize },
 }
 

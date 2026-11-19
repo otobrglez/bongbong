@@ -1371,6 +1371,10 @@ pub struct Game {
     /// The static bodies `init` put on the deep water cells, which a
     /// snowfall mid-round (`change_weather`) takes off as the water ices.
     deep_water_bodies: Vec<rapier2d::prelude::RigidBodyHandle>,
+    /// The static bodies `init` put on the deep lava cells, in spawn order,
+    /// for the test that pins that order.
+    #[cfg(test)]
+    deep_lava_bodies: Vec<rapier2d::prelude::RigidBodyHandle>,
     /// The round's single RNG stream - see the module doc. `None` only
     /// before the first `init`. `update` takes it into the frame context
     /// and puts it back at its end.
@@ -1870,10 +1874,17 @@ impl Game {
                 tuning().lava_heat_falloff,
             )
         };
+        // Spawned in `deep_grid_cells` order, row by row, so a seed gives
+        // the same body handles every run; the set only answers the
+        // neighbour lookup.
         let deep_lava: HashSet<(i32, i32)> = self.lava.deep_grid_cells().collect();
-        for &(gx, gy) in &deep_lava {
+        #[cfg(test)]
+        self.deep_lava_bodies.clear();
+        for (gx, gy) in self.lava.deep_grid_cells() {
             let half = battlefield::tile_hull_half_extent(&deep_lava, gx, gy, OBSTACLE_GRID_SIZE * 0.5);
-            self.physics.spawn_static(map::cell_to_world(gx, gy), half);
+            let _body = self.physics.spawn_static(map::cell_to_world(gx, gy), half);
+            #[cfg(test)]
+            self.deep_lava_bodies.push(_body);
         }
 
         // --- Player ---
@@ -1982,7 +1993,11 @@ impl Game {
         let enemy_count = match self.spawn_plan {
             SpawnPlan::Band { count } => count
                 .or(self.map.tanks.map(|n| n as usize))
-                .unwrap_or_else(|| rng.random_range(tuning().enemy_count_min..=tuning().enemy_count_max))
+                .unwrap_or_else(|| {
+                    // An inverted pair (min above max) is `min`, undrawn.
+                    let (min, max) = (tuning().enemy_count_min, tuning().enemy_count_max);
+                    if min <= max { rng.random_range(min..=max) } else { min }
+                })
                 // Free-form user input: the cap keeps live slots small; 0
                 // is a sandbox round (see `band_enemy_count`).
                 .min(31),
@@ -2113,10 +2128,7 @@ impl Game {
                     // spot. Snap one more band sample to the nearest usable
                     // cell that keeps its distance from the tanks already
                     // down, so the fallback can still never land in a wall.
-                    let sample = Position::new(
-                        rng.random_range(margin_min..(width - margin_min)),
-                        rng.random_range(margin_min..(height - margin_min)),
-                    );
+                    let sample = battlefield::sample_band_position(&mut rng, width, height, margin_min);
                     let mut avoid = enemy_positions.clone();
                     avoid.push(center);
                     avoid.extend(others.iter().copied());
@@ -2200,10 +2212,7 @@ impl Game {
                         && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= bong_clear)
                 })
                 .unwrap_or_else(|| {
-                    let sample = Position::new(
-                        rng.random_range(margin_min..(width - margin_min)),
-                        rng.random_range(margin_min..(height - margin_min)),
-                    );
+                    let sample = battlefield::sample_band_position(&mut rng, width, height, margin_min);
                     let mut avoid = enemy_positions.clone();
                     avoid.push(center);
                     avoid.extend(others.iter().copied());
@@ -3249,7 +3258,7 @@ impl Game {
             && let Some((target, target_pos, dist, _)) = nearest_foe
             && dist <= attack_range
         {
-            let dmg = f.rng.random_range(tuning().bong_attack_damage_min..tuning().bong_attack_damage_max);
+            let dmg = combat::roll_range(&mut f.rng, tuning().bong_attack_damage_min, tuning().bong_attack_damage_max);
             // A bite never finishes a player off, whichever player it is.
             let cap = if self.is_player(target) { MAX_DAMAGE - 1.0 } else { MAX_DAMAGE };
             let (became_wreck, victim_pos, victim) = {
@@ -6764,7 +6773,9 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
 /// scheduler, so a wave tank is kitted exactly like a band tank. No
 /// physics body: the caller spawns one when the tank is on the field.
 fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> Tank {
-    let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
+    // No variance is no spread and no draw: every enemy at `enemy_speed`.
+    let variance = tuning().enemy_speed_variance;
+    let factor = 1.0 + if variance > 0.0 { rng.random_range(-variance..variance) } else { 0.0 };
     let mut enemy = Tank {
         row,
         shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
@@ -7284,6 +7295,30 @@ mod determinism_tests {
             }
         }
     }
+
+    /// The deep-lava colliders are spawned row by row, in
+    /// `LavaLayout::deep_grid_cells` order, so a seed hands rapier the same
+    /// body handles on every run.
+    #[test]
+    fn deep_lava_colliders_spawn_in_cell_order() {
+        let mut map = String::from("version = 1\ntanks = 0\ncells.\"3,6\" = { kind = \"start\" }\n");
+        for c in 12..=18 {
+            for r in 4..=10 {
+                map.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"lava\" }}\n"));
+            }
+        }
+        let mut game = Game::default();
+        game.seed_override = Some(0xB0B5);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(&map).expect("test map parses");
+        game.init(1088.0, 544.0);
+        let cells: Vec<Position> = game.lava.deep_grid_cells().map(|(c, r)| map::cell_to_world(c, r)).collect();
+        assert!(cells.len() >= 9, "a pool with a deep middle: {}", cells.len());
+        let spawned: Vec<Position> = game.deep_lava_bodies.iter().map(|&b| game.physics.position(b)).collect();
+        assert_eq!(spawned, cells);
+        let indices: Vec<u32> = game.deep_lava_bodies.iter().map(|b| b.into_raw_parts().0).collect();
+        assert!(indices.windows(2).all(|w| w[0] < w[1]), "handles in spawn order: {indices:?}");
+    }
 }
 
 #[cfg(test)]
@@ -7306,6 +7341,60 @@ mod mechanics_tests {
 
     fn step(game: &mut Game, input: Input) {
         game.update(input, 1.0 / 60.0, W, H);
+    }
+
+    /// A band round on an open field under `table`, put in force on this
+    /// thread alone for the `init` (`tuning::in_force`): `enemies` pins the
+    /// count, `None` leaves it to the table's roll.
+    #[cfg(feature = "dev-tools")]
+    fn band_round_under(table: crate::tuning::Tuning, enemies: Option<usize>) -> Game {
+        let table = std::sync::Arc::new(table);
+        crate::tuning::in_force(Some(&table), || {
+            let mut game = Game::default();
+            game.enemy_count_override = enemies;
+            game.seed_override = Some(7);
+            game.level_overrides.mission = Some(Mission::Destroy);
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+            game.map = MapFile::from_toml_str("version = 1\ncells.\"5,11\" = { kind = \"start\" }\n").expect("test map parses");
+            game.init(W, H);
+            game
+        })
+    }
+
+    #[cfg(feature = "dev-tools")]
+    fn enemies_of(game: &Game) -> Vec<(Position, f32)> {
+        game.world.query::<&Tank>().iter().filter(|t| !t.owner().is_player()).map(|t| (t.position, t.speed_scale)).collect()
+    }
+
+    /// `enemy_count_min` above `enemy_count_max` is a band of `min`.
+    #[cfg(feature = "dev-tools")]
+    #[test]
+    fn an_inverted_enemy_count_range_spawns_the_minimum() {
+        let game = band_round_under(crate::tuning::Tuning { enemy_count_min: 6, enemy_count_max: 3, ..crate::tuning::Tuning::DEFAULT }, None);
+        assert_eq!(game.band_enemy_count, 6);
+        assert_eq!(enemies_of(&game).len(), 6);
+    }
+
+    /// `enemy_speed_variance` at 0 is every enemy at exactly `enemy_speed`.
+    #[cfg(feature = "dev-tools")]
+    #[test]
+    fn no_enemy_speed_variance_spawns_every_enemy_at_the_base_speed() {
+        let game = band_round_under(crate::tuning::Tuning { enemy_speed_variance: 0.0, ..crate::tuning::Tuning::DEFAULT }, Some(4));
+        let enemies = enemies_of(&game);
+        assert_eq!(enemies.len(), 4);
+        assert!(enemies.iter().all(|&(_, scale)| scale == 1.0), "{enemies:?}");
+    }
+
+    /// `enemy_spawn_margin_min` at 0.5 leaves the band no room on the short
+    /// side: the round still starts, every enemy on the field.
+    #[cfg(feature = "dev-tools")]
+    #[test]
+    fn a_collapsed_spawn_margin_band_still_places_the_enemies() {
+        let table = crate::tuning::Tuning { enemy_spawn_margin_min: 0.5, enemy_spawn_margin_max: 0.5, ..crate::tuning::Tuning::DEFAULT };
+        let game = band_round_under(table, Some(3));
+        let enemies = enemies_of(&game);
+        assert_eq!(enemies.len(), 3);
+        assert!(enemies.iter().all(|&(p, _)| p.x > 0.0 && p.x < W && p.y > 0.0 && p.y < H), "{enemies:?}");
     }
 
     /// An empty sandbox with `water` cells: the player starts at (5, 11)

@@ -418,9 +418,8 @@ impl Session {
         }
     }
 
-    /// The progress to write, once per change: the map name of the
-    /// furthest level reached.
-    pub fn take_progress(&mut self) -> Option<String> {
+    /// The progress to write, once per change.
+    pub fn take_progress(&mut self) -> Option<crate::levels::Progress> {
         self.campaign.as_mut()?.take_unsaved()
     }
 
@@ -433,7 +432,7 @@ impl Session {
         }
         let buttons = self.level_round().zip(self.campaign.as_ref()).map(|(i, campaign)| {
             let next = (self.game.outcome() == Outcome::Won).then(|| {
-                if campaign.is_last(i) { NextLevel::FirstAgain { levels: campaign.levels.len() } } else { NextLevel::Next }
+                if campaign.is_last(i) { NextLevel::FirstAgain { levels: campaign.levels.count() } } else { NextLevel::Next }
             });
             // Whole seconds, never 0: at zero the screen is taking its
             // way (`follow_countdown`), which it does the same frame.
@@ -441,7 +440,7 @@ impl Session {
             let countdown = (!matches!(next, Some(NextLevel::FirstAgain { .. }))).then(|| left.ceil().max(1.0) as u32);
             ResultButtons { next, countdown }
         });
-        Some(ResultView { stats: self.game.round_stats(), seats: self.game.players.count(), buttons })
+        Some(ResultView { stats: crate::hud::result_stats(&self.game), seats: self.game.players.count(), buttons })
     }
 
     /// A level's end screen whose countdown has run out takes the way it
@@ -1370,7 +1369,7 @@ impl Session {
                 countdown_label: None,
                 level: self.level().zip(self.campaign.as_ref()).and_then(|(i, campaign)| {
                     let level = campaign.levels.get(i)?;
-                    Some(LevelBanner { number: campaign.levels.number(i), count: campaign.levels.last_number(), title: level.title() })
+                    Some(LevelBanner { number: campaign.levels.number(i), count: campaign.levels.count(), title: level.title() })
                 }),
                 result: self.result_view(),
                 verdict_lift: self.verdict_lift(),
@@ -2488,6 +2487,47 @@ mod session_tests {
         assert!(!s.press_players(), "the players dialog stays shut");
     }
 
+    /// The banner's `/ N` and the last win's `ALL N LEVELS` are one count,
+    /// which leaves the training stage (level 0) out: after it, two levels
+    /// are levels 1 and 2 of 2.
+    #[test]
+    fn the_banner_and_the_last_win_count_the_same_levels() {
+        let levels = crate::levels::Levels::parse(
+            "[[level]]\nmap = \"boot-camp\"\ntitle = \"Boot Camp\"\nskippable = true\n[[level]]\nmap = \"lotus-lagoon\"\ntitle = \"Lotus Lagoon\"\n[[level]]\nmap = \"glasshouses\"\ntitle = \"Glasshouse Gardens\"\n",
+        )
+        .expect("the test's levels parse");
+        let mut s = level_session(levels, 2);
+        let banner = s.play_chrome().level.expect("a level's banner");
+        assert_eq!((banner.number, banner.count), (2, 2), "the last level is 2 of 2");
+        finish(&mut s, true);
+        let buttons = s.play_chrome().result.and_then(|v| v.buttons).expect("the buttons");
+        assert_eq!(buttons.next, Some(NextLevel::FirstAgain { levels: banner.count }));
+    }
+
+    /// A training round's enemies come from its script, outside the spawn
+    /// plan, so the end screen's total is the wrecks and the enemies still
+    /// out, never a plan's zero under them.
+    #[test]
+    fn a_training_rounds_end_screen_counts_the_enemies_its_script_brought() {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.map = crate::map::open_map("boot-camp").expect("Boot Camp opens");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        assert!(s.game.map.training.is_some(), "Boot Camp is the training stage");
+        assert_eq!(s.game.round_stats().enemies, 0, "the plan brings none");
+        let at = crate::Position::new(w / 2.0, h / 2.0);
+        let first = s.game.debug_spawn_enemy(at, Some(1), None).expect("spawns");
+        s.game.debug_spawn_enemy(at, Some(1), None).expect("spawns");
+        let stats = crate::hud::result_stats(&s.game);
+        assert_eq!((stats.destroyed, stats.enemies), (0, 2), "both still out");
+        s.game.debug_kill(first).expect("the tank exists");
+        step(&mut s);
+        let stats = crate::hud::result_stats(&s.game);
+        assert_eq!((stats.destroyed, stats.enemies), (1, 2), "one wrecked of the two");
+    }
+
     /// One frame as `app.rs` runs it: a step while the round is live,
     /// then the session's reading of it.
     fn step(s: &mut Session) {
@@ -2640,7 +2680,7 @@ mod session_tests {
         assert!(s.play_chrome().result.is_none(), "no end screen mid-round");
 
         finish(&mut s, true);
-        assert_eq!(s.take_progress().as_deref(), Some("glasshouses"), "the next level is reached");
+        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("glasshouses".to_string(), false)), "the next level is reached");
         assert_eq!(s.take_progress(), None, "once");
         let view = s.play_chrome().result.expect("the end screen");
         let seconds = crate::tuning::tuning().restart_delay.ceil() as u32;
@@ -2663,7 +2703,7 @@ mod session_tests {
         // The last level: every level complete, and no countdown round
         // to the first.
         finish(&mut s, true);
-        assert_eq!(s.take_progress(), None, "the last level opens nothing further");
+        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("glasshouses".to_string(), true)), "the last level opens nothing further, and winning it is kept");
         let buttons = s.play_chrome().result.and_then(|v| v.buttons).expect("the buttons");
         assert_eq!(buttons, ResultButtons { next: Some(NextLevel::FirstAgain { levels: 2 }), countdown: None });
         for _ in 0..end_frames(&s) + 60 {
@@ -2796,7 +2836,7 @@ mod session_tests {
 
         // Won: level 2 is reached, and the end screen opens the screen.
         finish(&mut s, true);
-        assert_eq!(s.take_progress().as_deref(), Some("glasshouses"));
+        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("glasshouses".to_string(), false)));
         to_verdict(&mut s);
         assert!(s.press_result(centre(result_rects(&s).expect("the buttons").levels), area()));
         assert!(s.level_select.is_some());

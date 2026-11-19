@@ -78,12 +78,17 @@ impl BlastParams {
         }
     }
 
-    /// Centre damage before falloff. Tolerates a live-tuned inverted
-    /// range (min >= max) by returning `min` instead of panicking.
+    /// Centre damage before falloff (`roll_range`).
     pub fn roll_damage(&self, rng: &mut SmallRng) -> f32 {
-        let (min, max) = self.damage;
-        if max > min { rng.random_range(min..max) } else { min }
+        roll_range(rng, self.damage.0, self.damage.1)
     }
+}
+
+/// A uniform roll in `min..max`: one draw. A tuned range that is empty or
+/// inverted (`min >= max`) is `min` and draws nothing, so a knob pair set
+/// the wrong way round plays instead of panicking.
+pub(super) fn roll_range(rng: &mut SmallRng, min: f32, max: f32) -> f32 {
+    if max > min { rng.random_range(min..max) } else { min }
 }
 
 /// What a hit does beyond damage: an optional shove (unit travel direction,
@@ -142,7 +147,7 @@ impl Game {
                     } else {
                         // Scaled after the roll, so the RNG draw count never
                         // depends on who shot whom.
-                        let mut d = f.rng.random_range(dmg.0..dmg.1);
+                        let mut d = roll_range(&mut f.rng, dmg.0, dmg.1);
                         if shooter.is_player() && tank.owner().is_player() {
                             d *= tuning().friendly_fire_damage_factor;
                         }
@@ -193,7 +198,7 @@ impl Game {
                     if bong.is_dead() {
                         (true, bong.position, false, 0.0)
                     } else {
-                        let d = f.rng.random_range(dmg.0..dmg.1);
+                        let d = roll_range(&mut f.rng, dmg.0, dmg.1);
                         bong.damage(d);
                         let target = HitTarget::Bong { side: bong.side };
                         f.events.push(Event::Hit { target, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: effects.cause });
@@ -210,7 +215,7 @@ impl Game {
                 }
             }
             ShellTarget::Obstacle(entity) => {
-                let d = f.rng.random_range(dmg.0..dmg.1);
+                let d = roll_range(&mut f.rng, dmg.0, dmg.1);
                 // Read the material before the damage lands: a killing blow
                 // despawns the tile, and the event has to say what it was.
                 let material = {
@@ -321,7 +326,7 @@ pub(super) fn ram(
     if a.is_wreck() || b.is_wreck() || a.ram_cooldown > 0.0 || b.ram_cooldown > 0.0 {
         return None;
     }
-    let dmg = rng.random_range(tuning().ram_damage_min..tuning().ram_damage_max) * damage_scale;
+    let dmg = roll_range(rng, tuning().ram_damage_min, tuning().ram_damage_max) * damage_scale;
     a.take_damage(dmg, MAX_DAMAGE);
     b.take_damage(dmg, MAX_DAMAGE);
     a.mark_hit();
@@ -445,9 +450,7 @@ pub(super) fn bong_hop_target(
     width: f32,
     height: f32,
 ) -> Option<Position> {
-    let jitter = rng
-        .random_range(-tuning().bong_hop_angle_jitter_deg..tuning().bong_hop_angle_jitter_deg)
-        .to_radians();
+    let jitter = roll_range(rng, -tuning().bong_hop_angle_jitter_deg, tuning().bong_hop_angle_jitter_deg).to_radians();
     let base_angle = math::atan2(away_dir.y, away_dir.x) + jitter;
     let margin = tuning().bong_hop_bounds_margin;
     for wet_only in [true, false] {
@@ -504,6 +507,45 @@ mod ram_tests {
         let landing = bong_hop_target(&mut rng, bong, Vec2::new(-1.0, 0.0), 96.0, &terrain, w, h).expect("a landing");
         assert_eq!(water.depth_at(landing), crate::ground::Depth::Dry);
         assert!(landing.x < bong.x);
+    }
+
+    #[test]
+    fn roll_range_is_min_and_draws_nothing_on_an_empty_or_inverted_range() {
+        for (min, max) in [(6.0_f32, 2.0_f32), (4.0, 4.0), (0.0, 0.0), (-0.0, 0.0)] {
+            let mut rng = SmallRng::seed_from_u64(9);
+            let mut untouched = rng.clone();
+            assert_eq!(roll_range(&mut rng, min, max), min, "{min}..{max}");
+            assert_eq!(rng.random_range(0..u32::MAX), untouched.random_range(0..u32::MAX), "{min}..{max} drew");
+        }
+        let blast = BlastParams { radius: 10.0, damage: (8.0, 3.0), knockback: 0.0, by: None };
+        assert_eq!(blast.roll_damage(&mut SmallRng::seed_from_u64(9)), 8.0);
+    }
+
+    #[test]
+    fn roll_range_is_the_one_plain_draw_on_a_valid_range() {
+        for (seed, min, max) in [(1_u64, 2.0_f32, 6.0_f32), (2, 0.0, 100.0), (0xB0B5, -10.0, 10.0), (4, 3.0, 3.5)] {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let mut plain = rng.clone();
+            for _ in 0..32 {
+                assert_eq!(roll_range(&mut rng, min, max).to_bits(), plain.random_range(min..max).to_bits(), "seed {seed}, {min}..{max}");
+            }
+            assert_eq!(rng.random_range(0..u32::MAX), plain.random_range(0..u32::MAX), "the streams stay in step");
+        }
+    }
+
+    /// `bong_hop_angle_jitter_deg` at 0 is a hop straight along `away`.
+    #[cfg(feature = "dev-tools")]
+    #[test]
+    fn a_hop_with_no_angle_jitter_still_lands() {
+        let table = std::sync::Arc::new(crate::tuning::Tuning { bong_hop_angle_jitter_deg: 0.0, ..crate::tuning::Tuning::DEFAULT });
+        let world = hecs::World::new();
+        let (w, h) = (1280.0, 720.0);
+        let water = crate::ground::WaterLayout::build(w, h, &[], &[]);
+        let terrain = Terrain::build(&world, w, h, &[], &water);
+        let bong = crate::map::cell_to_world(11, 11);
+        let mut rng = SmallRng::seed_from_u64(3);
+        let landing = crate::tuning::in_force(Some(&table), || bong_hop_target(&mut rng, bong, Vec2::new(1.0, 0.0), 96.0, &terrain, w, h));
+        assert!(landing.is_some_and(|p| p.x > bong.x), "{landing:?}");
     }
 
     #[test]
