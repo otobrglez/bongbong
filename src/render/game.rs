@@ -269,6 +269,32 @@ pub enum SplitLayer<'a> {
 /// near-black.
 const DIVIDER: Color = Color::new(0x14, 0x14, 0x18, 255);
 
+/// A round's field between its sky's stages
+/// (`render::weather::run_stages`).
+struct RoundStages<'a> {
+    game: &'a Game,
+    textures: &'a Textures<'a>,
+    shots: Option<&'a mut ShotShaders>,
+    fx: &'a crate::fx::Fx,
+    cull: Option<Rectangle>,
+    camera: &'a Camera,
+    ammo_seats: &'a [u8],
+}
+
+impl crate::render::weather::StagePainter for RoundStages<'_> {
+    fn ground<D: RaylibDraw>(&mut self, d: &mut D) {
+        self.game.paint_ground(&mut GpuCanvas::culled(d, self.textures, self.cull));
+    }
+
+    fn lit<D: RaylibDraw>(&mut self, d: &mut D, ground_drawn: bool) {
+        self.game.paint_field_lit(d, self.textures, self.fx, ground_drawn, self.cull);
+    }
+
+    fn glowing<D: RaylibDraw>(&mut self, d: &mut D, day_pools: f32) {
+        self.game.paint_field_glowing(d, self.textures, self.shots.as_deref_mut(), self.fx, day_pools, self.camera, self.ammo_seats);
+    }
+}
+
 impl Game {
     /// The light shots throw on the ground (inside the first additive
     /// block, under every sprite): a soft pool in the shot's colour under
@@ -731,13 +757,10 @@ impl Game {
 
         // Pass 1: draw the world (tracks, tanks, shells) into an offscreen
         // render texture, so a shockwave can distort the finished frame as a
-        // whole-screen shader pass in pass 2. Under a sky (docs/weather.md,
-        // render/weather.rs) it runs in stages that ping-pong between
-        // `scene_target` and the weather's own target and always end in
-        // `scene_target`: the field under the light, multiplied by the
-        // light map, then what shines by itself, then the air over it all.
-        // A pass that covers a whole target - the weather's - is drawn in
-        // the target's own pixels; the world is drawn through `in_target`.
+        // whole-screen shader pass in pass 2. Under a sky (docs/weather.md)
+        // it runs in the stages `render::weather::run_stages` orders, which
+        // always end in `scene_target`; the world is drawn through
+        // `in_target`.
         let lights_stage = crate::frame_stages::stage("lights");
         let weather = match effects.weather.as_deref_mut() {
             Some(fx) => fx.begin(rl, thread, &crate::render::weather::Scene::of_round(self, effects.fx.impacts()), textures, camera),
@@ -755,85 +778,10 @@ impl Game {
                     });
                 });
             }
-            Some(frame) if frame.plain => {
-                // The sky without its shaders (`weather::plain`), every
-                // stage straight into `scene_target`: the field (on snow
-                // lying over the bare ground, under the marks), the light
-                // map multiplied in by a blend mode, what shines by
-                // itself, then the air as plain blocks.
-                let plan = frame.plan;
-                let day_pools = frame.day_light_pools();
-                let light = effects.weather.as_deref().and_then(|fx| fx.light_map()).expect("`begin` readied the targets");
-                let mut blocks = Vec::new();
-                rl.draw_texture_mode(thread, crate::frame_stages::target(scene_target), |mut d| {
-                    d.clear_background(Color::WHITE);
-                    d.draw_mode2D(in_target, |mut d, _| {
-                        frame.plain_snow_cover(&mut blocks);
-                        let snowed = !blocks.is_empty();
-                        if snowed {
-                            self.paint_ground(&mut GpuCanvas::culled(&mut d, textures, cull));
-                            crate::render::weather::draw_blocks(&mut d, &blocks);
-                        }
-                        self.paint_field_lit(&mut d, textures, effects.fx, snowed, cull);
-                        if !plan.lit {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
-                        }
-                    });
-                    if plan.lit {
-                        crate::render::weather::multiply_light(&mut d, light, &frame);
-                        d.draw_mode2D(in_target, |mut d, _| {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
-                        });
-                    }
-                    if plan.sky {
-                        blocks.clear();
-                        frame.plain_air(&mut blocks);
-                        d.draw_mode2D(in_target, |mut d, _| crate::render::weather::draw_blocks(&mut d, &blocks));
-                        crate::render::weather::draw_flash(&mut d, &frame);
-                    }
-                });
-            }
             Some(frame) => {
-                let (lit_target, mut passes) = effects.weather.as_deref_mut().and_then(|fx| fx.stages()).expect("`begin` readied the targets");
-                let plan = frame.plan;
-                let day_pools = frame.day_light_pools();
-                // Each stage draws into the other buffer from the one before
-                // it, so the last lands in `scene_target`: under light and
-                // sky the first stage starts there, under one of them it
-                // starts in the weather's target.
-                let first_in_scene = plan.lit == plan.sky;
-                {
-                    let first: &mut RenderTexture2D = if first_in_scene { &mut *scene_target } else { &mut *lit_target };
-                    rl.draw_texture_mode(thread, crate::frame_stages::target(first), |mut d| {
-                        d.clear_background(Color::WHITE);
-                        // The ground pass draws the bare ground with the
-                        // sky's mark on it in place of the ground tileset.
-                        if plan.ground {
-                            passes.draw_ground(&mut d, &frame);
-                        }
-                        d.draw_mode2D(in_target, |mut d, _| {
-                            self.paint_field_lit(&mut d, textures, effects.fx, plan.ground, cull);
-                            if !plan.lit {
-                                self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
-                            }
-                        });
-                    });
-                }
-                if plan.lit {
-                    let (under, to): (&RenderTexture2D, &mut RenderTexture2D) =
-                        if first_in_scene { (&*scene_target, &mut *lit_target) } else { (&*lit_target, &mut *scene_target) };
-                    rl.draw_texture_mode(thread, crate::frame_stages::target(to), |mut d| {
-                        passes.draw_lit(&mut d, under, &frame);
-                        d.draw_mode2D(in_target, |mut d, _| {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
-                        });
-                    });
-                }
-                if plan.sky {
-                    // Whichever stage came before left the field in the
-                    // weather's target.
-                    rl.draw_texture_mode(thread, crate::frame_stages::target(scene_target), |mut d| passes.draw_sky(&mut d, lit_target, &frame));
-                }
+                let fx = effects.weather.as_deref_mut().expect("the frame is its `begin`'s");
+                let mut painter = RoundStages { game: self, textures, shots: effects.shots.as_deref_mut(), fx: effects.fx, cull, camera, ammo_seats };
+                crate::render::weather::run_stages(rl, thread, fx, frame, scene_target, in_target, &mut painter);
             }
         }
 
@@ -1598,7 +1546,9 @@ impl Game {
                     draw_portal_glow(&mut bd, at, self.time);
                 }
             }
-            for obstacle in self.world.query::<&Obstacle>().iter() {
+            // The few tiles in view that glow: a lit fuse, burning timber.
+            let tiles = self.obstacles_in(cull, |o| o.fuse.is_some() || o.burning);
+            for obstacle in tiles.iter() {
                 if obstacle.fuse.is_some() && !culled(cull, obstacle.position) {
                     draw_fuse_glow(&mut bd, obstacle.position, self.time);
                 }
@@ -1623,7 +1573,7 @@ impl Game {
                 let lean = pyro::smoke_lean(&t, tank.drawn().position, self.time);
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::damage_stage::flames(tank, self.time, lean), bands);
             }
-            for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !culled(cull, o.position)) {
+            for obstacle in tiles.iter().filter(|o| o.burning && !culled(cull, o.position)) {
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::game::tile_flames(obstacle, self.time), bands);
             }
             for pickup in self.world.query::<&crate::pickup::Pickup>().iter().filter(|p| p.burn.is_some() && !culled(cull, p.position)) {

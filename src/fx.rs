@@ -242,7 +242,8 @@ const VIEW_FX_MARGIN: f32 = 96.0;
 /// Every short-lived effect the presentation layer owns.
 #[derive(Default)]
 pub struct Fx {
-    particles: Vec<Particle>,
+    /// Every live particle, oldest first (`particles.rs`).
+    particles: crate::particles::Particles<Particle>,
     /// What broken wall chunks threw (`pieces.rs`), flying and lying.
     pieces: crate::pieces::Pieces,
     /// The last `Game::frame()` `observe` consumed. The dev server can
@@ -424,19 +425,16 @@ impl Fx {
         self.bongs.clear();
     }
 
+    /// One more particle. At the cap the oldest goes first - a burst that
+    /// overflows it should eat into the smoke still hanging around from a
+    /// minute ago, not cannibalise itself half way through - but for a
+    /// damaged hull's smoke, which the cap keeps room for
+    /// (`particles::Floors`).
     fn push(&mut self, p: Particle) {
-        let cap = tuning().fx_max_particles.max(0) as usize;
-        if cap == 0 {
-            return;
-        }
-        if self.particles.len() >= cap {
-            // Oldest first: a burst that overflows the cap should eat into
-            // the smoke still hanging around from a minute ago, not
-            // cannibalise itself half way through.
-            let excess = self.particles.len() + 1 - cap;
-            self.particles.drain(..excess);
-        }
-        self.particles.push(p);
+        let t = tuning();
+        let floors = crate::particles::Floors { damage: t.fx_damage_smoke_reserve.max(0) as usize };
+        let budget = crate::particles::Budget::Kind(p.kind);
+        self.particles.push(p, budget, t.fx_max_particles.max(0) as usize, floors);
     }
 
     /// Scale a requested count by `fx_density`, which the web build lowers.
@@ -531,8 +529,8 @@ impl Fx {
         self.burst(at, kind, n, speed, tints);
         let mut rng = rand::rng();
         let base = dir.y.atan2(dir.x);
-        // `push` appends and evicts from the front, so the burst is always
-        // the last `n` particles.
+        // `push` appends and never drops the newest, so the burst is the
+        // last `n` particles.
         let from = self.particles.len().saturating_sub(n as usize);
         for p in &mut self.particles[from..] {
             let s = p.vel.length();
@@ -1579,6 +1577,8 @@ impl Fx {
                 if self.due(key, hull_rate * (0.15 + 0.85 * thick), dt) {
                     let tint = if burning { SOOT_T } else { SMOKE_T };
                     self.burst(at, ParticleKind::Smoke, 1, 8.0, &[tint]);
+                    // The tell of a hurt hull: the cap keeps room for it.
+                    self.particles.count_newest_as(1, crate::particles::Budget::Damage);
                 }
                 if burning && self.due(key ^ 0x3e3e, flame_rate * 0.3 * tuning().fx_density, dt) {
                     self.burst(at, ParticleKind::Ember, 1, 22.0, &[FIRE_T, EMBER_T]);

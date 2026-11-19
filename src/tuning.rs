@@ -2998,6 +2998,11 @@ tunables! {
         /// Hard cap on live particles; oldest are evicted first so a big
         /// burst eats into old smoke rather than into itself.
         fx_max_particles: i32 = 900 in 0 ..= 8000;
+        /// How many of those the smoke off damaged hulls keeps at the cap:
+        /// while no more of it than this is live, a burst that overflows
+        /// the cap takes the oldest of everything else instead
+        /// (`particles::Floors`). 0 drops it with the rest, oldest first.
+        fx_damage_smoke_reserve: i32 = 150 in 0 ..= 8000;
         /// Hard cap on wall pieces (`fx::Piece`, a broken chunk's own
         /// pixels), flying and lying; the oldest lying ones go first.
         fx_max_pieces: i32 = 600 in 0 ..= 4000;

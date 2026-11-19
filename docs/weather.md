@@ -217,7 +217,9 @@ and always end in `scene_target`: under light and sky the field starts in
 `scene_target`, is lit into the weather's target and comes back through
 the sky; under one of the two it starts in the weather's target. Pass 2,
 the ripple re-blits and the dev server's screenshots read `scene_target`
-as they always have.
+as they always have. `render::weather::run_stages` is the one place that
+orders them, for a round's field and for the builder's canvas alike: each
+hands it the three things it paints between the stages (`StagePainter`).
 
 Every banding - the light, the fog, the sand, the snow cover - is stepped
 with its edges dithered by a 2x2 Bayer pattern across the middle third of
