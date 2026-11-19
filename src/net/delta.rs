@@ -476,7 +476,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use rand::rngs::SmallRng;
+    use crate::RoundRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
@@ -485,7 +485,7 @@ mod tests {
     use crate::net::wire::{RoundOutcome, ShotKind, WeaponKind, quantise_pos, quantise_velocity};
     use crate::pickup::PickupKind;
 
-    fn random_tank(rng: &mut SmallRng, id: u16) -> TankState {
+    fn random_tank(rng: &mut RoundRng, id: u16) -> TankState {
         TankState {
             id,
             row: rng.random_range(0..12),
@@ -509,7 +509,7 @@ mod tests {
         }
     }
 
-    fn random_air(rng: &mut SmallRng, id: u16) -> AirState {
+    fn random_air(rng: &mut RoundRng, id: u16) -> AirState {
         AirState {
             id,
             seat: rng.random_range(0..8),
@@ -523,7 +523,7 @@ mod tests {
         }
     }
 
-    fn random_shot(rng: &mut SmallRng, id: u16) -> ShotState {
+    fn random_shot(rng: &mut RoundRng, id: u16) -> ShotState {
         ShotState {
             id,
             kind: [ShotKind::Shell, ShotKind::Bullet, ShotKind::Plasma, ShotKind::Orb][rng.random_range(0..4)],
@@ -535,7 +535,7 @@ mod tests {
         }
     }
 
-    fn random_bong(rng: &mut SmallRng, side: Side) -> BongState {
+    fn random_bong(rng: &mut RoundRng, side: Side) -> BongState {
         BongState {
             side,
             x: rng.random_range(0..4000),
@@ -548,7 +548,7 @@ mod tests {
         }
     }
 
-    fn random_keys(rng: &mut SmallRng, max: usize, range: u16) -> Vec<u16> {
+    fn random_keys(rng: &mut RoundRng, max: usize, range: u16) -> Vec<u16> {
         let n = rng.random_range(0..=max);
         let mut keys: Vec<u16> = (0..n).map(|_| rng.random_range(0..range)).collect();
         keys.sort();
@@ -556,7 +556,7 @@ mod tests {
         keys
     }
 
-    fn random_events(rng: &mut SmallRng) -> Vec<WireEvent> {
+    fn random_events(rng: &mut RoundRng) -> Vec<WireEvent> {
         (0..rng.random_range(0..4))
             .map(|_| match rng.random_range(0..3) {
                 0 => WireEvent::Fired { slot: rng.random_range(0..40), weapon: WeaponKind::Shell, input_tick: 0 },
@@ -566,7 +566,7 @@ mod tests {
             .collect()
     }
 
-    fn random_snapshot(rng: &mut SmallRng) -> Snapshot {
+    fn random_snapshot(rng: &mut RoundRng) -> Snapshot {
         let mut acked = [0u32; MAX_SEATS];
         for a in &mut acked {
             *a = rng.random_range(0..100_000);
@@ -688,7 +688,7 @@ mod tests {
 
     /// `prev` one interval later: most entries nudged a short way, a few
     /// changed outright, some removed, some added.
-    fn mutate(rng: &mut SmallRng, prev: &Snapshot) -> Snapshot {
+    fn mutate(rng: &mut RoundRng, prev: &Snapshot) -> Snapshot {
         let mut next = prev.clone();
         next.tick += 3;
         next.server_ms = next.server_ms.wrapping_add(50);
@@ -825,7 +825,7 @@ mod tests {
     #[test]
     fn applying_a_delta_reproduces_the_next_snapshot() {
         for seed in 0..300u64 {
-            let mut rng = SmallRng::seed_from_u64(seed);
+            let mut rng = RoundRng::seed_from_u64(seed);
             let a = random_snapshot(&mut rng);
             let b = mutate(&mut rng, &a);
             let d = delta(&a, &b);
@@ -840,7 +840,7 @@ mod tests {
 
     #[test]
     fn a_delta_survives_the_wire() {
-        let mut rng = SmallRng::seed_from_u64(42);
+        let mut rng = RoundRng::seed_from_u64(42);
         let a = random_snapshot(&mut rng);
         let b = mutate(&mut rng, &a);
         let d = delta(&a, &b);
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn an_identical_snapshot_costs_only_the_header() {
-        let mut rng = SmallRng::seed_from_u64(7);
+        let mut rng = RoundRng::seed_from_u64(7);
         let a = random_snapshot(&mut rng);
         let mut b = a.clone();
         b.events.clear();
@@ -889,7 +889,7 @@ mod tests {
     /// The snapshot the PRD sizes: eight tanks and twenty-four shots on
     /// the default field, both bongs, nothing damaged yet.
     fn busy_snapshot() -> Snapshot {
-        let mut rng = SmallRng::seed_from_u64(0xB0B5);
+        let mut rng = RoundRng::seed_from_u64(0xB0B5);
         let tanks = (0..8u16)
             .map(|id| TankState {
                 id,

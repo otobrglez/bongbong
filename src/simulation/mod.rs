@@ -15,7 +15,7 @@
 //! explosions; `engage` hands attacking enemies distinct engagement slots;
 //! `nav` builds the nav grid the AI routes by and keeps it across frames.
 //!
-//! Determinism: all round randomness flows from the one seeded `SmallRng`
+//! Determinism: all round randomness flows from the one seeded `RoundRng`
 //! in `Game::rng` (never `rand::rng()` on the simulation path, never
 //! iterate a HashMap/HashSet where the body consumes RNG or spawns) -
 //! `determinism_tests` replays a seed twice and bit-compares.
@@ -222,7 +222,7 @@ use crate::tuning::tuning;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use hecs::Entity;
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use crate::math::Vec2;
@@ -1395,7 +1395,7 @@ pub struct Game {
     /// The round's single RNG stream - see the module doc. `None` only
     /// before the first `init`. `update` takes it into the frame context
     /// and puts it back at its end.
-    rng: Option<SmallRng>,
+    rng: Option<RoundRng>,
     /// The battlefield map this round's static terrain comes from.
     /// `main.rs` sets it before the first `init` (`--map` or
     /// `maps/default.toml`); there is no procedural fallback.
@@ -1469,7 +1469,7 @@ struct Frame {
     dt: f32,
     width: f32,
     height: f32,
-    rng: SmallRng,
+    rng: RoundRng,
     terrain: Terrain,
     /// Tanks destroyed this frame: (position, who the victim was).
     kills: Vec<(Position, Owner)>,
@@ -1584,7 +1584,7 @@ impl Shoves {
 }
 
 impl Frame {
-    fn new(dt: f32, width: f32, height: f32, rng: SmallRng, terrain: Terrain) -> Self {
+    fn new(dt: f32, width: f32, height: f32, rng: RoundRng, terrain: Terrain) -> Self {
         Frame {
             dt,
             width,
@@ -1696,7 +1696,7 @@ impl Game {
         // so an unseeded round is replayable once its seed is printed.
         let seed = self.seed_override.unwrap_or_else(|| rand::rng().random());
         self.round_seed = seed;
-        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut rng = RoundRng::seed_from_u64(seed);
         // The sky is the round's from here on: the rules read it (a
         // frozen lake below, sight, grip and gusts every frame) as the
         // renderer does, so it is settled once rather than asked of the
@@ -2568,7 +2568,7 @@ impl Game {
     /// Per-entity timers: every tank's cooldowns/recharge/wreck burn,
     /// obstacles' burn, the bong's animation and in-flight hop (its static
     /// body follows `position`), and track fade.
-    fn tick_timers(&mut self, dt: f32, rng: &mut SmallRng) {
+    fn tick_timers(&mut self, dt: f32, rng: &mut RoundRng) {
         // The portal cooldown only runs while the tank is off every
         // portal: a tank that stops to fight beside its exit and drifts
         // onto it must not bounce back the moment the timer ends - it has
@@ -5699,6 +5699,52 @@ impl Game {
         self.outcome
     }
 
+    /// A digest of the round as it stands, split by what a divergence
+    /// between two runs of one seed would show first (the probe's
+    /// `--state-hash-every`, `just probe-wasm-parity`). Floats go in by
+    /// their bits and tanks in slot order, so two builds agree on every
+    /// part exactly when they are playing the same round. Reads only:
+    /// the RNG is peeked through a copy and draws nothing.
+    pub fn state_hash(&self) -> StateHash {
+        fn fold(hash: &mut u64, word: u64) {
+            for byte in word.to_le_bytes() {
+                *hash = (*hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        const BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        let rng = self.rng.clone().map_or(0, |mut rng| rand::Rng::next_u64(&mut rng));
+        let mut snapshots = self.tank_snapshots();
+        snapshots.sort_by_key(|t| t.slot);
+        let (mut tanks, mut bodies, mut world) = (BASIS, BASIS, BASIS);
+        for t in &snapshots {
+            let state = [
+                t.position.x.to_bits(),
+                t.position.y.to_bits(),
+                t.rotation.to_bits(),
+                t.damage.to_bits(),
+                t.shield_hp.to_bits(),
+                t.shells_ammo as u32,
+                t.is_wreck as u32,
+            ];
+            fold(&mut tanks, t.slot as u64);
+            state.into_iter().for_each(|word| fold(&mut tanks, word as u64));
+            fold(&mut bodies, t.slot as u64);
+            [t.velocity.x.to_bits(), t.velocity.y.to_bits()].into_iter().for_each(|word| fold(&mut bodies, word as u64));
+        }
+        let mut bongs: Vec<[u32; 3]> = self
+            .world
+            .query::<&Bong>()
+            .iter()
+            .map(|bong| [bong.position.x.to_bits(), bong.position.y.to_bits(), bong.health.to_bits()])
+            .collect();
+        bongs.sort();
+        fold(&mut world, self.world.len() as u64);
+        fold(&mut world, self.time.to_bits() as u64);
+        fold(&mut world, self.enemies_destroyed as u64);
+        bongs.into_iter().flatten().for_each(|word| fold(&mut world, word as u64));
+        StateHash { rng, tanks, bodies, world }
+    }
+
     /// The round's time and wreck count so far - the end screen's
     /// numbers once `outcome` is decided.
     pub fn round_stats(&self) -> RoundStats {
@@ -5986,6 +6032,21 @@ impl Game {
             })
             .collect()
     }
+}
+
+/// `Game::state_hash`: one number per part of the round, each the same
+/// on every platform for the same seed and inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StateHash {
+    /// The next value the round's RNG would draw.
+    pub rng: u64,
+    /// Every tank's pose, damage, shield, shells and wreck flag.
+    pub tanks: u64,
+    /// Every tank's velocity as its physics body has it.
+    pub bodies: u64,
+    /// The entity count, the round clock, the wreck count and each bong's
+    /// position and health.
+    pub world: u64,
 }
 
 /// Read-only summary of one tank, from `Game::tank_snapshots`. A
@@ -6659,7 +6720,7 @@ fn respawn_from_slots(
     height: f32,
     hurt: BonusGates,
     dropped_at: Option<f32>,
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
 ) -> Option<(Position, PickupKind)> {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
     let free: Vec<(Position, PickupKind)> = slots
@@ -6697,7 +6758,7 @@ fn maybe_spawn_health_slot_bonuses(
     height: f32,
     hurt: BonusGates,
     dropped_at: Option<f32>,
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
 ) {
     maybe_spawn_bonus(world, map, slot, PickupKind::Shield, tuning().shield_near_health_chance, width, height, dropped_at, rng);
     if hurt.bong {
@@ -6723,7 +6784,7 @@ fn maybe_spawn_bonus(
     width: f32,
     height: f32,
     dropped_at: Option<f32>,
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
 ) {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
     let already_there = world
@@ -6751,7 +6812,7 @@ fn bonus_pickup_cell(
     occupied: &[Position],
     width: f32,
     height: f32,
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
 ) -> Option<Position> {
     const NEIGHBOURS: [(i32, i32); 8] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
     let (col, row) = map::world_to_cell(slot);
@@ -6909,7 +6970,7 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
 /// track wobble. Shared by the band placement in `init` and the wave
 /// scheduler, so a wave tank is kitted exactly like a band tank. No
 /// physics body: the caller spawns one when the tank is on the field.
-fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> Tank {
+fn roll_enemy_tank(rng: &mut RoundRng, row: i32, pos: Position, slot: usize) -> Tank {
     // No variance is no spread and no draw: every enemy at `enemy_speed`.
     let variance = tuning().enemy_speed_variance;
     let factor = 1.0 + if variance > 0.0 { rng.random_range(-variance..variance) } else { 0.0 };
@@ -6957,7 +7018,7 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
 /// (the rest fight the player), Hunt at `enemy_hunter_share_hunt` (the rest
 /// guard the enemy bong), Destroy has nothing to hunt or guard. A share of
 /// zero draws nothing, so it leaves the round's RNG stream untouched.
-fn roll_role(mission: Mission, rng: &mut SmallRng) -> Role {
+fn roll_role(mission: Mission, rng: &mut RoundRng) -> Role {
     let mut rolls = |share: f32| share > 0.0 && rng.random_range(0.0..1.0) < share;
     match mission {
         Mission::Protect => {
@@ -6976,7 +7037,7 @@ fn roll_role(mission: Mission, rng: &mut SmallRng) -> Role {
 /// damping and friction have to change (`Physics::settle_wreck`) - a wreck
 /// is made by damage mid-round, not spawned as one, so there is no builder
 /// to set them on.
-fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) -> bool {
+fn roll_wreck_col(tank: &mut Tank, rng: &mut RoundRng) -> bool {
     if tank.is_wreck() && tank.wreck_col.is_none() {
         tank.wreck_col = Some(TANK_WRECK_COLS[rng.random_range(0..TANK_WRECK_COLS.len())]);
         return true;
@@ -8181,7 +8242,7 @@ mod mechanics_tests {
         assert_eq!(with_tank(&game.world, player, |t| t.burn_timer), 0.0, "the afterburn went out in the stream");
         // A cell of water refuses to light, a dry one beside it does.
         let (w, h) = (W, H);
-        let mut f = Frame::new(1.0 / 60.0, w, h, SmallRng::seed_from_u64(1), Terrain::build(&game.world, w, h, &game.grass_cells, &game.water));
+        let mut f = Frame::new(1.0 / 60.0, w, h, RoundRng::seed_from_u64(1), Terrain::build(&game.world, w, h, &game.grass_cells, &game.water));
         game.light_cell(&mut f, (10, 4), 3.0, true);
         game.light_cell(&mut f, (10, 6), 3.0, true);
         assert_eq!(game.burning_cells().len(), 1, "only the dry cell lit");
@@ -10440,7 +10501,7 @@ cells."30,20" = { kind = "bong" }
     fn a_pristine_bongs_health_slot_draws_no_more_rng_than_the_shield_roll_alone() {
         let map = MapFile::from_toml_str("version = 1\ncells.\"10,10\" = { kind = \"start\" }\n").expect("parses");
         let slot = map::cell_to_world(11, 10);
-        let (mut with_gate, mut shield_only) = (SmallRng::seed_from_u64(99), SmallRng::seed_from_u64(99));
+        let (mut with_gate, mut shield_only) = (RoundRng::seed_from_u64(99), RoundRng::seed_from_u64(99));
         let (mut wa, mut wb) = (hecs::World::new(), hecs::World::new());
         maybe_spawn_health_slot_bonuses(&mut wa, &map, slot, W, H, BonusGates::default(), None, &mut with_gate);
         let chance = tuning().shield_near_health_chance;
@@ -10908,7 +10969,7 @@ cells."30,20" = { kind = "bong" }
     fn a_bonus_shield_lands_on_a_free_neighbouring_cell() {
         let map = MapFile::from_toml_str(OPEN_MAP).expect("map parses");
         let slot = map::cell_to_world(20, 11);
-        let mut rng = SmallRng::seed_from_u64(3);
+        let mut rng = RoundRng::seed_from_u64(3);
         // The slot itself is occupied by its health pack; every neighbour is
         // free and inside the field.
         let pos = bonus_pickup_cell(&map, slot, &[slot], W, H, &mut rng).expect("an open map has a free neighbour");
@@ -10923,7 +10984,7 @@ cells."30,20" = { kind = "bong" }
         // start cell (10,10), walls, or cells already holding a pickup.
         let map = MapFile::from_toml_str(SEALED_CRATE_MAP).expect("map parses");
         let slot = map::cell_to_world(11, 10);
-        let mut rng = SmallRng::seed_from_u64(3);
+        let mut rng = RoundRng::seed_from_u64(3);
         let open_neighbours: Vec<Position> = [(12, 9), (12, 10), (12, 11), (9, 9), (9, 10), (9, 11), (10, 9), (10, 11), (11, 9), (11, 11)]
             .iter()
             .map(|&(c, r)| map::cell_to_world(c, r))
@@ -12081,7 +12142,7 @@ cells."30,20" = { kind = "bong" }
             // The fence goes, a cell at a time.
             let fence: Vec<Entity> = game.world.query::<(Entity, &Obstacle)>().iter().filter(|(_, o)| o.material == crate::obstacle::Material::Fence).map(|(e, _)| e).collect();
             assert_eq!(fence.len(), fences);
-            let mut f = Frame::new(1.0 / 60.0, FW, FH, SmallRng::seed_from_u64(1), hits::Terrain::build(&game.world, FW, FH, &[], &game.water));
+            let mut f = Frame::new(1.0 / 60.0, FW, FH, RoundRng::seed_from_u64(1), hits::Terrain::build(&game.world, FW, FH, &[], &game.water));
             for entity in fence {
                 assert!(game.damage_obstacle(&mut f, entity, f32::MAX, props::DamageCause::Fire), "{fences}: the fence dies");
             }

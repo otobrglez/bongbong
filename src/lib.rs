@@ -3,6 +3,26 @@ use math::Vec2;
 /// A 2D position in field pixels (y down); `math::Vec2` is the vector type.
 pub type Position = math::Vec2;
 
+/// The generator a round's one RNG stream runs on (`Game::rng`), named
+/// outright: xoshiro256++ on every target. `rand::rngs::SmallRng` is this
+/// generator on a 64-bit target and xoshiro128++ on a 32-bit one - wasm32
+/// among them - so a seed handed to it plays a different round in the
+/// browser than on the desktop. `round_rng_tests` pins the stream.
+pub type RoundRng = rand::rngs::Xoshiro256PlusPlus;
+
+#[cfg(test)]
+mod round_rng_tests {
+    use rand::{Rng, SeedableRng};
+
+    /// The first draws of seed 1000, the same on every pointer width.
+    #[test]
+    fn a_seed_draws_the_same_stream_on_every_target() {
+        let mut rng = super::RoundRng::seed_from_u64(1000);
+        let drawn: Vec<u64> = (0..3).map(|_| rng.next_u64()).collect();
+        assert_eq!(drawn, [0xfd36_48d3_c592_7911, 0x9595_931d_7400_9049, 0xdda8_a49f_0c8f_b725]);
+    }
+}
+
 // scifi_tanks_sheet.png: 33 columns x 60 rows of 40 x 40 cells, generated
 // by tools/spritegen/tankdesign/export.py from the Vanguard design line
 // (docs/SPRITESHEET_SPEC.md). Five team blocks of the twelve chassis - the

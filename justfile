@@ -560,6 +560,14 @@ perf-field *ARGS:
 perf-field-wasm *ARGS:
     tools/perf/field_wasm.sh {{ARGS}}
 
+# Does a seed play the same round in wasm as natively: both probes print
+# `Game::state_hash` every frame (`--state-hash-every 1`) for 600 frames
+# of `defend` at seed 1000 on the default arena, longwater and the perf
+# map, and the lines must match (tools/perf/wasm_parity.sh). Arguments
+# replace the three runs with one.
+probe-wasm-parity *ARGS:
+    tools/perf/wasm_parity.sh {{ARGS}}
+
 # --- iOS simulator (docs/ios-native-port-prd.md, CLAUDE.md's iOS section) ---
 # Every recipe runs through tools/ios/env.sh: Xcode as DEVELOPER_DIR (the
 # devenv shell points it at nix's apple-sdk), Xcode's clang as the host
@@ -710,11 +718,6 @@ android-tap X Y:
     bash -c 'source tools/android/env.sh; adb shell input tap {{X}} {{Y}}'
 android-swipe X1 Y1 X2 Y2 MS="300":
     bash -c 'source tools/android/env.sh; adb shell input swipe {{X1}} {{Y1}} {{X2}} {{Y2}} {{MS}}'
-
-# Conference demos (ntk/): isolated raylib-with-Rust examples, one file per
-# demo under ntk/src/bin/. `just ntk 01_hello`.
-ntk NAME *ARGS:
-    cargo run -p ntk-demos --bin {{NAME}} -- {{ARGS}}
 
 # --- Releases (CLAUDE.md's Releases section, tools/release/) ---
 

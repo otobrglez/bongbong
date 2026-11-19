@@ -2530,7 +2530,7 @@ mod tests {
         use std::collections::BTreeMap;
         let mut checked = 0;
         for seed in 0..16u64 {
-            let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+            let mut rng = crate::RoundRng::seed_from_u64(seed);
             let (cols, rows) = (14, 9);
             let height = if seed % 2 == 0 { rows as f32 } else { rows as f32 - 0.5 } * GROUND_WORLD_TILE;
             let width = cols as f32 * GROUND_WORLD_TILE;
@@ -2584,7 +2584,7 @@ mod tests {
 
     fn random_field(seed: u64) -> (Vec<Position>, Vec<Position>) {
         use rand::{RngExt, SeedableRng};
-        let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+        let mut rng = crate::RoundRng::seed_from_u64(seed);
         let (cols, rows) = (16i32, 12i32);
         let blobs: Vec<(f32, f32, f32)> = (0..rng.random_range(1..=5))
             .map(|_| (rng.random_range(0.0..cols as f32), rng.random_range(0.0..rows as f32), rng.random_range(1.5..4.0)))

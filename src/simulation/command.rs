@@ -8,7 +8,7 @@
 //! - **No world access.** Pure data plus caller-supplied closures, so the
 //!   whole thing is unit-tested without booting a `Game` - the same shape
 //!   [`super::engage`] takes, and for the same reason.
-//! - **No RNG, ever.** [`Commander::plan`] is never handed a `SmallRng` and
+//! - **No RNG, ever.** [`Commander::plan`] is never handed a `RoundRng` and
 //!   never will be. Every tie is broken by owner slot. That is what makes a
 //!   producer safe to add, reorder or remove: the round's RNG stream is
 //!   untouched, so any movement in `just probe-fixtures` afterwards is a

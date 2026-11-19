@@ -111,7 +111,7 @@ jobs:
       # Every workspace member's library and bins with default features, as
       # a version tag's cargo-dist build compiles them: `cargo test --lib`
       # builds the game's library alone, so a change that breaks a bin or
-      # another member (the ntk demos, netlab, the room server, the android
+      # another member (netlab, the room server, the android
       # crate) would otherwise first fail on the release.
       - name: cargo check --workspace
         run: cargo check --workspace
