@@ -271,11 +271,12 @@ impl LevelSelect {
                 lines: wrap(&level.title(), max_px, TILE_TITLE_SIZE),
                 // Past the furthest reached, a skippable level leaves the
                 // one after it open (`Campaign::open_to`).
-                state: match i.cmp(&reached) {
-                    std::cmp::Ordering::Less => TileState::Won,
-                    std::cmp::Ordering::Equal => TileState::Next,
-                    std::cmp::Ordering::Greater if i <= open => TileState::Next,
-                    std::cmp::Ordering::Greater => TileState::Locked,
+                state: if campaign.is_won(i) {
+                    TileState::Won
+                } else if i <= reached.max(open) {
+                    TileState::Next
+                } else {
+                    TileState::Locked
                 },
                 current: current == Some(i),
                 focus: i == self.focus,
@@ -434,6 +435,21 @@ mod level_select_tests {
         assert!(v.tiles[0].current && v.tiles[0].focus);
         assert!(v.tiles[1..].iter().all(|t| !t.current && !t.focus));
         assert_eq!((v.tiles[0].number, v.tiles[13].number), (0, 13), "Boot Camp is level 0");
+    }
+
+    /// The last level's tile shows as won once it has been, not before.
+    #[test]
+    fn the_last_levels_tile_is_won_once_the_campaign_is_complete() {
+        let mut campaign = Campaign::new(Levels::shipped(), None);
+        let last = campaign.levels.len() - 1;
+        for i in 0..last {
+            campaign.won(i);
+        }
+        let s = LevelSelect::open(Some(last), campaign.reached());
+        assert_eq!(s.view(&campaign, Some(last)).tiles[last].state, TileState::Next, "reached, not won");
+        campaign.won(last);
+        let v = s.view(&campaign, Some(last));
+        assert!(v.tiles.iter().all(|t| t.state == TileState::Won), "every tile is won");
     }
 
     #[test]

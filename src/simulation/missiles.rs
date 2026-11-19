@@ -55,12 +55,13 @@ impl Game {
     /// past, since its seek reaches much further than the box - and a
     /// launcher gone from the field locks onto none. No RNG.
     pub(super) fn guide_missiles(&mut self, f: &mut Frame) {
-        // Everything a missile can lock: live tanks with a body (a wave tank
-        // still rolling in has neither a body nor an `Ai`). And where every
+        // Everything a missile can lock: live tanks on the field (a wave
+        // tank still rolling in has neither a body nor an `Ai`, and a seat
+        // driving back in is not one of `seats_on_field`). And where every
         // enemy launcher stands, wrecks included.
         let mut targets: Vec<(Entity, usize, Owner, Position)> = Vec::new();
         let mut launchers: Vec<(usize, Position)> = Vec::new();
-        for player in self.players().into_iter().flatten() {
+        for player in self.seats_on_field().into_iter().flatten() {
             super::with_tank(&self.world, player, |t| {
                 if !t.is_wreck() {
                     targets.push((player, t.owner_slot(), t.owner(), t.position));
@@ -160,7 +161,8 @@ impl Game {
     /// takes linear-falloff damage and every live tank in range is shoved
     /// (the wreck blast's rule - `explosion_hit` - so one draw per tank in
     /// range, players first, then enemies; a seat's shove goes on
-    /// `Frame::shoves`, which tells a client-owned hull's client); bongs of
+    /// `Frame::shoves`, which tells a client-owned hull's client; a tank
+    /// still driving in through a gate is neither hurt nor shoved); bongs of
     /// the opposing side take damage; tiles crack and barrels go off
     /// (`damage_obstacle`, as any blast), and crates break.
     pub(super) fn side_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams) {
@@ -173,7 +175,10 @@ impl Game {
     /// spared it is `side_blast`, draw for draw.
     pub(super) fn side_blast_sparing(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams, spared: &[Entity]) {
         self.chain_held_drums(f, center, params.radius);
-        for player in self.players().into_iter().flatten() {
+        // A tank still rolling in through a gate has no body to shove and
+        // is out of the fight: a seat by `seats_on_field`, an enemy by
+        // having no `Ai` yet.
+        for player in self.seats_on_field().into_iter().flatten() {
             if spared.contains(&player) {
                 continue;
             }

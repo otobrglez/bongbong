@@ -372,7 +372,7 @@ impl Game {
     /// each to the nearest other opposing tank within `tesla_chain_radius`
     /// of the last one hit (a seat only while the coil stands inside its
     /// sight box, `box_allows`), for `tesla_chain_factor` of the damage
-    /// before.
+    /// before; the chain stops where a jump would do none (`chain_factor`).
     fn tesla_strike(&mut self, f: &mut Frame, cell: (i32, i32), tower: &Tower, first: Candidate, cands: &[Candidate]) {
         let t = tuning();
         let owner = tower.owner(tower_cell_id(cell));
@@ -408,14 +408,29 @@ impl Game {
                 })
                 .copied();
             let Some(n) = next else { break };
+            let Some(next_factor) = chain_factor(factor, t.tesla_chain_factor) else { break };
             from = to;
             target = n;
-            factor *= t.tesla_chain_factor;
+            factor = next_factor;
         }
     }
 
+    /// Whether a live bong of the tower's own side stands within
+    /// `gun_tower_friendly_block_px` of its collider of the segment from
+    /// the tower to `target`: a bullet stops on a bong whoever fired it, so
+    /// the gun holds its fire as it does for a friendly hull
+    /// (docs/defence-towers-prd.md decision 7).
+    fn own_bong_in_line(&self, tower: &Tower, target: Position) -> bool {
+        let reach = tuning().gun_tower_friendly_block_px + BONG_COLLIDER_HALF_EXTENT.0.max(BONG_COLLIDER_HALF_EXTENT.1);
+        self.world
+            .query::<&Bong>()
+            .iter()
+            .any(|bong| bong.side == tower.side && !bong.is_dead() && near_segment(tower.position, target, bong.position, reach))
+    }
+
     /// The gun tower: tracks, leads its target, and fires bursts when its
-    /// turret is on the aim and no friend is in the line.
+    /// turret is on the aim and neither a friendly tank nor its own side's
+    /// bong is in the line.
     fn tick_gun(&mut self, f: &mut Frame, cell: (i32, i32), tower: &mut Tower, cands: &[Candidate], air: &[AirCandidate]) {
         let t = tuning();
         tower.cooldown = (tower.cooldown - f.dt).max(0.0);
@@ -436,7 +451,7 @@ impl Game {
             let want = heading_to(tower.position, aim);
             tower.heading = turn_toward(tower.heading, want, t.gun_tower_turn_deg_per_second * f.dt);
             let on_aim = angle_diff(tower.heading, want).abs() <= t.gun_tower_fire_cone_deg;
-            if tower.burst_left == 0 && tower.cooldown <= 0.0 && on_aim && !friend_in_line(tower, pos, cands) {
+            if tower.burst_left == 0 && tower.cooldown <= 0.0 && on_aim && !friend_in_line(tower, pos, cands) && !self.own_bong_in_line(tower, pos) {
                 tower.burst_left = t.gun_tower_burst_size.max(1) as u32;
                 tower.burst_timer = 0.0;
                 let muzzle = tower.position + unit(tower.heading) * GUN_MUZZLE_PX;
@@ -901,26 +916,37 @@ impl Game {
     }
 }
 
+/// The damage factor of the jump after one at `factor`, each jump
+/// `chain_factor` (`tesla_chain_factor`) of the one before: `None` once
+/// that is nothing, so a factor of 0 ends the chain at the first tank.
+pub(super) fn chain_factor(factor: f32, chain_factor: f32) -> Option<f32> {
+    let next = factor * chain_factor;
+    (next > 0.0).then_some(next)
+}
+
 /// Whether a same-side tank stands within `gun_tower_friendly_block_px`
 /// of its hull of the segment from the tower to `target`.
 fn friend_in_line(tower: &Tower, target: Position, cands: &[Candidate]) -> bool {
     let block = tuning().gun_tower_friendly_block_px;
-    let (a, b) = (tower.position, target);
+    cands
+        .iter()
+        .filter(|c| !tower.opposes(c.owner))
+        .any(|c| near_segment(tower.position, target, c.pos, block + c.hull.1.x.max(c.hull.1.y)))
+}
+
+/// Whether `p` is within `reach` of the segment from `a` to `b`, measured
+/// at the point of the segment's line nearest `p`: a point whose nearest
+/// falls off either end is not near it, and neither is anything near a
+/// segment of no length.
+fn near_segment(a: Position, b: Position, p: Position, reach: f32) -> bool {
     let ab = b - a;
     let len2 = ab.x * ab.x + ab.y * ab.y;
     if len2 <= 0.0 {
         return false;
     }
-    cands.iter().filter(|c| !tower.opposes(c.owner)).any(|c| {
-        let ap = c.pos - a;
-        let u = (ap.x * ab.x + ap.y * ab.y) / len2;
-        if !(0.0..=1.0).contains(&u) {
-            return false;
-        }
-        let closest = a + ab * u;
-        let reach = block + c.hull.1.x.max(c.hull.1.y);
-        closest.distance_to(c.pos) <= reach
-    })
+    let ap = p - a;
+    let u = (ap.x * ab.x + ap.y * ab.y) / len2;
+    (0.0..=1.0).contains(&u) && (a + ab * u).distance_to(p) <= reach
 }
 
 /// Whether the hull box (`center`, `half`) overlaps a cell with ooze.

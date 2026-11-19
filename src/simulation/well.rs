@@ -610,9 +610,14 @@ impl Game {
 
     /// The bongs in a pull, either side's, alive: pinned (no hop) and slid
     /// toward the core at `well_bong_speed` times the field's pull, wherever
-    /// a bong fits; its collider moved with it.
+    /// a bong fits; its collider moved with it. Only a well still standing
+    /// pulls: one that collapsed this tick, an EMP's included, is out of the
+    /// field here, so every bong it held is let go on the tick it goes.
     fn pull_bongs(&mut self, f: &mut Frame, t: &Tuning) {
-        let field = &f.wells;
+        let standing = well::WellField {
+            sources: f.wells.sources.iter().copied().filter(|&(id, _)| self.zones.iter().any(|z| z.id == id)).collect(),
+        };
+        let field = &standing;
         let terrain = &f.terrain;
         let mut moved = Vec::new();
         for bong in self.world.query_mut::<&mut Bong>() {

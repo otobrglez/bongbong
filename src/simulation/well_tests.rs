@@ -623,6 +623,38 @@ fn an_emp_collapses_an_anchored_well_and_fizzles_an_orb() {
     assert!(game.orbs().is_empty());
 }
 
+/// A bong is pinned only by a well still standing: one an EMP collapses
+/// lets it go on that tick, and it hops again once its cooldown is out.
+#[test]
+fn a_bong_in_a_well_an_emp_collapses_is_let_go() {
+    let mut game = round_with("cells.\"8,6\" = { kind = \"bong\" }\n", Mission::Protect, Some(ActiveWeapon::Emp));
+    let bong0 = game.world.query::<&Bong>().iter().next().expect("a bong").position;
+    let id = pulling_well(&mut game, bong0 - Vec2::new(60.0, 0.0));
+    idle(&mut game, 10);
+    assert!(game.world.query::<&Bong>().iter().next().is_some_and(|b| b.pulled && !b.can_hop()), "pinned while the well stands");
+    let mut seen = step(&mut game, true);
+    for _ in 0..120 {
+        if !collapsed(&seen).is_empty() {
+            break;
+        }
+        seen = step(&mut game, false);
+    }
+    assert_eq!(collapsed(&seen), vec![(id, true)], "the EMP collapsed it");
+    assert!(game.world.query::<&Bong>().iter().next().is_some_and(|b| !b.pulled), "let go on the collapse's tick");
+    idle(&mut game, 5);
+    assert!(wells(&game).is_empty());
+    assert!(game.world.query::<&Bong>().iter().next().is_some_and(|b| !b.pulled), "still free with no well standing");
+    let mut hops = false;
+    for _ in 0..ticks(20.0) {
+        step(&mut game, false);
+        if game.world.query::<&Bong>().iter().next().is_some_and(|b| b.can_hop()) {
+            hops = true;
+            break;
+        }
+    }
+    assert!(hops, "the bong can hop again");
+}
+
 /// On the end screen a well forms, swirls and collapses as a show: it pulls
 /// no hull, lifts no drum and hurts nobody, and the drums it held when the
 /// round ended go off at its collapse as blasts that hurt nobody - they do

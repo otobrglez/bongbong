@@ -1672,8 +1672,8 @@ tunables! {
         /// Bullet damage, rolled per hit.
         gun_tower_damage_min: f32 = 3.0 in 0.0 ..= 100.0;
         gun_tower_damage_max: f32 = 5.0 in 0.0 ..= 100.0;
-        /// The gun holds fire while a tank of its own side is this close
-        /// (px) to the line to its target.
+        /// The gun holds fire while a tank or the bong of its own side is
+        /// this close (px) to the line to its target.
         gun_tower_friendly_block_px: f32 = 20.0 in 0.0 ..= 100.0;
         /// Odds a shell or bullet glances off the gun tower's armour.
         gun_tower_deflect_chance: f64 = 0.25 in 0.0 ..= 1.0;

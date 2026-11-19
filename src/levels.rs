@@ -120,9 +120,17 @@ impl Levels {
         i + self.first_number()
     }
 
-    /// The highest number shown, the banner's count.
+    /// The highest number shown.
     pub fn last_number(&self) -> usize {
         self.number(self.len() - 1)
+    }
+
+    /// How many levels the campaign counts: the numbered ones, 1 to
+    /// `last_number`, a skippable first (level 0, the training stage) left
+    /// out. The banner's `LEVEL 3 / N` and the last win's `ALL N LEVELS
+    /// COMPLETE!` both read it.
+    pub fn count(&self) -> usize {
+        self.last_number()
     }
 
     /// A level as the command line names it (`--level`): its number as
@@ -148,17 +156,28 @@ pub struct Campaign {
     /// rest of the session: a level played again is played as edited
     /// (`remember_edit`).
     edits: BTreeMap<String, MapFile>,
-    /// A win has moved `reached` and the store has not been told.
+    /// The last level has been won: the whole campaign is complete.
+    complete: bool,
+    /// A win has moved `reached` or set `complete` and the store has not
+    /// been told.
     unsaved: bool,
 }
 
 impl Campaign {
-    /// The campaign on `levels`, with the progress the store kept: the
-    /// map name of the furthest level reached. A name the list no longer
-    /// has starts from the first level.
-    pub fn new(levels: Levels, saved: Option<&str>) -> Campaign {
-        let reached = saved.and_then(|name| levels.position(name)).unwrap_or(0);
-        Campaign { levels, reached, edits: BTreeMap::new(), unsaved: false }
+    /// The campaign on `levels`, with the progress the store kept. A
+    /// level name the list no longer has starts from the first level, and
+    /// a campaign is complete only while the level it reached is still
+    /// the last: a list that grew has a level left to win.
+    pub fn new(levels: Levels, saved: Option<&Progress>) -> Campaign {
+        let reached = saved.and_then(|p| levels.position(&p.level)).unwrap_or(0);
+        let complete = saved.is_some_and(|p| p.complete) && reached + 1 == levels.len();
+        Campaign { levels, reached, complete, edits: BTreeMap::new(), unsaved: false }
+    }
+
+    /// Whether level `i` has been won: every level before the furthest
+    /// reached, and the last one once the campaign is complete.
+    pub fn is_won(&self, i: usize) -> bool {
+        i < self.reached || (self.complete && self.is_last(i))
     }
 
     /// The furthest level reached - the one a new session opens on.
@@ -221,57 +240,72 @@ impl Campaign {
     }
 
     /// Level `i` was won: the next one is reached, if it is further than
-    /// any before. The last level opens nothing further.
+    /// any before. The last level opens nothing further; winning it
+    /// completes the campaign.
     pub fn won(&mut self, i: usize) {
         let opened = (i + 1).min(self.levels.len() - 1);
         if opened > self.reached {
             self.reached = opened;
             self.unsaved = true;
         }
+        if self.is_last(i) && !self.complete {
+            self.complete = true;
+            self.unsaved = true;
+        }
     }
 
-    /// The progress to hand the store, once per change: the map name of
-    /// the furthest level reached.
-    pub fn take_unsaved(&mut self) -> Option<String> {
+    /// The progress to hand the store, once per change.
+    pub fn take_unsaved(&mut self) -> Option<Progress> {
         if !std::mem::take(&mut self.unsaved) {
             return None;
         }
-        self.levels.get(self.reached).map(|l| l.map.clone())
+        self.levels.get(self.reached).map(|l| Progress { level: l.map.clone(), complete: self.complete })
     }
 }
 
-/// What the progress store holds.
-#[derive(Deserialize, serde::Serialize)]
-struct ProgressFile {
+/// What the progress store holds. A store written before `complete`
+/// existed reads as not complete.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, serde::Serialize)]
+pub struct Progress {
     /// The map name of the furthest level reached.
-    level: String,
+    pub level: String,
+    /// Whether the last level has been won.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub complete: bool,
+}
+
+impl Progress {
+    /// Having reached `level`, with the campaign not complete.
+    pub fn at(level: &str) -> Progress {
+        Progress { level: level.to_string(), complete: false }
+    }
 }
 
 /// The progress as the store writes it.
-pub fn progress_text(level: &str) -> String {
-    toml::to_string(&ProgressFile { level: level.to_string() }).expect("a string field serialises")
+pub fn progress_text(progress: &Progress) -> String {
+    toml::to_string(progress).expect("a string and a flag serialise")
 }
 
-/// The level a store's text names, or `None` for text that is not
+/// The progress a store's text holds, or `None` for text that is not
 /// progress - an empty store, a file from somewhere else.
-pub fn parse_progress(text: &str) -> Option<String> {
-    let file: ProgressFile = toml::from_str(text).ok()?;
+pub fn parse_progress(text: &str) -> Option<Progress> {
+    let file: Progress = toml::from_str(text).ok()?;
     let level = file.level.trim();
-    (!level.is_empty()).then(|| level.to_string())
+    (!level.is_empty()).then(|| Progress { level: level.to_string(), complete: file.complete })
 }
 
 /// Read the progress file at `path`: `None` when there is none yet or it
 /// is not progress.
-pub fn read_progress(path: &Path) -> Option<String> {
+pub fn read_progress(path: &Path) -> Option<Progress> {
     parse_progress(&std::fs::read_to_string(path).ok()?)
 }
 
 /// Write the progress file at `path`, making its directory.
-pub fn write_progress(path: &Path, level: &str) -> Result<(), String> {
+pub fn write_progress(path: &Path, progress: &Progress) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     }
-    std::fs::write(path, progress_text(level)).map_err(|e| format!("writing {}: {e}", path.display()))
+    std::fs::write(path, progress_text(progress)).map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
 /// Where a desktop or an iPhone keeps the progress file: `data_dir`'s
@@ -382,6 +416,19 @@ mod level_tests {
         assert_eq!((shipped.number(0), shipped.get(0).map(|l| l.map.as_str())), (0, Some("boot-camp")));
     }
 
+    /// The campaign counts its numbered levels: the training stage is
+    /// level 0 and no part of the count, so the last level's number is
+    /// the count.
+    #[test]
+    fn the_count_leaves_the_training_stage_out() {
+        let with = Levels::parse("[[level]]\nmap = \"a\"\ntitle = \"A\"\nskippable = true\n[[level]]\nmap = \"b\"\ntitle = \"B\"\n[[level]]\nmap = \"c\"\ntitle = \"C\"\n").unwrap();
+        assert_eq!((with.len(), with.count(), with.last_number()), (3, 2, 2));
+        assert_eq!(three().count(), 3, "no training stage, every level counts");
+        let shipped = Levels::shipped();
+        assert_eq!(shipped.count(), shipped.len() - 1, "Boot Camp is not counted");
+        assert_eq!(shipped.number(shipped.len() - 1), shipped.count(), "the last level is LEVEL N / N");
+    }
+
     fn three() -> Levels {
         Levels::parse(
             "[[level]]\nmap = \"lotus-lagoon\"\ntitle = \"A\"\n[[level]]\nmap = \"carnival\"\ntitle = \"B\"\n[[level]]\nmap = \"scrapyard\"\ntitle = \"C\"\n",
@@ -397,20 +444,46 @@ mod level_tests {
         assert_eq!((c.reached(), c.take_unsaved()), (0, None));
         c.won(0);
         assert_eq!(c.reached(), 1);
-        assert_eq!(c.take_unsaved().as_deref(), Some("carnival"));
+        assert_eq!(c.take_unsaved(), Some(Progress::at("carnival")));
         assert_eq!(c.take_unsaved(), None, "told once");
         c.won(0);
         assert_eq!((c.reached(), c.take_unsaved()), (1, None), "winning an earlier level again moves nothing");
         c.won(2);
-        assert_eq!((c.reached(), c.take_unsaved().as_deref()), (2, Some("scrapyard")), "the last opens only itself");
+        assert_eq!((c.reached(), c.take_unsaved()), (2, Some(Progress { level: "scrapyard".into(), complete: true })), "the last opens only itself, and is won");
         assert_eq!((c.next(2), c.is_last(2), c.is_last(1)), (0, true, false), "and the one after it is the first");
+    }
+
+    /// Winning the last level completes the campaign: the store hears of
+    /// it once, a later session reads it back, and a store written before
+    /// the flag existed, or a list that has grown since, is not complete.
+    #[test]
+    fn winning_the_last_level_completes_the_campaign_and_is_kept() {
+        let mut c = Campaign::new(three(), None);
+        c.won(0);
+        c.won(1);
+        assert_eq!(c.take_unsaved(), Some(Progress::at("scrapyard")));
+        assert!(c.is_won(1) && !c.is_won(2), "reaching the last level has not won it");
+        c.won(2);
+        let kept = c.take_unsaved().expect("the store hears of the last win");
+        assert_eq!(kept, Progress { level: "scrapyard".into(), complete: true });
+        assert!(c.is_won(2));
+        c.won(2);
+        assert_eq!(c.take_unsaved(), None, "winning it again tells nothing");
+
+        let text = progress_text(&kept);
+        assert!(Campaign::new(three(), parse_progress(&text).as_ref()).is_won(2), "a later session reads it back");
+        assert_eq!(progress_text(&Progress::at("scrapyard")), "level = \"scrapyard\"\n", "a campaign not complete writes the level alone");
+        let old = parse_progress("level = \"scrapyard\"").expect("a store from before the flag");
+        assert!(!Campaign::new(three(), Some(&old)).is_won(2));
+        let grown = Progress { level: "carnival".into(), complete: true };
+        assert!(!Campaign::new(three(), Some(&grown)).is_won(1), "a level that is no longer the last is not won by the flag");
     }
 
     #[test]
     fn saved_progress_is_read_by_name() {
-        assert_eq!(Campaign::new(three(), Some("scrapyard")).reached(), 2);
-        assert_eq!(Campaign::new(three(), Some("no-such-level")).reached(), 0, "a level the list lost starts over");
-        assert_eq!(parse_progress(&progress_text("carnival")).as_deref(), Some("carnival"));
+        assert_eq!(Campaign::new(three(), Some(&Progress::at("scrapyard"))).reached(), 2);
+        assert_eq!(Campaign::new(three(), Some(&Progress::at("no-such-level"))).reached(), 0, "a level the list lost starts over");
+        assert_eq!(parse_progress(&progress_text(&Progress::at("carnival"))), Some(Progress::at("carnival")));
         assert_eq!(parse_progress(""), None);
         assert_eq!(parse_progress("level = \"\""), None);
         assert_eq!(parse_progress("not toml at all ["), None);
@@ -440,10 +513,10 @@ mod level_tests {
         let dir = std::env::temp_dir().join(format!("bongbong-progress-{}", std::process::id()));
         let path = dir.join("nested").join("progress.toml");
         assert_eq!(read_progress(&path), None, "no file yet");
-        write_progress(&path, "hedge-maze").expect("writes");
-        assert_eq!(read_progress(&path).as_deref(), Some("hedge-maze"));
-        write_progress(&path, "carnival").expect("overwrites");
-        assert_eq!(read_progress(&path).as_deref(), Some("carnival"));
+        write_progress(&path, &Progress::at("hedge-maze")).expect("writes");
+        assert_eq!(read_progress(&path), Some(Progress::at("hedge-maze")));
+        write_progress(&path, &Progress::at("carnival")).expect("overwrites");
+        assert_eq!(read_progress(&path), Some(Progress::at("carnival")));
         std::fs::remove_dir_all(&dir).ok();
     }
 }
