@@ -410,6 +410,10 @@ impl ConePicture {
 /// The cone's shadow's shade.
 const SHADOW: Color = Color::new(0, 0, 0, 90);
 
+// 6.28 is the phase's own scale, not a rounded TAU: as an f32 it is
+// 0x40c8f5c3 and TAU 0x40c90fdb, so swapping one for the other moves the
+// cone's pinned picture.
+#[allow(clippy::approx_constant)]
 fn noise_a(th: f32, s: i32) -> f32 {
     use crate::lava::hash3;
     use crate::trig::sin;

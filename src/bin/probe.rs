@@ -37,7 +37,7 @@ use bongbong::ai::{Intent, in_sight_box};
 use bongbong::map::MapFile;
 use bongbong::pickup::PickupKind;
 use bongbong::level::SpawnKind;
-use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, signed_quarter_turn};
+use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, signed_quarter_turn};
 use bongbong::simulation::{Event, Game, HitTarget, Input, Outcome, TankSnapshot};
 use bongbong::tank::{Dir, TankKind};
 use bongbong::{
@@ -165,6 +165,22 @@ const BORDER_FRAMES_THRESHOLD: u32 = 90; // 1.5s
 // live turn counters so both measure a round the same way. JITTER_THRESHOLD
 // flips inside the window flags a tank.
 const JITTER_THRESHOLD: u32 = 4;
+// What the run of flips got the tank splits it into two kinds. Every flip
+// in the window is paired with the one two before it - the same point of
+// the pattern one round of it earlier - and the pair gives the ground
+// driven between the two (`path`) and the straight line between them
+// (`net`); the run's advance is the nets summed over the paths summed. A
+// hull on a diagonal route alternates two headings and every round of the
+// two carries it on (0.7 of the path, 1 / sqrt 2, on a 45-degree stair);
+// one weaving past things on its way keeps the legs along its way (half
+// the path where they match the sidesteps): both are a `staircase`, turns
+// with net progress. A hull re-deciding between two headings is back
+// where it was each round, or hardly moves at all: `jitter`, a flip-flop.
+// STAIRCASE_PROGRESS is the advance that tells them apart, and
+// STAIRCASE_NET_MIN (one nav cell a round) keeps a hull dithering on the
+// spot, whose few pixels of path make any ratio, a flip-flop.
+const STAIRCASE_PROGRESS: f32 = 0.35;
+const STAIRCASE_NET_MIN: f32 = PATHFIND_CELL_SIZE;
 // Churn: lots of driving, no progress - net displacement over a trailing
 // window stays under CHURN_NET_MAX despite CHURN_MIN_PATH of actual path
 // traveled ("dancing"/back-and-forth). The complement of `stall` (which
@@ -176,6 +192,12 @@ const JITTER_THRESHOLD: u32 = 4;
 const CHURN_WINDOW_FRAMES: u32 = 240; // 4s
 const CHURN_MIN_PATH: f32 = 300.0; // px of path traveled within the window
 const CHURN_NET_MAX: f32 = 60.0; // px of net displacement
+// A hurt tank that fled to a health crate, took it and came back has driven
+// far and ended where it began for a reason: a window holding the frame a
+// fleeing tank (`act_flee`, within FLEE_HEAL_FRAMES) took the crate
+// (`Event::PickupCollected`, `PickupKind::Health`) is not churn. A crate a
+// tank drives over in the middle of its fight excuses nothing.
+const FLEE_HEAL_FRAMES: u32 = 30; // 0.5s
 // --- Contact-metric kinds (docs/gameplay-verification-design.md §4.3) ---
 // Built on TankSnapshot's narrow-phase read-backs (touching_static /
 // contact_impulse / commanded_velocity / top_speed - see
@@ -329,6 +351,17 @@ enum Scenario {
     /// reach the player in this short a window anyway). Run with
     /// `--frames 60 --log-every 1` to see the curve frame-by-frame.
     Brake,
+    /// The seats never move or fire and cannot be worn down: after every
+    /// frame the probe mends each live seat's hull back to no damage
+    /// (`Game::debug_set_tank`) and the players' bong back to full health
+    /// (`Game::debug_mend_bong`), so a round does not end a few seconds in
+    /// and the enemies' whole fight is on show - holding a firing slot,
+    /// running out of shells, falling back to recharge, coming again. A
+    /// blow that takes a whole hull or the whole bong in one frame still
+    /// ends it; a round nothing ends runs to `--frames` and counts as
+    /// unfinished. `--mortal-bong` leaves the bong unmended, for reading a
+    /// Protect round's outcome with the seat out of the question.
+    Survive,
     /// A perfect defence: the seats never move or fire, and every enemy
     /// that comes within `--defend-reach` of a live seat or the players'
     /// bong is destroyed on the spot, through the normal kill path
@@ -418,6 +451,11 @@ struct Args {
     /// team under pressure looks like to the pacing director.
     #[arg(long = "defend-reach", default_value_t = DEFEND_REACH_PX)]
     defend_reach: f32,
+
+    /// The `survive` scenario mends the seats only: the players' bong
+    /// takes its damage, and a Protect round is lost when it dies.
+    #[arg(long = "mortal-bong")]
+    mortal_bong: bool,
 
     /// Two-player rounds: pin player 2's chassis (over the map's `tank2`
     /// key, else a random roll), like `--tank` for player 1.
@@ -538,7 +576,7 @@ fn input_for_frame(args: &Args, frame: u32) -> Input {
 fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
     let mut player_intent = Intent::default();
     match scenario {
-        Scenario::Afk | Scenario::Defend => {}
+        Scenario::Afk | Scenario::Defend | Scenario::Survive => {}
         Scenario::Advance => {
             player_intent.move_dir = Some(Dir::Up);
             player_intent.fire = frame % 30 == 0;
@@ -575,6 +613,20 @@ fn defend(game: &mut Game, tracks: &mut BTreeMap<usize, TankTrack>, frame: u32, 
                 track.time_to_engage.get_or_insert(frame as f32 * DT);
             }
         }
+    }
+}
+
+/// The `survive` scenario's mending: every live seat's hull back to no
+/// damage and, unless `mortal_bong`, the players' bong back to full
+/// health, so the next frame's fire starts on whole ones.
+fn mend(game: &mut Game, mortal_bong: bool) {
+    let whole = TankPatch { damage: Some(0.0), ..TankPatch::default() };
+    let live: Vec<usize> = game.tank_snapshots().iter().filter(|t| t.is_player && !t.is_wreck).map(|t| t.slot).collect();
+    for slot in live {
+        let _ = game.debug_set_tank(slot, &whole);
+    }
+    if !mortal_bong {
+        game.debug_mend_bong();
     }
 }
 
@@ -626,6 +678,7 @@ struct AnomalyTotals {
     stall: u32,
     border_stuck: u32,
     jitter: u32,
+    staircase: u32,
     spin: u32,
     churn: u32,
     clustering: u32,
@@ -645,11 +698,12 @@ struct AnomalyTotals {
 /// (tags with `-` swapped for `_`), the `--heatmap` per-kind ordering and
 /// the sweep totals (`AnomalyTotals::add`): a new kind added here and in
 /// `AnomalyTotals::count`/`count_mut` reaches all four automatically.
-const ANOMALY_KINDS: [&str; 15] = [
+const ANOMALY_KINDS: [&str; 16] = [
     "stale-start",
     "stall",
     "border-stuck",
     "jitter",
+    "staircase",
     "spin",
     "churn",
     "clustering",
@@ -694,6 +748,7 @@ impl AnomalyTotals {
             "stall" => &mut self.stall,
             "border-stuck" => &mut self.border_stuck,
             "jitter" => &mut self.jitter,
+            "staircase" => &mut self.staircase,
             "spin" => &mut self.spin,
             "churn" => &mut self.churn,
             "clustering" => &mut self.clustering,
@@ -755,6 +810,10 @@ struct FireTally {
     /// landed - the reverse unfairness: that enemy cannot answer until it
     /// closes in.
     seat_hits_offbox: u32,
+    /// Enemy tanks damaged by another enemy's shot, beam, flame or blast
+    /// (`TankSnapshot::hit_by_enemy`), one per tank per frame it happened
+    /// in. A ram between the two that frame is left to `RamTally`.
+    enemy_hits_on_enemies: u32,
 }
 
 impl FireTally {
@@ -771,11 +830,12 @@ impl FireTally {
         self.hits_on_seats += other.hits_on_seats;
         self.seat_hits += other.seat_hits;
         self.seat_hits_offbox += other.seat_hits_offbox;
+        self.enemy_hits_on_enemies += other.enemy_hits_on_enemies;
     }
 
     /// `(name, value)` in reporting order - the summary line and the
     /// `--json-out` `fire` object read the same list.
-    fn fields(&self) -> [(&'static str, u32); 12] {
+    fn fields(&self) -> [(&'static str, u32); 13] {
         [
             ("enemy_shots", self.enemy_shots),
             ("shots_at_seats", self.shots_at_seats),
@@ -789,6 +849,7 @@ impl FireTally {
             ("seat_hits_offbox", self.seat_hits_offbox),
             ("rod_calls_on_seats", self.rod_calls_on_seats),
             ("rod_calls_offbox", self.rod_calls_offbox),
+            ("enemy_hits_on_enemies", self.enemy_hits_on_enemies),
         ]
     }
 }
@@ -817,14 +878,26 @@ struct TankTrack {
     stall_flagged: bool,
     border_flagged: bool,
     jitter_flagged: bool,
+    staircase_flagged: bool,
     cluster_frames: u32,
     cluster_flagged: bool,
-    // Last up to 3 *distinct* headings seen, oldest first - an A,B,A pattern
-    // here is a genuine flip-flop, not just "still facing the same way".
-    heading_history: VecDeque<f32>,
-    // Frame numbers of recent A,B,A flip-flop events, for the trailing
-    // JITTER_WINDOW_FRAMES count.
-    recent_flips: VecDeque<u32>,
+    // The tank's odometer for the heading checks: the ground it has driven
+    // and the sum of its frame-to-frame moves since the track began (or
+    // rejoined), a portal jump left out of both, and where it stood last
+    // frame. Two readings of it bracket a run of flips (`STAIRCASE_*`).
+    turn_odo: Odo,
+    turn_last_pos: Option<Position>,
+    // Last up to 3 *distinct* headings seen, oldest first, each with the
+    // odometer as it began - an A,B,A pattern here is a genuine flip-flop,
+    // not just "still facing the same way".
+    heading_history: VecDeque<(f32, Odo)>,
+    // Recent A,B,A flip-flop events for the trailing JITTER_WINDOW_FRAMES
+    // count: the frame of each, and the odometer at it.
+    recent_flips: VecDeque<(u32, Odo)>,
+    // The last `TURN_LOG` headings turned to, oldest first, each with the
+    // odometer as it began: the legs of a flagged run, spelled out on its
+    // `ANOMALY` line.
+    turn_log: VecDeque<(f32, Odo)>,
     // --- spin: a chain of consecutive same-direction quarter-turns ---
     spin_flagged: bool,
     // The heading as of the previous frame, so a change (and its signed
@@ -840,6 +913,10 @@ struct TankTrack {
     spin_start_pos: Position,
     // --- churn: trailing-window path length vs net displacement ---
     churn_flagged: bool,
+    // The last frame its action was `flee`, and the last frame it took a
+    // health crate while fleeing (`FLEE_HEAL_FRAMES`).
+    last_flee_frame: Option<u32>,
+    last_heal_frame: Option<u32>,
     // Per-frame position samples covering the trailing CHURN_WINDOW_FRAMES,
     // oldest first, with the summed segment lengths between consecutive
     // samples maintained incrementally alongside.
@@ -915,6 +992,28 @@ struct TankTrack {
     last_pulled: Option<u32>,
 }
 
+/// How many of a tank's latest turns `TankTrack::turn_log` keeps: more than
+/// a flagged run can hold (a hull turns at most every few frames).
+const TURN_LOG: usize = 32;
+
+/// One letter for a heading on an `ANOMALY` line's legs.
+fn heading_letter(dir: Dir) -> &'static str {
+    match dir {
+        Dir::Up => "U",
+        Dir::Right => "R",
+        Dir::Down => "D",
+        Dir::Left => "L",
+    }
+}
+
+/// A reading of a tank's odometer (`TankTrack::turn_odo`): the ground
+/// driven so far, and the sum of the moves that made it.
+#[derive(Clone, Copy, Default)]
+struct Odo {
+    path: f32,
+    drift: Position,
+}
+
 /// How long after a gravity well's pull an anomaly is tagged as the well's
 /// (`TankTrack::shown_label`, docs/gravity-well.md "Probe"): three seconds.
 const AFTER_PULL_FRAMES: u32 = 180;
@@ -980,7 +1079,7 @@ impl TankTrack {
     /// per tank, which is all this is.
     fn new(game: &Game, snapshot: &TankSnapshot, player_pos: Position, frame: u32) -> Self {
         let mut heading_history = VecDeque::with_capacity(3);
-        heading_history.push_back(snapshot.rotation);
+        heading_history.push_back((snapshot.rotation, Odo::default()));
         let path_cells = game.nav_path_cells(snapshot.position, player_pos, field_width(), field_height());
         // top_speed is a real rolled speed (150-220px/s range), never
         // zero - the .max(1.0) only guards a hypothetical future
@@ -998,9 +1097,13 @@ impl TankTrack {
             stall_flagged: false,
             border_flagged: false,
             jitter_flagged: false,
+            staircase_flagged: false,
             cluster_frames: 0,
             cluster_flagged: false,
+            turn_odo: Odo::default(),
+            turn_last_pos: None,
             heading_history,
+            turn_log: VecDeque::with_capacity(TURN_LOG),
             recent_flips: VecDeque::new(),
             spin_flagged: false,
             last_heading: snapshot.rotation,
@@ -1008,6 +1111,8 @@ impl TankTrack {
             spin_start_frame: frame,
             spin_start_pos: snapshot.position,
             churn_flagged: false,
+            last_flee_frame: None,
+            last_heal_frame: None,
             trail: VecDeque::with_capacity(CHURN_WINDOW_FRAMES as usize + 1),
             trail_path_len: 0.0,
             prev_ammo: None,
@@ -1044,8 +1149,10 @@ impl TankTrack {
     /// budget from the first arrival - stands.
     fn rejoin(&mut self, snapshot: &TankSnapshot, frame: u32) {
         self.heading_history.clear();
-        self.heading_history.push_back(snapshot.rotation);
+        self.heading_history.push_back((snapshot.rotation, self.turn_odo));
         self.recent_flips.clear();
+        self.turn_log.clear();
+        self.turn_last_pos = None;
         self.last_heading = snapshot.rotation;
         self.spin_sum = 0.0;
         self.spin_start_frame = frame;
@@ -1071,44 +1178,89 @@ impl TankTrack {
 }
 
 impl TankTrack {
-    /// The checks on which way the tank faces - facing jitter and spin -
-    /// for `tank` at `frame` standing at `pos`: run every frame the tank
-    /// steers, a gravity well's drag included (`STEERED_IN`).
-    fn check_heading(&mut self, tank: &TankSnapshot, frame: u32, pos: Position, at: (&mut Vec<(String, Position)>, u32, u64), totals: &mut AnomalyTotals) {
+    /// The checks on which way the tank faces - facing jitter, staircase
+    /// and spin - for `tank` at `frame` standing at `pos`: run every frame
+    /// the tank steers, a gravity well's drag included (`STEERED_IN`).
+    /// `jumped` is a portal jump this frame, which is no driving.
+    fn check_heading(&mut self, tank: &TankSnapshot, frame: u32, pos: Position, jumped: bool, at: (&mut Vec<(String, Position)>, u32, u64), totals: &mut AnomalyTotals) {
         let (heat, round, seed) = at;
         let track = self;
-        // Facing jitter: A,B,A heading flip-flops within a trailing window.
-        if track.heading_history.back() != Some(&tank.rotation) {
-            track.heading_history.push_back(tank.rotation);
+        if let Some(last) = track.turn_last_pos
+            && !jumped
+        {
+            track.turn_odo.path += last.distance_to(pos);
+            track.turn_odo.drift += pos - last;
+        }
+        track.turn_last_pos = Some(pos);
+        // Facing jitter: A,B,A heading flip-flops within a trailing window,
+        // told apart by what the run of them covered (`STAIRCASE_*`).
+        if track.heading_history.back().map(|h| h.0) != Some(tank.rotation) {
+            track.heading_history.push_back((tank.rotation, track.turn_odo));
             if track.heading_history.len() > 3 {
                 track.heading_history.pop_front();
             }
+            if track.turn_log.len() == TURN_LOG {
+                track.turn_log.pop_front();
+            }
+            track.turn_log.push_back((tank.rotation, track.turn_odo));
             if track.heading_history.len() == 3
-                && track.heading_history[0] == track.heading_history[2]
+                && track.heading_history[0].0 == track.heading_history[2].0
             {
-                track.recent_flips.push_back(frame);
-                while let Some(&oldest) = track.recent_flips.front() {
+                track.recent_flips.push_back((frame, track.turn_odo));
+                while let Some(&(oldest, _)) = track.recent_flips.front() {
                     if frame - oldest > JITTER_WINDOW_FRAMES {
                         track.recent_flips.pop_front();
                     } else {
                         break;
                     }
                 }
-                if !track.jitter_flagged && track.recent_flips.len() as u32 >= JITTER_THRESHOLD {
-                    report(
-                        heat,
-                        round,
-                        seed,
-                        frame,
-                        &track.shown_label(frame),
-                        "jitter",
-                        &format!(
-                            "{JITTER_THRESHOLD}+ heading flip-flops within {JITTER_WINDOW_FRAMES} frames"
-                        ),
-                        pos,
-                    );
-                    track.jitter_flagged = true;
-                    totals.jitter += 1;
+                if track.recent_flips.len() as u32 >= JITTER_THRESHOLD
+                    && let Some(&(_, began)) = track.recent_flips.front()
+                {
+                    let (mut net, mut path) = (0.0f32, 0.0f32);
+                    for (&(_, from), &(_, to)) in track.recent_flips.iter().zip(track.recent_flips.iter().skip(2)) {
+                        net += to.drift.distance_to(from.drift);
+                        path += to.path - from.path;
+                    }
+                    let rounds = track.recent_flips.len().saturating_sub(2).max(1) as f32;
+                    let progress = net >= STAIRCASE_NET_MIN * rounds && net >= STAIRCASE_PROGRESS * path;
+                    // Each leg since the run's first flip as its heading and
+                    // the ground it covered, the last one just begun:
+                    // `R32 U64 R31 U0`.
+                    let legs: Vec<(f32, f32)> =
+                        track.turn_log.iter().filter(|(_, odo)| odo.path >= began.path).map(|&(heading, odo)| (heading, odo.path)).collect();
+                    let legs = legs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &(heading, from))| {
+                            let to = legs.get(i + 1).map_or(track.turn_odo.path, |next| next.1);
+                            format!("{}{:.0}", Dir::from_rotation(heading).map_or("?", heading_letter), to - from)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let (kind, flagged, count, what) = if progress {
+                        ("staircase", &mut track.staircase_flagged, &mut totals.staircase, "alternating turns")
+                    } else {
+                        ("jitter", &mut track.jitter_flagged, &mut totals.jitter, "heading flip-flops")
+                    };
+                    if !*flagged {
+                        *flagged = true;
+                        *count += 1;
+                        report(
+                            heat,
+                            round,
+                            seed,
+                            frame,
+                            &track.shown_label(frame),
+                            kind,
+                            &format!(
+                                "{JITTER_THRESHOLD}+ {what} within {JITTER_WINDOW_FRAMES} frames (a round of them advances {:.0}px of {:.0}px driven: {legs})",
+                                net / rounds,
+                                path / rounds,
+                            ),
+                            pos,
+                        );
+                    }
                 }
             }
         }
@@ -1471,11 +1623,22 @@ fn check_anomalies(
         if tank.pulled {
             track.last_pulled = Some(frame);
         }
+        // A portal jump is not travel (`Event::Teleported`): the heading
+        // odometer skips it here, and the trail restarts below.
+        let teleported = game.events().iter().any(|e| matches!(e, Event::Teleported { slot, .. } if *slot == tank.slot));
+        if tank.action.0 == Some("flee") {
+            track.last_flee_frame = Some(frame);
+        }
+        if track.last_flee_frame.is_some_and(|f| frame - f <= FLEE_HEAL_FRAMES)
+            && game.events().iter().any(|e| matches!(*e, Event::PickupCollected { slot, kind: PickupKind::Health, .. } if slot == tank.slot))
+        {
+            track.last_heal_frame = Some(frame);
+        }
         let out: Vec<&str> = OUT_OF_ITS_HANDS.iter().filter(|(_, out)| out(tank)).map(|(name, _)| *name).collect();
         if !out.is_empty() {
             if out.iter().all(|name| STEERED_IN.contains(name)) {
                 track.rejoin_motion();
-                track.check_heading(tank, frame, pos, (&mut *heat, round, seed), totals);
+                track.check_heading(tank, frame, pos, teleported, (&mut *heat, round, seed), totals);
             } else {
                 track.rejoin(tank, frame);
             }
@@ -1559,14 +1722,13 @@ fn check_anomalies(
             totals.border_stuck += 1;
         }
 
-        track.check_heading(tank, frame, pos, (&mut *heat, round, seed), totals);
+        track.check_heading(tank, frame, pos, teleported, (&mut *heat, round, seed), totals);
 
-        // A portal jump is not travel: the frame a tank came through one
-        // (`Event::Teleported`) the trail restarts at the arrival, so the
-        // churn window and the path total never count the screen it
-        // crossed, and the spin chain is cut too. `invariant`'s speed is
-        // the physics velocity, which the jump zeroes, so it needs nothing.
-        let teleported = game.events().iter().any(|e| matches!(e, Event::Teleported { slot, .. } if *slot == tank.slot));
+        // The frame a tank came through a portal the trail restarts at the
+        // arrival, so the churn window and the path total never count the
+        // screen it crossed, and the spin chain is cut too. `invariant`'s
+        // speed is the physics velocity, which the jump zeroes, so it
+        // needs nothing.
         if teleported {
             track.trail.clear();
             track.trail_path_len = 0.0;
@@ -1596,7 +1758,8 @@ fn check_anomalies(
             && frame - oldest_frame >= CHURN_WINDOW_FRAMES
         {
             let net = oldest_pos.distance_to(pos);
-            if track.trail_path_len >= CHURN_MIN_PATH && net <= CHURN_NET_MAX {
+            let healed = track.last_heal_frame.is_some_and(|f| frame - f <= CHURN_WINDOW_FRAMES);
+            if track.trail_path_len >= CHURN_MIN_PATH && net <= CHURN_NET_MAX && !healed {
                 report(
                     heat,
                     round,
@@ -1816,9 +1979,10 @@ fn seat_label(seat: usize, first_enemy: usize) -> String {
 /// or drone launched at one (`Event::DroneLaunched`) is measured from where the shooter and the seat stood when it was
 /// decided (`stood`), and one taken from outside the seat's box is an
 /// `offbox-fire` - reported once per enemy per round (`flagged`), every
-/// one counted in `fire`. The tally also counts hits on seats and seat
-/// hits on enemies, and the ones on an enemy outside the hitting seat's
-/// box (where they stand after the frame, which is when the hit landed).
+/// one counted in `fire`. The tally also counts hits on seats, seat
+/// hits on enemies, the ones on an enemy outside the hitting seat's
+/// box (where they stand after the frame, which is when the hit landed),
+/// and enemies' hits on each other.
 /// A tank that came through a portal this frame, or is rolling in, is
 /// not measured: where it stood is not where it was decided from. Runs on
 /// every frame, the one the round ends on included - its shots were
@@ -1908,6 +2072,11 @@ fn check_fire(
         }
     }
     for tank in &snapshots {
+        if let Some(by) = tank.hit_by_enemy
+            && !events.iter().any(|e| matches!(*e, Event::Ram { slot, other_slot, .. } if (slot, other_slot) == (tank.slot, by) || (slot, other_slot) == (by, tank.slot)))
+        {
+            fire.enemy_hits_on_enemies += 1;
+        }
         let Some(seat) = tank.hit_by_seat else { continue };
         fire.seat_hits += 1;
         if let Some(by) = snapshots.iter().find(|t| t.slot == seat as usize)
@@ -2179,6 +2348,9 @@ fn run_round(
         if matches!(args.scenario, Scenario::Defend) {
             defend(&mut game, &mut tracks, frame, args.defend_reach);
         }
+        if matches!(args.scenario, Scenario::Survive) {
+            mend(&mut game, args.mortal_bong);
+        }
         let now = frame as f32 * DT;
         if contact.shot.is_none() && fire.shots_at_seats > 0 {
             contact.shot = Some(now);
@@ -2362,6 +2534,7 @@ fn scenario_str(scenario: Scenario) -> &'static str {
     match scenario {
         Scenario::Afk => "afk",
         Scenario::Defend => "defend",
+        Scenario::Survive => "survive",
         Scenario::Advance => "advance",
         Scenario::Brake => "brake",
         Scenario::Circle => "circle",
@@ -2737,6 +2910,15 @@ fn main() -> ExitCode {
         update_seconds * 1000.0 / ticks.max(1) as f64,
         if cfg!(debug_assertions) { " (debug build)" } else { "" },
     );
+    // The phases `Game::update` times itself (`frame_stages.rs`), in a
+    // build with the dev tools: ms a tick each, the rest of the tick last.
+    let phases = bongbong::frame_stages::totals();
+    if !phases.is_empty() {
+        let per_tick = |ms: f64| ms / ticks.max(1) as f64;
+        let timed: f64 = phases.iter().map(|(_, ms)| ms).sum();
+        let line: Vec<String> = phases.iter().map(|(name, ms)| format!("{} {:.4}", name.trim_start_matches("sim."), per_tick(*ms))).collect();
+        println!("probe: phases: {} other {:.4} ms/tick", line.join(" "), per_tick(update_seconds * 1000.0 - timed));
+    }
 
     if args.heatmap {
         print_heatmaps(&args, &heat);

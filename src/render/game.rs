@@ -361,7 +361,7 @@ impl Game {
                     return;
                 }
                 d.set_blend_factors_separate(RL_SRC_ALPHA as i32, RL_ONE as i32, RL_ZERO as i32, RL_ONE as i32, RL_FUNC_ADD as i32, RL_FUNC_ADD as i32);
-                d.draw_blend_mode(BlendMode::BLEND_CUSTOM_SEPARATE, |mut bd| {
+                d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_CUSTOM_SEPARATE), |mut bd| {
                     let b = atlas.image.block as f32;
                     for ((x, y), (sx, sy, w, h)) in atlas.tiles() {
                         if culled(reach, Position::new(x as f32 + 16.0, y as f32 + 16.0)) {
@@ -373,7 +373,7 @@ impl Game {
                     }
                 });
             }
-            None => d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            None => d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                 for (col, row) in self.lava.cells().filter(|(c, r)| (c + r) % 2 == 0) {
                     let at = crate::map::cell_to_world(col, row);
                     if !culled(reach, at) {
@@ -560,7 +560,7 @@ impl Game {
                 let size = ((view.window.0 * frame.units).round() as i32, (view.window.1 * frame.units).round() as i32);
                 if let Some(target) = dissolve.keep(rl, thread, size) {
                     let onto = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: frame.units };
-                    rl.draw_texture_mode(thread, target, |mut t| {
+                    rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut t| {
                         t.draw_mode2D(onto, |mut t, _| present_frame(&mut t, composite, camera, view, layout, backdrop, margins.as_ref(), &split));
                         self.draw_chrome(&mut t, &text, &hud, chrome, &frame, layout, camera, indicators, bubble, minimap.as_ref(), textures, touch, fx_live, base);
                     });
@@ -680,7 +680,7 @@ impl Game {
         let world_stage = crate::frame_stages::stage("world");
         match weather.as_ref() {
             None => {
-                rl.draw_texture_mode(thread, scene_target, |mut d| {
+                rl.draw_texture_mode(thread, crate::frame_stages::target(scene_target), |mut d| {
                     d.clear_background(Color::WHITE);
                     d.draw_mode2D(in_target, |mut d, _| {
                         self.paint_field_lit(&mut d, textures, effects.fx, false, cull);
@@ -698,7 +698,7 @@ impl Game {
                 let day_pools = frame.day_light_pools();
                 let light = effects.weather.as_deref().and_then(|fx| fx.light_map()).expect("`begin` readied the targets");
                 let mut blocks = Vec::new();
-                rl.draw_texture_mode(thread, scene_target, |mut d| {
+                rl.draw_texture_mode(thread, crate::frame_stages::target(scene_target), |mut d| {
                     d.clear_background(Color::WHITE);
                     d.draw_mode2D(in_target, |mut d, _| {
                         frame.plain_snow_cover(&mut blocks);
@@ -737,7 +737,7 @@ impl Game {
                 let first_in_scene = plan.lit == plan.sky;
                 {
                     let first: &mut RenderTexture2D = if first_in_scene { &mut *scene_target } else { &mut *lit_target };
-                    rl.draw_texture_mode(thread, first, |mut d| {
+                    rl.draw_texture_mode(thread, crate::frame_stages::target(first), |mut d| {
                         d.clear_background(Color::WHITE);
                         // The ground pass draws the bare ground with the
                         // sky's mark on it in place of the ground tileset.
@@ -755,7 +755,7 @@ impl Game {
                 if plan.lit {
                     let (under, to): (&RenderTexture2D, &mut RenderTexture2D) =
                         if first_in_scene { (&*scene_target, &mut *lit_target) } else { (&*lit_target, &mut *scene_target) };
-                    rl.draw_texture_mode(thread, to, |mut d| {
+                    rl.draw_texture_mode(thread, crate::frame_stages::target(to), |mut d| {
                         passes.draw_lit(&mut d, under, &frame);
                         d.draw_mode2D(in_target, |mut d, _| {
                             self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, ammo_seats);
@@ -765,7 +765,7 @@ impl Game {
                 if plan.sky {
                     // Whichever stage came before left the field in the
                     // weather's target.
-                    rl.draw_texture_mode(thread, scene_target, |mut d| passes.draw_sky(&mut d, lit_target, &frame));
+                    rl.draw_texture_mode(thread, crate::frame_stages::target(scene_target), |mut d| passes.draw_sky(&mut d, lit_target, &frame));
                 }
             }
         }
@@ -855,7 +855,7 @@ impl Game {
             bend: !still,
             marks,
         };
-        rl.draw_texture_mode(thread, composite, |mut d| {
+        rl.draw_texture_mode(thread, crate::frame_stages::target(composite), |mut d| {
             d.clear_background(Color::BLACK);
             self.draw_world_layer(&mut d, &world, effects);
         });
@@ -945,7 +945,7 @@ impl Game {
         let texel = |at: Position| Vector2::new(at.x - camera.origin.x, target_height as f32 - (at.y - camera.origin.y));
 
         if !self.shocks.is_empty() && w.bend {
-            d.draw_shader_mode(&mut effects.shock.shader, |mut sd| {
+            d.draw_shader_mode(crate::frame_stages::shader(&mut effects.shock.shader), |mut sd| {
                 sd.draw_texture_pro(w.scene, w.source, w.blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             });
         } else {
@@ -986,7 +986,7 @@ impl Game {
                 };
                 let origin = Vector2::new(r, r);
 
-                d.draw_shader_mode(&mut effects.muzzle.shader, |mut sd| {
+                d.draw_shader_mode(crate::frame_stages::shader(&mut effects.muzzle.shader), |mut sd| {
                     sd.draw_texture_pro(
                         w.scene,
                         flash_source,
@@ -1026,7 +1026,7 @@ impl Game {
                 };
                 let origin = Vector2::new(r, r);
 
-                d.draw_shader_mode(&mut effects.impact.shader, |mut sd| {
+                d.draw_shader_mode(crate::frame_stages::shader(&mut effects.impact.shader), |mut sd| {
                     sd.draw_texture_pro(
                         w.scene,
                         flash_source,
@@ -1195,11 +1195,13 @@ impl Game {
                 color: Color::new(80, 200, 255, 255),
             });
         }
-        // Where the frame's time goes (`frame_stages.rs`), where the
-        // tuning panel asks for it.
+        // Where the frame's time goes, what the last frame drew and how
+        // the frames are paced (`frame_stages.rs`), where the tuning panel
+        // asks for it.
         #[cfg(feature = "dev-tools")]
         if tuning().ui_frame_stages {
             lines.push(Line { text: crate::frame_stages::line(), size: 14, color: Color::new(80, 200, 255, 255) });
+            lines.push(Line { text: crate::frame_stages::draws_line(), size: 14, color: Color::new(80, 200, 255, 255) });
         }
 
         // Everything from here to the stick is in UI points: the window at
@@ -1448,7 +1450,7 @@ impl Game {
 
         // A barrel whose fuse is lit pulses (additive, so it reads as
         // light on the drum rather than a disc over it).
-        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+        d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
             // An active portal glows from below its spiral.
             if self.portals_active() {
                 for &at in self.portals.iter().filter(|at| !culled(cull, **at)) {
@@ -1611,7 +1613,7 @@ impl Game {
         // A hit lights up what it landed on: the hull or the tile drawn
         // again in light for a few frames, stepping down.
         if !fx.flashes().is_empty() {
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| self.draw_flashes(&mut GpuCanvas::new(&mut bd, textures), fx.flashes()));
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| self.draw_flashes(&mut GpuCanvas::new(&mut bd, textures), fx.flashes()));
         }
         // The towers' light (a charging coil, a mortar's ooze, a
         // tower on fire) and the globs in the air over everything that
@@ -1619,7 +1621,7 @@ impl Game {
         for glob in &self.globs {
             crate::tower::draw_glob(&mut GpuCanvas::new(d, textures), glob);
         }
-        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| self.draw_towers_light(&mut bd));
+        d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| self.draw_towers_light(&mut bd));
 
         // The tanks' own lights - lamps, strips, sensor eyes, the modules'
         // lenses, a wreck's embers - under a dark sky, which multiplied
@@ -1627,7 +1629,7 @@ impl Game {
         // `day_pools` is 1 in daylight and falls as the sky's lights rise.
         let tank_glow = 1.0 - day_pools;
         if tank_glow > 0.0 {
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                 let mut c = GpuCanvas::new(&mut bd, textures);
                 for tank in self.world.query::<&Tank>().iter() {
                     if (self.hide_players && tank.is_player()) || culled(cull, tank.position) {
@@ -1655,7 +1657,7 @@ impl Game {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &lamps);
                 let light = tuning().fpv_lamp_light * tank_glow;
                 if light > 0.0 {
-                    d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                         for shape in &lamps {
                             if let pyro::Shape::Mark { pos, color, .. } = *shape {
                                 ground_light(&mut bd, pos, 10.0, color, light);
@@ -1674,7 +1676,7 @@ impl Game {
             let t = tuning();
             let pictures = self.lava.pictures();
             let fresh = pictures.fresh(self.time);
-            d.draw_blend_mode(BlendMode::BLEND_ALPHA, |mut bd| {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ALPHA), |mut bd| {
                 let mut c = GpuCanvas::culled(&mut bd, textures, cull);
                 if fresh && crate::canvas::Canvas::has_blocks(&c, pictures.glow.image.stamp) {
                     pictures.glow.draw(&mut c);
@@ -1778,7 +1780,7 @@ impl Game {
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
                 let bands = t.glow_bands.max(0) as u32;
-                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+                d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
             }
         }
 
@@ -1805,7 +1807,7 @@ impl Game {
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
                 let bands = t.glow_bands.max(0) as u32;
-                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+                d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
             }
         }
 
@@ -1835,7 +1837,7 @@ impl Game {
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
                 let bands = t.glow_bands.max(0) as u32;
-                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+                d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
             }
             // The cores over every light: holes, black whatever shines.
             let mut cores = Vec::new();
@@ -1864,7 +1866,7 @@ impl Game {
             if !shapes.is_empty() {
                 pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
                 let bands = t.glow_bands.max(0) as u32;
-                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+                d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
             }
         }
 
@@ -1883,7 +1885,7 @@ impl Game {
         // are drawn curved.
         let wells = self.present_wells();
         if glow {
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                 // Light on the floor first: every shot, burn and flash
                 // lights the ground around it in its own colour.
                 self.draw_ground_light(&mut bd, day_pools, cull);
@@ -1962,7 +1964,7 @@ impl Game {
             }
             if glow {
                 let bands = t.glow_bands.max(0) as u32;
-                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                     for shapes in &hits {
                         pyro::draw_glows(&mut Rl(&mut bd), shapes, bands);
                     }
@@ -2013,7 +2015,7 @@ impl Game {
             }
             // The crate's flash and the symbol's blink are the sprite again
             // over itself in light, as a hit's flash is; then the glows.
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                 {
                     let mut c = GpuCanvas::new(&mut bd, textures);
                     for (o, open) in &opens {
@@ -2067,7 +2069,7 @@ impl Game {
                 }
             }
             let bands = tuning().glow_bands.max(0) as u32;
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                 for beam in &self.laser_beams {
                     draw_laser_flares(&mut bd, beam);
                 }
@@ -2103,7 +2105,7 @@ impl Game {
                 }
             }
             let bands = t.glow_bands.max(0) as u32;
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                 for shapes in &blasts {
                     pyro::draw_glows(&mut Rl(&mut bd), shapes, bands);
                 }
@@ -2162,7 +2164,7 @@ impl Game {
             }
             pyro::draw(&mut GpuCanvas::new(d, textures), &shapes);
             let bands = t.glow_bands.max(0) as u32;
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| pyro::draw_glows(&mut Rl(&mut bd), &shapes, bands));
         }
 
         // Seeker missiles are the highest thing in the air: over the
@@ -2173,7 +2175,7 @@ impl Game {
             }
         }
         if glow && self.world.query::<&Missile>().iter().next().is_some() {
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
                 for missile in self.world.query::<&Missile>().iter() {
                     draw_missile_exhaust(&mut bd, missile, self.time);
                 }

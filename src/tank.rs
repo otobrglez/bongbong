@@ -981,6 +981,12 @@ pub struct Tank {
     /// which the probe counts seat hits on enemies outside the seat's
     /// sight box by.
     pub hit_by_seat: Option<u8>,
+    /// The owner slot of the other enemy that damaged this enemy tank in
+    /// the frame just simulated, if one did: set by `credit` and cleared
+    /// beside `hit_by_seat`. Nothing in the round reads it; it is the
+    /// instantaneous fact `TankSnapshot::hit_by_enemy` reports, which the
+    /// probe counts enemy-on-enemy hits by.
+    pub hit_by_enemy: Option<usize>,
     /// What its runs are doing to the ground (docs/ground-memory.md):
     /// pressed by `simulation::press_treads`, read by the particle layer
     /// (`Game::driving`) and nothing that plays.
@@ -1153,6 +1159,7 @@ impl Default for Tank {
             burn_timer: 0.0,
             last_hit_by: None,
             hit_by_seat: None,
+            hit_by_enemy: None,
             slime_timer: 0.0,
             oil_load: 0,
             oil_cell: None,
@@ -2201,13 +2208,16 @@ impl Tank {
     /// `by` has just damaged this tank: a seat's hit on an enemy makes
     /// that seat the one its wreck is credited to (`last_hit_by`) and the
     /// one that hit it this frame (`hit_by_seat`). An enemy's hit, or any
-    /// hit on a seat, credits nobody.
+    /// hit on a seat, credits nobody; another enemy's hit on an enemy is
+    /// noted for the frame (`hit_by_enemy`).
     pub fn credit(&mut self, by: Owner) {
-        if let Owner::Player(seat) = by
-            && !self.owner.is_player()
-        {
-            self.last_hit_by = Some(seat);
-            self.hit_by_seat = Some(seat);
+        match (by, self.owner) {
+            (Owner::Player(seat), owner) if !owner.is_player() => {
+                self.last_hit_by = Some(seat);
+                self.hit_by_seat = Some(seat);
+            }
+            (Owner::Enemy(by), Owner::Enemy(own)) if by != own => self.hit_by_enemy = Some(by),
+            _ => {}
         }
     }
 
@@ -3637,5 +3647,20 @@ mod credit_tests {
         let mut seat = Tank { owner: Owner::Player(1), ..Tank::default() };
         seat.credit(Owner::Player(0));
         assert_eq!(seat.last_hit_by, None);
+    }
+
+    /// Another enemy's hit on an enemy is noted for the frame; its own
+    /// blast, a seat's hit and any hit on a seat are not.
+    #[test]
+    fn an_enemys_hit_on_another_enemy_is_noted() {
+        let mut enemy = Tank { owner: Owner::Enemy(3), ..Tank::default() };
+        enemy.credit(Owner::Enemy(3));
+        enemy.credit(Owner::Player(0));
+        assert_eq!(enemy.hit_by_enemy, None);
+        enemy.credit(Owner::Enemy(4));
+        assert_eq!(enemy.hit_by_enemy, Some(4));
+        let mut seat = Tank { owner: Owner::Player(0), ..Tank::default() };
+        seat.credit(Owner::Enemy(4));
+        assert_eq!(seat.hit_by_enemy, None);
     }
 }

@@ -1180,6 +1180,18 @@ impl Game {
         Ok(())
     }
 
+    /// Heal the players' bong back to full health while it lives - for
+    /// tooling (the probe's `survive` scenario keeps it standing as it
+    /// keeps the seats). A dead bong stays dead (`Bong::heal`).
+    pub fn debug_mend_bong(&mut self) {
+        if let Some(entity) = self.bong
+            && let Ok(mut bong) = self.world.get::<&mut crate::bong::Bong>(entity)
+        {
+            let whole = bong.max_health;
+            bong.heal(whole);
+        }
+    }
+
     /// Queue the tank in `slot` to die at the top of the next playing
     /// frame - through `Frame::kills`, so it gets its shockwave, explosion
     /// splash, `Event::Wreck` and round-end check like any other kill.

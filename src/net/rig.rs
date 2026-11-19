@@ -531,7 +531,7 @@ impl Room {
         }
         let frame = game.frame();
         self.tick.store(frame, Ordering::Relaxed);
-        if frame % SNAPSHOT_EVERY != 0 {
+        if !frame.is_multiple_of(SNAPSHOT_EVERY) {
             // A tick that sends nothing banks its events for the next
             // snapshot, whose own events are its frame's.
             self.pending_events.extend(encode::wire_events_acked(game.events(), &presses));
