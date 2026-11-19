@@ -402,7 +402,7 @@ ground passes under it in whole texels.
   the map does not shake your screen, and switchable off (Apple's "make
   motion optional", Xbox accessibility guideline 117). The shake moves
   what the frame reads of the scene target, which holds the shake's
-  reach of the world round the view (`shockwave::shake_overscan`, 10 px
+  reach of the world round the view (`shockwave::shake_overscan`, 6 px
   at the default knobs; `Camera::overscanned`), so a shaken screen shows
   the world that is there and never a bare edge.
 - **Presenting** (`view::Prescale`). A window rarely shows a texel as a

@@ -277,7 +277,7 @@ mod shake_tests {
     #[test]
     fn no_shake_reaches_past_the_overscan() {
         let loud = Tuning { camera_shake_magnitude: 11.0, camera_shake_max_stack: 2.3, screen_fx_intensity: 1.5, ..Tuning::DEFAULT };
-        assert_eq!(shake_overscan(&Tuning::DEFAULT), 10.0);
+        assert_eq!(shake_overscan(&Tuning::DEFAULT), 6.0);
         for t in [Tuning::DEFAULT, loud] {
             let reach = shake_overscan(&t);
             assert_eq!(reach % 2.0, 0.0);
