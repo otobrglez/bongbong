@@ -2621,7 +2621,7 @@ impl Game {
                 // The frame a tank becomes a wreck: stop it behaving like
                 // an air-hockey puck. See `Physics::settle_wreck`.
                 if let Some(body) = tank.body {
-                    self.physics.settle_wreck(body, tuning().wreck_linear_damping, tuning().wreck_friction);
+                    self.physics.settle_wreck(body, tuning().wreck_linear_damping * tank.mass_factor(), tuning().wreck_friction);
                 }
             }
         }
@@ -2833,7 +2833,8 @@ impl Game {
     /// measures (`net::mailbox::Mailbox::pose_reach_ticks`): one tick for
     /// an ordinary read, the whole stall for the read that ends one,
     /// since an owned read takes every intent at or before its play
-    /// point at once. The pose
+    /// point at once. A pose that turns the hull across its tracks may
+    /// stand it a turn fit further (`tank_turn_fit_px` each way). The pose
     /// must lie inside the field, off a solid tile and out of deep water;
     /// a wreck and a seat still rolling in through a gate own nothing. A
     /// refusal leaves the hull where it was, and the room answers with
@@ -2876,7 +2877,12 @@ impl Game {
                     well = pull.current * ((toward + slide).min(room) * PHYSICS_FIXED_DT * ticks * 0.5 / toward);
                 }
             }
-            let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX + well.length();
+            // A turn stands the hull where its new shape fits (`fit_turn`):
+            // up to `tank_turn_fit_px` along each track axis, on the tick
+            // the pose's facing swaps axis.
+            let turned_axis = matches!(Dir::from_rotation(pose.rotation), Some(Dir::Left | Dir::Right)) != tank.facing_along_x();
+            let fit = if turned_axis { tuning().tank_turn_fit_px * std::f32::consts::SQRT_2 } else { 0.0 };
+            let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX + well.length() + fit;
             // A knock carries it past that too, by no more than the knock
             // could slide it in all (`SeatKnock`).
             (tank.position + well, reach, self.seat_knock[seat].extra(self.frame, ticks))
@@ -4598,6 +4604,11 @@ impl Game {
             // impulse is the only part that waits for the commander. A
             // tank in a tell holds its aim whatever it decided.
             let intent = hold_for_tell(intent, tank.tell);
+            // A turn pressed just short of an opening waits for it, as a
+            // seat's does (`buffer_turn`).
+            let intent = buffer_turn(&self.physics, tank, intent, current, || {
+                Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank)
+            });
             tank.control(intent.move_dir, intent.face);
             let owner = tank.owner();
             tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -4850,6 +4861,11 @@ impl Game {
         self.advance_drones(PHYSICS_FIXED_DT, (f.width, f.height));
         self.pull_air(f, PHYSICS_FIXED_DT);
         if step_physics {
+            for tank in self.world.query::<&mut Tank>().iter() {
+                if let Some(body) = tank.body {
+                    tank.ram_velocity = self.physics.velocity(body);
+                }
+            }
             self.physics.step();
             let (bodies, colliders) = self.physics.quarantined();
             if bodies > 0 || colliders > 0 {
@@ -6430,7 +6446,106 @@ fn enemy_trigger(physics: &mut Physics, f: &mut Frame, entity: Entity, tank: &mu
 
 fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32, footing: Footing) {
     let handle = tank.body.expect("tank should always have a physics body once spawned");
-    drive_tank_with(physics, tank, intent, dt, physics.velocity(handle), tank.rotation, footing)
+    let current = physics.velocity(handle);
+    let intent = buffer_turn(physics, tank, intent, current, || footing);
+    drive_tank_with(physics, tank, intent, dt, current, tank.rotation, footing)
+}
+
+/// The step the turn buffer and the lane assist look for a clear way in,
+/// px.
+const LANE_STEP_PX: f32 = 1.0;
+
+/// The furthest a slide is looked ahead for, px: on ice a hull's slide
+/// has no end worth planning for.
+const LANE_SLIDE_MAX_PX: f32 = 96.0;
+
+/// The turn buffer (`turn_buffer_px`): `intent`, with a turn pressed just
+/// short of an opening held back - the hull told to drive on along its
+/// heading - until the hull reaches the opening.
+///
+/// A turn is held only when all of this is so: the hull is travelling
+/// along its heading and is told to turn across it; the new heading is
+/// walled off within `lane_look_px` both where the hull stands and where
+/// its slide would end (`v^2 / 2a` at its tracks' grip, the point an
+/// enemy times its own turns for, `Ai::lane_turn`); and the new heading is
+/// clear from some point within the buffer's distance ahead. It reads the
+/// hull, its body's velocity `current` and the fixed bodies around it and
+/// keeps nothing, so a client's prediction replays it from the same pose.
+/// Called before `Tank::control`, the seats' from `drive_tank` and the
+/// enemies' from `enemy_phase`'s collect pass: the hull must not have
+/// turned yet. `footing` is asked for only once a turn is in question.
+fn buffer_turn(physics: &Physics, tank: &Tank, intent: Intent, current: Position, footing: impl FnOnce() -> Footing) -> Intent {
+    let t = tuning();
+    let reach = t.turn_buffer_px;
+    let (Some(want), Some(heading)) = (intent.move_dir, Dir::from_rotation(tank.rotation)) else { return intent };
+    if reach <= 0.0 || want == heading || want == heading.opposite() || tank.skid > 0.0 || tank.spin > 0.0 || tank.body.is_none() {
+        return intent;
+    }
+    let footing = footing();
+    let (along, turn) = (heading.vec(), want.vec());
+    let speed = (current.x - footing.flow.x) * along.x + (current.y - footing.flow.y) * along.y;
+    if speed <= t.tank_decel_snap_px || !footing.well.is_zero() {
+        return intent;
+    }
+    let half = tank.move_half_extents(want == Dir::Left || want == Dir::Right);
+    // The turned hull as `fit_turn` would stand it: moved the way it
+    // then faces until it fits, and from there clear for the look.
+    let clear = |at: Position| {
+        let steps = (t.tank_turn_fit_px / TURN_FIT_STEP_PX).ceil() as i32;
+        (0..=steps)
+            .map(|k| at + turn * (k as f32 * TURN_FIT_STEP_PX).min(t.tank_turn_fit_px))
+            .find(|&p| physics.hull_fits(p, half))
+            .is_some_and(|p| physics.hull_path_clear(p, half, turn, t.lane_look_px))
+    };
+    let at = tank.position;
+    let grip = t.tank_turn_grip_force * footing.grip / tank.mass();
+    let slide = if grip > 0.0 { (speed * speed / (2.0 * grip)).min(LANE_SLIDE_MAX_PX) } else { LANE_SLIDE_MAX_PX };
+    if clear(at) || clear(at + along * slide) {
+        return intent;
+    }
+    let steps = (reach / LANE_STEP_PX).ceil() as i32;
+    let opening = (1..=steps).any(|k| clear(at + along * (k as f32 * LANE_STEP_PX).min(reach)));
+    if opening { Intent { move_dir: Some(heading), ..intent } } else { intent }
+}
+
+/// The lane assist (`lane_assist_px`): how far across its tracks, px
+/// along +y for a hull facing along x and along +x otherwise, a driving
+/// hull is to be slid to find its way ahead clear - `None` where it is
+/// clear already or nowhere near.
+///
+/// The way ahead is the hull's own shape travelling `lane_look_px` along
+/// its heading past fixed bodies only. It is asked for where the hull's
+/// sideways slide `slide_off` (px/s) would end at its tracks' grip `grip`
+/// (px/s^2): a hull that will come to rest in the clear is left to. Then
+/// to either side of where it stands, nearest first, the side against its
+/// slide before the side along it - and further on that side, by the
+/// distance the guided grip (`lane_assist_grip`) takes to stop the slide.
+fn lane_guide(physics: &Physics, tank: &Tank, at: Position, along_x: bool, slide_off: f32, grip: f32) -> Option<f32> {
+    let t = tuning();
+    let reach = t.lane_assist_px;
+    if reach <= 0.0 {
+        return None;
+    }
+    let heading = Dir::from_rotation(tank.rotation)?.vec();
+    let across = if along_x { Vec2::new(0.0, 1.0) } else { Vec2::new(1.0, 0.0) };
+    let half = tank.move_half_extents(along_x);
+    let clear = |off: f32| physics.hull_path_clear(at + across * off, half, heading, t.lane_look_px);
+    let rest = if grip > 0.0 { (slide_off * slide_off.abs() / (2.0 * grip)).clamp(-LANE_SLIDE_MAX_PX, LANE_SLIDE_MAX_PX) } else { 0.0 };
+    if clear(rest) {
+        return None;
+    }
+    // Against the slide the reach is longer by what the guided grip needs
+    // to stop it: a lane the hull can still be brought back to.
+    let back = if slide_off > 0.0 { -1.0 } else { 1.0 };
+    let stop = rest.abs() / t.lane_assist_grip;
+    let steps = ((reach + stop) / LANE_STEP_PX).ceil() as i32;
+    (1..=steps)
+        .flat_map(|k| {
+            let off = k as f32 * LANE_STEP_PX;
+            [(off <= reach + stop).then_some(back * off), (off <= reach).then_some(-back * off)]
+        })
+        .flatten()
+        .find(|&off| clear(off))
 }
 
 /// `drive_tank`, given the body velocity and hull facing as they stood
@@ -6482,7 +6597,7 @@ fn drive_tank_with(
     let target = tank.velocity;
 
     if tank.rotation != facing_before {
-        physics.resize_collider(physics.collider_of(handle), tank.move_half_extents(tank.facing_along_x()));
+        fit_turn(physics, tank, handle, facing_before);
     }
 
     // Knocked off its tracks (`Tank::skid`, docs/sonic-hammer.md): the
@@ -6539,22 +6654,45 @@ fn drive_tank_with(
         (current_on - footing.well.current.y, footing.well.side.x * dt)
     };
 
+    // Weight (`tank_drive_mass_exponent`, `tank_brake_mass_exponent`): a
+    // heavy chassis drives and brakes with more force. Exactly 1 at an
+    // exponent of 0 and on the standard chassis.
+    let t = tuning();
+    let weight = |exponent: f32| if exponent == 0.0 { 1.0 } else { math::powf(tank.mass_factor(), exponent) };
+    // A parked hull holds its ground (`tank_park_hold_force`): with no
+    // drive commanded and another hull against it, the speed its tracks
+    // take off a step on top of the brake and the grip.
+    let parked = target_on == 0.0 && !pulled && t.tank_park_hold_force > 0.0;
+    let hold = if parked && physics.contact_stats(handle).touching_tank { t.tank_park_hold_force * tank.mass_factor() / tank.mass() * dt } else { 0.0 };
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
     let delta_on = if speeding_up {
-        let max_on = tuning().tank_accel_force * pace * footing.traction * tank.speed_factor() / tank.mass() * dt;
+        let max_on = t.tank_accel_force * weight(t.tank_drive_mass_exponent) * pace * footing.traction * tank.speed_factor() / tank.mass() * dt;
         want_on.clamp(-max_on, max_on)
     } else {
         // Close a rate-controlled fraction of the remaining gap each frame
         // (frame-rate independent); snap the last sliver below
         // TANK_DECEL_SNAP_PX rather than trailing the asymptote forever.
-        let rate = tuning().tank_decel_curve_rate * tank.speed_factor() / tank.mass() * footing.brake;
+        let rate = t.tank_decel_curve_rate * weight(t.tank_brake_mass_exponent) * tank.speed_factor() / tank.mass() * footing.brake;
         let remaining_gap = want_on * math::exp(-rate * dt);
-        if remaining_gap.abs() < tuning().tank_decel_snap_px { want_on } else { want_on - remaining_gap }
+        if remaining_gap.abs() < t.tank_decel_snap_px + hold { want_on } else { want_on - (remaining_gap - hold.copysign(remaining_gap)) }
     };
 
-    let max_off = tuning().tank_turn_grip_force * footing.grip / tank.mass() * dt;
-    let delta_off = if pulled { side_off + (-(current_off + side_off)).clamp(-max_off, max_off) } else { (-current_off).clamp(-max_off, max_off) };
+    let max_off = tuning().tank_turn_grip_force * footing.grip / tank.mass() * dt + hold;
+    // The lane assist: a driving hull whose way ahead is walled off, with
+    // the way clear a little to one side, is slid across to it.
+    let guide = if pulled || target_on == 0.0 { None } else { lane_guide(physics, tank, physics.position(handle), along_x, current_off, max_off / dt) };
+    let delta_off = if pulled {
+        side_off + (-(current_off + side_off)).clamp(-max_off, max_off)
+    } else if let Some(off) = guide {
+        // Across at the hull's own pace at most, and no faster than the
+        // guided grip can stop within what is left to go.
+        let max_off = max_off * tuning().lane_assist_grip;
+        let pace = target_on.abs().min((2.0 * max_off / dt * off.abs()).sqrt()).min(off.abs() / dt);
+        (pace.copysign(off) - current_off).clamp(-max_off, max_off)
+    } else {
+        (-current_off).clamp(-max_off, max_off)
+    };
 
     let delta = if along_x {
         Position::new(delta_on, delta_off)
@@ -6562,6 +6700,38 @@ fn drive_tank_with(
         Position::new(delta_off, delta_on)
     };
     physics.apply_impulse(handle, Position::new(delta.x * tank.mass(), delta.y * tank.mass()));
+}
+
+/// The step `fit_turn` looks for a fit in, px.
+const TURN_FIT_STEP_PX: f32 = 1.0;
+
+/// Reshape a hull's collider for the facing it has just turned to from
+/// `facing_before`, and stand it clear of the ground first
+/// (`tank_turn_fit_px`): where the hull's new length would reach into a
+/// tile, the field's edge, deep water or the bong, the hull is moved to
+/// the nearest place it fits, its velocity kept. Along its new length
+/// first - the way it now faces, then back - and failing that along the
+/// heading it turned from as well, back before on: a hull that turned a
+/// little past a lane too tight to turn in comes back to the lane's
+/// mouth. Where nothing within reach fits it turns where it stands, and
+/// the solver pushes it out.
+fn fit_turn(physics: &mut Physics, tank: &mut Tank, handle: rapier2d::prelude::RigidBodyHandle, facing_before: f32) {
+    let half = tank.move_half_extents(tank.facing_along_x());
+    let reach = tuning().tank_turn_fit_px;
+    let at = physics.position(handle);
+    if reach > 0.0 && !physics.hull_fits(at, half) {
+        let ahead = Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec();
+        let on = Dir::from_rotation(facing_before).unwrap_or(Dir::Up).vec();
+        let steps = (reach / TURN_FIT_STEP_PX).ceil() as i32;
+        // 0, then each distance out to the reach, one sign before the other.
+        let offsets = |first: f32| (0..=steps).flat_map(move |k| [first, -first].map(|side| side * (k as f32 * TURN_FIT_STEP_PX).min(reach)));
+        let fitted = offsets(-1.0).flat_map(|back| offsets(1.0).map(move |fore| on * back + ahead * fore)).find(|&by| physics.hull_fits(at + by, half));
+        if let Some(by) = fitted {
+            physics.shift(handle, by);
+            tank.position = at + by;
+        }
+    }
+    physics.resize_collider(physics.collider_of(handle), half);
 }
 
 /// `cell` unless it is deep water or lava, else the nearest map cell
@@ -7493,8 +7663,22 @@ mod determinism_tests {
         // leaving no skid (`blast_skid_max_seconds` 0) under the common cap
         // (`blast_knock_max_speed` at `knockback_max_speed`) the pair is
         // (18_253_144_103_971_971_681, 4_357_366_187_508_363_331).
+        // The drive (docs/physics-engine-design.md "Driving") guides a hull
+        // into a lane and gives each chassis its weight. With the lane
+        // assist off (`lane_assist_px` 0) the pair is
+        // (6_976_515_189_390_347_512, 9_135_375_455_525_039_611); with one
+        // drive and brake force for every chassis
+        // (`tank_drive_mass_exponent` and `tank_brake_mass_exponent` 0) it
+        // is (1_943_777_947_950_664_923, 1_920_987_364_215_620_537); and
+        // with both of those, the turn fit, the turn buffer and the parked
+        // hold at 0 (`tank_turn_fit_px`, `turn_buffer_px`,
+        // `tank_park_hold_force`), wrecks damped at 4
+        // (`wreck_linear_damping`), bongs flush to hulls
+        // (`bong_hull_clearance_px` 0) and every touch a prop's ram
+        // (`prop_ram_min_speed` 0) it is (11_732_861_727_457_925_354,
+        // 18_125_339_335_117_055_137).
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (11_732_861_727_457_925_354, 18_125_339_335_117_055_137), "(one seat, two seats)");
+        assert_eq!((one, two), (9_140_234_918_546_171_875, 15_604_372_050_397_659_249), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -7587,6 +7771,11 @@ mod determinism_tests {
 mod mechanics_tests {
     use super::*;
     use crate::bong::Facing;
+
+    // Its cases put a knob table in force on their thread
+    // (`tuning::in_force`), which only the dev-tools build has.
+    #[cfg(feature = "dev-tools")]
+    mod drive;
 
     const W: f32 = 1280.0;
     const H: f32 = 720.0;

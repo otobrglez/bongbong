@@ -1242,24 +1242,27 @@ impl Game {
         }
     }
 
-    /// Tanks pushing into props and trees. A live tank with a body and a
-    /// commanded move counts as a pusher; a tile it is in narrow-phase
-    /// contact with
-    /// (`Physics::touching`, the same contact state the ram check between
-    /// tanks reads) accumulates `ram_timer` and collapses at its
+    /// Tanks pushing into props and trees. A live tank whose body went
+    /// into the step moving (`Tank::ram_velocity`: driven, knocked or
+    /// skidding alike) counts as a pusher; a tile it is in narrow-phase
+    /// contact with, and was going into at `prop_ram_min_speed` or more
+    /// along that contact (`Physics::contact_normal`) - so a hull grazing
+    /// along a prop's face does not count - accumulates `ram_timer` and
+    /// collapses at its
     /// `Material::ram_seconds` - a sandbag slows the tank for a moment,
     /// a fence barely at all - while a barrel takes
     /// `barrel_ram_damage_per_second` and pops in the rammer's face. The
     /// timer decays while nothing pushes, so nudging a sandbag twice
     /// doesn't add up. No RNG.
     pub(super) fn ram_props(&mut self, f: &mut Frame) {
-        let pushers: Vec<(RigidBodyHandle, Position)> = self
+        let pushers: Vec<(RigidBodyHandle, Position, Vec2)> = self
             .world
             .query::<&Tank>()
             .iter()
-            .filter(|t| !t.is_wreck() && (t.velocity.x != 0.0 || t.velocity.y != 0.0))
-            .filter_map(|t| t.body.map(|b| (b, t.position)))
+            .filter(|t| !t.is_wreck() && (t.ram_velocity.x != 0.0 || t.ram_velocity.y != 0.0))
+            .filter_map(|t| t.body.map(|b| (b, t.position, t.ram_velocity)))
             .collect();
+        let min_speed = tuning().prop_ram_min_speed;
         // Coarse distance cull before asking the narrow phase.
         let reach = OBSTACLE_GRID_SIZE * 2.0;
         let mut collapsed = Vec::new();
@@ -1273,9 +1276,9 @@ impl Game {
             if o.material.ram_seconds().is_none() && !o.material.is_explosive() {
                 continue;
             }
-            let pushed = pushers
-                .iter()
-                .any(|&(body, pos)| pos.distance_to(o.position) < reach && self.physics.touching(body, o.body));
+            let pushed = pushers.iter().any(|&(body, pos, velocity)| {
+                pos.distance_to(o.position) < reach && self.physics.contact_normal(body, o.body).is_some_and(|into| velocity.dot(into) >= min_speed)
+            });
             match o.material.ram_seconds() {
                 Some(limit) => {
                     o.ram_timer = if pushed { o.ram_timer + f.dt } else { (o.ram_timer - f.dt).max(0.0) };

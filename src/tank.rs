@@ -1123,6 +1123,11 @@ pub struct Tank {
     /// velocity is "ours" versus residual momentum from a ram/explosion
     /// impulse (see that function).
     pub velocity: Vec2,
+    /// The body's velocity (px/s) as it went into the last physics step:
+    /// the drive, a knock and a skid together, before the solver took off
+    /// whatever a tile or another hull stopped. What a prop is rammed
+    /// with (`Game::ram_props`).
+    pub ram_velocity: Vec2,
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
@@ -1231,6 +1236,7 @@ impl Default for Tank {
             tread_phase: 0.0,
             tread_press: 1.0,
             velocity: Vec2::new(0.0, 0.0),
+            ram_velocity: Vec2::new(0.0, 0.0),
             body: None,
 
             owner: Owner::Player(0),

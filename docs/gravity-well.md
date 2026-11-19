@@ -261,8 +261,9 @@ untouched. It does not break.
 **Bongs** (either side's, alive): a bong in the pull is **pinned** - it
 neither hops (its evasive hop, its training walk) nor hops back - and slides
 toward the core at `well_bong_speed * s(d)` (50 px/s) wherever
-`Terrain::bong_fits` lets it (its static collider moved with it, as a hop
-moves it). It bites as ever. `Bong::pulled` is the flag.
+`Terrain::bong_slides` lets it - clear of every tile, and never further
+into a hull, standing or wrecked (its static collider moved with it, as a
+hop moves it). It bites as ever. `Bong::pulled` is the flag.
 
 **Fish** in a lake the pull reaches swim to the deep cell nearest the
 core while it pulls (an attractor among `fish.rs`'s scares; cosmetic).
