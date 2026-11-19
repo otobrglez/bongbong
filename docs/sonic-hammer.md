@@ -532,7 +532,7 @@ the general case:
   serde spelling) down at the map cell nearest (`x`, `y`), in its air drop
   (`Pickup::dropped(.., Some(time))`). Refused outside the field, on a solid
   tile and where a pickup already stands. Not a slot - it never respawns.
-  No RNG. A `GAME_ONLY_TOOLS` and `ONLINE_REFUSED_TOOLS` member. Replies
+  No RNG. Its row is `in_build: false`, `online: false`. Replies
   `{kind, x, y}`. `set_tank` takes `sonic_ammo` (and every later weapon's
   field) the way it takes `grenade_ammo`: above 0 arms it in place of the
   special carried.
