@@ -1,0 +1,25 @@
+# The balance probe's close quarters Protect fixture. The west pickup lane
+# is clear, so heading for a crate and guarding the bong are distinct choices.
+version = 1
+view = "whole"
+size = [24, 16]
+tanks = 3
+tank = "scout"
+weather = "clear"
+
+[cells]
+"12,10" = { kind = "start" }
+"12,12" = { kind = "bong" }
+"10,10" = { kind = "pickup", pickup = "minigun" }
+"8,10" = { kind = "pickup", pickup = "shield" }
+"16,12" = { kind = "pickup", pickup = "bong_health" }
+"8,6" = { kind = "wall", material = "brick" }
+"9,6" = { kind = "wall", material = "brick" }
+"15,6" = { kind = "wall", material = "brick" }
+"16,6" = { kind = "wall", material = "brick" }
+
+[mission]
+kind = "protect"
+
+[spawn]
+kind = "band"
