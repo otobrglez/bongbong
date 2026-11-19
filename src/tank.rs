@@ -2222,13 +2222,13 @@ impl Tank {
     }
 
     /// Decide this tank's rotation and commanded velocity for one frame.
-    /// `move_dir` faces the hull that way and sets `velocity` to its
-    /// damage-scaled speed along that axis (classic 4-direction, no momentum;
-    /// see `effective_speed`). `face` turns the hull in place without moving
-    /// (used when an AI stops to aim). `move_dir` takes precedence. Shared by
-    /// the player and the AI so both move identically. Does not touch
-    /// `position` - that's the physics body's job once `velocity` is handed
-    /// to it; see `Game::drive_tank`.
+    /// `move_dir` faces the hull that way and sets `velocity`, the
+    /// *commanded* cardinal vector, to its damage-scaled speed along that
+    /// axis (see `effective_speed`). `face` turns the hull in place without
+    /// moving (used when an AI stops to aim). `move_dir` takes precedence.
+    /// Shared by the player and the AI so both move identically. Does not
+    /// touch `position` or the body: `simulation::drive_tank` accelerates
+    /// the body toward `velocity` with momentum, and the step moves it.
     pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>) {
         if self.spin > 0.0 {
             // Spun round by an overcharged slug's recoil: the stick
@@ -2899,10 +2899,11 @@ pub fn draw_tank_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
     if tank.is_wreck() {
         return;
     }
-    let base_hue = (time * tuning().shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
+    let t = tuning();
+    let base_hue = (time * t.shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
     let base = match tank.owner() {
-        Owner::Player(i) => with_opacity(team_color(i), tuning().player_ring_opacity * tuning().health_ring_base_opacity),
-        Owner::Enemy(_) | Owner::Tower { .. } => with_opacity(BLACK, tuning().health_ring_gap_opacity),
+        Owner::Player(i) => with_opacity(team_color(i), t.player_ring_opacity * t.health_ring_base_opacity),
+        Owner::Enemy(_) | Owner::Tower { .. } => with_opacity(BLACK, t.health_ring_gap_opacity),
     };
     let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
     draw_ground_ring(c, tank, time, style, shield_visibility(tank));
@@ -3162,8 +3163,9 @@ pub fn draw_ammo_pips(c: &mut impl Canvas, tank: &Tank, rounds: i32, max: i32, c
 pub fn draw_tank_shadow(c: &mut impl Canvas, tank: &Tank, time: f32) {
     let size = tank.sprite_size();
     let origin = draw_pivot(size);
-    let (dx, dy) = (tuning().shadow_dir_x * tuning().tank_shadow_offset, tuning().shadow_dir_y * tuning().tank_shadow_offset);
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
+    let t = tuning();
+    let (dx, dy) = (t.shadow_dir_x * t.tank_shadow_offset, t.shadow_dir_y * t.tank_shadow_offset);
+    let shadow = Color::new(0, 0, 0, (255.0 * t.tank_shadow_opacity * tank.alpha()) as u8);
     for (sheet, src, at, rot) in layers(tank, time, false) {
         c.blit(sheet, src, Rectangle::new(at.x + dx, at.y + dy, size, size), origin, rot, shadow);
     }

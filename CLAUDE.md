@@ -115,7 +115,7 @@ One line per module: what it owns, the rule to keep, its design doc. **Before ch
 - **fps 0 on the web** (rAF); any `fps > 0` selects a setTimeout driver that judders.
 - `.cargo/config.toml`: **no `-sASYNCIFY`** (it halved the client; audio would need it back); **`-sSTACK_SIZE=4194304`** - an overflow is silent in release and surfaces as stb_image failing on a valid PNG; the `[env]` pins of `CC_/CXX_/AR_wasm32_unknown_emscripten` are required under nix.
 - Shaders: `static/web/*.fs` are hand-ported GLSL ES 100 twins of `static/*.fs` - change both.
-- The page's JavaScript is in `site/src/scripts/`, never inline in the `.astro` page. The canvas fills its box: never `aspect-ratio` or `object-fit` on it (raylib maps touches by the CSS box). The page talks to the game only through `window.bb*` globals read in `app.rs`. Favicons are generated (`tools/web/gen_favicon.py`).
+- The page's JavaScript is in `site/src/scripts/`, never inline in the `.astro` page. The canvas fills its box: never `aspect-ratio` or `object-fit` on it (raylib maps touches by the CSS box). The page talks to the game only through `window.bb*` globals read in `app.rs`; one it changes while the game runs is followed by a call to `window.bbChanged()`, or the game does not read it again. Favicons are generated (`tools/web/gen_favicon.py`).
 - Production deploys on version tags; every same-repo PR gets a dev-tools preview Worker (the QA surface with the tuning panel; production never gets it). Fork PRs get no secrets by design - never "fix" that with `pull_request_target`.
 
 ## iOS (detail in docs/platforms.md, docs/ios-native-port-prd.md)

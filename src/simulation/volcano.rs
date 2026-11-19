@@ -25,7 +25,7 @@ use crate::math;
 use hecs::Entity;
 
 use super::props::{BlastShape, PendingBlast};
-use super::{Ai, Event, Frame, Game, Spectacle};
+use super::{Event, Frame, Game, Spectacle};
 use crate::ground::Depth;
 use crate::obstacle::Drum;
 use crate::shockwave::Shockwave;
@@ -222,7 +222,7 @@ impl Game {
         let t = tuning();
         let from = t.heat_hurt_from.clamp(0.0, 0.99);
         let mut order: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
-        order.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
+        order.extend(self.enemies_by_slot());
         for entity in order {
             let mut q = self.world.query_one::<&mut Tank>(entity);
             let Ok(tank) = q.get() else { continue };

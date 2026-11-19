@@ -643,7 +643,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     turret grown by `player_shot_hit_pad_px` (read into the snapshot at `build`), while enemy shots,
     the seats, tiles and walls keep the exact boxes. A tower's shot flies over the tiles its aim
     sees past (sandbags and fences, `Material::blocks_sight`). Projectiles have no physics body;
-    rapier is never consulted for hits. A shot is swept only up to the portal it goes into
+    rapier is never consulted for hits. `Terrain` holds its tiles in cell order, its bongs in
+    `bong_order` and sweeps enemies by slot, so an exact tie on entry time is settled by place,
+    never by storage order. A shot is swept only up to the portal it goes into
     (`portals.rs`). `Terrain::line_of_sight` is the AI's fire gate. **Lag compensation**
     (docs/online-coop-prd.md §4.16, favour the shooter): `HitBoxHistory` is a ring of the last
     `REWIND_MAX_TICKS` (15, 250 ms) ticks of every live enemy's hull and turret boxes and every
@@ -1142,7 +1144,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`solid_box`: the standing 16 px quadrants), and the order a fire takes a burning plank's chunks in
   (`burn_ranks`, `burn_state`; BB-84, docs/WALLS_SPEC.md §12). Plain data, no RNG. `Terrain::sweep` tests a chunked
   tile's standing chunks (`hits::segment_hits_chunks`), so a hole lets shots through - a loophole -
-  while `Game::fit_tile_body` keeps the tile's body over its standing quadrants. Every chunk a blow
+  while `Game::fit_tile_body` keeps the tile's body over its standing quadrants and
+  `Game::refit_neighbours` hands the four tiles beside a dead one their own width back (one rule,
+  `tile_fit`; a breach is as wide for a hull as for a shot; trees and lamp posts close no seam). Every chunk a blow
   breaks is an `Event::ChunksBroken`. What a breach does besides (BB-82, docs/WALLS_SPEC.md §10)
   lives in `props.rs`: `Game::spall` (a shell's breach hurts the tank sheltering behind,
   `HitCause::Spall`), `lay_rubble` (`chunks::Rubble`, `Game::rubble`: it slows a hull through
@@ -1756,7 +1760,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   line), and `frame_done` at the top of the loop, kept as averages over about half a second and as
   totals (`totals`, the probe's `phases:` line). Beside them `Draws` - what the last whole frame
   drew, counted where `GpuCanvas` and `render::pyro::Rl` forward to raylib (`blit`, `rect`,
-  `shape`; `texture_switches` from the id of each draw's texture, 0 for the shapes texture) and
+  `shape`; `texture_switches` from the id of each draw's texture, a rectangle's and a shape's being
+  the one `shapes_texture` named - the walls sheet's, `render/shapes.rs` - or 0 for raylib's own) and
   where a blend, shader or render-target scope opens (`blend`/`shader`/`target` hand their argument
   back, so the count sits in the call: `d.draw_blend_mode(frame_stages::blend(mode), ..)` - a new
   scope is written the same way) - and `Pace`, the last `WINDOW` (600) frames' worst and 99th
@@ -1768,7 +1773,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   test's its own. docs/tooling.md, Performance instruments, has the recipes and the baseline.
   `render/batch.rs` is `RenderBatch`: rlgl's batch raised to the desktop's 8192 quads on the GLES
   builds (the web, iOS, Android; ES 2's own is 2048), loaded after the window opens and held by the
-  frame closure.
+  frame closure. `render/shapes.rs` is the walls sheet's texture with the white block raylib draws
+  its shapes from (`SetShapesTexture`), so a rectangle and a wall sprite share a batch - a wall
+  piece is a shadow rectangle then its sprite. The texture is the sheet at the origin of one twice
+  as tall and no wider: halving a texture coordinate loses no bit, so every sample lands on the
+  texel it did. **No sheet is packed into an atlas at an offset or another size**: a turned
+  sprite's samples then round onto other texels (measured: 1 to 20 pixels a frame on the default
+  arena with only the tanks' sheet padded to 4096 px), so an atlas changes the picture.
 
 ## HUD and chrome
 
@@ -2035,7 +2046,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   at most four disjoint rects reaching `into` px under the field's edge, `Margin` the ground and
   shade made for a round's floor and reach (`fits`; reach rounded up to 4 cells, at most `MAX_CELLS`
   96, the plateau past it). Nothing stands or plays there; the simulation, the field's rect, `View`
-  and every pointer are untouched. `render/margin.rs` is `MarginFx`: into targets of the window's
+  and every pointer are untouched. Under no sky the picture is kept and drawn again only when what
+  it is drawn from changed (`Kept`: the frame, the floor, the backdrop, and `ground::clock_step` -
+  the water's frame and the whole pixels its flow marks have drifted, for a ground that has either,
+  `GroundGrid::moves`); a sky moves every frame. `render/margin.rs` is `MarginFx`: into targets of the window's
   world, the ground once, the shade part by part, then the sky of its `render::weather::Scene` - a
   round's, or the builder's canvas's - through `render::weather`'s passes over the parts
   (`PassView::parts`) under a 1x1 light map of the ambient with the margin grid's own cell mask

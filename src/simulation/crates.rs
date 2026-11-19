@@ -150,11 +150,11 @@ impl Game {
                     f.shoves.push(tank.owner(), dv);
                 }
             }
-            for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
+            for tank in super::ordered(self.world.query::<&mut Tank>().with::<&Ai>().iter(), |t| t.owner_slot()) {
                 explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
             }
             let mut dead_bongs = Vec::new();
-            for bong in self.world.query::<&mut Bong>().iter() {
+            for bong in super::ordered(self.world.query::<&mut Bong>().iter(), |b| super::bong_order(b)) {
                 let dist = bong.position.distance_to(center);
                 if bong.is_dead() || dist > params.radius {
                     continue;
@@ -167,10 +167,8 @@ impl Game {
             for pos in dead_bongs {
                 f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
             }
-            let hits: Vec<(Entity, Material, f32)> = self
-                .world
-                .query::<(Entity, &mut Obstacle)>()
-                .iter()
+            let hits: Vec<(Entity, Material, f32)> = super::tiles_near(self.world.query::<(Entity, &mut Obstacle)>().iter(), center, params.radius)
+                .into_iter()
                 .filter(|(_, o)| !o.destroyed && o.fuse.is_none())
                 .filter_map(|(e, o)| {
                     let dist = o.position.distance_to(center);

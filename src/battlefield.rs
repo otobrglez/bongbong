@@ -345,12 +345,15 @@ pub fn relocate_unusable_spawns(physics: &mut Physics, world: &mut hecs::World, 
     // needs every *other* tank's current position, relocated ones
     // included, so two stranded tanks near each other never both land on
     // the exact same nearest cell.
-    let mut positions: Vec<(hecs::Entity, Position)> = world
+    let mut enemies: Vec<(usize, hecs::Entity, Position)> = world
         .query::<(hecs::Entity, &Tank)>()
         .with::<&Ai>()
         .iter()
-        .map(|(entity, tank)| (entity, tank.position))
+        .map(|(entity, tank)| (tank.owner_slot(), entity, tank.position))
         .collect();
+    // By owner slot: an earlier tank's new cell is kept clear by a later.
+    enemies.sort_by_key(|&(slot, ..)| slot);
+    let mut positions: Vec<(hecs::Entity, Position)> = enemies.into_iter().map(|(_, entity, at)| (entity, at)).collect();
     for i in 0..positions.len() {
         let (entity, pos) = positions[i];
         if grid.usable(pos) {

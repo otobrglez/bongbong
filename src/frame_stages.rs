@@ -124,9 +124,12 @@ mod kept {
         pub total: Vec<(&'static str, f64)>,
         /// What this frame has drawn so far.
         pub drawing: super::Draws,
-        /// The texture of this frame's latest draw, 0 for raylib's shapes
-        /// texture (no loaded texture has that id).
+        /// The texture of this frame's latest draw.
         pub bound: Option<u32>,
+        /// The texture rectangles and shapes are drawn from
+        /// (`shapes_texture`): 0 for raylib's own, which no loaded texture
+        /// has as its id.
+        pub shapes: u32,
         /// What the last whole frame drew.
         pub drew: super::Draws,
         /// The steps this frame's play clock paid out, if it ran.
@@ -188,7 +191,8 @@ pub fn rect() {
     kept::STAGES.with(|s| {
         let mut s = s.borrow_mut();
         s.drawing.rects += 1;
-        s.draw(0);
+        let shapes = s.shapes;
+        s.draw(shapes);
     });
 }
 
@@ -199,8 +203,18 @@ pub fn shape() {
     kept::STAGES.with(|s| {
         let mut s = s.borrow_mut();
         s.drawing.shapes += 1;
-        s.draw(0);
+        let shapes = s.shapes;
+        s.draw(shapes);
     });
+}
+
+/// Rectangles and shapes are drawn from the texture with raylib's id
+/// `_texture` from here on (`render::shapes::draw_from`), so one after a
+/// sprite off that texture is no switch.
+#[inline]
+pub fn shapes_texture(_texture: u32) {
+    #[cfg(feature = "dev-tools")]
+    kept::STAGES.with(|s| s.borrow_mut().shapes = _texture);
 }
 
 /// Count a blend-mode scope about to open and hand its mode back, so the

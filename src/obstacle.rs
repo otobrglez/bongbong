@@ -1,7 +1,7 @@
 use crate::math;
 use crate::canvas::Canvas;
 use crate::chunks::Chunks;
-use crate::tuning::tuning;
+use crate::tuning::{tuning, Tuning};
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
 use crate::math::{Color, Rectangle, Vec2};
@@ -1585,13 +1585,12 @@ pub fn face_toward(tile: Position, from: Position) -> u8 {
 /// made ramming one read as nothing happening. Direction comes from the
 /// nearest live tank, which while `ram_timer` is running is the one doing
 /// the pushing (nothing else can accumulate it).
-pub fn tree_lean(obstacle: &Obstacle, movers: &[Position]) -> f32 {
-    let t = tuning();
+pub fn tree_lean(obstacle: &Obstacle, movers: &[Position], t: &Tuning) -> f32 {
     let seed = crate::blast::seed_at(obstacle.position, 41);
     let mut lean = 0.0;
 
-    let limit = obstacle.material.ram_seconds().unwrap_or(0.0);
-    if obstacle.ram_timer > 0.0 && limit > 0.0 {
+    let limit = if obstacle.ram_timer > 0.0 { obstacle.material.ram_seconds().unwrap_or(0.0) } else { 0.0 };
+    if limit > 0.0 {
         let push = (obstacle.ram_timer / limit).clamp(0.0, 1.0);
         if let Some(m) = movers
             .iter()
@@ -1627,13 +1626,13 @@ pub fn tree_lean(obstacle: &Obstacle, movers: &[Position]) -> f32 {
 /// moving. `tree_dapple_seconds` sets the rate and the tree's own position
 /// hash sets its phase, so a wood shimmers out of step with itself rather
 /// than blinking as one.
-pub fn tree_col(obstacle: &Obstacle, time: f32) -> i32 {
+pub fn tree_col(obstacle: &Obstacle, time: f32, t: &Tuning) -> i32 {
     let dry = if obstacle.dry { TREE_DRY_COL } else { 0 };
     if obstacle.burning {
         return dry + TREE_BURN_COL + obstacle.burn_frame;
     }
     let seed = crate::blast::seed_at(obstacle.position, 41);
-    let step = (time / tuning().tree_dapple_seconds.max(0.05)) as i64;
+    let step = (time / t.tree_dapple_seconds.max(0.05)) as i64;
     let frame = (step + (seed % TREE_SHIMMER_FRAMES as u32) as i64).rem_euclid(TREE_SHIMMER_FRAMES as i64);
     dry + frame as i32 * TREE_STAGES + obstacle.damage_stage()
 }
@@ -1641,21 +1640,21 @@ pub fn tree_col(obstacle: &Obstacle, time: f32) -> i32 {
 /// Draw a tree. Split from `draw_obstacle` because a tree has its own
 /// column layout (`tree_col`) and because it is the one thing on the
 /// battlefield that can bend.
-pub fn draw_tree(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32) {
-    draw_tree_tinted(c, obstacle, lean, time, Color::WHITE);
+pub fn draw_tree(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, t: &Tuning) {
+    draw_tree_tinted(c, obstacle, lean, time, Color::WHITE, t);
 }
 
 /// `draw_tree` in `tint`: a hit's flash draws the crown again in light.
-pub fn draw_tree_tinted(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, tint: Color) {
+pub fn draw_tree_tinted(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, tint: Color, t: &Tuning) {
     let sheet = obstacle.material.sheet();
-    let src = tree_source(obstacle, time);
+    let src = tree_source(obstacle, time, t);
     let size = obstacle.sprite_size();
     tree_blit(c, sheet, src, crown_centre(obstacle), size, lean, tint);
 }
 
 /// The cell of the sheet a tree draws from now, mirrored as its crown is.
-fn tree_source(obstacle: &Obstacle, time: f32) -> Rectangle {
-    let src = source_rec(obstacle.material.sheet(), obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+fn tree_source(obstacle: &Obstacle, time: f32, t: &Tuning) -> Rectangle {
+    let src = source_rec(obstacle.material.sheet(), obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time, t));
     if obstacle.crown.mirror { Rectangle::new(src.x, src.y, -src.width, src.height) } else { src }
 }
 
@@ -1698,16 +1697,13 @@ pub fn canopy_cutaway(trees: &[&Obstacle], hulls: &[(Position, Position)], cover
 /// slide out of its own shadow, `fade` (0 to 1) of its usual weight - less
 /// for a crown the canopy cutaway draws see-through. Must be called before
 /// `draw_tree`.
-pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, fade: f32) {
+pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, fade: f32, t: &Tuning) {
     let sheet = obstacle.material.sheet();
-    let src = tree_source(obstacle, time);
+    let src = tree_source(obstacle, time, t);
     let size = obstacle.sprite_size();
     let centre = crown_centre(obstacle);
-    let at = Position::new(
-        centre.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
-        centre.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
-    );
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity * fade.clamp(0.0, 1.0)) as u8);
+    let at = Position::new(centre.x + t.shadow_dir_x * t.obstacle_shadow_offset, centre.y + t.shadow_dir_y * t.obstacle_shadow_offset);
+    let shadow = Color::new(0, 0, 0, (255.0 * t.obstacle_shadow_opacity * fade.clamp(0.0, 1.0)) as u8);
     tree_blit(c, sheet, src, at, size, lean, shadow);
 }
 
@@ -1776,18 +1772,18 @@ const FX_BLOCK: f32 = 2.0;
 
 /// Draw this obstacle's drop shadow - see `tank::draw_tank_shadow` /
 /// docs/sprite-shadows-design.md. Must be called before `draw_obstacle`.
-pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis) {
+pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, t: &Tuning) {
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
     let dest = Rectangle::new(
-        obstacle.position.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
-        obstacle.position.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
+        obstacle.position.x + t.shadow_dir_x * t.obstacle_shadow_offset,
+        obstacle.position.y + t.shadow_dir_y * t.obstacle_shadow_offset,
         size,
         size,
     );
     let origin = Vec2::new(size / 2.0, size / 2.0);
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * t.obstacle_shadow_opacity) as u8);
     c.blit(sheet, src, dest, origin, 0.0, shadow);
 }
 

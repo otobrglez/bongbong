@@ -220,7 +220,7 @@ impl Terrain {
             .filter(|o| !o.destroyed && !o.material.is_tree())
             .map(|o| battlefield::pos_to_cell(o.position))
             .collect();
-        let obstacles = world
+        let mut obstacles: Vec<TerrainBox> = world
             .query::<(Entity, &Obstacle)>()
             .iter()
             .filter(|(_, o)| !o.destroyed)
@@ -238,11 +238,10 @@ impl Terrain {
                 }
             })
             .collect();
-        let bongs = world
-            .query::<(Entity, &Bong)>()
-            .iter()
-            .map(|(e, f)| (e, f.position))
-            .collect();
+        // Cell order, and the bongs in theirs: two boxes a shot enters at
+        // the same instant are told apart by where they stand.
+        obstacles.sort_by_key(|b| super::cell_order(b.center));
+        let bongs = super::ordered(world.query::<(Entity, &Bong)>().iter(), |(_, b)| super::bong_order(b)).into_iter().map(|(e, f)| (e, f.position)).collect();
         Terrain {
             obstacles,
             bongs,
@@ -504,7 +503,7 @@ impl Terrain {
             }
         }
 
-        for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
+        for (entity, tank) in super::ordered(world.query::<(Entity, &Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()) {
             if skips(tank.owner()) || tank.is_wreck() {
                 continue;
             }

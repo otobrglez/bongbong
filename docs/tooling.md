@@ -313,6 +313,23 @@ call (`cargo check --no-default-features` builds none of it).
   With the wall pieces on and the particles off the default arena's switches run 324 to 1,304 a
   frame: the pieces alternate with everything around them.
 
+- **After the draw-call stage (BB-164), same day, same machine and scene**, every lockstep
+  screenshot byte for byte the baseline's:
+
+  | Reading | before | after |
+  |---|---|---|
+  | texture switches a frame, default arena (particles and pieces off) | 73 - 106 | 71 - 84 |
+  | the same with the wall pieces on | 169 - 1,304 | 72 - 84 |
+  | texture switches a frame, longwater | 12 - 24 | 11 - 23 |
+  | blend scopes a frame, default / longwater | 4 - 7 / 4 - 5 | 3 - 6 / 3 - 4 |
+  | an arena with margins under a clear sky (classic, 1280x900): blits / target scopes | 2,958 / 4 | 2,022 / 2 |
+  | `tuning()` calls in one paused frame, default / longwater | 2,376 / 1,075 | 209 / 161 |
+
+  The rectangles draw from a white block in the walls sheet's texture (`render/shapes.rs`), which
+  is what took the pieces' alternation away. The sheets are not packed into an atlas: a sheet moved
+  into a larger texture has a turned sprite's samples round onto other texels, so the picture
+  changes. The switches left are one sheet after another in the y-sorted walk.
+
   | `Game::update`, ms a tick (`defend`, seed 1000) | native | wasm (node 24) |
   |---|---|---|
   | default arena | 0.10 | 0.19 |

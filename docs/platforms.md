@@ -184,8 +184,8 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   deploys `site/dist/`.
 - **`game_loop::run`'s fps means different things**: native `SetTargetFPS`; on web any `fps > 0`
   selects a setTimeout driver and only `0` selects rAF (timers are unsynced, throttled and judder),
-  so `app.rs` passes 0 on emscripten. Physics runs on its own fixed-dt accumulator, so a lower loop
-  rate is safe.
+  so `app.rs` passes 0 on emscripten. The round steps in whole `PHYSICS_FIXED_DT` steps owed by
+  `StepClock`, so a lower loop rate is safe.
 - `.cargo/config.toml` carries the emscripten link flags (GLFW3, memory growth, `--preload-file
   static@/static` so `static/...` paths resolve, **no `-sASYNCIFY`** (it instruments every function
   and halved the web client; docs/online-coop-prd.md decision 19), and **`-sSTACK_SIZE=4194304`**:
@@ -265,10 +265,16 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   forgets.
 - **What the page publishes on `window`**, the only way the browser tells the game anything the API
   cannot: `app.rs` reads each through `emscripten_run_script*`, and nothing else in the tree does.
-  `window.bbShift` (`site/src/scripts/input.ts`), read once a frame by `left_shift_down`, because
+  The two that change while the game runs are read when the page says they changed, not every
+  frame: `app::web::watch_page` gives the page `window.bbChanged`, a function that sets one byte of
+  the game's memory, the page's scripts call it after every change, and `web::read_page` at the top
+  of a frame evaluates the two globals again only when the byte is set. A page that does not promise
+  the calls (`window.bbNotifies`), or a runtime the script could not write the byte in, is read
+  every frame.
+  `window.bbShift` (`site/src/scripts/input.ts`), read that way for `left_shift_down`, because
   emscripten's GLFW maps both Shift keys to left (`event.code` is what tells them apart, and Left
   Shift is player 2's fire key). `window.bbOverlay` (`site/src/scripts/overlay.ts`: `top x y w h` in
-  CSS pixels), read once a frame by `app::web::follow_canvas` into `hud::PageOverlay`: on a touch
+  CSS pixels), read the same way into `hud::PageOverlay`: on a touch
   screen (`(hover: none) and (pointer: coarse)`) the page's controls - Full screen and More, whose
   panel holds the rest (`more-panel.ts`) - stand in a band along the canvas's top, centred - the one
   strip a thumb does not reach in a landscape grip - and the game keeps its chrome below it as below

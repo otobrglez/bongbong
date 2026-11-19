@@ -405,7 +405,7 @@ impl Still {
                 crate::tower::draw_tower_shadow(c, *kind, *side, *at);
             }
         }
-        crate::game::paint_tile_run(c, self.tiles.iter(), &self.fences, true, time);
+        crate::game::paint_tile_run(c, self.tiles.iter(), &self.fences, true, time, &crate::tuning::tuning());
         for &at in &self.doors {
             if !c.culls(at) {
                 crate::training::draw_door(c, at);
@@ -426,7 +426,7 @@ impl Still {
         let cull = c.cull();
         for &(at, kind) in &self.pickups {
             if !crate::view::culled(cull, at) {
-                crate::pickup::draw_crate(c, kind, at, crate::crate_fx::glint_col(time, at, &t), true, crate::math::Color::WHITE);
+                crate::pickup::draw_crate(c, kind, at, crate::crate_fx::glint_col(time, at, &t), true, crate::math::Color::WHITE, &t);
             }
         }
         let theme = self.theme;
@@ -451,7 +451,7 @@ impl Still {
                 (None, None) => break,
             };
             if !crate::view::culled(cull, tuft.base) {
-                crate::grass::draw_tuft(c, tuft, theme, time);
+                crate::grass::draw_tuft(c, tuft, theme, time, &t);
             }
         };
         for stand in &self.standing {
@@ -477,7 +477,7 @@ impl Still {
         }
         grass_up_to(c, f32::INFINITY);
         for tree in self.trees.iter().filter(|tree| !crate::view::culled(cull, tree.position)) {
-            crate::game::paint_tree(c, tree, 0.0, 1.0, true, time);
+            crate::game::paint_tree(c, tree, 0.0, 1.0, true, time, &t);
         }
     }
 
