@@ -756,6 +756,10 @@ pub struct Tank {
     /// while the hull swings around to catch up. Read only by `draw_tank`/
     /// `draw_tank_shadow`.
     pub turret_visual_rotation: f32,
+    /// The pose a frame between two steps draws this tank at (`pose.rs`).
+    /// Presentation only: the drawing reads it through `drawn`, and
+    /// nothing that plays reads it at all.
+    pub smooth: crate::pose::Smooth,
     /// Seconds accumulated toward the minigun module's next "hot barrel"
     /// cell (see `module_cols`), advanced while `minigun_burst` is active
     /// (see `tick_minigun_spin`) and held in place - not reset to 0 - the
@@ -1129,6 +1133,7 @@ impl Default for Tank {
             rotation: 0.0,
             visual_rotation: 0.0,
             turret_visual_rotation: 0.0,
+            smooth: crate::pose::Smooth::default(),
             minigun_cycle_timer: 0.0,
             hull_frame: 0,
             recoil_pose: 0,
@@ -2234,6 +2239,28 @@ impl Tank {
         }
     }
 
+    /// The pose the simulation has this tank at: where it is and the
+    /// angles its hull and turret sprites have eased to.
+    pub fn pose(&self) -> crate::pose::Pose {
+        crate::pose::Pose { position: self.position, rotation: self.visual_rotation, turret: self.turret_visual_rotation, lift: 0.0 }
+    }
+
+    /// The pose a frame draws this tank at: between the last two steps
+    /// when the frame loop asked for that (`Game::pose_at`), else `pose`.
+    /// Every painter of a tank reads this, so the hull, the turret, the
+    /// rings and the camera agree to the pixel.
+    pub fn drawn(&self) -> crate::pose::Pose {
+        self.smooth.drawn(self.pose())
+    }
+
+    /// How far the drawn position stands from the live one: what a
+    /// painter adds to a point it worked out from the live pose (a
+    /// muzzle tell, the sparks on a hull) to keep it on the drawn tank.
+    pub fn draw_shift(&self) -> Vec2 {
+        let drawn = self.drawn().position;
+        Vec2::new(drawn.x - self.position.x, drawn.y - self.position.y)
+    }
+
     /// Chase `visual_rotation` toward `rotation` at TANK_VISUAL_TURN_SPEED_DEG
     /// degrees/second, the short way round, so the sprite visibly swings into
     /// a turn instead of popping to the new facing the instant `rotation`
@@ -2346,12 +2373,12 @@ fn module_rec(chassis_row: i32, col: i32) -> Rectangle {
 /// the hull on its back.
 fn turret_placement(tank: &Tank) -> (Position, f32) {
     if tank.turret_thrown() {
-        let r = tank.visual_rotation.to_radians();
+        let r = tank.drawn().rotation.to_radians();
         let (dx, dy) = (12.0 * tank.scale, 9.0 * tank.scale);
         let off = Vec2::new(dx * math::cos(r) - dy * math::sin(r), dx * math::sin(r) + dy * math::cos(r));
-        (tank.position + off, tank.visual_rotation + 150.0)
+        (tank.drawn().position + off, tank.drawn().rotation + 150.0)
     } else {
-        (tank.position, tank.turret_visual_rotation + tank.droop)
+        (tank.drawn().position, tank.drawn().turret + tank.droop)
     }
 }
 
@@ -2369,7 +2396,7 @@ fn hull_layer(tank: &Tank, time: f32, glow: bool) -> Layer {
         let frame = ((time * 8.0 + tank.anim_phase()) as i32).rem_euclid(TANK_TRACK_FRAMES);
         col = tank.damage_tier() * TANK_TRACK_FRAMES + frame;
     }
-    (sheet, source_rec(tank.sheet_row(), col), tank.position, tank.visual_rotation)
+    (sheet, source_rec(tank.sheet_row(), col), tank.drawn().position, tank.drawn().rotation)
 }
 
 /// The layers over the hull, in draw order: the turret, then the weapon
@@ -2380,7 +2407,7 @@ fn turret_layers(tank: &Tank, time: f32, glow: bool) -> Vec<Layer> {
     let (at, rot) = turret_placement(tank);
     let mut out = vec![(tanks, source_rec(tank.sheet_row(), tank.turret_col()), at, rot)];
     for col in module_cols(tank, time).into_iter().flatten() {
-        out.push((modules, module_rec(tank.row, col), tank.position, tank.turret_visual_rotation + tank.droop));
+        out.push((modules, module_rec(tank.row, col), tank.drawn().position, tank.drawn().turret + tank.droop));
     }
     out
 }
@@ -2540,12 +2567,13 @@ pub fn draw_tank_slime(c: &mut impl Canvas, tank: &Tank, time: f32) {
     }
     let fade = (tank.slime_timer / 0.5).clamp(0.0, 1.0);
     let size = tank.sprite_size();
-    let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
+    let dest = Rectangle::new(tank.drawn().position.x, tank.drawn().position.y, size, size);
     let origin = draw_pivot(size);
     let wash = |col: Color, a: f32| Color::new(col.r, col.g, col.b, (a * fade) as u8);
-    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.hull_col()), dest, origin, tank.visual_rotation, wash(crate::tower::OOZE_MD, 120.0));
-    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.turret_col()), dest, origin, tank.turret_visual_rotation, wash(crate::tower::OOZE_LT, 90.0));
-    let (center, half) = tank.hull_bbox_world();
+    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.hull_col()), dest, origin, tank.drawn().rotation, wash(crate::tower::OOZE_MD, 120.0));
+    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.turret_col()), dest, origin, tank.drawn().turret, wash(crate::tower::OOZE_LT, 90.0));
+    let (_, half) = tank.hull_bbox_world();
+    let center = tank.drawn().position;
     let seed = crate::blast::seed_at(Position::new(tank.owner_slot() as f32 * 32.0, 0.0), 61);
     for k in 0..7u32 {
         let h = seed.rotate_left(k * 5) ^ k.wrapping_mul(0x9e37_79b9);
@@ -2706,7 +2734,7 @@ pub enum RingStyle {
 /// and `draw_enemy_ring` all come through here, so the shield ring and the
 /// health gauges read as the same object in different colours.
 pub fn draw_ground_ring(c: &mut impl Canvas, tank: &Tank, time: f32, style: RingStyle, fade: f32) {
-    draw_ground_ring_scaled(c, tank.position, tank.size(), tank.anim_phase(), time, style, fade, ring_scale(tank));
+    draw_ground_ring_scaled(c, tank.drawn().position, tank.size(), tank.anim_phase(), time, style, fade, ring_scale(tank));
 }
 
 /// How much larger than the shared ring every tank's rings are drawn,
@@ -2879,7 +2907,7 @@ pub fn draw_tank_heat_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
         return;
     }
     let frac = tank.heat_shield_fraction();
-    let centre = tank.position;
+    let centre = tank.drawn().position;
     let r = tank.size() * 0.95;
     let count = ((r * std::f32::consts::TAU) / 4.0) as i32;
     let lit = ((time * 12.0) as i32).rem_euclid(count.max(1));
@@ -3005,7 +3033,7 @@ pub fn draw_player_locate(c: &mut impl Canvas, tank: &Tank, time: f32, elapsed: 
     let phase = (elapsed * tuning().player_locate_pulse_hz).fract();
     let color = with_opacity(team_color(index), (1.0 - phase) * tuning().player_ring_opacity);
     let scale = ring_scale(tank) * (1.0 + 0.6 * phase);
-    draw_ground_ring_scaled(c, tank.position, tank.size(), tank.anim_phase(), time, RingStyle::Solid(color), 1.0, scale);
+    draw_ground_ring_scaled(c, tank.drawn().position, tank.size(), tank.anim_phase(), time, RingStyle::Solid(color), 1.0, scale);
 }
 
 /// Whether the locate cue is still showing `elapsed` seconds into play.
@@ -3101,7 +3129,7 @@ pub fn draw_ammo_pips(c: &mut impl Canvas, tank: &Tank, rounds: i32, max: i32, c
     if tank.is_wreck() {
         return;
     }
-    let pips = ammo_pips(tank.position, ring_outer_radius(tank), rounds, max);
+    let pips = ammo_pips(tank.drawn().position, ring_outer_radius(tank), rounds, max);
     for pip in &pips {
         c.fill_rect(pip.x - PIP_RIM_PX / 2, pip.y - PIP_RIM_PX / 2, PIP_RIM_PX, PIP_RIM_PX, PIP_RIM);
     }

@@ -1036,6 +1036,8 @@ impl Game {
             let mut q = self.world.query_one::<&mut Tank>(entity);
             let tank = q.get().map_err(|e| e.to_string())?;
             tank.position = pos;
+            // A placement is a jump: the frame draws it where it lands.
+            tank.smooth.cut();
             tank.velocity = Vec2::new(0.0, 0.0);
             tank.skid = 0.0;
             // Arriving facing some way is no pivot.

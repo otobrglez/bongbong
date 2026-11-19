@@ -170,7 +170,7 @@ impl ShotShaders {
         };
         let l = &self.orb_locs;
         let s = &mut self.orb;
-        s.set_shader_value(l.orb_pos, Vector2::new(plasma.position.x, plasma.position.y));
+        s.set_shader_value(l.orb_pos, Vector2::new(plasma.drawn().x, plasma.drawn().y));
         s.set_shader_value(l.radius_px, r);
         set_view(s, l.view_origin, l.view_height, camera);
         s.set_shader_value(l.time, time);
@@ -185,7 +185,7 @@ impl ShotShaders {
         s.set_shader_value(l.body, rgb(body));
         s.set_shader_value(l.bright, rgb(bright));
         s.set_shader_value(l.hot, rgb(hot));
-        let dest = Rectangle::new(plasma.position.x, plasma.position.y, w * r, h * r);
+        let dest = Rectangle::new(plasma.drawn().x, plasma.drawn().y, w * r, h * r);
         let origin = Vector2::new(ORB_REACH * r, ORB_REACH * r);
         let quad = &self.quad;
         d.draw_shader_mode(s, |mut sd| {
