@@ -42,7 +42,7 @@ things when forgotten; this is the detail. Update it with the tool.
   4747; a second uses `BONGBONG_DEV_PORT`. The MCP adapter caches the tool list, so a new tool needs
   a `/mcp` reconnect.
 - **`src/bin/probe.rs`** — headless gameplay probe, the default way to verify mechanics: `cargo run
-  --bin probe -- --scenario afk|advance|brake|circle|defend [--enemies N] [--tank K] [--mission ..]
+  --bin probe -- --scenario afk|advance|brake|circle|defend|survive [--enemies N] [--tank K] [--mission ..]
   [--spawn ..] [--frames N] [--log-every N] [--seed S] [-m map] [--rounds N] [--json-out F]
   [--budget kind=N ...] [--heatmap] [--tuning F] [--crate KIND] [--print-rust]`; `--crate` puts that
   pickup in every weapon crate's place (the fixtures carry none). Built on
@@ -50,20 +50,31 @@ things when forgotten; this is the detail. Update it with the tool.
   not raw world access (a bin sees only `pub`). Per-frame **anomaly checks** on enemies print
   greppable `ANOMALY round= seed= frame= kind= tank= pos=` lines, each seed a replay recipe; kinds
   (`ANOMALY_KINDS`, the single list wiring `--budget`/`--json-out`/`--heatmap`/summaries):
-  stale-start, stall, border-stuck, jitter, spin, churn, clustering, wall-grind, bump-rate,
+  stale-start, stall, border-stuck, jitter, staircase, spin, churn, clustering, wall-grind, bump-rate,
   low-progress, never-arrived, invariant (also players/wrecks and `PhysicsQuarantine`), tank-grind,
   pile-up, offbox-fire (an enemy shot or missile lock on a seat from outside that seat's sight box;
   budgeted at 0 in every recipe; ci.yml runs `just probe-fixtures`, so the justfile holds the only
   copy of the ceilings). A fire tally (`TankSnapshot::shot_at_seat`/`hit_by_seat`) prints beside the
-  rams and goes into `--json-out` as `fire`; `seat-hits-offbox` is the reverse unfairness. Sweep
+  rams and goes into `--json-out` as `fire`; `seat-hits-offbox` is the reverse unfairness, and
+  `enemy-hits-on-enemies` counts enemy tanks damaged by another enemy's shot, beam, flame or blast
+  (`TankSnapshot::hit_by_enemy`, one per tank per frame; a ram between the two is left to the ram
+  tally). Sweep
   totals sum every kind (`AnomalyTotals::add`). Thresholds are named consts at the top (the
   spin/jitter windows and `signed_quarter_turn` live in `simulation::debug`, shared with the dev
   server's live turn counters); a new kind extends `TankTrack` + `check_anomalies` +
   `ANOMALY_KINDS`. stall/stale-start are muted for a deliberate hold (firing solution, retreat
   recharge, and the `HOLDS` rows: asleep, a tell, a skid, kept out of a danger, a charge, a stand
   for the FPV swarm - `air`); a state the tank's motion is not its own in (`OUT_OF_ITS_HANDS`: an
-  EMP's outage) mutes every check and restarts its windows. `jitter` cannot tell flip-flopping from
-  legitimate weaving - corroborate with `--log-every 1` before calling it a regression. Ram counts
+  EMP's outage) mutes every check and restarts its windows. Four A,B,A turns inside two seconds
+  flag a tank, and what the run covered says which kind: each flip is paired with the one two
+  before it, and where the pairs' straight lines come to `STAIRCASE_PROGRESS` (0.35) of the ground
+  driven between them and a nav cell a round, the turns carried the hull on - a `staircase`, a
+  diagonal route or a weave past something - and otherwise it is back where it was or dithering on
+  the spot: `jitter`, a flip-flop. A tank is flagged once for each, and the line spells the run's
+  legs out (`U144 L144 U98 L0`: heading and px), so most readings need no `--log-every 1`; a run
+  that is half a stair and half a shuttle can read either way, and there the trace decides. A
+  `churn` window that holds the frame a fleeing tank took a health crate (`act_flee` within half a
+  second of the `PickupCollected`) is a trip to heal and back, not churn. Ram counts
   (enemy-pair / into-player) are counters, never budgeted, and saturate through the ram cooldown;
   `tank_contact_seconds` does not. `--rounds N` sweeps seeds base+i and prints only anomalies and
   summaries. A sweep also prints `outcomes:` (won/lost/unfinished, lost-after and won-after mean and
@@ -79,18 +90,22 @@ things when forgotten; this is the detail. Update it with the tool.
   deterministic, so an exceedance is a real change; re-baseline consciously after a deliberate
   AI/map/tuning change, never bump a ceiling to go green; the probe is built once, headless, and the
   fixtures run one per core, each one's output printed in order; CI's `check` job runs it after
-  `cargo check --workspace`, beside the `test` job's `cargo test --lib`), `just
-  probe-fields` (the field-map AI: the study map, longwater and five 56-wide levels, AFK, 10 rounds
-  at seed 1000 against ceilings recorded 2026-10-02 and re-baselined the same day for lanes, for the
-  margin's window (jitter=30, hedge-maze) and for the shipped maps' growth by 40 % a side
-  (border-stuck=8 castle-moat, spin=9 and churn=39 hedge-maze, wall-grind=1 harbor-lights) and once
-  more for the play-test pass's armour, shield and rockets (spin=12, churn=43, clustering=11
-  hedge-maze, pile-up=8 archipelago, tank-grind=1); not in CI - about four minutes in a debug
-  build), `just probe-defend` (release: the perfect defence on longwater and the study map, ten
+  `cargo check --workspace`, beside the `test` job's `cargo test --lib`), `just probe-survive` (the
+  same fixtures under `--scenario survive`, every round its whole 30 s, against its own ceilings;
+  CI runs it), `just probe-fields` (the field-map AI: the study map, longwater and five 56-wide
+  levels, AFK, 10 rounds at seed 1000; the ceilings and their history are in the justfile, last
+  re-recorded 2026-11-19 for the jitter/staircase split - jitter=7 archipelago, staircase=29
+  hedge-maze - with clustering and pile-up brought down to 1; the maps run one per core, over a
+  minute in a debug build, and CI runs it), `just probe-defend` (release: the perfect defence on longwater and the study map, ten
   seven-minute rounds each at seed 1000, never-arrived 0). `defend` is a perfect defence: every
   enemy within `--defend-reach` px (400) of a live seat or the players' bong is destroyed through
   `Game::debug_kill`, so a round lasts as long as its last straggler and never-arrived counts one
-  still out. The `maps/test/*.toml` fixtures are 40 x 22.5 but carry `view = "whole"`, so they stay
+  still out. `survive` is a seat that cannot be worn down: the seats never move or fire, and after
+  every frame the probe mends each live seat's hull (`Game::debug_set_tank`) and the players' bong
+  (`Game::debug_mend_bong`), so no round ends 4 to 15 s in the way an AFK one does and the enemies'
+  whole fight is read - a round nothing ends runs to `--frames` and counts as unfinished;
+  `--mortal-bong` leaves the bong unmended, so a Protect round can still be lost. The
+  `maps/test/*.toml` fixtures are 40 x 22.5 but carry `view = "whole"`, so they stay
   arenas and their ceilings measure the arena's AI; `maps/missions/waves-basic.toml` and
   `hunt-basic.toml` are field maps by size. `maps/test/` is the adversarial fixture corpus (u-trap,
   choke, tight-corridors, bong-block, maze, pockets, the `props` playground, plus `portals` (two
@@ -137,7 +152,13 @@ things when forgotten; this is the detail. Update it with the tool.
   --ignored --nocapture` prints a builder stroke's cost per cell and the texels it uploads.
   `a_large_fill_timing` (add `--release` for a phone's order) prints a large RECT's or FILL's cost
   against making the ground again, and `a_load_list_thumbnail_timing` (render feature) the Load
-  list's two thumbnail renderers side by side. No rustfmt/clippy config is checked in. Dependencies
+  list's two thumbnail renderers side by side. No rustfmt/clippy config is checked in; `cargo
+  clippy --lib --no-default-features --features dev-tools` has no errors (its warnings are not a
+  gate). CI (`.github/workflows/ci.yml`) runs, in `test`, `cargo test --lib` and the headless
+  `cargo test --lib --no-default-features --features dev-tools`, and in `check`, `cargo check
+  --workspace`, that clippy command (an error fails it), `cargo test -p bongbong-server`, `cargo
+  test --test waves_sanity --no-default-features` and `just probe-fixtures`, `probe-survive` and
+  `probe-fields`. Dependencies
   build at opt-level 3 in the dev profile (`[profile.dev.package."*"]`), and CI's two jobs build
   the dev profile itself at opt-level 1 with line tables only (`CARGO_PROFILE_DEV_*` in ci.yml): the
   game crate compiles about a minute longer and the suite and probe sweeps run several times faster,

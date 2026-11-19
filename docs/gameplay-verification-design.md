@@ -782,6 +782,55 @@ maps get their own recipe, `just probe-fields` - the 96 x 54 study map,
 longwater and five of the levels (56 wide since the shipped maps grew by
 40 % a side), budgeted the way `probe-fixtures` is.
 
+**Landed 2026-11-19 (BB-156) - a seat that survives, and turns that mean
+what they say.** Three things the gate could not see, measured first: an
+AFK round is lost 4 to 15 s in, so a "1800 frames x 10 rounds" sweep
+watched about five seconds of AI; the one `jitter` count read a hull
+driving a diagonal as stairs the same as a hull flip-flopping; and nothing
+counted enemies hitting each other.
+
+- **`--scenario survive`.** The seats never move or fire, and after every
+  frame the probe mends each live seat's hull (`Game::debug_set_tank`) and
+  the players' bong (`Game::debug_mend_bong`; `--mortal-bong` leaves the
+  bong alone). Nothing ends the round, so all of `--frames` is played: on
+  the nine fixtures at seed 1000 every one of the 90 rounds runs its 30 s,
+  and the kinds an AFK round is too short for read something (clustering 4
+  on choke and maze, pile-up 2 and never-arrived 4 on maze). `just
+  probe-survive` holds the fixtures to those readings.
+- **`staircase` beside `jitter`.** Four A,B,A turns inside
+  `JITTER_WINDOW_FRAMES` still flag a tank. Each flip is then paired with
+  the one two before it - the same point of the pattern one round
+  earlier - and the pairs' straight lines are summed against the ground
+  driven between them. At `STAIRCASE_PROGRESS` (0.35) of it or more, and
+  at least a nav cell a round, the turns carried the hull on: a
+  `staircase` (0.7 on a 45-degree stair, about 0.5 on a weave). Under
+  that it is back where it was each round, or dithering in place:
+  `jitter`. The two are flagged once each per tank, and the ANOMALY line
+  spells out the run's legs (`U47 D47 U47 D47 U0` is a flip-flop on
+  sight). A portal jump is left out of the ground driven. On hedge-maze,
+  whose one count had gone to 33 against a ceiling of 31, 29 of the 33
+  tanks were on stairs and 4 were flip-flops. The measure is a rule of
+  thumb in the middle: a run that is half a stair and half a shuttle
+  reads as whichever half is longer, and `--log-every 1` still settles
+  it.
+- **A trip to heal is not `churn`.** A churn window holding the frame a
+  tank took a health crate while fleeing (`act_flee` within
+  `FLEE_HEAL_FRAMES` of the `PickupCollected`) is not flagged. A crate
+  driven over in the middle of a fight excuses nothing: the first cut of
+  the rule, any health crate in the window, excused a tank dancing round
+  a circling seat (default map, `circle`, seed 1005, ENEMY#1). No sweep
+  run for this change holds a flee-heal-return that would have been
+  churn, so the rule is unexercised by the recipes.
+- **`enemy-hits-on-enemies`** in the fire tally and `--json-out`'s
+  `fire` object: enemy tanks damaged by another enemy's shot, beam, flame
+  or blast, one per tank per frame (`TankSnapshot::hit_by_enemy`, set by
+  `Tank::credit` beside `hit_by_seat`), a ram between the two that frame
+  left to the ram tally. A counter, never budgeted. Under `survive` the
+  fixtures read 73 to 133 in ten 30 s rounds.
+
+`--json-out` stays `"v":1`: `anomalies` gains `staircase` and `fire`
+gains `enemy_hits_on_enemies`, and `scenario` can be `survive`.
+
 ---
 
 ## Phase 5 — Navigation e2e (path-stretch)
@@ -1127,10 +1176,8 @@ proofs: unit tests, the determinism smoke, map lint, pinned regressions.
 
 ## Open questions / future work
 
-- **`jitter` upgrade**: with Phase 4 data, a compound "jitter while zero
-  net progress" check could finally separate wasteful flip-flopping from
-  legitimate maze weaving (the documented blind spot). Deferred until the
-  contact metrics have baselines.
+- **`jitter` upgrade**: done by BB-156 - `staircase` is the turns with
+  net progress, `jitter` the ones with none (Phase 4.3's last entry).
 - **Sweep parallelism**: rounds are independent once seeded;
   `std::thread::scope` over chunks if thousand-round sweeps ever feel
   slow. Not now — 30 rounds ≈ 1s.

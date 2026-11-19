@@ -1,8 +1,9 @@
 # Test lane (Phase 6 of docs/gameplay-verification-design.md), as two jobs
-# that run side by side: `test` (cargo test - unit, determinism, map lint)
-# and `check` (the whole workspace compiles, then the budgeted probe
-# fixture sweeps). Each builds the game crate once; one after the other
-# they were the longest check on a PR.
+# that run side by side: `test` (the library's tests, with raylib and then
+# headless with the dev tools) and `check` (the whole workspace compiles,
+# clippy's errors on the headless library, the room server's tests, the
+# waves round played end to end, then the budgeted probe sweeps). One
+# after the other they were the longest check on a PR.
 # Deliberately separate from the deploy lanes (cloudflare-deploy.yml /
 # pr-preview.yml) and never touching release.yml (cargo-dist-generated).
 name: CI
@@ -71,6 +72,12 @@ jobs:
       - name: cargo test
         run: cargo test --lib
 
+      # The same suite on the crate as the room server and the probe build
+      # it - headless, no raylib - with the dev tools on: the dev server's
+      # and `capi`'s tests, which the run above compiles out.
+      - name: cargo test, headless with the dev tools
+        run: cargo test --lib --no-default-features --features dev-tools
+
   check:
     runs-on: ubuntu-latest
     env:
@@ -91,6 +98,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.0"
+          components: clippy
 
       # Keyed as in `test`, so a new step's dependencies land in the cache
       # on master's next push.
@@ -108,11 +116,35 @@ jobs:
       - name: cargo check --workspace
         run: cargo check --workspace
 
-      # Budgeted probe sweeps over every fixture map. The justfile recipe
-      # holds the ceilings and the policy for re-baselining them, and builds
-      # the probe headless (no raylib), as it plays.
+      # Clippy's deny-level lints on the headless library, dev tools
+      # included: an error fails the job, a warning only prints (no lint
+      # configuration is checked in, and the warnings are not a gate).
+      - name: cargo clippy, headless library
+        run: cargo clippy --lib --no-default-features --features dev-tools
+
+      # The room server and the `net/` code it shares with the client.
+      - name: cargo test -p bongbong-server
+        run: cargo test -p bongbong-server
+
+      # A three-wave round on the shipped map through the public API
+      # (`cargo test --lib` runs no integration test). Headless, like the
+      # probe below.
+      - name: waves round, end to end
+        run: cargo test --test waves_sanity --no-default-features
+
+      # Budgeted probe sweeps: every fixture map with an AFK seat, the
+      # fixtures again with a seat that survives the whole round, and the
+      # field maps. The justfile recipes hold the ceilings and the policy
+      # for re-baselining them, and build the probe once, headless (no
+      # raylib), as it plays.
       - name: probe fixture sweeps
         run: just probe-fixtures
+
+      - name: probe fixture sweeps, surviving seat
+        run: just probe-survive
+
+      - name: probe field-map sweeps
+        run: just probe-fields
 
   # Builds the web client on every push to master, so its cargo and emsdk
   # cache is saved where every PR preview and release tag can read it (a

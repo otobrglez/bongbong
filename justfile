@@ -22,7 +22,7 @@ probe-waves:
 
 # Sweep every maps/test/ adversarial fixture at a pinned seed and hold it
 # to the recorded baseline: each ceiling is the observed maximum across all
-# six fixtures - deterministic under the pinned seed, so any exceedance is
+# fixtures - deterministic under the pinned seed, so any exceedance is
 # a real behavior change, not noise. After a deliberate AI/map/tuning
 # change shifts the numbers: rerun, read the new totals, and re-baseline
 # consciously - never bump a ceiling just to go green. Zero-ceilings
@@ -98,31 +98,67 @@ probe-waves:
 # clustering 206/177/151 -> 85/60/50, tank-grind 12/7/4 -> 2/1/0, spin
 # 73/70/71 -> 29/17/19, churn 327/307/313 -> 305/305/311, jitter
 # 272/304/277 -> 318/287/304, never-arrived 5/0/0 -> 6/1/0.
-# The probe is built once, headless (`--no-default-features`: no raylib, as
-# it plays - the sweeps read the same either way), and the fixtures run
-# side by side, one per core, each into its own log, printed in fixture
-# order once all are done; every fixture runs even after one fails, and
-# the recipe fails if any did. CI runs this recipe
-# (.github/workflows/ci.yml), so these are the only copy of the ceilings.
+# Re-recorded 2026-11-19 (BB-156) against a probe that splits the turn
+# count in two: a run of four A,B,A turns that carries the hull on is a
+# `staircase`, one that leaves it where it was is `jitter`
+# (`STAIRCASE_PROGRESS` in src/bin/probe.rs; each ANOMALY line spells the
+# run's legs out). No round moved - the split is the probe's - and of the
+# tanks the one count flagged, most were stairs along a diagonal route:
+# jitter=3 is choke and maze (the one count read 9 on maze, which reads
+# 3 and staircase=8 now; a tank can be flagged once for each).
+# staircase=8 is maze. clustering=1 and pile-up=1 are the measured 0 on
+# every fixture plus a margin of one tank, down from 9 and 3: an AFK round
+# is lost before a crowd forms, and a ceiling nine above its reading
+# gated nothing. border-stuck=1 (props, u-trap) and spin=1 (maze,
+# tight-corridors) sit at their readings; churn=10 stands over a 7
+# (props).
 # Extra arguments go to every run - a weapon's `--crate <kind>` or an armed
 # `--tuning <file>` (docs/sonic-hammer.md "Probe") - under the same
-# ceilings.
-probe-fixtures *args:
+# ceilings. How the maps are run is `_probe-maps`; CI runs this recipe
+# (.github/workflows/ci.yml), so these are the only copy of the ceilings.
+fixture_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=3 --budget staircase=8 --budget spin=1 --budget churn=10 --budget clustering=1 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=1 --budget offbox-fire=0"
+
+probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames 1800 --rounds 10 --seed 1000 " + fixture_ceilings + " " + args)
+
+# The fixtures again with a seat that cannot be worn down (the probe's
+# `survive` scenario: the seats and the players' bong mended after every
+# frame), so every round runs its whole 30 s instead of ending with the
+# AFK seat 4 to 15 s in: the enemies hold their firing slots, run out of
+# shells, fall back and come again, and the crowd kinds have something to
+# read. Ceilings are each kind's maximum over the nine fixtures, recorded
+# 2026-11-19 (BB-156): border-stuck=5 props, jitter=13 choke, staircase=17
+# bong-block, spin=1 (maze, pockets, props, tight-corridors), churn=24
+# (maze, pockets), clustering=4 (choke, maze), never-arrived=4 maze,
+# pile-up=2 maze; the rest read 0. All 90 rounds run to the frame cap.
+# Re-baseline as `probe-fixtures` is: on purpose, never to go green. CI
+# runs this recipe too.
+survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=5 --budget jitter=13 --budget staircase=17 --budget spin=1 --budget churn=24 --budget clustering=4 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=4 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0"
+
+probe-survive *args: (_probe-maps "probe-survive" "maps/test/*.toml" "--scenario survive --frames 1800 --rounds 10 --seed 1000 " + survive_ceilings + " " + args)
+
+# One probe sweep (`sweep`: its scenario, frames, rounds, seed and budgets)
+# over every map of `maps`. The probe is built once, headless
+# (`--no-default-features`: no raylib, as it plays - the sweeps read the
+# same either way), and the maps run side by side, one per core, each into
+# its own log, printed in map order once all are done; every map runs even
+# after one fails, and the recipe fails if any did.
+[private]
+_probe-maps name maps sweep:
     #!/usr/bin/env bash
     set -euo pipefail
-    budgets="--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=9 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=3 --budget offbox-fire=0 {{args}}"
     cargo build --bin probe --no-default-features
     probe="${CARGO_TARGET_DIR:-target}/debug/probe"
     logs=$(mktemp -d)
     trap 'rm -rf "$logs"' EXIT
-    printf '%s\n' maps/test/*.toml | xargs -P "$(getconf _NPROCESSORS_ONLN)" -I{} sh -c \
-        '"$1" --map "$2" --frames 1800 --rounds 10 --seed 1000 $3 > "$4/$(basename "$2").log" 2>&1 || touch "$4/$(basename "$2").failed"' \
-        _ "$probe" {} "$budgets" "$logs"
+    maps=({{maps}})
+    printf '%s\n' "${maps[@]}" | xargs -P "$(getconf _NPROCESSORS_ONLN)" -I{} sh -c \
+        '"$1" --map "$2" $3 > "$4/$(basename "$2").log" 2>&1 || touch "$4/$(basename "$2").failed"' \
+        _ "$probe" {} "{{sweep}}" "$logs"
     failed=0
-    for m in maps/test/*.toml; do
+    for m in "${maps[@]}"; do
         cat "$logs/$(basename "$m").log"
         if [ -e "$logs/$(basename "$m").failed" ]; then
-            echo "probe-fixtures: $m is over its ceilings" >&2
+            echo "{{name}}: $m is over its ceilings" >&2
             failed=1
         fi
     done
@@ -220,10 +256,28 @@ probe-fixtures *args:
 # rounds' totals over the seven maps, before -> after: churn 93 -> 79,
 # clustering 22 -> 11, jitter 104 -> 107, spin 17 -> 19, border-stuck
 # 10 -> 9, pile-up 10 -> 10; every other ceiling stands.
-# Not in CI: well over two minutes in a debug build, the study map alone
-# more than one.
-probe-fields *args:
-    for m in maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml; do cargo run --bin probe -- --map $m --frames 3600 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=31 --budget spin=12 --budget churn=43 --budget clustering=12 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=8 --budget offbox-fire=0 {{args}} || exit 1; done
+# Re-recorded 2026-11-19 (BB-156). The recipe had gone red out of CI's
+# sight: hedge-maze read jitter=33 against the 31 above. Traced
+# (`--log-every 1`, and each run's legs on its ANOMALY line), 29 of its 33
+# flagged tanks were driving the maze's diagonals as stairs - `U144 L144
+# U98`, a leg of a few cells and a turn, every one carrying the hull on
+# toward the seat - and 4 were flip-flops: a tank shuttling 40 px left and
+# right under `seek_plasma` at 0x3ec, one doubling back across its lane at
+# 0x3ed, and hulls dithering a few pixels at a time at 0x3e8 and 0x3ed.
+# The probe now tells the two apart (`staircase` and `jitter`, as
+# `probe-fixtures` says), and no round moved. jitter=7 is archipelago
+# (hedge-maze reads 5, one of them a tank flagged for a stair first);
+# staircase=29 is hedge-maze (harbor-lights 28).
+# clustering=1 and pile-up=1 are the measured 0 on all seven maps plus a
+# margin of one tank, down from 12 and 8, readings the rounds no longer
+# make; stall=1, wall-grind=1, low-progress=1 and tank-grind=1 stand one
+# over their 0. border-stuck=8 stands over a 6 (castle-moat), spin=12 over
+# a 5 and churn=43 over a 26 (both hedge-maze).
+# How the maps are run is `_probe-maps`: one per core, about a minute in a
+# debug build. CI runs this recipe (.github/workflows/ci.yml).
+field_ceilings := "--budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=7 --budget staircase=29 --budget spin=12 --budget churn=43 --budget clustering=1 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=1 --budget offbox-fire=0"
+
+probe-fields *args: (_probe-maps "probe-fields" "maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml" "--frames 3600 --rounds 10 --seed 1000 " + field_ceilings + " " + args)
 
 # The perfect defence (docs/large-maps-follow-camera.md section 12): the
 # probe's `defend` scenario - every enemy destroyed the moment it comes
