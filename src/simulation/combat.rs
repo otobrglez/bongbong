@@ -6,12 +6,13 @@ use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 use crate::math::Vec2;
 
 use crate::ai::Ai;
-use crate::bong::Bong;
-use crate::obstacle::Obstacle;
+use crate::bong::{Bong, Side};
+use crate::knock::Knock;
+use crate::obstacle::{face_toward, Material, Obstacle};
 use crate::physics::Physics;
 use crate::shell::Owner;
 use crate::shockwave::Shockwave;
@@ -25,61 +26,113 @@ use crate::{
 
 use super::hits::{ShellTarget, Terrain};
 use super::props::DamageCause;
-use super::{with_bong_mut, Event, Frame, Game, HitCause, HitTarget, Shoves};
+use super::{with_bong_mut, Event, Footing, Frame, Game, HitCause, HitTarget, Shoves};
 
-/// One explosion's numbers - a tank wreck's or a barrel's - so
-/// `explosion_hit` serves both.
+/// Whose hulls a blast hurts. It shoves every live hull it reaches.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum BlastSpares {
+    Nobody,
+    /// The side of this owner is shoved and not hurt: a wreck's own side,
+    /// the side that fired a missile or threw a grenade.
+    SideOf(Owner),
+}
+
+/// Which bongs a blast hurts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum BlastBongs {
+    None,
+    All,
+    /// Only the bong of the side opposing this owner.
+    Opposing(Owner),
+}
+
+/// One explosion's numbers and what it touches, for `Game::blast` - the
+/// one blast every source goes through: a tank wreck's, a drum's, a lava
+/// bomb's, a crate cooking off, a missile's, a grenade's, a drone's, a
+/// jet's.
 pub(super) struct BlastParams {
     pub radius: f32,
     pub damage: (f32, f32),
     pub knockback: f32,
     /// Who set the blast off, for the kill credit (`Tank::credit`): a
-    /// missile's shooter. `None` for a wreck's or a drum's.
+    /// missile's shooter, the seat that wrecked the tank now exploding.
+    /// `None` for a drum's.
     pub by: Option<Owner>,
+    pub spares: BlastSpares,
+    pub bongs: BlastBongs,
+    /// Lanterns on the ground within `LANTERN_REACH` of the radius are
+    /// knocked out.
+    pub lanterns: bool,
+    /// Grenades on the ground in the radius go off with it.
+    pub grenades: bool,
+    /// A drum's way with tiles: an explosive tile in the radius goes off
+    /// with no roll, and one already on a fuse is left to it. Without it
+    /// every tile takes the rolled damage.
+    pub chains: bool,
 }
 
+/// How much of a blast's radius knocks a lantern out.
+const LANTERN_REACH: f32 = 0.6;
+
 impl BlastParams {
-    pub fn tank_wreck() -> Self {
+    /// A blast of the world's own - a drum, a lava bomb: everyone in the
+    /// radius, both bongs, the lanterns, the drums chained.
+    pub fn world(radius: f32, damage: (f32, f32), knockback: f32) -> Self {
+        BlastParams { radius, damage, knockback, by: None, spares: BlastSpares::Nobody, bongs: BlastBongs::All, lanterns: true, grenades: false, chains: true }
+    }
+
+    /// Ordnance fired by `by` going off - a missile, a grenade, a drone, a
+    /// jet's burst or bomb: the side opposing `by` and its bong.
+    pub fn ordnance(radius: f32, damage: (f32, f32), knockback: f32, by: Owner) -> Self {
+        BlastParams {
+            radius,
+            damage,
+            knockback,
+            by: Some(by),
+            spares: BlastSpares::SideOf(by),
+            bongs: BlastBongs::Opposing(by),
+            lanterns: false,
+            grenades: false,
+            chains: false,
+        }
+    }
+
+    /// A tank's death (`Game::apply_explosion`): a chip to the side
+    /// opposing `victim`, credited to `by`, and no bong.
+    pub fn tank_wreck(victim: Owner, by: Option<Owner>) -> Self {
         BlastParams {
             radius: tuning().explosion_radius,
             damage: (tuning().explosion_damage_min, tuning().explosion_damage_max),
             knockback: tuning().explosion_knockback_speed,
-            by: None,
+            by,
+            spares: BlastSpares::SideOf(victim),
+            bongs: BlastBongs::None,
+            lanterns: false,
+            grenades: false,
+            chains: false,
         }
     }
 
     /// The red oil drum's blast.
     pub fn barrel() -> Self {
-        BlastParams {
-            radius: tuning().barrel_blast_radius,
-            damage: (tuning().barrel_blast_damage_min, tuning().barrel_blast_damage_max),
-            knockback: tuning().barrel_blast_knockback_speed,
-            by: None,
-        }
+        let t = tuning();
+        BlastParams::world(t.barrel_blast_radius, (t.barrel_blast_damage_min, t.barrel_blast_damage_max), t.barrel_blast_knockback_speed)
     }
 
     /// The grey fuel drum's: bigger, sharper, shorter.
     pub fn fuel() -> Self {
-        BlastParams {
-            radius: tuning().fuel_blast_radius,
-            damage: (tuning().fuel_blast_damage_min, tuning().fuel_blast_damage_max),
-            knockback: tuning().fuel_blast_knockback_speed,
-            by: None,
-        }
+        let t = tuning();
+        BlastParams::world(t.fuel_blast_radius, (t.fuel_blast_damage_min, t.fuel_blast_damage_max), t.fuel_blast_knockback_speed)
     }
 
     /// A volcano's lava bomb landing (docs/volcano.md).
     pub fn lava_bomb() -> Self {
-        BlastParams {
-            radius: tuning().volcano_bomb_radius_px,
-            damage: (tuning().volcano_bomb_damage_min, tuning().volcano_bomb_damage_max),
-            knockback: tuning().volcano_bomb_knockback,
-            by: None,
-        }
+        let t = tuning();
+        BlastParams::world(t.volcano_bomb_radius_px, (t.volcano_bomb_damage_min, t.volcano_bomb_damage_max), t.volcano_bomb_knockback)
     }
 
     /// Centre damage before falloff (`roll_range`).
-    pub fn roll_damage(&self, rng: &mut SmallRng) -> f32 {
+    pub fn roll_damage(&self, rng: &mut RoundRng) -> f32 {
         roll_range(rng, self.damage.0, self.damage.1)
     }
 }
@@ -87,8 +140,114 @@ impl BlastParams {
 /// A uniform roll in `min..max`: one draw. A tuned range that is empty or
 /// inverted (`min >= max`) is `min` and draws nothing, so a knob pair set
 /// the wrong way round plays instead of panicking.
-pub(super) fn roll_range(rng: &mut SmallRng, min: f32, max: f32) -> f32 {
+pub(super) fn roll_range(rng: &mut RoundRng, min: f32, max: f32) -> f32 {
     if max > min { rng.random_range(min..max) } else { min }
+}
+
+/// How a hurt is told to the round's feed (`Event::Hit`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Report {
+    /// One landed thing - a shot, a slug, a wave, a blast's share: an
+    /// `Event::Hit` with what the hull took.
+    Hit(HitCause),
+    /// A source that burns for as long as it touches - a flame stream,
+    /// lava, a burning cell, ooze: an `Event::Hit` with damage 0 on the
+    /// first tick of the contact (`Tank::touch`) and on the tick that
+    /// wrecks the hull, never one a frame.
+    Contact(HitCause),
+    /// The source logs its own event (`Event::Ram`, `Event::BongBite`).
+    Own,
+}
+
+/// One hurt on its way to a tank through `hurt`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Hurt {
+    /// Damage before the shield and a seat's armour (`Tank::take_damage`).
+    /// Zero lands nothing and credits nobody, but is still reported.
+    pub amount: f32,
+    /// Where the hull's damage stops: `MAX_DAMAGE`, or one below it for a
+    /// bite that never finishes a seat off.
+    pub cap: f32,
+    /// Who did it, for the kill credit (`Tank::credit`) and a tower's
+    /// grudge. `None` for the world's own hurts.
+    pub by: Option<Owner>,
+    /// Where it landed, for the event.
+    pub at: Position,
+    pub report: Report,
+    /// A rod from god's: the hull is wrecked whole, past the shield, the
+    /// armour and the amount.
+    pub crush: bool,
+}
+
+impl Hurt {
+    pub fn hit(amount: f32, cause: HitCause, by: Option<Owner>, at: Position) -> Self {
+        Hurt { amount, cap: MAX_DAMAGE, by, at, report: Report::Hit(cause), crush: false }
+    }
+
+    pub fn contact(amount: f32, cause: HitCause, by: Option<Owner>, at: Position) -> Self {
+        Hurt { report: Report::Contact(cause), ..Hurt::hit(amount, cause, by, at) }
+    }
+
+    pub fn own(amount: f32, by: Option<Owner>, at: Position) -> Self {
+        Hurt { amount, cap: MAX_DAMAGE, by, at, report: Report::Own, crush: false }
+    }
+}
+
+/// What a hurt did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Landed {
+    /// What the hull took: 0 where a shield took it instead.
+    pub landed: f32,
+    pub killed: bool,
+    pub owner: Owner,
+    pub position: Position,
+}
+
+/// **The one way a tank loses health.** Every source - a shot, a beam, a
+/// stream, a blast, a ram, a bite, lava, fire, ooze, a rod - lands here:
+/// the damage goes on through `Tank::take_damage` (or the rod's crush),
+/// the hull is marked hit and `hurt.by` credited, the hurt is reported as
+/// its `Report` says, and a hull it wrecks goes on `kills`. `None` for a
+/// wreck, which nothing hurts further. Draws no RNG: a source rolls its
+/// own damage first. `Game::hurt_tank` is this plus the AI's alert.
+pub(super) fn hurt(tank: &mut Tank, hurt: &Hurt, events: &mut Vec<Event>, kills: &mut Vec<(Position, Owner)>) -> Option<Landed> {
+    if tank.is_wreck() {
+        return None;
+    }
+    let landed = if hurt.crush {
+        tank.crush();
+        MAX_DAMAGE
+    } else if hurt.amount > 0.0 {
+        tank.take_damage(hurt.amount, hurt.cap)
+    } else {
+        0.0
+    };
+    if hurt.crush || hurt.amount > 0.0 {
+        tank.mark_hit();
+        if let Some(by) = hurt.by {
+            tank.credit(by);
+        }
+    }
+    let killed = tank.is_wreck();
+    let owner = tank.owner();
+    let target = match owner {
+        Owner::Player(player) => HitTarget::Player { player },
+        Owner::Enemy(slot) => HitTarget::Enemy { slot },
+        Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
+    };
+    match hurt.report {
+        Report::Hit(cause) => events.push(Event::Hit { target, damage: landed, killed, x: hurt.at.x, y: hurt.at.y, cause }),
+        Report::Contact(cause) => {
+            if tank.touch(cause) || killed {
+                events.push(Event::Hit { target, damage: 0.0, killed, x: hurt.at.x, y: hurt.at.y, cause });
+            }
+        }
+        Report::Own => {}
+    }
+    if killed {
+        kills.push((tank.position, owner));
+    }
+    Some(Landed { landed, killed, owner, position: tank.position })
 }
 
 /// What a hit does beyond damage: an optional shove (unit travel direction,
@@ -118,6 +277,28 @@ impl HitEffects {
 }
 
 impl Game {
+    /// `hurt` on the tank `entity`, and the alert: an enemy that survives
+    /// a hurt that landed is told it was hit (`Ai::notify_hit`; a seat
+    /// carries no `Ai`), and holds a grudge against the tower that did it.
+    /// `None` for a wreck or an entity with no tank.
+    pub(super) fn hurt_tank(&mut self, f: &mut Frame, entity: Entity, h: Hurt) -> Option<Landed> {
+        let landed = {
+            let mut q = self.world.query_one::<&mut Tank>(entity);
+            let tank = q.get().ok()?;
+            hurt(tank, &h, &mut f.events, &mut f.kills)?
+        };
+        if !landed.killed && (h.amount > 0.0 || h.crush) {
+            let tower = h.by.and_then(|by| self.tower_by_owner(by));
+            if let Ok(mut ai) = self.world.get::<&mut Ai>(entity) {
+                match tower {
+                    Some(at) => ai.notify_tower_hit(at),
+                    None => ai.notify_hit(),
+                }
+            }
+        }
+        Some(landed)
+    }
+
     /// Apply one resolved projectile/beam hit to `target`: roll damage in
     /// `dmg`, then per target kind - a tank is marked hit, either killed
     /// (recorded in `f.kills` for its shockwave/explosion) or shoved; an
@@ -139,56 +320,20 @@ impl Game {
     ) {
         match target {
             ShellTarget::Tank(entity) => {
-                let survived = {
+                let Some(seat) = self.world.get::<&Tank>(entity).ok().filter(|t| !t.is_wreck()).map(|t| t.owner().is_player()) else { return };
+                // Scaled after the roll, so the RNG draw count never
+                // depends on who shot whom.
+                let mut d = roll_range(&mut f.rng, dmg.0, dmg.1);
+                if shooter.is_player() && seat {
+                    d *= tuning().friendly_fire_damage_factor;
+                }
+                // A shield takes the hit instead and what landed is 0,
+                // which is what the event reports.
+                let landed = self.hurt_tank(f, entity, Hurt::hit(d, effects.cause, Some(shooter), at));
+                if let (Some(Landed { killed: false, .. }), Some((dir, speed))) = (landed, effects.knockback) {
                     let mut q = self.world.query_one::<&mut Tank>(entity);
                     let tank = q.get().expect("hit target always has a Tank");
-                    if tank.is_wreck() {
-                        false
-                    } else {
-                        // Scaled after the roll, so the RNG draw count never
-                        // depends on who shot whom.
-                        let mut d = roll_range(&mut f.rng, dmg.0, dmg.1);
-                        if shooter.is_player() && tank.owner().is_player() {
-                            d *= tuning().friendly_fire_damage_factor;
-                        }
-                        // A shield takes the hit instead and `landed` is 0,
-                        // which is what the event reports: a beam stopped by
-                        // a shield used to log the full roll as damage that
-                        // never touched the hull, the one place the feed
-                        // lied. `take_damage` spends the shield either way,
-                        // so ask it whether that was the shattering blow.
-                        let landed = tank.take_damage(d, MAX_DAMAGE);
-                        tank.mark_hit();
-                        tank.credit(shooter);
-                        let killed = tank.is_wreck();
-                        let hit_target = match tank.owner() {
-                            Owner::Player(player) => HitTarget::Player { player },
-                            Owner::Enemy(slot) => HitTarget::Enemy { slot },
-                            Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
-                        };
-                        f.events.push(Event::Hit { target: hit_target, damage: landed, killed, x: at.x, y: at.y, cause: effects.cause });
-                        if killed {
-                            f.kills.push((tank.position, tank.owner()));
-                            false
-                        } else {
-                            if let Some((dir, speed)) = effects.knockback {
-                                let dv = knockback(tank, &mut self.physics, dir, speed);
-                                f.shoves.push(tank.owner(), dv);
-                            }
-                            true
-                        }
-                    }
-                };
-                if survived {
-                    // A player carries no `Ai`, so this is a no-op for one.
-                    let tower = self.tower_by_owner(shooter);
-                    let mut q = self.world.query_one::<&mut Ai>(entity);
-                    if let Ok(ai) = q.get() {
-                        match tower {
-                            Some(at) => ai.notify_tower_hit(at),
-                            None => ai.notify_hit(),
-                        }
-                    }
+                    knock(&mut self.physics, &mut f.shoves, tank, dir, Knock::impact(&tuning(), speed), Footing::DRY);
                 }
             }
             ShellTarget::Bong(entity) => {
@@ -236,56 +381,211 @@ impl Game {
 
     /// A tank's death: an outward shove that fades linearly to nothing at
     /// `explosion_radius`, reaching every live tank regardless of side,
-    /// plus a chip of damage only to the side opposing whoever died.
-    /// Obstacles in range crack too (no side, no knockback) - a barrel in
-    /// range goes off (`Game::damage_obstacle`). The bong is deliberately
-    /// immune - it is a loss condition, so splash damage would be a real
-    /// balance change rather than a detail. A chip that finishes off a
-    /// tank pushes it onto `f.kills`, so it gets its own blast in turn.
+    /// plus a chip of damage only to the side opposing whoever died,
+    /// credited to the seat the wreck itself is credited to. Obstacles in
+    /// range crack too - a barrel in range goes off
+    /// (`Game::damage_obstacle`). No bong is hurt. A chip that finishes
+    /// off a tank pushes it onto `f.kills`, so it gets its own blast in
+    /// turn.
     pub(super) fn apply_explosion(&mut self, f: &mut Frame, center: Position, victim: Owner) {
-        let params = BlastParams::tank_wreck();
+        let by = self.world.query::<&Tank>().iter().find(|t| t.owner() == victim).and_then(|t| t.last_hit_by).map(Owner::Player);
+        self.blast(f, center, &BlastParams::tank_wreck(victim, by), &[]);
+    }
+
+    /// **The one blast.** Everything `params.radius` reaches from `center`
+    /// takes its share, falling off linearly to nothing at the radius:
+    ///
+    /// - every live hull on the field is shoved out from the centre, and
+    ///   hurt unless `params.spares` its side - reached at the nearest
+    ///   point of its hull (`TargetShape::reach_from`), so a wide hull is
+    ///   not hit from further inside itself than a narrow one;
+    /// - the bongs `params.bongs` names are hurt;
+    /// - a hull or a bong with a permanent tile between it and the centre
+    ///   (`Terrain::line_of_fire` to where it stands - iron, a volcano's
+    ///   cone, a training door) is in cover: neither hurt nor shoved;
+    /// - lanterns and grenades as the flags say; every tile cracks
+    ///   (`damage_obstacle`), every crate in reach breaks (`blast_crates`),
+    ///   and a gravity well's held drums go off.
+    ///
+    /// `spared` are left out whole. One damage roll for each hull hurt,
+    /// each bong and each tile, in that order - the seats in index order,
+    /// the enemies by slot, the bongs, the tiles by cell - and the roll is
+    /// drawn for one in cover too, so cover never moves the stream. A tank
+    /// still rolling in through a gate is out of the fight: a seat by
+    /// `seats_on_field`, an enemy by having no `Ai` yet.
+    pub(super) fn blast(&mut self, f: &mut Frame, center: Position, params: &BlastParams, spared: &[Entity]) {
         self.chain_held_drums(f, center, params.radius);
-        // Players first, in index order, then the enemies: each tank's
-        // damage roll is one RNG draw, so this order is part of the replay.
-        for player in self.seats_on_field().into_iter().flatten() {
-            let mut q = self.world.query_one::<&mut Tank>(player);
-            let tank = q.get().expect("player entity always has a Tank");
-            let chips = !victim.same_side(tank.owner());
-            if let Some(dv) = explosion_hit(tank, center, chips, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
-                f.shoves.push(tank.owner(), dv);
+        let mut hulls: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
+        hulls.extend(super::ordered(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()).into_iter().map(|(e, _)| e));
+        for entity in hulls {
+            if spared.contains(&entity) {
+                continue;
+            }
+            let (dist, at, owner, footing) = {
+                let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
+                if tank.is_wreck() {
+                    continue;
+                }
+                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
+                let dist = tank.target_shape().reach_from(center);
+                (dist, tank.position, tank.owner(), footing)
+            };
+            if dist > params.radius {
+                continue;
+            }
+            let falloff = 1.0 - dist / params.radius;
+            let covered = !f.terrain.line_of_fire(center, at);
+            let hurts = match params.spares {
+                BlastSpares::Nobody => true,
+                BlastSpares::SideOf(side) => !side.same_side(owner),
+            };
+            if hurts {
+                let dmg = params.roll_damage(&mut f.rng) * falloff;
+                if !covered && self.hurt_tank(f, entity, Hurt::hit(dmg, HitCause::Blast, params.by, center)).is_some_and(|l| l.killed) {
+                    continue;
+                }
+            }
+            if covered {
+                continue;
+            }
+            let line = at - center;
+            let len = line.length();
+            // Sitting exactly on the blast's centre: any direction beats none.
+            let dir = if len > 0.001 { line / len } else { Vec2::new(1.0, 0.0) };
+            let mut q = self.world.query_one::<&mut Tank>(entity);
+            let tank = q.get().expect("a hull in the blast's walk has a Tank");
+            knock(&mut self.physics, &mut f.shoves, tank, dir, Knock::blast(&tuning(), params.knockback * falloff), footing);
+        }
+        if params.bongs != BlastBongs::None {
+            let mut dead_bongs = Vec::new();
+            for (entity, bong) in super::ordered(self.world.query::<(Entity, &mut Bong)>().iter(), |(_, b)| super::bong_order(b)) {
+                if bong.is_dead() || spared.contains(&entity) {
+                    continue;
+                }
+                if let BlastBongs::Opposing(owner) = params.bongs
+                    && bong.side == (if owner.is_player() { Side::Player } else { Side::Enemy })
+                {
+                    continue;
+                }
+                let dist = bong.position.distance_to(center);
+                if dist > params.radius {
+                    continue;
+                }
+                let dmg = params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius);
+                if !f.terrain.line_of_fire(center, bong.position) {
+                    continue;
+                }
+                bong.damage(dmg);
+                if bong.is_dead() {
+                    dead_bongs.push(bong.position);
+                }
+            }
+            for pos in dead_bongs {
+                f.shocks.push(Shockwave::scaled(pos, tuning().bong_shock));
             }
         }
-        for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
-            let chips = !victim.same_side(tank.owner());
-            explosion_hit(tank, center, chips, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+        if params.lanterns {
+            self.break_lanterns(f, center, params.radius * LANTERN_REACH);
         }
-        // Collect first: `damage_obstacle` needs the world free. Same
-        // per-obstacle draw order as iterating directly.
-        let hits: Vec<(Entity, f32)> = self
-            .world
-            .query::<(Entity, &Obstacle)>()
-            .iter()
-            .filter(|(_, o)| !o.destroyed)
+        if params.grenades {
+            self.set_off_grenades(center, params.radius);
+        }
+        // Collect first: `damage_obstacle` needs the world free.
+        let hits: Vec<(Entity, Material, f32)> = super::tiles_near(self.world.query::<(Entity, &mut Obstacle)>().iter(), center, params.radius)
+            .into_iter()
+            .filter(|(_, o)| !o.destroyed && !(params.chains && o.fuse.is_some()))
             .filter_map(|(e, o)| {
                 let dist = o.position.distance_to(center);
-                (dist <= params.radius).then(|| (e, 1.0 - dist / params.radius))
+                if dist > params.radius {
+                    return None;
+                }
+                // Soot on whichever face looked at the blast; a wall's
+                // business only, and cosmetic.
+                if o.material.is_wall() {
+                    o.scorched |= face_toward(o.position, center);
+                }
+                Some((e, o.material, 1.0 - dist / params.radius))
             })
             .collect();
-        for (entity, falloff) in hits {
-            let amount = params.roll_damage(&mut f.rng) * falloff;
+        for (entity, material, falloff) in hits {
+            // A drum's blast sets every other drum inside off - no roll.
+            let amount = if params.chains && material.is_explosive() { f32::MAX } else { params.roll_damage(&mut f.rng) * falloff };
             self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
         }
-        self.blast_crates(f, center, &params);
+        self.blast_crates(f, center, params);
+    }
+
+    /// Knock out every lantern on the ground within `reach` of `center`
+    /// (`Event::LanternBroken`).
+    pub(super) fn break_lanterns(&mut self, f: &mut Frame, center: Position, reach: f32) {
+        let mut broken = Vec::new();
+        self.lanterns.retain(|l| {
+            let hit = l.position.distance_to(center) <= reach;
+            if hit {
+                broken.push(l.position);
+            }
+            !hit
+        });
+        for at in broken {
+            f.events.push(Event::LanternBroken { x: at.x, y: at.y });
+        }
+    }
+
+    /// Run every grenade within `reach` of `center` out of fuse: each goes
+    /// off on its own next resolve, in id order.
+    pub(super) fn set_off_grenades(&mut self, center: Position, reach: f32) {
+        for grenade in self.world.query_mut::<&mut crate::grenade::Grenade>() {
+            if grenade.position.distance_to(center) <= reach {
+                grenade.fuse = 0.0;
+            }
+        }
     }
 }
 
-/// Shove a live tank along `dir` (unit) at `speed` px/s - a real impulse
-/// sized by the tank's own mass, so the velocity change is exact. Returns
-/// that change, for `Shoves`.
-fn knockback(tank: &Tank, physics: &mut Physics, dir: Vec2, speed: f32) -> Vec2 {
-    let handle = tank.body.expect("tank should always have a physics body once spawned");
-    physics.apply_impulse(handle, Position::new(dir.x * speed * tank.mass(), dir.y * speed * tank.mass()));
-    Vec2::new(dir.x * speed, dir.y * speed)
+/// Shove `tank` along the unit `dir` as `k` says (`Knock::velocity`, the
+/// one mass rule): a real impulse sized by the tank's own mass, so the
+/// velocity change is exact. Returns that change; `None` for a hull with
+/// no body or a knock that comes to nothing. No skid - `knock_hull` is
+/// this and the skid.
+pub(super) fn shove(physics: &mut Physics, tank: &Tank, dir: Vec2, k: Knock) -> Option<Vec2> {
+    let handle = tank.body?;
+    let v = k.velocity(tank.mass_factor());
+    if v <= 0.0 {
+        return None;
+    }
+    let dv = dir * v;
+    physics.apply_impulse(handle, Position::new(dv.x * tank.mass(), dv.y * tank.mass()));
+    Some(dv)
+}
+
+/// **The one knock**, with nobody told: `shove`, then - for a knock with a
+/// skid - the hull off its tracks (`Tank::skid`, docs/sonic-hammer.md "The
+/// knock") for as long as the skid's friction takes to stop it on its
+/// ground (`footing`), `k.skid` at most, and the speed it was left at for
+/// the pose validator. The velocity change and the skid. What a client's
+/// sandbox kicks its own hull with too (`Game::predict_seat_with`).
+pub(super) fn knock_hull(physics: &mut Physics, tank: &mut Tank, dir: Vec2, k: Knock, footing: Footing) -> Option<(Vec2, f32)> {
+    let dv = shove(physics, tank, dir, k)?;
+    if k.skid <= 0.0 {
+        return Some((dv, 0.0));
+    }
+    let handle = tank.body?;
+    let v = physics.velocity(handle);
+    let rel = Vec2::new(v.x - footing.flow.x, v.y - footing.flow.y).length();
+    let skid = (rel / crate::sonic::skid_friction(&tuning(), footing.grip)).min(k.skid);
+    tank.skid = tank.skid.max(skid);
+    tank.skid_speed = rel;
+    Some((dv, skid))
+}
+
+/// `knock_hull`, and a client-owned seat told of it (`Event::Shoved` with
+/// its skid, through `Shoves`). Every shove in the round goes through
+/// here: a shot's impact, a blast, a ram, a hammer's
+/// wave, a rod's ring, a well's fling. Returns the velocity change.
+pub(super) fn knock(physics: &mut Physics, shoves: &mut Shoves, tank: &mut Tank, dir: Vec2, k: Knock, footing: Footing) -> Vec2 {
+    let Some((dv, skid)) = knock_hull(physics, tank, dir, k, footing) else { return Vec2::zero() };
+    shoves.push_knock(tank.owner(), dv, skid);
+    dv
 }
 
 /// Ram contact between two live tanks on opposing sides: both take
@@ -318,7 +618,7 @@ pub(super) fn ram(
     a: &mut Tank,
     b: &mut Tank,
     physics: &mut Physics,
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
     kills: &mut Vec<(Position, Owner)>,
     shoves: &mut Shoves,
     damage_scale: f32,
@@ -327,20 +627,13 @@ pub(super) fn ram(
         return None;
     }
     let dmg = roll_range(rng, tuning().ram_damage_min, tuning().ram_damage_max) * damage_scale;
-    a.take_damage(dmg, MAX_DAMAGE);
-    b.take_damage(dmg, MAX_DAMAGE);
-    a.mark_hit();
-    b.mark_hit();
-    a.credit(b.owner());
-    b.credit(a.owner());
+    // `Event::Ram` is the exchange's report (`Report::Own`).
+    let mut unreported = Vec::new();
+    let (at_a, at_b) = (a.position, b.position);
+    hurt(a, &Hurt::own(dmg, Some(b.owner()), at_a), &mut unreported, kills);
+    hurt(b, &Hurt::own(dmg, Some(a.owner()), at_b), &mut unreported, kills);
     a.ram_cooldown = tuning().ram_damage_cooldown;
     b.ram_cooldown = tuning().ram_damage_cooldown;
-    if a.is_wreck() {
-        kills.push((a.position, a.owner()));
-    }
-    if b.is_wreck() {
-        kills.push((b.position, b.owner()));
-    }
 
     let dx = a.position.x - b.position.x;
     let dy = a.position.y - b.position.y;
@@ -362,67 +655,14 @@ pub(super) fn ram(
     let push = (impact_speed * tuning().knockback_strength).min(tuning().knockback_max_speed);
     let total_mass = a.mass() + b.mass();
     // A tank this very hit just killed stays put, like any wreck.
+    let t = tuning();
     if !a.is_wreck() {
-        let a_push = (push * 2.0 * b.mass() / total_mass).min(tuning().knockback_max_speed);
-        shoves.push(a.owner(), knockback(a, physics, axis, a_push));
+        knock(physics, shoves, a, axis, Knock::ram(&t, push * 2.0 * b.mass() / total_mass), Footing::DRY);
     }
     if !b.is_wreck() {
-        let b_push = (push * 2.0 * a.mass() / total_mass).min(tuning().knockback_max_speed);
-        shoves.push(b.owner(), knockback(b, physics, Vec2::new(-axis.x, -axis.y), b_push));
+        knock(physics, shoves, b, Vec2::new(-axis.x, -axis.y), Knock::ram(&t, push * 2.0 * a.mass() / total_mass), Footing::DRY);
     }
     Some(dmg)
-}
-
-/// One tank's share of a nearby explosion (see `Game::apply_explosion` and
-/// `Game::apply_blast`): a shove that fades linearly with distance and,
-/// only when `damage` is true, a chip of damage scaled the same way. No-op
-/// on a wreck or a tank outside `params.radius`. A resulting kill is
-/// recorded with the tank's owner. Returns the shove's velocity change,
-/// `None` when there was none, for the caller's `Shoves`.
-pub(super) fn explosion_hit(
-    tank: &mut Tank,
-    center: Position,
-    damage: bool,
-    physics: &mut Physics,
-    rng: &mut SmallRng,
-    kills: &mut Vec<(Position, Owner)>,
-    params: &BlastParams,
-) -> Option<Vec2> {
-    if tank.is_wreck() {
-        return None;
-    }
-    let dx = tank.position.x - center.x;
-    let dy = tank.position.y - center.y;
-    let dist = (dx * dx + dy * dy).sqrt();
-    if dist > params.radius {
-        return None;
-    }
-    let falloff = 1.0 - dist / params.radius;
-
-    if damage {
-        let dmg = params.roll_damage(rng) * falloff;
-        tank.take_damage(dmg, MAX_DAMAGE);
-        tank.mark_hit();
-        if let Some(by) = params.by {
-            tank.credit(by);
-        }
-        if tank.is_wreck() {
-            kills.push((tank.position, tank.owner()));
-            return None;
-        }
-    }
-
-    // The push is tuned against the chassis-free baseline mass (scale
-    // squared), so a heavy chassis resists it and a light one flies.
-    let reference_mass = tank.scale * tank.scale;
-    let push = (params.knockback * falloff * reference_mass / tank.mass()).min(tuning().knockback_max_speed);
-    let axis = if dist > 0.001 {
-        Vec2::new(dx / dist, dy / dist)
-    } else {
-        // Sitting exactly on the blast center: any direction beats none.
-        Vec2::new(1.0, 0.0)
-    };
-    Some(knockback(tank, physics, axis, push))
 }
 
 /// A landing spot for the bong's evasive hop, up to `distance` px away
@@ -442,7 +682,7 @@ pub(super) fn explosion_hit(
 /// only a landing in water, then any landing. One jitter draw either way,
 /// so a map without water hops exactly as before.
 pub(super) fn bong_hop_target(
-    rng: &mut SmallRng,
+    rng: &mut RoundRng,
     bong_pos: Position,
     away_dir: Vec2,
     distance: f32,
@@ -498,12 +738,12 @@ mod ram_tests {
         let terrain = Terrain::build(&world, w, h, &[], &water);
         let bong = crate::map::cell_to_world(11, 11);
         let away = Vec2::new(1.0, 0.0);
-        let mut rng = SmallRng::seed_from_u64(3);
+        let mut rng = RoundRng::seed_from_u64(3);
         let landing = bong_hop_target(&mut rng, bong, away, 96.0, &terrain, w, h).expect("a landing");
         assert_ne!(water.depth_at(landing), crate::ground::Depth::Dry, "landed in the pond: {landing:?}");
         // Threat from the east: hopping west finds no water in the fan, so
         // it lands on dry ground as before.
-        let mut rng = SmallRng::seed_from_u64(3);
+        let mut rng = RoundRng::seed_from_u64(3);
         let landing = bong_hop_target(&mut rng, bong, Vec2::new(-1.0, 0.0), 96.0, &terrain, w, h).expect("a landing");
         assert_eq!(water.depth_at(landing), crate::ground::Depth::Dry);
         assert!(landing.x < bong.x);
@@ -512,19 +752,19 @@ mod ram_tests {
     #[test]
     fn roll_range_is_min_and_draws_nothing_on_an_empty_or_inverted_range() {
         for (min, max) in [(6.0_f32, 2.0_f32), (4.0, 4.0), (0.0, 0.0), (-0.0, 0.0)] {
-            let mut rng = SmallRng::seed_from_u64(9);
+            let mut rng = RoundRng::seed_from_u64(9);
             let mut untouched = rng.clone();
             assert_eq!(roll_range(&mut rng, min, max), min, "{min}..{max}");
             assert_eq!(rng.random_range(0..u32::MAX), untouched.random_range(0..u32::MAX), "{min}..{max} drew");
         }
-        let blast = BlastParams { radius: 10.0, damage: (8.0, 3.0), knockback: 0.0, by: None };
-        assert_eq!(blast.roll_damage(&mut SmallRng::seed_from_u64(9)), 8.0);
+        let blast = BlastParams::world(10.0, (8.0, 3.0), 0.0);
+        assert_eq!(blast.roll_damage(&mut RoundRng::seed_from_u64(9)), 8.0);
     }
 
     #[test]
     fn roll_range_is_the_one_plain_draw_on_a_valid_range() {
         for (seed, min, max) in [(1_u64, 2.0_f32, 6.0_f32), (2, 0.0, 100.0), (0xB0B5, -10.0, 10.0), (4, 3.0, 3.5)] {
-            let mut rng = SmallRng::seed_from_u64(seed);
+            let mut rng = RoundRng::seed_from_u64(seed);
             let mut plain = rng.clone();
             for _ in 0..32 {
                 assert_eq!(roll_range(&mut rng, min, max).to_bits(), plain.random_range(min..max).to_bits(), "seed {seed}, {min}..{max}");
@@ -543,7 +783,7 @@ mod ram_tests {
         let water = crate::ground::WaterLayout::build(w, h, &[], &[]);
         let terrain = Terrain::build(&world, w, h, &[], &water);
         let bong = crate::map::cell_to_world(11, 11);
-        let mut rng = SmallRng::seed_from_u64(3);
+        let mut rng = RoundRng::seed_from_u64(3);
         let landing = crate::tuning::in_force(Some(&table), || bong_hop_target(&mut rng, bong, Vec2::new(1.0, 0.0), 96.0, &terrain, w, h));
         assert!(landing.is_some_and(|p| p.x > bong.x), "{landing:?}");
     }
@@ -553,7 +793,7 @@ mod ram_tests {
         let mut physics = Physics::new();
         let mut wreck = tank_at(100.0, MAX_DAMAGE, &mut physics);
         let mut live = tank_at(130.0, 10.0, &mut physics);
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = RoundRng::seed_from_u64(1);
         let mut kills = Vec::new();
         ram(&mut wreck, &mut live, &mut physics, &mut rng, &mut kills, &mut Shoves::default(), 1.0);
         assert_eq!(live.damage, 10.0);
@@ -566,7 +806,7 @@ mod ram_tests {
         let mut physics = Physics::new();
         let mut a = tank_at(100.0, 0.0, &mut physics);
         let mut b = tank_at(130.0, 0.0, &mut physics);
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = RoundRng::seed_from_u64(1);
         let mut kills = Vec::new();
         ram(&mut a, &mut b, &mut physics, &mut rng, &mut kills, &mut Shoves::default(), 1.0);
         assert!(a.damage >= tuning().ram_damage_min && a.damage < tuning().ram_damage_max);
@@ -588,7 +828,7 @@ mod ram_tests {
         physics.set_velocity(seat.body.expect("a body"), Position::new(120.0, 0.0));
         let mut shoves = Shoves::default();
         shoves.owned[0] = true;
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = RoundRng::seed_from_u64(1);
         let mut kills = Vec::new();
         ram(&mut seat, &mut enemy, &mut physics, &mut rng, &mut kills, &mut shoves, 1.0).expect("an exchange");
         assert_eq!(shoves.log.len(), 1, "the enemy's push is nobody's to be told: {:?}", shoves.log);

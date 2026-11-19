@@ -7,9 +7,17 @@ declare global {
     /** Emscripten's configuration object. The glue reads the global `Module`
      *  when it loads, so the page must have defined it by then. */
     Module: EmscriptenModule;
-    /** Bit 1 = ShiftLeft held; read once a frame by `app.rs`'s
-     *  `left_shift_down`. See `input.ts`. */
+    /** Bit 1 = ShiftLeft held; read by `app.rs`'s `left_shift_down` when
+     *  it changed (`bbChanged`). See `input.ts`. */
     bbShift: number;
+    /** 1 once the page's scripts call `bbChanged` after every change of
+     *  `bbShift` and `bbOverlay`; without it the game reads both every
+     *  frame. See `input.ts`. */
+    bbNotifies: number;
+    /** The game's, set when it starts (src/app/web.rs `watch_page`): the
+     *  page calls it after changing `bbShift` or `bbOverlay`, and the game
+     *  reads them again on its next frame. */
+    bbChanged?: () => void;
     /** The URL this page was opened on, fragment stripped: the web
      *  build's command line, parsed once at startup by `app.rs` through
      *  `net::rooms::Invite`. See `room.ts`. */
@@ -27,8 +35,8 @@ declare global {
      *  See `motion.ts`. */
     bbMotion: string;
     /** Where the page's own controls stand over the canvas, `top x y
-     *  width height` in CSS pixels, read once a frame by `app/web.rs`.
-     *  See `overlay.ts`. */
+     *  width height` in CSS pixels, read by `app/web.rs` when it changed
+     *  (`bbChanged`). See `overlay.ts`. */
     bbOverlay: string;
     /** "1" on a touch screen - `(hover: none) and (pointer: coarse)` -,
      *  else empty: read once at startup by `app.rs`, which frames a phone's

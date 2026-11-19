@@ -22,6 +22,15 @@
 //! stand below it - and wherever they are, the off-screen arrows keep off
 //! them.
 //!
+//! What the page changes while the game runs - `window.bbShift`,
+//! `window.bbOverlay` - it changes in its own event handlers, between
+//! frames, and each time calls `window.bbChanged`, a function the game
+//! gave it (`watch_page`) that sets one byte of the game's memory.
+//! `read_page`, at the top of a frame, evaluates the two globals again
+//! only when that byte is set: a frame the page did nothing in runs no
+//! script. A page that does not promise the calls (`window.bbNotifies`),
+//! or a runtime the byte could not be written in, is read every frame.
+//!
 //! Every reading is a synchronous call into emscripten's runtime - the box
 //! through `emscripten_get_element_css_size`, the ratio through
 //! `emscripten_get_device_pixel_ratio` - and the resize is raylib's own
@@ -33,6 +42,7 @@
 use std::cell::Cell;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_double, c_int};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use sola_raylib::prelude::RaylibHandle;
 
@@ -54,6 +64,11 @@ thread_local! {
     /// What the page's own controls take of the canvas, as `follow_canvas`
     /// last read it.
     static OVERLAY: Cell<PageOverlay> = const { Cell::new(PageOverlay { top: 0.0, rect: None }) };
+    /// `window.bbShift` as `read_page` last read it.
+    static SHIFT: Cell<i32> = const { Cell::new(0) };
+    /// Whether the page tells its changes (`watch_page`); until it does,
+    /// every frame reads it.
+    static WATCHED: Cell<bool> = const { Cell::new(false) };
     /// Whether the page is on a touch screen (`set_touch_screen`).
     static TOUCH: Cell<bool> = const { Cell::new(false) };
     /// Whether the page is on a full-size iPad (`set_full_size_ipad`).
@@ -90,6 +105,50 @@ pub fn touch_screen() -> bool {
 /// height` in CSS pixels, or nothing.
 const PAGE_OVERLAY: &CStr = c"(function(){try{return String(window.bbOverlay||'')}catch(e){return ''}})()";
 
+/// `window.bbShift` as a string, for `page_string`.
+const PAGE_SHIFT: &CStr = c"(function(){try{return String(window.bbShift|0)}catch(e){return '0'}})()";
+
+/// Set by the page's `window.bbChanged` (`watch_page`): one of the
+/// globals `read_page` reads has changed since it last did. It starts
+/// set, for the first reading.
+static CHANGED: AtomicU8 = AtomicU8::new(1);
+
+/// What `watch_page`'s script writes to `CHANGED` to show it can.
+const PROBE: u8 = 2;
+
+/// Give the page `window.bbChanged`, which sets `CHANGED`, and from then
+/// on read the page's globals only when it was called - if the page
+/// promises to call it (`window.bbNotifies`) and the script could write
+/// the byte, which it shows by leaving `PROBE` there.
+pub fn watch_page() {
+    let at = CHANGED.as_ptr() as usize;
+    let script = format!(
+        "(function(){{try{{var p={at};var h=function(){{return typeof HEAPU8!=='undefined'?HEAPU8:Module.HEAPU8}};h()[p]={PROBE};window.bbChanged=function(){{try{{h()[p]=1}}catch(e){{}}}};return window.bbNotifies?'1':''}}catch(e){{return ''}}}})()"
+    );
+    let Ok(script) = std::ffi::CString::new(script) else { return };
+    let promised = super::page_string(&script).trim() == "1";
+    let written = CHANGED.swap(1, Ordering::Relaxed) == PROBE;
+    WATCHED.with(|w| w.set(promised && written));
+    eprintln!("[web] the page's changes are {}", if promised && written { "told by the page" } else { "read every frame" });
+}
+
+/// Read what the page changes while the game runs, if it has changed
+/// (`CHANGED`) or the page does not tell (`WATCHED`): the Shift key and
+/// the controls' box.
+fn read_page() {
+    let told = CHANGED.swap(0, Ordering::Relaxed) != 0;
+    if !told && WATCHED.with(Cell::get) {
+        return;
+    }
+    SHIFT.with(|s| s.set(super::page_string(PAGE_SHIFT).trim().parse().unwrap_or(0)));
+    OVERLAY.with(|o| o.set(PageOverlay::parse(&super::page_string(PAGE_OVERLAY))));
+}
+
+/// `window.bbShift` (bit 1 = ShiftLeft held) as this frame read it.
+pub fn shift_mask() -> i32 {
+    SHIFT.with(Cell::get)
+}
+
 /// The drawing buffer the canvas's box needs now, and how many of its
 /// pixels make a CSS pixel (`view::canvas_buffer`). `None` while the
 /// canvas has no box.
@@ -113,7 +172,7 @@ pub fn canvas_buffer() -> Option<((i32, i32), f32)> {
 /// pixels and the first one after it with the size from before, and in
 /// both cases a second request lands where the first was meant to.
 pub fn follow_canvas(rl: &mut RaylibHandle) {
-    OVERLAY.with(|o| o.set(PageOverlay::parse(&super::page_string(PAGE_OVERLAY))));
+    read_page();
     let Some(((width, height), units)) = canvas_buffer() else { return };
     UNITS.with(|u| u.set(units));
     for _ in 0..2 {

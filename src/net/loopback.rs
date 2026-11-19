@@ -12,7 +12,7 @@
 //! is here because the rig's job is to make the replica's tolerance
 //! visible - the PRD's `--loss 0.02`.
 //!
-//! Every roll comes from a seeded `SmallRng`, one per direction, so a
+//! Every roll comes from a seeded `RoundRng`, one per direction, so a
 //! rig run replays: the same seed, the same link, the same parcels
 //! arriving on the same frames. `rand::rng()` is never called here.
 
@@ -20,7 +20,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::net::codec::{self, Msg};
@@ -89,7 +89,7 @@ pub struct Loopback {
     /// What this end writes.
     outbox: Arc<Mutex<Pipe>>,
     quality: LinkQuality,
-    rng: SmallRng,
+    rng: RoundRng,
     /// Set once the inbox has closed and run dry.
     finished: Option<Closed>,
     /// What `send` and `drain` call now: the wall unless a test winds it
@@ -108,7 +108,7 @@ pub fn pair(quality: LinkQuality, seed: u64) -> (Loopback, Loopback) {
         inbox: b_to_a.clone(),
         outbox: a_to_b.clone(),
         quality,
-        rng: SmallRng::seed_from_u64(seed),
+        rng: RoundRng::seed_from_u64(seed),
         finished: None,
         clock: Now::wall(),
     };
@@ -118,7 +118,7 @@ pub fn pair(quality: LinkQuality, seed: u64) -> (Loopback, Loopback) {
         quality,
         // The other direction's stream: the odd-word mix of the golden
         // ratio, the same constant the hashes elsewhere are salted with.
-        rng: SmallRng::seed_from_u64(seed ^ 0x9E37_79B9_7F4A_7C15),
+        rng: RoundRng::seed_from_u64(seed ^ 0x9E37_79B9_7F4A_7C15),
         finished: None,
         clock: Now::wall(),
     };

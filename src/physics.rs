@@ -83,9 +83,9 @@ impl Physics {
     }
 
     /// Advance the simulation by one fixed step. `IntegrationParameters::dt`
-    /// defaults to 1/60s (see `PHYSICS_FIXED_DT`); `Game::update` drives this
-    /// from a fixed-timestep accumulator so contact resolution stays
-    /// consistent regardless of the render frame rate.
+    /// defaults to 1/60s (see `PHYSICS_FIXED_DT`), the one `dt`
+    /// `Game::update` is ever given, so an update is exactly one step
+    /// whatever the render frame rate.
     pub fn step(&mut self) {
         self.world.step();
     }

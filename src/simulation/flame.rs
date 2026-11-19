@@ -22,17 +22,18 @@ use crate::math;
 use hecs::Entity;
 use crate::math::Vec2;
 
+use super::combat::Hurt;
+use super::hits::Terrain;
 use super::props::{arm_fuse, DamageCause};
 use super::weapons::FlameJet;
 use super::{Event, Frame, Game, HitTarget};
-use crate::ai::Ai;
 use crate::bong::Bong;
 use crate::map::cell_to_world;
 use crate::obstacle::{face_toward, Obstacle};
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::tuning::tuning;
-use crate::{Position, MAX_DAMAGE, OBSTACLE_GRID_SIZE};
+use crate::{Position, OBSTACLE_GRID_SIZE};
 
 /// The stream starts sampling the ground this far past the muzzle, so a
 /// standing tank never lights the cell it is sitting in.
@@ -40,52 +41,87 @@ const SAMPLE_START_PX: f32 = OBSTACLE_GRID_SIZE / 4.0;
 /// Spacing of the exposure samples along the centre line - two per cell,
 /// so no cell the line crosses is skipped.
 const SAMPLE_STEP_PX: f32 = OBSTACLE_GRID_SIZE / 2.0;
-/// Lateral slack for a hull: the stream counts as on a tank whose centre
-/// is within a quarter hull of the cone, since a jet that visibly washes
-/// over a hull's flank and does nothing reads as a miss.
-const HULL_SLACK_FRACTION: f32 = 0.25;
+/// The cone is cast as rays from the nozzle, one at each of these
+/// fractions of its half angle: each is stopped on its own by the first
+/// tile it meets and then by the first hull, so a flank does not burn
+/// round a wall's corner and nothing burns behind a tank.
+const RAYS: [f32; 5] = [-1.0, -0.5, 0.0, 0.5, 1.0];
+/// The ray down the cone's axis.
+const CENTRE: usize = 2;
 
-/// One jet's cone this frame, with the range already capped by the first
-/// solid tile on its centre line.
+/// One jet's cone this frame, each of its rays capped by what it met.
 struct Cone {
     origin: Position,
     dir: Vec2,
-    /// Effective reach: `flame_range`, or where the centre line met a tile.
+    /// The centre ray's reach to the first tile, or `flame_range`: what
+    /// the jet is drawn to.
     reach: f32,
     /// tan of the half angle: half width at distance `d` is `d * spread`.
     spread: f32,
+    /// How far along the axis each of `RAYS` gets, px.
+    rays: [f32; RAYS.len()],
 }
 
 impl Cone {
-    fn new(jet: &FlameJet, reach: f32) -> Self {
-        Cone { origin: jet.origin, dir: jet.dir, reach, spread: math::tan(tuning().flame_half_angle_deg.to_radians()) }
+    /// The cone of `jet`, each ray capped at the first tile a shot would
+    /// meet on it (`Terrain::first_shot_along`: every tile, a chunked one
+    /// by its standing chunks).
+    fn new(jet: &FlameJet, terrain: &Terrain) -> Self {
+        let spread = math::tan(tuning().flame_half_angle_deg.to_radians());
+        let mut cone = Cone { origin: jet.origin, dir: jet.dir, reach: jet.range, spread, rays: [jet.range; RAYS.len()] };
+        for i in 0..RAYS.len() {
+            let end = cone.ray_end(i, jet.range);
+            cone.rays[i] = terrain.first_shot_along(jet.origin, end, 0.0).map_or(jet.range, |t| t * jet.range);
+        }
+        cone.reach = cone.rays[CENTRE];
+        cone
     }
 
-    /// Is `p` inside the cone, widened by `pad` on every side?
+    /// The point `along` px down the axis on ray `i`.
+    fn ray_end(&self, i: usize, along: f32) -> Position {
+        let side = along * self.spread * RAYS[i];
+        Position::new(self.origin.x + self.dir.x * along - self.dir.y * side, self.origin.y + self.dir.y * along + self.dir.x * side)
+    }
+
+    /// The ray nearest a point `along` px down the axis and `side` px off
+    /// it (signed, toward `ray_end`'s positive side).
+    fn ray_near(&self, along: f32, side: f32) -> usize {
+        let half = along * self.spread;
+        if half <= f32::EPSILON {
+            return CENTRE;
+        }
+        let k = (side / half).clamp(-1.0, 1.0);
+        (((k + 1.0) * 0.5) * (RAYS.len() - 1) as f32).round() as usize
+    }
+
+    /// Is `p` in the stream, widened by `pad` on every side: inside the
+    /// cone and no further out than the ray nearest it gets?
     fn contains(&self, p: Position, pad: f32) -> bool {
         let dx = p.x - self.origin.x;
         let dy = p.y - self.origin.y;
         let along = dx * self.dir.x + dy * self.dir.y;
-        let lateral = (dx * self.dir.y - dy * self.dir.x).abs();
-        along >= -pad && along <= self.reach + pad && lateral <= along.max(0.0) * self.spread + pad
+        let side = dy * self.dir.x - dx * self.dir.y;
+        along >= -pad && side.abs() <= along.max(0.0) * self.spread + pad && along <= self.rays[self.ray_near(along.max(0.0), side)] + pad
     }
 
-    /// The ground cells the stream heats this frame: the centre line
-    /// sampled from a quarter cell past the muzzle to the reach, and the
-    /// cone's width sampled across its outer half. Sorted and unique.
+    /// The ground cells the stream heats this frame: the centre ray
+    /// sampled from a quarter cell past the muzzle to its reach, and the
+    /// two edge rays across the cone's outer half, each to its own.
+    /// Sorted and unique.
     fn cells(&self) -> Vec<(i32, i32)> {
         let mut cells = Vec::new();
         let mut along = SAMPLE_START_PX;
-        while along <= self.reach {
-            let cx = self.origin.x + self.dir.x * along;
-            let cy = self.origin.y + self.dir.y * along;
-            cells.push(cell_of(Position::new(cx, cy)));
+        let far = self.rays.iter().copied().fold(0.0, f32::max);
+        while along <= far {
+            if along <= self.rays[CENTRE] {
+                cells.push(cell_of(self.ray_end(CENTRE, along)));
+            }
             if along >= self.reach * 0.5 {
-                let half_w = along * self.spread;
-                // Perpendicular to the facing.
-                let (px, py) = (-self.dir.y * half_w, self.dir.x * half_w);
-                cells.push(cell_of(Position::new(cx + px, cy + py)));
-                cells.push(cell_of(Position::new(cx - px, cy - py)));
+                for edge in [0, RAYS.len() - 1] {
+                    if along <= self.rays[edge] {
+                        cells.push(cell_of(self.ray_end(edge, along)));
+                    }
+                }
             }
             along += SAMPLE_STEP_PX;
         }
@@ -113,63 +149,70 @@ impl Game {
         let mut cones: Vec<(Cone, &FlameJet)> = Vec::with_capacity(jets.len());
         let mut kept = Vec::with_capacity(jets.len());
         for jet in &jets {
-            let end = Position::new(jet.origin.x + jet.dir.x * jet.range, jet.origin.y + jet.dir.y * jet.range);
-            let reach = f.terrain.first_solid_along(jet.origin, end).map_or(jet.range, |t| t * jet.range);
-            cones.push((Cone::new(jet, reach), jet));
-            kept.push(FlameJet { reach, ..*jet });
+            let cone = Cone::new(jet, &f.terrain);
+            kept.push(FlameJet { reach: cone.reach, ..*jet });
+            cones.push((cone, jet));
         }
 
         // --- Tanks and bongs in a cone. ---
         let mut touched: Vec<Entity> = Vec::new();
-        for (cone, jet) in &cones {
-            let targets: Vec<Entity> = self
+        for (cone, jet) in &mut cones {
+            // By owner slot: the seats, then the enemies. A wreck is no
+            // more in a stream's way than in a shell's.
+            let mut hulls: Vec<(usize, Entity, crate::shape::TargetShape)> = self
                 .world
                 .query::<(Entity, &Tank)>()
                 .iter()
                 .filter(|(e, tank)| *e != jet.shooter && !tank.is_wreck() && tank.body.is_some())
-                .filter(|(_, tank)| cone.contains(tank.position, tank.hull_size() * HULL_SLACK_FRACTION))
-                .map(|(e, _)| e)
+                .map(|(e, tank)| (tank.owner_slot(), e, tank.target_shape()))
                 .collect();
+            hulls.sort_unstable_by_key(|&(slot, ..)| slot);
+            let bongs: Vec<(Entity, Position)> = super::ordered(self.world.query::<(Entity, &Bong)>().iter().filter(|(_, b)| !b.is_dead()), |(_, b)| super::bong_order(b))
+                .into_iter()
+                .map(|(e, b)| (e, b.position))
+                .collect();
+            // Each ray burns the first hull or bong it meets (`TargetShape::
+            // swept`, the boxes a shot is tested against) and stops there.
+            let mut reached: Vec<Entity> = Vec::new();
+            let bong_half = Position::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
+            for i in 0..RAYS.len() {
+                let end = cone.ray_end(i, cone.rays[i]);
+                let mut first: Option<(f32, Entity)> = None;
+                let entries = hulls
+                    .iter()
+                    .map(|&(_, e, shape)| (e, shape.swept(cone.origin, end, Vec2::zero())))
+                    .chain(bongs.iter().map(|&(e, at)| (e, super::hits::segment_hits_aabb(cone.origin, end, at, bong_half))));
+                for (e, entry) in entries {
+                    if let Some(t) = entry
+                        && first.is_none_or(|(best, _)| t < best)
+                    {
+                        first = Some((t, e));
+                    }
+                }
+                if let Some((t, e)) = first {
+                    cone.rays[i] *= t;
+                    reached.push(e);
+                }
+            }
+            let targets: Vec<Entity> = hulls.iter().map(|&(_, e, _)| e).filter(|e| reached.contains(e)).collect();
             for entity in targets {
-                let (killed, pos, owner, entered) = {
-                    let mut q = self.world.query_one::<&mut Tank>(entity);
-                    let tank = q.get().expect("cone target always has a Tank");
-                    let mut d = t.flame_damage_per_second * f.dt;
-                    if jet.owner.is_player() && tank.owner().is_player() {
-                        d *= t.friendly_fire_damage_factor;
-                    }
-                    let entered = !self.flame_contacts.contains(&entity);
-                    // A heat shield turns the stream: no burn, no afterburn.
-                    if tank.takes_heat() {
-                        tank.take_damage(d, MAX_DAMAGE);
-                        tank.mark_hit();
-                        tank.credit(jet.owner);
-                        tank.burn_timer = t.flame_afterburn_seconds;
-                    }
-                    (tank.is_wreck(), tank.position, tank.owner(), entered)
-                };
+                let Some((at, seat, takes_heat)) = self.world.get::<&Tank>(entity).ok().map(|tank| (tank.position, tank.owner().is_player(), tank.takes_heat())) else { continue };
+                let mut d = t.flame_damage_per_second * f.dt;
+                if jet.owner.is_player() && seat {
+                    d *= t.friendly_fire_damage_factor;
+                }
+                // A heat shield turns the stream: no burn, no afterburn -
+                // the contact is still reported.
+                self.hurt_tank(f, entity, Hurt::contact(if takes_heat { d } else { 0.0 }, super::HitCause::Flame, Some(jet.owner), at));
+                if takes_heat {
+                    super::with_tank_mut(&self.world, entity, |tank| tank.burn_timer = t.flame_afterburn_seconds);
+                }
                 touched.push(entity);
-                if entered {
-                    let target = match owner {
-                        crate::shell::Owner::Player(player) => HitTarget::Player { player },
-                        crate::shell::Owner::Enemy(slot) => HitTarget::Enemy { slot },
-                        crate::shell::Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
-                    };
-                    f.events.push(Event::Hit { target, damage: 0.0, killed, x: pos.x, y: pos.y, cause: super::HitCause::Flame });
-                }
-                if killed {
-                    f.kills.push((pos, owner));
-                } else {
-                    let mut q = self.world.query_one::<&mut Ai>(entity);
-                    if let Ok(ai) = q.get() {
-                        ai.notify_hit();
-                    }
-                }
             }
             if t.flame_bong_damage_per_second > 0.0 {
                 let mut dead_at = Vec::new();
-                for (entity, bong) in self.world.query::<(Entity, &mut Bong)>().iter() {
-                    if bong.is_dead() || !cone.contains(bong.position, OBSTACLE_GRID_SIZE * 0.25) {
+                for (entity, bong) in super::ordered(self.world.query::<(Entity, &mut Bong)>().iter(), |(_, b)| super::bong_order(b)) {
+                    if bong.is_dead() || !reached.contains(&entity) {
                         continue;
                     }
                     bong.damage(t.flame_bong_damage_per_second * f.dt);
@@ -197,31 +240,24 @@ impl Game {
         // enemies, like every other damage walk.
         if t.flame_afterburn_dps > 0.0 {
             let mut order: Vec<Entity> = self.players().into_iter().flatten().collect();
-            order.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
+            order.extend(self.enemies_by_slot());
             for entity in order {
                 if touched.contains(&entity) {
                     continue;
                 }
-                let mut q = self.world.query_one::<&mut Tank>(entity);
-                let Ok(tank) = q.get() else { continue };
-                if tank.is_wreck() || tank.burn_timer <= 0.0 {
-                    continue;
-                }
+                let Some((at, takes_heat)) = self.world.get::<&Tank>(entity).ok().filter(|tank| !tank.is_wreck() && tank.burn_timer > 0.0).map(|tank| (tank.position, tank.takes_heat())) else { continue };
                 // Wading puts the fire out (docs/water.md); ice does not.
                 // A heat shield puts it out too.
-                if self.water.depth_at(tank.position).is_wet() || !tank.takes_heat() {
-                    tank.burn_timer = 0.0;
+                if self.water.depth_at(at).is_wet() || !takes_heat {
+                    super::with_tank_mut(&self.world, entity, |tank| tank.burn_timer = 0.0);
                     continue;
                 }
                 // In the lava itself the lava charges the full rate
                 // (`Game::lava_phase`); the afterburn is for after.
-                if self.lava.depth_at(tank.position) != crate::ground::Depth::Dry {
+                if self.lava.depth_at(at) != crate::ground::Depth::Dry {
                     continue;
                 }
-                tank.take_damage(t.flame_afterburn_dps * f.dt, MAX_DAMAGE);
-                if tank.is_wreck() {
-                    f.kills.push((tank.position, tank.owner()));
-                }
+                self.hurt_tank(f, entity, Hurt::contact(t.flame_afterburn_dps * f.dt, super::HitCause::Fire, None, at));
             }
         }
         self.flame_contacts = touched;
@@ -283,7 +319,8 @@ impl Game {
         let half = OBSTACLE_GRID_SIZE * 0.5;
         let mut collapse: Vec<(Entity, Position, &'static str)> = Vec::new();
         let mut ignited: Vec<(Position, &'static str)> = Vec::new();
-        for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
+        // In cell order: what a tile catching or giving way sets off.
+        for (entity, o) in super::ordered(self.world.query::<(Entity, &mut Obstacle)>().iter(), |(_, o)| super::cell_order(o.position)) {
             if o.destroyed || o.burning || o.fuse.is_some() {
                 continue;
             }

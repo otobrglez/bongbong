@@ -55,6 +55,40 @@ enum Standing<'a> {
     Grenade(&'a crate::grenade::Grenade),
 }
 
+/// The lists the stages fill on every frame, kept between frames so that a
+/// frame builds them in the room the last one left: a stage takes a list
+/// out (`scratch`), fills it and puts it back (`keep`).
+#[derive(Default)]
+struct Scratch {
+    fences: HashSet<(i32, i32)>,
+    rollins: HashSet<Entity>,
+    standing: Vec<(f32, Standing<'static>)>,
+    trees: Vec<&'static Obstacle>,
+    movers: Vec<crate::Position>,
+    seats: Vec<(crate::Position, crate::Position)>,
+}
+
+thread_local! {
+    static SCRATCH: std::cell::RefCell<Scratch> = std::cell::RefCell::new(Scratch::default());
+}
+
+/// Take one of the thread's kept lists out, as it was put back.
+fn scratch<T: Default>(list: impl FnOnce(&mut Scratch) -> &mut T) -> T {
+    SCRATCH.with(|s| std::mem::take(list(&mut s.borrow_mut())))
+}
+
+/// Put a list back for the next frame.
+fn keep<T>(list: impl FnOnce(&mut Scratch) -> &mut T, value: T) {
+    SCRATCH.with(|s| *list(&mut s.borrow_mut()) = value);
+}
+
+/// `list` emptied, as a list of another type of the same layout - one
+/// holding borrows of another frame's - in the room it already has.
+fn emptied<T, U>(mut list: Vec<T>) -> Vec<U> {
+    list.clear();
+    list.into_iter().map(|_| unreachable!("the list is empty")).collect()
+}
+
 /// What a wreck's aftermath puts on its hull (docs/aftermath.md): its
 /// remain while it is one (`Game::wreck_hot`) and how much snow lies on a
 /// cold deck (`Game::hulk_snow`).
@@ -65,7 +99,7 @@ struct HulkLook {
 }
 
 /// A tank and everything drawn on it, in the order the layers stack.
-fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, shadows: bool, locate_cue: bool, hulk: HulkLook) {
+fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, shadows: bool, locate_cue: bool, hulk: HulkLook, t: &crate::tuning::Tuning) {
     match role {
         TankRole::Player => {
             // The locate ripple under the marker so the steady ring stays
@@ -90,25 +124,24 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     // A cold hulk's rust and the snow on its deck, under anything still
     // burning on it (docs/aftermath.md).
     if hulk.hot.is_some() {
-        crate::pyro::draw(c, &crate::damage_stage::weathering(tank, hulk.snow, &crate::tuning::tuning()));
+        crate::pyro::draw(c, &crate::damage_stage::weathering(tank, hulk.snow, t));
     }
     // An EMP's lights out: the lamps and strips drawn dark (docs/emp-burst.md).
     crate::tank::draw_tank_dark(c, tank, time);
     crate::tank::draw_tank_slime(c, tank, time);
     if role != TankRole::RollIn {
-        let t = crate::tuning::tuning();
-        let lean = crate::pyro::smoke_lean(&t, tank.drawn().position, time);
+        let lean = crate::pyro::smoke_lean(t, tank.drawn().position, time);
         crate::pyro::draw(c, &crate::damage_stage::flames(tank, time, lean));
         // A smouldering hulk's glowing breaches and flare-ups; their light
         // is the glowing pass's.
         if let Some(hot) = hulk.hot.as_ref() {
-            crate::pyro::draw(c, &crate::damage_stage::smoulder(tank, hot, time, &t));
+            crate::pyro::draw(c, &crate::damage_stage::smoulder(tank, hot, time, t));
         }
     }
     // The FPV halo round the hull, over it: its shadows and drones; the
     // lamps are the glowing pass's (`halo_of`).
     if let Some(look) = halo_of(tank, time) {
-        let (halo_shadows, pic) = crate::fpv::compose_halo(&look, &crate::tuning::tuning());
+        let (halo_shadows, pic) = crate::fpv::compose_halo(&look, t);
         if shadows {
             crate::pyro::draw(c, &halo_shadows);
         }
@@ -242,15 +275,23 @@ pub fn is_tile(obstacle: &Obstacle) -> bool {
 /// of tiles reads as one structure rather than as a grid. `fences` is
 /// every fence's cell, which way each runs (`fence_axis`). The round's
 /// tiles (`Game::paint_tiles`) and the builder's canvas (`editor::still`)
-/// are drawn by this one loop. Each tile the canvas culls is left out.
-pub fn paint_tile_run<'a>(c: &mut impl Canvas, tiles: impl Iterator<Item = &'a Obstacle>, fences: &HashSet<(i32, i32)>, shadows: bool, time: f32) {
+/// are drawn by this one loop, under the knobs `t`. Each tile the canvas
+/// culls is left out.
+pub fn paint_tile_run<'a>(
+    c: &mut impl Canvas,
+    tiles: impl Iterator<Item = &'a Obstacle>,
+    fences: &HashSet<(i32, i32)>,
+    shadows: bool,
+    time: f32,
+    t: &crate::tuning::Tuning,
+) {
     for obstacle in tiles {
         if c.culls(obstacle.position) {
             continue;
         }
         let axis = fence_axis(obstacle, fences);
         if shadows {
-            draw_obstacle_shadow(c, obstacle, axis);
+            draw_obstacle_shadow(c, obstacle, axis, t);
         }
         draw_obstacle(c, obstacle, axis, time);
         draw_obstacle_cap(c, obstacle);
@@ -273,15 +314,15 @@ pub fn sort_trees<T: std::borrow::Borrow<Obstacle>>(trees: &mut [T]) {
 /// player's hull is see-through), and its flames while it burns. The
 /// round's woods (`Game::paint_standing`) and the builder's
 /// (`editor::still`) are drawn by this.
-pub fn paint_tree(c: &mut impl Canvas, tree: &Obstacle, lean: f32, alpha: f32, shadows: bool, time: f32) {
+pub fn paint_tree(c: &mut impl Canvas, tree: &Obstacle, lean: f32, alpha: f32, shadows: bool, time: f32, t: &crate::tuning::Tuning) {
     if shadows {
-        draw_tree_shadow(c, tree, lean, time, alpha);
+        draw_tree_shadow(c, tree, lean, time, alpha, t);
     }
     if alpha < 1.0 {
         let alpha = (255.0 * alpha.clamp(0.0, 1.0)) as u8;
-        crate::obstacle::draw_tree_tinted(c, tree, lean, time, crate::math::Color::new(255, 255, 255, alpha));
+        crate::obstacle::draw_tree_tinted(c, tree, lean, time, crate::math::Color::new(255, 255, 255, alpha), t);
     } else {
-        draw_tree(c, tree, lean, time);
+        draw_tree(c, tree, lean, time, t);
     }
     if tree.burning {
         crate::pyro::draw(c, &tile_flames(tree, time));
@@ -401,6 +442,7 @@ impl Game {
     /// and the edge's, `ground::bake_shade`), then the marks on it. Each
     /// mark the canvas culls (`Canvas::culls`) is left out.
     pub fn paint_floor_marks(&self, c: &mut impl Canvas) {
+        let t = crate::tuning::tuning();
         if !self.plain_canvas {
             crate::ground::draw_shade(c, &self.ground);
         }
@@ -429,8 +471,8 @@ impl Game {
         for scorch in &self.scorches {
             if !c.culls(scorch.center) {
                 // Under snow a cold mark goes under it (docs/aftermath.md).
-                let cold = if scorch.ember { self.cold_for(crate::smoulder::Kind::Bed, scorch.age) } else { scorch.age };
-                draw_scorch_kept(c, scorch, self.snow_keep(cold));
+                let cold = if scorch.ember { self.cold_for(crate::smoulder::Kind::Bed, scorch.age, &t) } else { scorch.age };
+                draw_scorch_kept(c, scorch, self.snow_keep(cold, &t));
             }
         }
 
@@ -438,7 +480,7 @@ impl Game {
         // impact left, under the rubble it threw; filled with water under a
         // wet sky, iced under snow.
         if !self.craters.is_empty() {
-            let rain = crate::weather::fills_craters(self.weather, &crate::tuning::tuning());
+            let rain = crate::weather::fills_craters(self.weather, &t);
             for crater in self.craters.list() {
                 let at = crate::map::cell_to_world(crater.cell.0, crater.cell.1);
                 if c.culls(at) {
@@ -460,8 +502,8 @@ impl Game {
         for decal in self.decals.iter().filter(|dc| dc.landed()) {
             if !c.culls(decal.center) {
                 let kind = if decal.upright { crate::smoulder::Kind::Stump } else { crate::smoulder::Kind::Ruin };
-                let cold = if decal.hot { self.cold_for(kind, decal.age) } else { decal.age };
-                draw_decal_kept(c, decal, self.snow_keep(cold));
+                let cold = if decal.hot { self.cold_for(kind, decal.age, &t) } else { decal.age };
+                draw_decal_kept(c, decal, self.snow_keep(cold, &t));
             }
         }
         // What the fight left smouldering on the ground, and the snow over
@@ -539,13 +581,9 @@ impl Game {
     /// are not tiles here - their canopies belong over the tanks, so they
     /// close `paint_standing` instead.
     pub fn paint_tiles(&self, c: &mut impl Canvas) {
-        let fences: HashSet<(i32, i32)> = self
-            .world
-            .query::<&Obstacle>()
-            .iter()
-            .filter(|o| o.material == Material::Fence)
-            .map(|o| o.cell())
-            .collect();
+        let mut fences = scratch(|s| &mut s.fences);
+        fences.clear();
+        fences.extend(self.world.query::<&Obstacle>().iter().filter(|o| o.material == Material::Fence).map(|o| o.cell()));
         // Towers stand in `paint_standing`; their shadows fall here, under
         // the tiles and everything that drives past.
         let towers = self.tower_views();
@@ -574,8 +612,9 @@ impl Game {
         }
         drop(pictures);
         let mut tiles = self.world.query::<&Obstacle>();
-        paint_tile_run(c, tiles.iter().filter(|o| is_tile(o)), &fences, self.shadows_enabled, self.time);
+        paint_tile_run(c, tiles.iter().filter(|o| is_tile(o)), &fences, self.shadows_enabled, self.time, &t);
         drop(tiles);
+        keep(|s| &mut s.fences, fences);
         // Training doors and flags (docs/training-stage.md): drawn by
         // their own code, doors with the tiles, flags standing on the
         // ground beside them.
@@ -629,19 +668,18 @@ impl Game {
     pub fn paint_standing(&self, c: &mut impl Canvas, opts: PaintOptions) {
         // What the canvas culls (`Canvas::cull`) stands out of the walk.
         let cull = c.cull();
+        let t = crate::tuning::tuning();
         for pickup in self.world.query::<&Pickup>().iter() {
             if !culled(cull, pickup.at()) {
-                draw_pickup(c, pickup, self.time, self.shadows_enabled);
+                draw_pickup(c, pickup, self.time, self.shadows_enabled, &t);
             }
         }
 
-        let rollins: HashSet<Entity> = {
-            let mut q = self.world.query::<(Entity, &crate::simulation::RollIn)>();
-            let set = q.iter().map(|(e, _)| e).collect();
-            set
-        };
+        let mut rollins = scratch(|s| &mut s.rollins);
+        rollins.clear();
+        rollins.extend(self.world.query::<(Entity, &crate::simulation::RollIn)>().iter().map(|(e, _)| e));
         let mut tank_query = self.world.query::<(Entity, &Tank)>();
-        let mut standing: Vec<(f32, Standing)> = tank_query
+        let tanks = tank_query
             .iter()
             .map(|(entity, tank)| {
                 // The lane first: a tank on its way in through a gate is
@@ -658,8 +696,9 @@ impl Game {
             .filter(|(_, item)| {
                 !(self.hide_players && matches!(item, Standing::Tank(_, TankRole::Player)))
             })
-            .filter(|(_, item)| !matches!(item, Standing::Tank(tank, _) if culled(cull, tank.position)))
-            .collect();
+            .filter(|(_, item)| !matches!(item, Standing::Tank(tank, _) if culled(cull, tank.position)));
+        let mut standing: Vec<(f32, Standing)> = emptied(scratch(|s| &mut s.standing));
+        standing.extend(tanks);
         for bong_entity in [self.bong, self.enemy_bong].into_iter().flatten() {
             let at = crate::simulation::with_bong(&self.world, bong_entity, |bong| bong.position);
             if !culled(cull, at) {
@@ -692,7 +731,7 @@ impl Game {
             let mut i = from;
             while i < self.grass.len() && self.grass[i].base.y <= upto {
                 if !culled(cull, self.grass[i].base) {
-                    crate::grass::draw_tuft(c, &self.grass[i], self.map.theme, self.time);
+                    crate::grass::draw_tuft(c, &self.grass[i], self.map.theme, self.time, &t);
                 }
                 i += 1;
             }
@@ -702,8 +741,8 @@ impl Game {
             next_tuft = grass_up_to(c, *key, next_tuft);
             match item {
                 Standing::Tank(tank, role) => {
-                    let hulk = HulkLook { hot: self.wreck_hot(tank), snow: self.hulk_snow(tank) };
-                    draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts.locate_cue, hulk);
+                    let hulk = HulkLook { hot: self.wreck_hot(tank), snow: self.hulk_snow(tank, &t) };
+                    draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts.locate_cue, hulk, &t);
                 }
                 Standing::Bong(entity) => {
                     crate::simulation::with_bong(&self.world, *entity, |bong| {
@@ -723,7 +762,6 @@ impl Game {
                     crate::tower::draw_tower(c, view.kind, view.side, view.position, view.stage, view.heading + view.droop, glow);
                 }
                 Standing::Lamp(at) => {
-                    let t = crate::tuning::tuning();
                     let lit = crate::emp::lamp_lit(*at, self.lamps_out);
                     crate::lamp::draw_post(c, *at, self.time, (t.shadow_dir_x, t.shadow_dir_y), self.shadows_enabled, lit);
                 }
@@ -731,52 +769,54 @@ impl Game {
             }
         }
         grass_up_to(c, f32::INFINITY, next_tuft);
+        keep(|s| &mut s.standing, emptied(standing));
+        keep(|s| &mut s.rollins, rollins);
 
-        let movers: Vec<crate::Position> = self
-            .world
-            .query::<&Tank>()
-            .iter()
-            .filter(|t| !t.is_dead())
-            .map(|t| t.position)
-            .collect();
+        let mut movers = scratch(|s| &mut s.movers);
+        movers.clear();
+        movers.extend(self.world.query::<&Tank>().iter().filter(|t| !t.is_dead()).map(|t| t.position));
         let mut tree_query = self.world.query::<&Obstacle>();
-        let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree() && !culled(cull, o.position)).collect();
+        let mut trees: Vec<&Obstacle> = emptied(scratch(|s| &mut s.trees));
+        trees.extend(tree_query.iter().filter(|o| o.material.is_tree() && !culled(cull, o.position)));
         sort_trees(&mut trees);
-        let t = crate::tuning::tuning();
         // The players' hulls, for the canopy cutaway: the crowns hiding
         // much of one are drawn see-through, so a player never loses their
         // own tank under a wood. An enemy under a canopy stays hidden.
-        let seats: Vec<(crate::Position, crate::Position)> = self
-            .world
-            .query::<(Entity, &Tank)>()
-            .iter()
-            .filter(|&(e, tank)| !tank.is_dead() && !self.hide_players && self.is_player(e))
-            .map(|(_, tank)| tank.hull_bbox_world())
-            .collect();
+        let mut seats = scratch(|s| &mut s.seats);
+        seats.clear();
+        seats.extend(
+            self.world
+                .query::<(Entity, &Tank)>()
+                .iter()
+                .filter(|&(e, tank)| !tank.is_dead() && !self.hide_players && self.is_player(e))
+                .map(|(_, tank)| tank.hull_bbox_world()),
+        );
         let cutaway = crate::obstacle::canopy_cutaway(&trees, &seats, t.canopy_cutaway_cover);
         for (tree, &see_through) in trees.iter().zip(&cutaway) {
             // A sonic wave passing sways the crown away from its pivot.
-            let lean = tree_lean(tree, &movers) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
+            let lean = tree_lean(tree, &movers, &t) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
             let alpha = if see_through { t.canopy_cutaway_alpha } else { 1.0 };
-            paint_tree(c, tree, lean, alpha, self.shadows_enabled, self.time);
+            paint_tree(c, tree, lean, alpha, self.shadows_enabled, self.time, &t);
         }
+        keep(|s| &mut s.trees, emptied(trees));
+        keep(|s| &mut s.movers, movers);
+        keep(|s| &mut s.seats, seats);
     }
 
     /// What of a mark that went cold `cold` seconds ago still shows through
     /// the snow (`smoulder::snow_cover`): all of it under any other sky, and
     /// all of it while it is still hot.
-    fn snow_keep(&self, cold: f32) -> f32 {
+    fn snow_keep(&self, cold: f32, t: &crate::tuning::Tuning) -> f32 {
         if self.weather != crate::map::Weather::Snow {
             return 1.0;
         }
-        1.0 - crate::smoulder::snow_cover(cold, &crate::tuning::tuning())
+        1.0 - crate::smoulder::snow_cover(cold, t)
     }
 
     /// Seconds since a remain of `kind` `age` seconds old went cold
     /// (`smoulder::spans`), negative while it is still hot.
-    fn cold_for(&self, kind: crate::smoulder::Kind, age: f32) -> f32 {
-        let t = crate::tuning::tuning();
-        let (burn, smoulder, wisps) = crate::smoulder::spans(kind, crate::smoulder::douse(self.weather, &t), &t);
+    fn cold_for(&self, kind: crate::smoulder::Kind, age: f32, t: &crate::tuning::Tuning) -> f32 {
+        let (burn, smoulder, wisps) = crate::smoulder::spans(kind, crate::smoulder::douse(self.weather, t), t);
         age - burn - smoulder - wisps
     }
 
@@ -812,13 +852,12 @@ impl Game {
 
     /// How much snow lies on `tank`'s deck (`smoulder::snow_cover`): under a
     /// snowy sky, from the moment its wreck goes cold; 0 otherwise.
-    fn hulk_snow(&self, tank: &Tank) -> f32 {
+    fn hulk_snow(&self, tank: &Tank, t: &crate::tuning::Tuning) -> f32 {
         if self.weather != crate::map::Weather::Snow || !tank.is_wreck() {
             return 0.0;
         }
-        let t = crate::tuning::tuning();
-        let (burn, smoulder, wisps) = crate::smoulder::spans(crate::smoulder::Kind::Wreck, crate::smoulder::douse(self.weather, &t), &t);
-        crate::smoulder::snow_cover(tank.wreck_age - burn - smoulder - wisps, &t)
+        let (burn, smoulder, wisps) = crate::smoulder::spans(crate::smoulder::Kind::Wreck, crate::smoulder::douse(self.weather, t), t);
+        crate::smoulder::snow_cover(tank.wreck_age - burn - smoulder - wisps, t)
     }
 
     /// What the aftermath puts in the air over `view` this frame

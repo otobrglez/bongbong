@@ -38,11 +38,18 @@ export function installInputShims(canvas: HTMLCanvasElement | null): void {
   // GLFW layer reports the DOM Shift key as the *left* Shift whichever
   // side was pressed (it maps keyCode 0x10 and never reads event.code), so
   // through raylib a Right Shift would fire player 2's tank on the web
-  // only. The game reads this flag once a frame instead (bit 1 =
-  // ShiftLeft; see src/app.rs's left_shift_down). Cleared on blur so a
-  // Shift held while the tab loses focus does not stick.
+  // only. The game reads this flag instead (bit 1 = ShiftLeft; see
+  // src/app.rs's left_shift_down), when the page says it changed
+  // (`window.bbChanged`, src/app/web.rs). Cleared on blur so a Shift held
+  // while the tab loses focus does not stick.
   window.bbShift = 0;
-  window.addEventListener("keydown", (e) => { if (e.code === "ShiftLeft") window.bbShift |= 1; });
-  window.addEventListener("keyup", (e) => { if (e.code === "ShiftLeft") window.bbShift &= ~1; });
-  window.addEventListener("blur", () => { window.bbShift = 0; });
+  window.bbNotifies = 1;
+  const shift = (mask: number) => {
+    if (mask === window.bbShift) return;
+    window.bbShift = mask;
+    if (window.bbChanged) window.bbChanged();
+  };
+  window.addEventListener("keydown", (e) => { if (e.code === "ShiftLeft") shift(window.bbShift | 1); });
+  window.addEventListener("keyup", (e) => { if (e.code === "ShiftLeft") shift(window.bbShift & ~1); });
+  window.addEventListener("blur", () => { shift(0); });
 }

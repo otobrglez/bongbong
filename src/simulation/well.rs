@@ -13,7 +13,6 @@
 //! through the fixed-step loop (`Projectile::bend`), on grenades, missiles
 //! and drones where they move. The well draws no RNG of its own.
 
-use crate::math;
 use std::collections::{BTreeMap, BTreeSet};
 
 use hecs::Entity;
@@ -29,8 +28,9 @@ use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::{tuning, Tuning};
 use crate::well::{self, AnchorBy, HeldDrum, Orb, Swallow, WellField, WellFx, WellFxKind, WellStage, WellZone};
 use crate::zone::{Zone, ZoneKind};
-use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position};
+use crate::{OBSTACLE_GRID_SIZE, Position};
 
+use super::combat::Hurt;
 use super::props::{BlastShape, PendingBlast};
 use super::{Event, Footing, Frame, Game, HitCause, HitTarget, Spectacle};
 
@@ -381,6 +381,7 @@ impl Game {
                 o.destroyed = true;
             }
             f.events.push(Event::ObstacleDestroyed { material: Material::Barrel, x: at.x, y: at.y });
+            self.refit_neighbours(Material::Barrel, at);
             let id = self.take_shot_id();
             self.held_drums.push(HeldDrum { id, well: zone.id, cell, drum: Drum::from_variant(variant), fuse, lifted_at: self.time, centre: zone.centre });
         }
@@ -492,32 +493,17 @@ impl Game {
     fn collapse_hulls(&mut self, f: &mut Frame, c: Position, owner: Owner, t: &Tuning) {
         let r = t.well_radius_px;
         for entity in self.hulls_in_order() {
-            let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { continue };
-            let (centre, half) = tank.hull_bbox_world();
-            let d = crate::emp::box_reach(c, centre, half);
-            if d > r || owner.same_side(tank.owner()) || t.well_collapse_damage <= 0.0 {
+            let Some((d, whose, at)) = self.world.get::<&Tank>(entity).ok().map(|tank| (tank.target_shape().reach_from(c), tank.owner(), tank.position)) else { continue };
+            if d > r || owner.same_side(whose) || t.well_collapse_damage <= 0.0 {
                 continue;
             }
-            let landed = tank.take_damage(t.well_collapse_damage * (1.0 - d / r), MAX_DAMAGE);
-            tank.mark_hit();
-            tank.credit(owner);
-            let killed = tank.is_wreck();
-            let target = match tank.owner() {
-                Owner::Player(player) => HitTarget::Player { player },
-                Owner::Enemy(slot) => HitTarget::Enemy { slot },
-                Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
-            };
-            let at = tank.position;
-            f.events.push(Event::Hit { target, damage: landed, killed, x: at.x, y: at.y, cause: HitCause::Well });
-            if killed {
-                f.kills.push((at, tank.owner()));
-            } else if let Ok(mut ai) = self.world.get::<&mut crate::ai::Ai>(entity) {
-                ai.notify_hit();
-            }
+            self.hurt_tank(f, entity, Hurt::hit(t.well_collapse_damage * (1.0 - d / r), HitCause::Well, Some(owner), at));
         }
-        self.knock_from(f, c, -1.0, r, |mass_factor, d| {
-            let falloff = (1.0 - d / r).max(0.0);
-            (t.well_fling_speed * falloff / math::powf(mass_factor.max(0.05), t.well_fling_mass_exponent)).min(t.well_fling_max_speed)
+        self.knock_from(f, c, -1.0, r, |d| crate::knock::Knock {
+            speed: t.well_fling_speed * (1.0 - d / r).max(0.0),
+            mass_exponent: t.well_fling_mass_exponent,
+            max_speed: t.well_fling_max_speed,
+            skid: t.sonic_skid_max_seconds,
         });
     }
 
@@ -528,7 +514,7 @@ impl Game {
         let r = t.well_radius_px;
         let terrain = &f.terrain;
         let mut hurt = Vec::new();
-        for bong in self.world.query_mut::<&mut Bong>() {
+        for bong in super::ordered(self.world.query_mut::<&mut Bong>().into_iter(), |b| super::bong_order(b)) {
             if bong.is_dead() {
                 continue;
             }

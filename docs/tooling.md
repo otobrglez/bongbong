@@ -283,6 +283,17 @@ call (`cargo check --no-default-features` builds none of it).
   a phone. The fixture is under `maps/perf/` so that no ceiling applies to it (`just
   probe-fixtures` globs `maps/test/*.toml`, `just probe-fields` names its maps); `just thumbnails`
   does render it, as an 8000 x 8000 PNG.
+- **`just probe-wasm-parity`** (`tools/perf/wasm_parity.sh`): does a seed play the same round in
+  wasm as natively. Both probes (native release, and the `perf-field-wasm` build under node) run
+  with **`--state-hash-every 1`**, which prints a `STATE round= seed= frame= rng= tanks= bodies=
+  world=` line per frame (and frame 0, after `init`) from `Game::state_hash` - the RNG's next
+  draw, every tank's pose/damage/shield/shells in slot order, every body's velocity, and the
+  entity count, clock, wrecks and bongs, floats by their bits. The `STATE` and `ANOMALY` lines must
+  match; on a difference it prints the first pair, which names the frame and the part. Default:
+  600 frames of `defend` at seed 1000 on the default arena, longwater and `maps/perf/dense-250`;
+  arguments replace that with one probe run. The flag works on any probe run and with `--rounds`,
+  so it also diffs two native builds (a refactor that must not move a round). Not in CI: it needs
+  emsdk and a second, wasm dependency build.
 - **Baseline, 2026-11-19** (an M3 Pro, release builds, the window 1280x720 on a 120 Hz display
   with vsync; the tree before any render-pipeline work):
 
@@ -301,6 +312,23 @@ call (`cargo check --no-default-features` builds none of it).
 
   With the wall pieces on and the particles off the default arena's switches run 324 to 1,304 a
   frame: the pieces alternate with everything around them.
+
+- **After the draw-call stage (BB-164), same day, same machine and scene**, every lockstep
+  screenshot byte for byte the baseline's:
+
+  | Reading | before | after |
+  |---|---|---|
+  | texture switches a frame, default arena (particles and pieces off) | 73 - 106 | 71 - 84 |
+  | the same with the wall pieces on | 169 - 1,304 | 72 - 84 |
+  | texture switches a frame, longwater | 12 - 24 | 11 - 23 |
+  | blend scopes a frame, default / longwater | 4 - 7 / 4 - 5 | 3 - 6 / 3 - 4 |
+  | an arena with margins under a clear sky (classic, 1280x900): blits / target scopes | 2,958 / 4 | 2,022 / 2 |
+  | `tuning()` calls in one paused frame, default / longwater | 2,376 / 1,075 | 209 / 161 |
+
+  The rectangles draw from a white block in the walls sheet's texture (`render/shapes.rs`), which
+  is what took the pieces' alternation away. The sheets are not packed into an atlas: a sheet moved
+  into a larger texture has a turned sprite's samples round onto other texels, so the picture
+  changes. The switches left are one sheet after another in the y-sorted walk.
 
   | `Game::update`, ms a tick (`defend`, seed 1000) | native | wasm (node 24) |
   |---|---|---|

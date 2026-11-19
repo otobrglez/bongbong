@@ -2575,7 +2575,7 @@ mod field_tests {
     /// table's whatever the rule.
     #[test]
     fn a_field_read_as_far_as_it_is_needed_answers_as_the_whole_table_does() {
-        use rand::rngs::SmallRng;
+        use crate::RoundRng;
         use rand::{RngExt, SeedableRng};
         let cell = 32.0;
         let (cols, rows) = (30usize, 20usize);
@@ -2583,7 +2583,7 @@ mod field_tests {
         let headings = [None, Some(Position::new(0.0, -1.0)), Some(Position::new(0.0, 1.0)), Some(Position::new(-1.0, 0.0)), Some(Position::new(1.0, 0.0))];
         let read = |route: Option<RouteAhead>| route.map(|route| (route.first(), route.cells().to_vec()));
         for seed in 0..12u64 {
-            let mut rng = SmallRng::seed_from_u64(seed);
+            let mut rng = RoundRng::seed_from_u64(seed);
             let walls: Vec<(Position, f32)> = (0..cols * rows)
                 .filter(|_| rng.random_range(0.0..1.0) < 0.22)
                 .map(|i| (at(i % cols, i / cols), cell / 2.0))

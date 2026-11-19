@@ -415,7 +415,9 @@ fn an_owned_seat_hit_by_a_shell_is_told_the_knockback() {
     assert_eq!(shoves.len(), 1, "one shove: {shoves:?}");
     let (seat, dv) = shoves[0];
     assert_eq!(seat, 0);
-    let speed = tuning().shell_impact_knockback_speed;
+    // The one mass rule: the impact's speed over the chassis's mass factor.
+    let factor = with_tank(&game.world, game.player().expect("a seat"), |t| t.mass_factor());
+    let speed = crate::knock::Knock::impact(&tuning(), tuning().shell_impact_knockback_speed).velocity(factor);
     assert!((dv.x - speed).abs() < 1e-3 && dv.y.abs() < 1e-3, "east at the knockback speed: {dv:?}");
 }
 

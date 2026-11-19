@@ -3,6 +3,26 @@ use math::Vec2;
 /// A 2D position in field pixels (y down); `math::Vec2` is the vector type.
 pub type Position = math::Vec2;
 
+/// The generator a round's one RNG stream runs on (`Game::rng`), named
+/// outright: xoshiro256++ on every target. `rand::rngs::SmallRng` is this
+/// generator on a 64-bit target and xoshiro128++ on a 32-bit one - wasm32
+/// among them - so a seed handed to it plays a different round in the
+/// browser than on the desktop. `round_rng_tests` pins the stream.
+pub type RoundRng = rand::rngs::Xoshiro256PlusPlus;
+
+#[cfg(test)]
+mod round_rng_tests {
+    use rand::{Rng, SeedableRng};
+
+    /// The first draws of seed 1000, the same on every pointer width.
+    #[test]
+    fn a_seed_draws_the_same_stream_on_every_target() {
+        let mut rng = super::RoundRng::seed_from_u64(1000);
+        let drawn: Vec<u64> = (0..3).map(|_| rng.next_u64()).collect();
+        assert_eq!(drawn, [0xfd36_48d3_c592_7911, 0x9595_931d_7400_9049, 0xdda8_a49f_0c8f_b725]);
+    }
+}
+
 // scifi_tanks_sheet.png: 33 columns x 60 rows of 40 x 40 cells, generated
 // by tools/spritegen/tankdesign/export.py from the Vanguard design line
 // (docs/SPRITESHEET_SPEC.md). Five team blocks of the twelve chassis - the
@@ -528,14 +548,9 @@ pub const WALL_THICKNESS: f32 = 100.0;
 // loop's `StepClock` in app.rs, the dev server's lockstep `step`, the probe
 // and the tests - passes exactly this `dt`, so one update is one step and a
 // round replays bit-for-bit from its seed whatever the display's refresh
-// rate. `Game::step_world` still drains the `dt` it is given in chunks of
-// this size, so a caller with a larger `dt` gets several physics steps in
-// one update. Matches rapier2d::prelude::IntegrationParameters::default().dt.
+// rate. `Game::update` asserts it in debug builds and steps the world once.
+// Matches rapier2d::prelude::IntegrationParameters::default().dt.
 pub const PHYSICS_FIXED_DT: f32 = 1.0 / 60.0;
-// Caps how much real time `step_world`'s own accumulator can catch up on
-// inside one update, so a caller passing a long `dt` never dumps a burst of
-// physics steps (the classic fixed-timestep "spiral of death").
-pub const PHYSICS_MAX_CATCHUP_SECONDS: f32 = 0.25;
 // The fastest any body moves (px/s), rapier's speed cap set for a pixel
 // world: one cell a step. Far above every legitimate speed - a knock's
 // 508 px/s wire ceiling on top of a hull's own, a light hull carried by a
@@ -1047,6 +1062,7 @@ pub mod game;
 pub mod ground;
 pub mod hud;
 pub mod indicators;
+pub mod knock;
 pub mod lamp;
 pub mod laser;
 pub mod lava;
@@ -1078,6 +1094,7 @@ pub mod pyro;
 pub mod qr;
 #[cfg(feature = "render")]
 pub mod render;
+pub mod shape;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;

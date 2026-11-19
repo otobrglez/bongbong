@@ -190,7 +190,7 @@ impl Pieces {
                 if p.rest < linger {
                     return true;
                 }
-                settled.push(Scar { x: snap(p.pos.x), y: snap(p.pos.y), src: p.src, tint: scarred(p.tint, 1.0) });
+                settled.push(Scar { x: snap(p.pos.x), y: snap(p.pos.y), src: p.src, tint: scarred(p.tint, 1.0, t.scar_shade) });
                 return false;
             }
             p.vz -= gravity * dt;
@@ -231,7 +231,8 @@ impl Pieces {
     /// tanks). Whole 2 px blocks; a lying piece darkens into the ground
     /// over its last second, and stays there as a scar.
     pub fn draw(&self, c: &mut impl Canvas, airborne: bool) {
-        let linger = tuning().piece_linger_seconds;
+        let t = tuning();
+        let (linger, shade) = (t.piece_linger_seconds, t.scar_shade);
         if !airborne {
             for s in &self.scars {
                 if c.culls(Position::new(s.x, s.y)) {
@@ -263,11 +264,11 @@ impl Pieces {
                 if shadow > 0 {
                     c.fill_rect(x as i32 + 1, y as i32 + 1, p.src.width as i32, p.src.height as i32, Color::new(0x25, 0x25, 0x25, shadow));
                 }
-                c.blit(Sheet::Walls, p.src, Rectangle::new(x, y, p.src.width, p.src.height), Vec2::zero(), 0.0, scarred(p.tint, sink));
+                c.blit(Sheet::Walls, p.src, Rectangle::new(x, y, p.src.width, p.src.height), Vec2::zero(), 0.0, scarred(p.tint, sink, shade));
             }
         }
         if airborne {
-            let flight = tuning().ember_flight_seconds.max(0.05);
+            let flight = t.ember_flight_seconds.max(0.05);
             for e in &self.embers {
                 let k = e.age / flight;
                 let at = Position::new(e.from.x + (e.to.x - e.from.x) * k, e.from.y + (e.to.y - e.from.y) * k);
@@ -293,9 +294,9 @@ fn snap(v: f32) -> f32 {
 }
 
 /// `tint` as far as `k` (0..1) toward what a scar settles to: dimmed by
-/// `scar_shade`, flat on the ground.
-fn scarred(tint: Color, k: f32) -> Color {
-    let shade = tuning().scar_shade.clamp(0.0, 1.0);
+/// `shade` (the `scar_shade` knob), flat on the ground.
+fn scarred(tint: Color, k: f32, shade: f32) -> Color {
+    let shade = shade.clamp(0.0, 1.0);
     let f = 1.0 - (1.0 - shade) * k;
     let ch = |v: u8| (v as f32 * f) as u8;
     Color::new(ch(tint.r), ch(tint.g), ch(tint.b), tint.a)

@@ -27,6 +27,7 @@ use crate::tuning::{tuning, Tuning};
 use crate::zone::{Zone, ZoneKind};
 use crate::{MAX_DAMAGE, MAX_SEATS, OBSTACLE_GRID_SIZE, Position};
 
+use super::combat::Hurt;
 use super::combat::BlastParams;
 use super::props::DamageCause;
 use super::{Event, Footing, Frame, Game, HitCause, HitTarget, RollIn, Spectacle};
@@ -181,24 +182,13 @@ impl Game {
     /// other out to the shove radius knocked (`knock_from`).
     fn rod_hulls(&mut self, f: &mut Frame, c: Position, by: Owner, t: &Tuning) {
         for entity in self.hulls_in_order() {
-            let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { continue };
-            let (centre, half) = tank.hull_bbox_world();
-            if crate::emp::box_reach(c, centre, half) > t.rod_kill_radius_px {
+            let Some((reach, at)) = self.world.get::<&Tank>(entity).ok().map(|tank| (tank.target_shape().reach_from(c), tank.position)) else { continue };
+            if reach > t.rod_kill_radius_px {
                 continue;
             }
-            crush(&mut tank);
-            tank.mark_hit();
-            tank.credit(by);
-            let target = match tank.owner() {
-                Owner::Player(player) => HitTarget::Player { player },
-                Owner::Enemy(slot) => HitTarget::Enemy { slot },
-                Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
-            };
-            let at = tank.position;
-            f.events.push(Event::Hit { target, damage: MAX_DAMAGE, killed: true, x: at.x, y: at.y, cause: HitCause::Rod });
-            f.kills.push((at, tank.owner()));
+            self.hurt_tank(f, entity, Hurt { crush: true, ..Hurt::hit(MAX_DAMAGE, HitCause::Rod, Some(by), at) });
         }
-        self.knock_from(f, c, t.rod_kill_radius_px, t.rod_shove_radius_px, |mass_factor, d| rod::shove_speed(t, mass_factor, d));
+        self.knock_from(f, c, t.rod_kill_radius_px, t.rod_shove_radius_px, |d| rod::knock_at(t, d));
     }
 
     /// Every live hull on the field with a body, in the walk order: the
@@ -218,26 +208,21 @@ impl Game {
     /// Knock every live hull on the field (`hulls_in_order`) whose box's
     /// nearest point stands more than `inner` and at most `outer` from
     /// `center` along the line out from it (straight ahead of its facing
-    /// where it stands on the centre), at `speed(mass factor, distance)`
-    /// px/s - the hammer's `knock`, the footing it stands on taken in. A
+    /// where it stands on the centre), by the `Knock` `knock_at(distance)`
+    /// gives (`combat::knock`), the footing it stands on taken in. A
     /// rod's shove ring; a gravity well's collapse throws with it too.
-    pub(super) fn knock_from(&mut self, f: &mut Frame, center: Position, inner: f32, outer: f32, speed: impl Fn(f32, f32) -> f32) {
+    pub(super) fn knock_from(&mut self, f: &mut Frame, center: Position, inner: f32, outer: f32, knock_at: impl Fn(f32) -> crate::knock::Knock) {
         for entity in self.hulls_in_order() {
             let footing = super::with_tank(&self.world, entity, |tank| Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time));
             let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { continue };
-            let (centre, half) = tank.hull_bbox_world();
-            let d = crate::emp::box_reach(center, centre, half);
+            let d = tank.target_shape().reach_from(center);
             if d <= inner || d > outer {
                 continue;
             }
             let line = tank.position - center;
             let len = line.length();
             let dir = if len > 1e-3 { line / len } else { Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec() };
-            let mass_factor = tank.mass() / (tank.scale * tank.scale);
-            let v = speed(mass_factor, d);
-            if v > 0.0 {
-                super::sonic::knock(&mut self.physics, f, &mut tank, dir, v, footing);
-            }
+            super::combat::knock(&mut self.physics, &mut f.shoves, &mut tank, dir, knock_at(d), footing);
         }
     }
 
@@ -246,7 +231,7 @@ impl Game {
     fn rod_bongs(&mut self, f: &mut Frame, c: Position, t: &Tuning) {
         let half = Vec2::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
         let mut dead = Vec::new();
-        for bong in self.world.query_mut::<&mut Bong>() {
+        for bong in super::ordered(self.world.query_mut::<&mut Bong>().into_iter(), |b| super::bong_order(b)) {
             if bong.is_dead() {
                 continue;
             }
@@ -293,31 +278,14 @@ impl Game {
     /// tall grass laid flat and hiding nobody for `rod_grass_flat_seconds`.
     fn rod_ground(&mut self, f: &mut Frame, c: Position, t: &Tuning) {
         let reach = t.rod_break_radius_px;
-        let mut grenades: Vec<(u32, Entity)> =
-            self.world.query::<(Entity, &crate::grenade::Grenade)>().iter().filter(|(_, g)| g.position.distance_to(c) <= reach).map(|(e, g)| (g.id, e)).collect();
-        grenades.sort_by_key(|&(id, _)| id);
-        for (_, e) in grenades {
-            if let Ok(mut g) = self.world.get::<&mut crate::grenade::Grenade>(e) {
-                g.fuse = 0.0;
-            }
-        }
-        let mut broken = Vec::new();
-        self.lanterns.retain(|l| {
-            let hit = l.position.distance_to(c) <= reach;
-            if hit {
-                broken.push(l.position);
-            }
-            !hit
-        });
-        for at in broken {
-            f.events.push(Event::LanternBroken { x: at.x, y: at.y });
-        }
+        self.set_off_grenades(c, reach);
+        self.break_lanterns(f, c, reach);
         let mut lit: Vec<(i32, i32)> = self.oil_cells.iter().copied().filter(|&cell| rod::cell_reach(c, cell) <= reach).collect();
         lit.sort_unstable();
         for cell in lit {
             self.light_cell(f, cell, t.oil_trail_burn_seconds, false);
         }
-        self.blast_crates(f, c, &BlastParams { radius: reach, damage: (1.0e6, 1.0e6), knockback: 0.0, by: None });
+        self.blast_crates(f, c, &BlastParams::world(reach, (1.0e6, 1.0e6), 0.0));
         if t.rod_grass_flat_seconds > 0.0 && !self.grass_cells.is_empty() {
             let cells: Vec<(i32, i32)> = self.grass_cells.iter().map(|&p| world_to_cell(p)).filter(|&cell| rod::cell_reach(c, cell) <= reach).collect();
             for cell in cells {
@@ -708,15 +676,3 @@ impl Game {
     }
 }
 
-/// Crush a hull (docs/rod-from-god.md "The impact"): a live rainbow shield
-/// pops - `drain_shield_breaks` logs it - and the hull is wrecked whole,
-/// past the shield, the armour and friendly fire.
-fn crush(tank: &mut Tank) {
-    if tank.is_shielded() {
-        tank.shield_hp = 0.0;
-        tank.shield_timer = 0.0;
-        tank.shield_recharge_delay = 0.0;
-        tank.shield_broke = true;
-    }
-    tank.damage = MAX_DAMAGE;
-}

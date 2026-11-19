@@ -10,7 +10,7 @@ use crate::math;
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 use crate::math::Vec2;
 
 use crate::bullet::{Bullet, BulletState};
@@ -153,8 +153,8 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 
 /// Firing recoil: push the shooter back along the shot's own travel axis
 /// (so a misfire's skew kicks the same way it skews the shot) at `speed`
-/// px/s, normalized against the chassis-free baseline mass and capped at
-/// `max_speed`. Returns the velocity change, `None` when nothing was
+/// px/s on the standard chassis, by the one mass rule (`Knock::recoil`),
+/// capped at `max_speed`. Returns the velocity change, `None` when nothing was
 /// pushed.
 ///
 /// Only a missile launch's and a grenade's go on to `Frame::shoves`. A
@@ -164,16 +164,10 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 /// grenade, so those kicks are the room's to tell it about.
 pub(super) fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
     let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
-    let handle = tank.body?;
     if len <= f32::EPSILON {
         return None;
     }
-    let reference_mass = tank.scale * tank.scale;
-    let push = (speed * reference_mass / tank.mass()).min(max_speed);
-    let impulse = push * tank.mass() / len;
-    let kick = Position::new(-velocity.x * impulse, -velocity.y * impulse);
-    physics.apply_impulse(handle, kick);
-    Some(Vec2::new(kick.x / tank.mass(), kick.y / tank.mass()))
+    super::combat::shove(physics, tank, Vec2::new(-velocity.x / len, -velocity.y / len), crate::knock::Knock::recoil(speed, max_speed))
 }
 
 /// Spawn one shell from `tank`: rolled drop shadow, muzzle-flash ripple,
@@ -560,7 +554,7 @@ pub(super) trait Projectile: hecs::Component {
     /// Bounce off `hit` instead of detonating, if this projectile can by
     /// its own rules (shells off iron, on a roll of `rng`). A barrel's
     /// chance deflection goes through `can_bounce`/`reflect_off` instead.
-    fn try_ricochet(&mut self, _hit: &TerrainBox, _rng: &mut SmallRng) -> bool {
+    fn try_ricochet(&mut self, _hit: &TerrainBox, _rng: &mut RoundRng) -> bool {
         false
     }
     /// Whether this kind can ricochet off a barrel at all - plasma never
@@ -694,7 +688,7 @@ impl Projectile for Shell {
     /// and rewind to the pre-motion position so next frame starts clear of
     /// the tile. The roll is drawn only once the rest allows a bounce, and
     /// never at a chance of 0 or 1.
-    fn try_ricochet(&mut self, hit: &TerrainBox, rng: &mut SmallRng) -> bool {
+    fn try_ricochet(&mut self, hit: &TerrainBox, rng: &mut RoundRng) -> bool {
         if self.bounces_left == 0 || !hit.material.ricochets_shells() {
             return false;
         }

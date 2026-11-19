@@ -478,6 +478,16 @@ struct Args {
     #[arg(long, default_value_t = 60)]
     log_every: u32,
 
+    /// Print a `STATE` line every N frames (and once after `init`, frame
+    /// 0): `Game::state_hash`, one number each for the RNG, the tanks, the
+    /// physics bodies and the rest of the world. Two builds playing the
+    /// same seed print the same lines, and the first line that differs
+    /// names the frame and the part a divergence starts in
+    /// (`just probe-wasm-parity`). 0 (the default) prints none; every
+    /// round prints its own, whatever --rounds says.
+    #[arg(long, default_value_t = 0)]
+    state_hash_every: u32,
+
     /// Re-run the scenario this many times, each with a fresh `init` (new
     /// spawn layout and AI RNG roll), to get statistical coverage of rare,
     /// spawn-dependent anomalies in one command. With more than one round,
@@ -670,6 +680,16 @@ fn log_frame(game: &Game, frame: u32) {
             },
         );
     }
+}
+
+/// One `STATE` line (`--state-hash-every`): the round's digest in hex,
+/// keyed like an `ANOMALY` line so two runs diff line for line.
+fn log_state_hash(game: &Game, round: u32, seed: u64, frame: u32) {
+    let hash = game.state_hash();
+    println!(
+        "STATE round={round} seed=0x{seed:016x} frame={frame} rng={:016x} tanks={:016x} bodies={:016x} world={:016x}",
+        hash.rng, hash.tanks, hash.bodies, hash.world
+    );
 }
 
 #[derive(Default, Clone, Copy)]
@@ -2067,7 +2087,7 @@ fn check_fire(
                     fire.rod_calls_offbox += 1;
                 }
             }
-            Event::Hit { target: HitTarget::Player { .. }, .. } => fire.hits_on_seats += 1,
+            Event::Hit { target: HitTarget::Player { .. }, cause, .. } if cause.is_shot() => fire.hits_on_seats += 1,
             _ => {}
         }
     }
@@ -2257,6 +2277,9 @@ fn run_round(
     }
     let _ = FIELD.set(game.map.field_size());
     game.init(field_width(), field_height());
+    if args.state_hash_every > 0 {
+        log_state_hash(&game, round, seed, 0);
+    }
     if trace {
         // Which chassis actually won the `--tank` / `player_tank` knob /
         // map `tank` / random race - the header line can only echo the
@@ -2359,6 +2382,9 @@ fn run_round(
             contact.hit = Some(now);
         }
 
+        if args.state_hash_every > 0 && frame % args.state_hash_every == 0 {
+            log_state_hash(&game, round, seed, frame);
+        }
         if trace && frame % args.log_every == 0 {
             log_frame(&game, frame);
         }
@@ -2731,7 +2757,7 @@ fn main() -> ExitCode {
     // The whole run's base seed: `--seed` when given, one entropy draw
     // otherwise - either way it's printed in the header, so *every* run is
     // replayable after the fact. Round i runs on base+i (see the `--seed`
-    // flag's doc comment; SmallRng's seed_from_u64 mixes the raw value
+    // flag's doc comment; RoundRng's seed_from_u64 mixes the raw value
     // through SplitMix64, so adjacent seeds are fully decorrelated rounds).
     let base_seed: u64 = args.seed.unwrap_or_else(|| rand::rng().random());
 

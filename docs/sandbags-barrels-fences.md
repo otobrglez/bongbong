@@ -74,6 +74,16 @@ knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
   burns tread marks in, re-throws rubble already in the radius and soots
   the wall faces that looked at it. `kind = "oil"` ground cells are
   trails a fire runs along (`oil_trail_*`) to whatever drum is at the end.
+- **What an enemy sees over, a shot can pass over.** Every tile with
+  `Material::blocks_sight` false has a `pass_over_chance`: sandbags and
+  barrels as above, a fence's mesh (`fence_pass_over_chance` 0.5), a lamp
+  post (`lamp_pass_over_chance` 0.75), a fir sapling
+  (`sapling_pass_over_chance` 0.35), a palm (`palm_pass_over_chance` 0.6)
+  and a snag (`snag_pass_over_chance` 0.5) - so an enemy firing across one
+  is not firing into a wall it cannot see. The roll is a lobbed shot's:
+  shells, bullets, plasma. A laser's beam and a gauss rail's slug fly flat
+  at the muzzle's height, roll neither a pass-over nor a deflection, and
+  strike every tile on their line.
 - **Fences**: a hit on a pristine fence destroys it at
   `fence_one_shot_chance` (0.7) odds, else it goes to its damaged keyframe
   and the next hit finishes it; rammed through in `fence_ram_seconds`

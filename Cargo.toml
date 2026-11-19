@@ -78,7 +78,7 @@ sola-raylib = { version = "6.3.1", features = ["nobuild"], optional = true }
 # desktop builds never link a cdylib; the root package stays the default
 # member, so `cargo build`/`test`/`watch` here are unchanged.
 [workspace]
-members = ["android", "netlab", "ntk", "server"]
+members = ["android", "netlab", "server"]
 
 [features]
 default = ["render", "online"]

@@ -189,9 +189,16 @@ of `update` catches a missed restore on the very next frame).
 
 Notes:
 
-- `SmallRng` is `rand::rngs::SmallRng` (unconditionally exported in rand
-  0.10; `SeedableRng::seed_from_u64` runs SplitMix64 internally, so even
-  adjacent seeds like `base + round` are well-decorrelated).
+- The stream's type is `crate::RoundRng`, an alias of
+  `rand::rngs::Xoshiro256PlusPlus` (`SeedableRng::seed_from_u64` runs
+  SplitMix64 internally, so even adjacent seeds like `base + round` are
+  well-decorrelated). It is not `rand::rngs::SmallRng`, which the
+  snippets here still spell: `SmallRng` picks its generator by pointer
+  width - xoshiro256++ on 64-bit targets, xoshiro128++ on wasm32 - so
+  the same seed played a different round in the browser, differing from
+  the first draw (BB-159). The alias is the same generator and the same
+  bits on every native target. `just probe-wasm-parity` compares the
+  per-frame `Game::state_hash` of a native and a wasm probe.
 - The one remaining `ThreadRng` use inside the game is the entropy draw for
   an unseeded round's seed — one `u64`, after which everything flows from
   the `SmallRng` stream.
@@ -264,12 +271,24 @@ for the record (all safe today, listed so a future change knows the rule):
 on the simulation path where the loop body consumes RNG, spawns entities,
 or breaks ties — sort first.**
 
+The same holds for an ECS query. hecs hands a query back in storage
+order, which moves with every spawn, despawn and component added or
+removed (a tank rolling in gains its `Ai`; a wreck swept away swaps
+another tank into its place). A walk whose body draws RNG, spawns, pushes
+onto an order-carrying list (`f.events`, `f.kills`, a pending blast) or
+keeps the first of a tie is sorted first: tanks by owner slot - seats, then
+enemies (`Game::enemies_by_slot`) - tiles and crates by cell
+(`cell_order`, `tiles_near`), projectiles by shot id, bongs by side then
+cell (`bong_order`); `simulation::ordered` is the helper. `hits::Terrain`
+keeps its tiles in cell order, so two boxes a shot enters at the same
+instant are told apart by where they stand.
+
 ### 1.4 What a seed does and doesn't promise
 
 - probe ↔ probe, same build: **bit-exact** — same layout, same AI
   decisions, same outcome, byte-identical trace. The probe steps `update`
-  with a constant `DT = 1/60` equal to `PHYSICS_FIXED_DT`, so the
-  accumulator fires exactly one physics step per frame.
+  with a constant `DT = 1/60` equal to `PHYSICS_FIXED_DT`, the only step
+  `update` takes (a debug build asserts it): one physics step per call.
 - windowed ↔ probe, same seed: **identical round setup** (map terrain,
   ground cosmetics, spawn positions, chassis/speed rolls, bong placement)
   but divergent evolution over time, because the windowed game feeds real
@@ -1031,6 +1050,48 @@ map tank counts):
 kind to its cross-fixture maximum exactly — deterministic, so an
 exceedance is a real behavior change; the justfile comment carries the
 re-baselining policy.
+
+### Re-baseline 2026-11-19: one of each (BB-166)
+
+One damage funnel, one knock, one blast, one "is it solid", one target
+shape and a pass-over chance for everything an enemy sees over, measured
+one at a time on the same binary:
+
+| step | the pinned pair (one seat, two seats) | probe readings |
+|---|---|---|
+| before | 1311122185973974513, 3120823617306764509 | fixtures 68 anomalies, survive 352, fields 213 |
+| the funnel (`hurt_tank`) | unchanged, 528837390636576270 | all three byte-identical |
+| the knock (`Knock`) | 9639597902138545158, 10896379673731459349 | 61, 364, 204: six ceilings passed by one to three |
+| the blast with cover | 11732861727457925354, unchanged | 63, 359, 200 |
+| "is it solid" (`TerrainBox::entry`) | unchanged | unchanged |
+| the target shape | unchanged | unchanged |
+| the pass-over | unchanged, 18125339335117055137 | 63, 360, 200 |
+
+The funnel alone moves no event, position or health in the pinned rounds:
+the two-seat hash differs by the last bit of one recoiling hull's
+velocity, which is the one mass rule's arithmetic (`speed / factor`
+where the recoil multiplied and divided by the mass). The knock is what
+moves the rounds - a shell's impact is now divided by the chassis's mass
+factor and a blast leaves a hull skidding - and it moves them the way
+chaos does: per map the kinds go up and down by a few, the totals stay
+level (and fall on the field maps), and over six seed bases the kinds
+that passed a ceiling read the same before and after (the justfile's
+comments carry the numbers). The ceilings re-recorded: `survive`
+border-stuck 5 to 6, jitter 13 to 14, churn 24 to 25, clustering 4 to 7,
+never-arrived 4 to 5; `fields` staircase 29 to 30. `probe-fixtures`
+passes as it was.
+
+### Re-baseline 2026-11-19: every order-carrying walk sorted (BB-161)
+
+Sorting the walks (section 1.3) changes which enemy takes an engagement
+slot, a blast roll or a kill first on the frames where storage order and
+slot order disagreed. `the_one_and_two_seat_streams_are_pinned` and every
+`just probe-fixtures` reading are unchanged (an AFK round on these maps
+never reached such a frame). `just probe-survive` and `just probe-fields`
+replay different rounds on some seeds; per map the totals moved by at most
+2 in either direction and no cross-map maximum moved, so every ceiling
+stands as it was. Refitting a dead tile's neighbours' colliders moved no
+reading on its own.
 
 ### Re-baseline 2026-09-03: nav-grid spawn legality
 

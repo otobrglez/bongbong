@@ -24,15 +24,16 @@
 use crate::math;
 use hecs::Entity;
 
+use super::combat::Hurt;
 use super::props::{BlastShape, PendingBlast};
-use super::{Ai, Event, Frame, Game, Spectacle};
+use super::{Event, Frame, Game, Spectacle};
 use crate::ground::Depth;
 use crate::obstacle::Drum;
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::tuning::tuning;
 use crate::volcano::{LavaBomb, Stage, Volcano};
-use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position};
+use crate::{OBSTACLE_GRID_SIZE, Position};
 
 impl Game {
     /// One `Volcano` per crater cell, in the map's cell order, each with
@@ -222,29 +223,18 @@ impl Game {
         let t = tuning();
         let from = t.heat_hurt_from.clamp(0.0, 0.99);
         let mut order: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
-        order.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
+        order.extend(self.enemies_by_slot());
         for entity in order {
-            let mut q = self.world.query_one::<&mut Tank>(entity);
-            let Ok(tank) = q.get() else { continue };
-            if tank.is_wreck() {
-                continue;
-            }
-            if !tank.takes_heat() {
-                continue;
-            }
-            let heat = self.lava.heat_at(tank.position);
+            let Some(at) = self.world.get::<&Tank>(entity).ok().filter(|tank| !tank.is_wreck() && tank.takes_heat()).map(|tank| tank.position) else { continue };
+            let heat = self.lava.heat_at(at);
             if heat <= from {
                 continue;
             }
             let k = (heat - from) / (1.0 - from);
-            tank.take_damage(t.lava_damage_per_second * k * f.dt, MAX_DAMAGE);
-            tank.mark_hit();
-            if self.lava.depth_at(tank.position) != Depth::Dry {
-                tank.burn_timer = tank.burn_timer.max(t.lava_afterburn_seconds);
+            if self.lava.depth_at(at) != Depth::Dry {
+                super::with_tank_mut(&self.world, entity, |tank| tank.burn_timer = tank.burn_timer.max(t.lava_afterburn_seconds));
             }
-            if tank.is_wreck() {
-                f.kills.push((tank.position, tank.owner()));
-            }
+            self.hurt_tank(f, entity, Hurt::contact(t.lava_damage_per_second * k * f.dt, super::HitCause::Lava, None, at));
         }
     }
 

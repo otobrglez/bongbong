@@ -136,16 +136,11 @@ impl Game {
     pub fn seat_kick(&mut self, seat: usize, velocity: Vec2, speed: f32, max_speed: f32) {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
         let Ok(tank) = self.world.get::<&Tank>(entity) else { return };
-        let Some(handle) = tank.body else { return };
         let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
         if len <= f32::EPSILON {
             return;
         }
-        let reference_mass = tank.scale * tank.scale;
-        let push = (speed * reference_mass / tank.mass()).min(max_speed);
-        let impulse = push * tank.mass() / len;
-        drop(tank);
-        self.physics.apply_impulse(handle, Position::new(-velocity.x * impulse, -velocity.y * impulse));
+        super::combat::shove(&mut self.physics, &tank, Vec2::new(-velocity.x / len, -velocity.y / len), crate::knock::Knock::recoil(speed, max_speed));
     }
 
     /// Where one seat's laser would be judged from right now (the gun
@@ -541,7 +536,7 @@ impl PresentWorld {
         for &bong in &self.bongs {
             consider(segment_box(p0, p1, bong, bong_half + pad), Contact::Bong);
         }
-        consider(self.terrain.first_solid_along(p0, p1), Contact::Tile);
+        consider(self.terrain.first_shot_along(p0, p1, 0.0), Contact::Tile);
         consider(self.edge_along(p0, p1), Contact::Edge);
         best.map(|(t, c)| (Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t), c))
     }
@@ -615,7 +610,7 @@ impl PresentWorld {
     /// only, for a shot drawn ahead of where the room has it.
 
     pub fn static_contact(&self, p0: Position, p1: Position) -> Option<Position> {
-        let t = [self.terrain.first_solid_along(p0, p1), self.edge_along(p0, p1)].into_iter().flatten().min_by(f32::total_cmp)?;
+        let t = [self.terrain.first_shot_along(p0, p1, 0.0), self.edge_along(p0, p1)].into_iter().flatten().min_by(f32::total_cmp)?;
         Some(Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t))
     }
 

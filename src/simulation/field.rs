@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use hecs::Entity;
 use rand::RngExt;
-use rand::rngs::SmallRng;
+use crate::RoundRng;
 
 use crate::ai::{Ai, Intent, in_sight_box_of};
 use crate::battlefield::{self, Gate};
@@ -222,7 +222,7 @@ pub(super) fn spawn_cells(grid: &Grid, seats: &[Position], walls: &[Position]) -
 /// piling into the sliver of it a small map has, and spreads over its
 /// region instead of starting in a heap. `None`, drawing nothing, when no
 /// cell passes.
-pub(super) fn pick_spawn(cells: &[SpawnCell], rng: &mut SmallRng, placed: &[Position], ok: impl Fn(Position) -> bool) -> Option<Position> {
+pub(super) fn pick_spawn(cells: &[SpawnCell], rng: &mut RoundRng, placed: &[Position], ok: impl Fn(Position) -> bool) -> Option<Position> {
     SpawnPool::new(cells, ok).pick(rng, placed)
 }
 
@@ -243,7 +243,7 @@ impl SpawnPool {
     }
 
     /// `pick_spawn`'s draw over the pool, `placed` the tanks already down.
-    pub(super) fn pick(&self, rng: &mut SmallRng, placed: &[Position]) -> Option<Position> {
+    pub(super) fn pick(&self, rng: &mut RoundRng, placed: &[Position]) -> Option<Position> {
         let free = &self.free;
         if free.is_empty() {
             return None;

@@ -185,8 +185,13 @@ fn the_heli_fires_its_salvos_and_leaves() {
     air_crate(&mut game, Sortie::Heli, SEAT);
     let mut stages = std::collections::BTreeSet::new();
     let mut seen = idle(&mut game, delay_ticks() + 1);
+    let mut hit = false;
     for _ in 0..1800 {
         tick(&mut game);
+        // Patched up between salvos: the heli goes home early from a box
+        // with nothing left to shoot at, and this is about a full attack.
+        hit |= damage(&game, near) > 0.0;
+        with_tank_mut(&game.world, near, |t| t.damage = 0.0);
         let events = game.events().to_vec();
         if let Some(a) = game.aircraft().first() {
             stages.insert(a.stage.code());
@@ -202,7 +207,7 @@ fn the_heli_fires_its_salvos_and_leaves() {
     assert!(count(&seen, |e| matches!(e, Event::AirSupportLeft { .. })) == 1, "it left");
     // Its last rockets may still be in the air when it leaves.
     idle(&mut game, 240);
-    assert!(damage(&game, near) > 0.0, "the enemy in the box was hit");
+    assert!(hit || damage(&game, near) > 0.0, "the enemy in the box was hit");
     assert_eq!(damage(&game, far), 0.0, "outside the box is untouched");
     assert_eq!(damage(&game, seat(&game)), 0.0, "no friendly fire");
 }

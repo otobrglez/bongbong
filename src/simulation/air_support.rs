@@ -39,18 +39,13 @@ impl BlastParams {
     /// One burst of the jet's cannon: fixed damage, no roll.
     pub fn air_gun(by: Owner) -> Self {
         let t = tuning();
-        BlastParams { radius: t.air_jet_gun_radius_px, damage: (t.air_jet_gun_damage, t.air_jet_gun_damage), knockback: t.air_jet_gun_knockback, by: Some(by) }
+        BlastParams::ordnance(t.air_jet_gun_radius_px, (t.air_jet_gun_damage, t.air_jet_gun_damage), t.air_jet_gun_knockback, by)
     }
 
     /// One of the jet's bombs.
     pub fn air_bomb(by: Owner) -> Self {
         let t = tuning();
-        BlastParams {
-            radius: t.air_jet_bomb_radius_px,
-            damage: (t.air_jet_bomb_damage_min, t.air_jet_bomb_damage_max),
-            knockback: t.air_jet_bomb_knockback,
-            by: Some(by),
-        }
+        BlastParams::ordnance(t.air_jet_bomb_radius_px, (t.air_jet_bomb_damage_min, t.air_jet_bomb_damage_max), t.air_jet_bomb_knockback, by)
     }
 }
 
@@ -276,12 +271,12 @@ impl Game {
 
     /// One of the jet's cannon bursts (`bomb` false) or bombs landing at
     /// `at`, fired by `owner` flying `dir`: the damage when `live`
-    /// (`side_blast`), then the show. `Event::AirStrike`.
+    /// (`Game::blast`), then the show. `Event::AirStrike`.
     pub(super) fn air_strike(&mut self, f: &mut Frame, id: u32, owner: Owner, at: Position, dir: Vec2, bomb: bool, live: bool) {
         f.events.push(Event::AirStrike { id, bomb, x: at.x, y: at.y });
         if live {
             let params = if bomb { BlastParams::air_bomb(owner) } else { BlastParams::air_gun(owner) };
-            self.side_blast(f, at, owner, &params);
+            self.blast(f, at, &params, &[]);
         }
         let mut show = Spectacle::default();
         self.air_strike_show(&mut show, at, dir, bomb);

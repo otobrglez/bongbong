@@ -457,8 +457,7 @@ pub fn glyph_src(kind: PickupKind) -> Rectangle {
 /// drop while it is coming down (`crate_fx::drop`); else the crate standing
 /// on its cell with a drop shadow like an obstacle's and the glint it idles
 /// with (`crate_fx::glint_col`). `shadows` is `Game::shadows_enabled`.
-pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup, time: f32, shadows: bool) {
-    let t = crate::tuning::tuning();
+pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup, time: f32, shadows: bool, t: &crate::tuning::Tuning) {
     let at = pickup.at();
     if let Some(left) = pickup.loose {
         // Spilled: the bare symbol on the ground, blinking out over its
@@ -474,13 +473,13 @@ pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup, time: f32, shadows: boo
     }
     if pickup.burn.is_some() || pickup.health < t.crate_hp * 0.5 {
         let col = if pickup.burn.is_some() { crate::CRATE_COL_CHARRED } else { crate::CRATE_COL_DAMAGED };
-        draw_crate(c, pickup.kind, at, col, shadows, Color::WHITE);
+        draw_crate(c, pickup.kind, at, col, shadows, Color::WHITE, t);
         if pickup.burn.is_some() {
             crate::pyro::draw(c, &crate_flames(pickup, time));
         }
         return;
     }
-    if let Some(drop) = pickup.dropped_at.and_then(|since| crate::crate_fx::drop(time - since, at, &t)) {
+    if let Some(drop) = pickup.dropped_at.and_then(|since| crate::crate_fx::drop(time - since, at, t)) {
         if shadows && drop.shadow_alpha > 0.0 {
             let (w, h) = (drop.shadow_w, drop.shadow_h);
             let dest = Rectangle::new(
@@ -504,7 +503,7 @@ pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup, time: f32, shadows: boo
         }
         return;
     }
-    draw_crate(c, pickup.kind, at, crate::crate_fx::glint_col(time, at, &t), shadows, Color::WHITE);
+    draw_crate(c, pickup.kind, at, crate::crate_fx::glint_col(time, at, t), shadows, Color::WHITE, t);
 }
 
 /// The flames on a burning crate (`Pickup::burn`): tongues off its lid in
@@ -525,10 +524,9 @@ pub fn crate_flames(pickup: &Pickup, time: f32) -> Vec<crate::pyro::Shape> {
 
 /// One crate standing on its cell in sheet column `col`, its shadow first
 /// when `shadows`; `tint` multiplies it (a white with alpha fades it).
-pub fn draw_crate(c: &mut impl Canvas, kind: PickupKind, at: Position, col: usize, shadows: bool, tint: Color) {
+pub fn draw_crate(c: &mut impl Canvas, kind: PickupKind, at: Position, col: usize, shadows: bool, tint: Color, t: &crate::tuning::Tuning) {
     let origin = Vec2::new(CRATE_CELL * 0.5, CRATE_CELL * 0.5);
     if shadows {
-        let t = crate::tuning::tuning();
         let dest = Rectangle::new(at.x + t.shadow_dir_x * t.obstacle_shadow_offset, at.y + t.shadow_dir_y * t.obstacle_shadow_offset, CRATE_CELL, CRATE_CELL);
         let shadow = Color::new(0, 0, 0, (t.obstacle_shadow_opacity * tint.a as f32) as u8);
         c.blit(Sheet::Crates, crate_src(kind, col), dest, origin, 0.0, shadow);
