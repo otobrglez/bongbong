@@ -1,0 +1,105 @@
+# Shieldbreak Depot. A Protect playtest for the shield, armour and grenade patch.
+# Take the middle shield for an exposed firing lane. The west lane has grenades,
+# an iron blast screen and a breakable approach. The east lane has an EMP and
+# a way around the depot. The two waves approach through the north gates.
+version = 1
+view = "whole"
+size = [36, 20]
+tank = "scout"
+bong = "oggle"
+theme = "desert"
+weather = "clear"
+
+[mission]
+kind = "protect"
+
+[spawn]
+kind = "waves"
+waves = 2
+size = 2
+growth = 1
+tier_start = "light"
+tier_end = "medium"
+
+[cells]
+# Enemy approaches
+"9,0" = { kind = "gate" }
+"17,0" = { kind = "gate" }
+"26,0" = { kind = "gate" }
+"9,3" = { kind = "road" }
+"17,3" = { kind = "road" }
+"26,3" = { kind = "road" }
+"9,4" = { kind = "road" }
+"17,4" = { kind = "road" }
+"26,4" = { kind = "road" }
+"4,4" = { kind = "palm" }
+"6,5" = { kind = "palm" }
+"31,4" = { kind = "palm" }
+"33,5" = { kind = "palm" }
+"12,5" = { kind = "wall", material = "brick" }
+"13,5" = { kind = "wall", material = "brick" }
+"14,5" = { kind = "wall", material = "brick" }
+"20,5" = { kind = "wall", material = "brick" }
+"21,5" = { kind = "wall", material = "brick" }
+"22,5" = { kind = "wall", material = "brick" }
+
+# West lane: a blast on one side of the iron front leaves the other side in cover.
+"8,10" = { kind = "wall", material = "iron" }
+"9,10" = { kind = "wall", material = "iron" }
+"10,10" = { kind = "wall", material = "iron" }
+"11,10" = { kind = "wall", material = "iron" }
+"7,8" = { kind = "sandbag" }
+"12,8" = { kind = "sandbag" }
+"6,12" = { kind = "wall", material = "brick" }
+"7,12" = { kind = "wall", material = "brick" }
+"12,12" = { kind = "wall", material = "brick" }
+"13,12" = { kind = "wall", material = "brick" }
+"9,13" = { kind = "road" }
+"9,14" = { kind = "road" }
+"9,15" = { kind = "pickup", pickup = "grenades" }
+"13,16" = { kind = "pickup", pickup = "grenades" }
+"6,16" = { kind = "palm" }
+
+# Middle lane: the shield pickup leads into shell fire, with firing bays on both sides.
+"15,8" = { kind = "wall", material = "iron" }
+"19,8" = { kind = "wall", material = "iron" }
+"15,9" = { kind = "wall", material = "iron" }
+"19,9" = { kind = "wall", material = "iron" }
+"17,8" = { kind = "road" }
+"17,9" = { kind = "road" }
+"17,10" = { kind = "road" }
+"17,11" = { kind = "road" }
+"17,12" = { kind = "road" }
+"17,13" = { kind = "road" }
+"17,14" = { kind = "pickup", pickup = "shield" }
+"17,15" = { kind = "road" }
+"14,14" = { kind = "sandbag" }
+"20,14" = { kind = "sandbag" }
+"13,7" = { kind = "pickup", pickup = "ammo" }
+"21,7" = { kind = "pickup", pickup = "shield" }
+
+# East lane: the flanking route with an EMP, a firing gap and a health pickup.
+"21,16" = { kind = "pickup", pickup = "emp_burst" }
+"24,13" = { kind = "pickup", pickup = "emp_burst" }
+"27,15" = { kind = "pickup", pickup = "health" }
+"30,15" = { kind = "palm" }
+"27,13" = { kind = "road" }
+"27,12" = { kind = "road" }
+"27,11" = { kind = "road" }
+"27,10" = { kind = "road" }
+"27,9" = { kind = "road" }
+"24,9" = { kind = "wall", material = "brick" }
+"24,10" = { kind = "wall", material = "brick" }
+"30,9" = { kind = "wall", material = "iron" }
+"30,10" = { kind = "wall", material = "iron" }
+"31,11" = { kind = "sandbag" }
+
+# Opening and objective.
+"17,16" = { kind = "start" }
+"17,18" = { kind = "bong" }
+"10,17" = { kind = "pickup", pickup = "ammo" }
+"24,17" = { kind = "pickup", pickup = "bong_health" }
+"14,18" = { kind = "wall", material = "brick" }
+"15,18" = { kind = "wall", material = "brick" }
+"19,18" = { kind = "wall", material = "brick" }
+"20,18" = { kind = "wall", material = "brick" }

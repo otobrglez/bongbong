@@ -231,6 +231,63 @@ things when forgotten; this is the detail. Update it with the tool.
   `load_cpu_sheets`, `GpuSheets`, `render_gpu` and `image_png_bytes`; its tests pin the CPU render
   hash of every `SHIPPED_MAPS` entry (re-baseline consciously after an art/map/tuning change).
 
+## Combat balance suite
+
+Build the headless evaluator once. The runner uses Python 3.10+ and the standard library.
+
+```sh
+cargo build --release --no-default-features --bin balance_probe
+python3 tools/balance.py --out target/balance/baseline
+python3 tools/balance.py --out target/balance/pilot --sample 48 --rounds 16 \
+  --objective protect_win_rate:max --objective protect_wrecks:max \
+  --objective protect_bong_damage:min --holdout-seed 84000
+```
+
+Use a new output directory for each run. Pass `--candidate path/to/patch.json`
+to evaluate your own patch, alongside the default. Repeat the flag to compare
+several. The sample option tries values around the current defaults using a
+Latin hypercube across five axes: armor, shield capacity, shield lifetime,
+reflection cost and a shared grenade damage multiplier. The multiplier
+preserves the relationship between the grenade damage bounds.
+
+Each patch runs the same case and seed combinations. The controlled cases
+compare unshielded, shielded and covered targets, rapid and spaced shell fire,
+and EMP against a fresh shield. The grenade case raises its shield two seconds
+after launch to test a fresh shield at impact. The Protect cases compare a
+guard with a driver that tries the minigun and shield lane before falling back
+to protect the bong. Each Protect round stops at the mission result or 30 seconds.
+The holdout reruns the shortlist and defaults on fresh seeds and swaps in the
+other Protect map. The controlled layouts stay fixed.
+
+The report includes a baseline for each case, comparable metrics for each
+patch and replay commands. `summary.json` holds per-case metrics and paired bong
+damage deltas. `rounds.jsonl` and `holdout.jsonl` hold the raw records, and
+`patches/` holds the tuning files. Protect damage to the bong comes from health
+lost plus healing received, so a bong can take more than its starting health
+in damage before it dies. Hit event totals show the reported damage by
+target and cause. They omit some continuous damage and group several kinds of
+explosions under blast. They also include rolled damage for some hits to the
+bong. Use the separate health metric for actual bong damage.
+
+With objectives, the report marks patches on the Pareto front. It checks that
+EMP still breaks the shield, that cover reduces grenade damage and that the
+crate script actually fired the minigun. Objective order controls the shortlist
+when more candidates qualify than the limit. A low bong damage total can also
+mean the player's tank died early, so read it alongside wins, wrecks and hull
+damage. The fixtures measure specific interactions and pacing. Play both the
+baseline and the finalists on real levels to decide which changes feel better.
+
+To replay one case or try the Protect fixture in the windowed game:
+
+```sh
+target/release/balance_probe --case protect-crate --protect-map crossfire \
+  --seed 84000 --tuning target/balance/pilot/patches/baseline.json
+cargo run -- --map maps/balance/crossfire.toml --seed 84000 \
+  --tuning target/balance/pilot/patches/baseline.json
+```
+
+The windowed run starts from the same map, seed and tuning, and uses your input.
+
 ## Performance instruments
 
 What the window draws, how its frames are paced and what a step costs, measured rather than read
