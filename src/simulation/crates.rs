@@ -23,18 +23,14 @@ use std::collections::HashSet;
 
 use crate::blast::{BlastFx, BlastKind, BlastShape, Scorch};
 use crate::decal::Decal;
-use crate::bong::Bong;
 use crate::map::world_to_cell;
-use crate::obstacle::{face_toward, Material, Obstacle};
+use crate::obstacle::Material;
 use crate::pickup::{Pickup, PickupKind};
 use crate::shockwave::Shockwave;
-use crate::tank::Tank;
 use crate::tuning::tuning;
 use crate::Position;
-use crate::ai::Ai;
 
-use super::combat::{explosion_hit, BlastParams};
-use super::props::DamageCause;
+use super::combat::BlastParams;
 use super::{Event, Frame, Game, Spectacle};
 
 impl Game {
@@ -143,49 +139,7 @@ impl Game {
         let t = tuning();
         let params = cookoff_params();
         if live && params.radius > 0.0 {
-            for player in self.seats_on_field().into_iter().flatten() {
-                let mut q = self.world.query_one::<&mut Tank>(player);
-                let tank = q.get().expect("player entity always has a Tank");
-                if let Some(dv) = explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
-                    f.shoves.push(tank.owner(), dv);
-                }
-            }
-            for tank in super::ordered(self.world.query::<&mut Tank>().with::<&Ai>().iter(), |t| t.owner_slot()) {
-                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
-            }
-            let mut dead_bongs = Vec::new();
-            for bong in super::ordered(self.world.query::<&mut Bong>().iter(), |b| super::bong_order(b)) {
-                let dist = bong.position.distance_to(center);
-                if bong.is_dead() || dist > params.radius {
-                    continue;
-                }
-                bong.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
-                if bong.is_dead() {
-                    dead_bongs.push(bong.position);
-                }
-            }
-            for pos in dead_bongs {
-                f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
-            }
-            let hits: Vec<(Entity, Material, f32)> = super::tiles_near(self.world.query::<(Entity, &mut Obstacle)>().iter(), center, params.radius)
-                .into_iter()
-                .filter(|(_, o)| !o.destroyed && o.fuse.is_none())
-                .filter_map(|(e, o)| {
-                    let dist = o.position.distance_to(center);
-                    if dist > params.radius {
-                        return None;
-                    }
-                    if o.material.is_wall() {
-                        o.scorched |= face_toward(o.position, center);
-                    }
-                    Some((e, o.material, 1.0 - dist / params.radius))
-                })
-                .collect();
-            for (entity, material, falloff) in hits {
-                let amount = if material.is_explosive() { f32::MAX } else { params.roll_damage(&mut f.rng) * falloff };
-                self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
-            }
-            self.blast_crates(f, center, &params);
+            self.blast(f, center, &params, &[]);
             if kind == PickupKind::Flamethrower {
                 self.light_cell(f, world_to_cell(center), t.oil_pool_seconds, true);
             }
@@ -225,6 +179,7 @@ fn cookoff_params() -> BlastParams {
     params.radius *= scale;
     params.damage = (params.damage.0 * scale, params.damage.1 * scale);
     params.knockback *= scale;
+    params.lanterns = false;
     params
 }
 

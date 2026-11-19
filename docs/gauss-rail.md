@@ -172,7 +172,7 @@ reuses, and the **lane** among the dangers an enemy keeps out of.
   at most `portal_shot_max_passes` legs. Each leg pierces its own list.
 - **The recoil**: on the release, the shooter is knocked back along its
   facing (`gauss::recoil_hull` in `resolve_rails`, before `step_world`,
-  through `sonic::knock_hull` - the hammer's shove-and-skid,
+  through `combat::knock_hull` - the one shove-and-skid,
   docs/sonic-hammer.md §3.6) at
   `v = sqrt(2 * skid_friction(1) * 32 * gauss_recoil_cells) / m^gauss_recoil_mass_exponent`,
   where `skid_friction(1)` is the skid's friction on dry ground
@@ -235,7 +235,7 @@ their picture (`tick_effects`), and the bursts they started play out.
 | `src/simulation/props.rs` | `DamageCause::Pierce { dir }` |
 | `src/simulation/mod.rs` | `Frame::{pending_rails, charge_ends}`; `Game::{rail_slugs, charge_ends, seat_hold}`; `resolve_rails` after `resolve_lasers`; `drive_player`'s trigger by `ActiveWeapon::trigger`; `enemy_trigger` routing a charge weapon's trigger every tick (its press edge from `Tank::trigger_held`); `coast_enemy` keeping a charging trigger down; the crawl in `drive_tank_with`; `tick_timers` (`spin`, `rail_flash`, a wreck's charge); `predict_seat_with` (the charge step and its recoil); `end_round`; `tick_effects`/`tick_presentation` (slugs, charge ends, a replica's charges); `Event::{RailSlug, ChargeStarted, ChargeEnded}`, `HitCause::Rail`; `Pending::charging`; `TankSnapshot::{gauss_slugs, charging}` |
 | `src/simulation/command.rs` | `Busy::Charging`: never ordered, keeps right of way |
-| `src/simulation/sonic.rs` | The hammer's trouble: a charging enemy rail's lane (§12); `knock_hull`/`knock_with`; the swap's table entry |
+| `src/simulation/sonic.rs` | The hammer's trouble: a charging enemy rail's lane (§12); the swap's table entry (the knock is `combat::knock_hull`) |
 | `src/simulation/present.rs` | `PresentWorld::rail_trace` (`RailTrace`: the drawn world's stop and what a slug goes through), `Game::draw_rail_press`, `Game::{seat_charge, set_seat_charge}` |
 | `src/simulation/replica.rs` | `DrawableTank::charge` |
 | `src/tank.rs` | `gauss_slugs`, `charge`, `spin`, `rail_flash`, `trigger_held`; `Trigger`, `Charge`, `ChargeRule`, `ChargeStage` (`name`), `ChargeEdge`, `ChargeEnd`, `ticks_of`, `CHARGE_HOLD_SPARE_TICKS`; `ActiveWeapon::GaussRail` (`name`, `full_load`, `tell_seconds` none, `trigger`, `charge_rule`), `SPECIAL_WEAPONS`; `step_charge`, `lapse_charge`, `charge_pace`, `windup`, `kick_rail`; `weapon_ammo`/`take_weapon`/`empty_stock`/`wants_pickup`; the spin lock in `control`; the module's cells in `module_cols`; `Dir::opposite` |
@@ -307,7 +307,7 @@ in the same places:
 And, as they are: the special hook's tier and `act_special` (extended
 below), the wind-up's off-screen arrow (`ArrowKind::Windup`, fed by a
 charge as by a tell through `Tank::windup`, below), the press show's claim
-by input tick, the knock and its skid (`sonic::knock_hull`),
+by input tick, the knock and its skid (`combat::knock_hull`),
 `Tank::special`/`active_weapon`, `Tank::disable`, the dangers and the
 `dodge` tier (its held exit point and `Brain::steer_out`),
 `spawn_pickup {kind: "gauss_rail"}`, the probe's `--crate gauss_rail`,
@@ -1646,8 +1646,8 @@ additions, kept general for the rod (BB-41) and whatever charges after it:
    `act_special`, `DangerShape::Lane` beside the EMP's disc (its `depth`,
    `exits` the dodge walks to and holds, `posts`, `middle`), the edge hold
    (`enters_lane`, `Ai::kept_out`), `command::Busy::Charging`.
-3. **The knock**: `sonic::knock_hull` (the hull's half alone, for the
-   prediction sandbox) and `knock_with`'s echo switch; `Shoves::allow_knock`
+3. **The knock**: `combat::knock_hull` (the hull's half alone, for the
+   prediction sandbox) under `combat::knock`; `Shoves::allow_knock`
    for a knock the room puts on no `Shoved`.
 4. **The prediction**: `Game::predict_seat_with` (the trigger stepped in the
    room's order, its edge reported), the predictor's history keeping each

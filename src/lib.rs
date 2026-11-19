@@ -1042,6 +1042,7 @@ pub mod game;
 pub mod ground;
 pub mod hud;
 pub mod indicators;
+pub mod knock;
 pub mod lamp;
 pub mod laser;
 pub mod lava;
@@ -1073,6 +1074,7 @@ pub mod pyro;
 pub mod qr;
 #[cfg(feature = "render")]
 pub mod render;
+pub mod shape;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;

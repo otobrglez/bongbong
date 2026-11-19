@@ -508,13 +508,29 @@ impl Material {
         self == Material::Glass
     }
 
-    /// Odds a projectile sails over this tile instead of hitting it, rolled
-    /// per projectile per tile (`Game::resolve_projectiles`). Zero means
-    /// "never", and no RNG is drawn for it.
+    /// Odds a projectile sails over or through this tile instead of
+    /// hitting it, rolled per projectile per tile
+    /// (`Game::resolve_projectiles`). Zero means "never", and no RNG is
+    /// drawn for it. **Every tile the AI sees over (`blocks_sight` false)
+    /// has a chance**, so an enemy that takes a shot across a fence or a
+    /// sapling is not firing into a wall it cannot see.
+    ///
+    /// The rule is for what is lobbed or flung - shells, bullets, plasma
+    /// bolts. A laser's beam and a gauss rail's slug travel dead flat at
+    /// the muzzle's height: they make no pass-over roll and no deflect
+    /// roll (`deflect_chance`), and strike every tile on their line - the
+    /// beam stops on the first, the slug goes through all but its
+    /// stoppers.
     pub fn pass_over_chance(self) -> f64 {
+        let t = tuning();
         match self {
-            Material::Sandbag => tuning().sandbag_pass_over_chance,
-            Material::Barrel => tuning().barrel_pass_over_chance,
+            Material::Sandbag => t.sandbag_pass_over_chance,
+            Material::Barrel => t.barrel_pass_over_chance,
+            Material::Fence => t.fence_pass_over_chance,
+            Material::Lamp => t.lamp_pass_over_chance,
+            Material::Fir => t.sapling_pass_over_chance,
+            Material::Palm => t.palm_pass_over_chance,
+            Material::Snag => t.snag_pass_over_chance,
             _ => 0.0,
         }
     }

@@ -49,7 +49,7 @@ impl BlastParams {
     /// One FPV drone's burst, launched by `by`: fixed damage, no roll.
     pub fn drone(by: Owner) -> Self {
         let t = tuning();
-        BlastParams { radius: t.fpv_blast_radius_px, damage: (t.fpv_damage, t.fpv_damage), knockback: t.fpv_knockback_speed, by: Some(by) }
+        BlastParams::ordnance(t.fpv_blast_radius_px, (t.fpv_damage, t.fpv_damage), t.fpv_knockback_speed, by)
     }
 }
 
@@ -314,7 +314,7 @@ impl Game {
                     }
                     None => {
                         let spared = self.spared_by_canopy(&trees);
-                        self.side_blast_sparing(f, at, owner, &BlastParams::drone(owner), &spared);
+                        self.blast(f, at, &BlastParams::drone(owner), &spared);
                     }
                 }
             }

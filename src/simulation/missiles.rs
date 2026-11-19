@@ -12,27 +12,22 @@ use crate::math::Vec2;
 
 use crate::ai::{Ai, in_sight_box};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
-use crate::bong::{Bong, Side};
 use crate::missile::Missile;
-use crate::obstacle::{face_toward, Obstacle};
+#[cfg(test)]
+use crate::obstacle::Obstacle;
 use crate::shell::Owner;
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::Position;
 
-use super::combat::{explosion_hit, BlastParams};
-use super::props::DamageCause;
+use super::combat::BlastParams;
 use super::{Event, Frame, Game, Spectacle};
 
 impl BlastParams {
     /// One seeker missile's burst, fired by `by`.
     pub fn missile(by: Owner) -> Self {
-        BlastParams {
-            radius: tuning().missile_blast_radius,
-            damage: (tuning().missile_blast_damage_min, tuning().missile_blast_damage_max),
-            knockback: tuning().missile_blast_knockback_speed,
-            by: Some(by),
-        }
+        let t = tuning();
+        BlastParams::ordnance(t.missile_blast_radius, (t.missile_blast_damage_min, t.missile_blast_damage_max), t.missile_blast_knockback_speed, by)
     }
 }
 
@@ -137,97 +132,17 @@ impl Game {
     }
 
     /// One missile's burst at `center`, fired by `owner`, travelling `dir`
-    /// as it came down: when `live` the damage (`side_blast`), then the
+    /// as it came down: when `live` the damage (`Game::blast`), then the
     /// show - a small fireball leaning downrange, a ripple, a scorch and
     /// flattened grass.
     fn missile_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, dir: Vec2, live: bool) {
         f.events.push(Event::MissileBlast { slot: owner.slot(), x: center.x, y: center.y });
         if live {
-            self.side_blast(f, center, owner, &BlastParams::missile(owner));
+            self.blast(f, center, &BlastParams::missile(owner), &[]);
         }
         let mut show = Spectacle::default();
         self.missile_show(&mut show, center, dir);
         f.stage(show);
-    }
-
-    /// The damage of ordnance fired by `owner` going off at `center` - a
-    /// missile's burst or a grenade's blast: the side opposing `owner`
-    /// takes linear-falloff damage and every live tank in range is shoved
-    /// (the wreck blast's rule - `explosion_hit` - so one draw per tank in
-    /// range, players first, then enemies; a seat's shove goes on
-    /// `Frame::shoves`, which tells a client-owned hull's client; a tank
-    /// still driving in through a gate is neither hurt nor shoved); bongs of
-    /// the opposing side take damage; tiles crack and barrels go off
-    /// (`damage_obstacle`, as any blast), and crates break.
-    pub(super) fn side_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams) {
-        self.side_blast_sparing(f, center, owner, params, &[]);
-    }
-
-    /// `side_blast` with the tanks and bongs in `spared` left out whole -
-    /// neither hurt nor shoved: an FPV drone's burst spares what stands
-    /// under a tree's crown (docs/fpv-swarm.md "Trees"). With nothing
-    /// spared it is `side_blast`, draw for draw.
-    pub(super) fn side_blast_sparing(&mut self, f: &mut Frame, center: Position, owner: Owner, params: &BlastParams, spared: &[Entity]) {
-        self.chain_held_drums(f, center, params.radius);
-        // A tank still rolling in through a gate has no body to shove and
-        // is out of the fight: a seat by `seats_on_field`, an enemy by
-        // having no `Ai` yet.
-        for player in self.seats_on_field().into_iter().flatten() {
-            if spared.contains(&player) {
-                continue;
-            }
-            let mut q = self.world.query_one::<&mut Tank>(player);
-            let tank = q.get().expect("player entity always has a Tank");
-            let hurts = !owner.same_side(tank.owner());
-            if let Some(dv) = explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, params) {
-                f.shoves.push(tank.owner(), dv);
-            }
-        }
-        for (entity, tank) in super::ordered(self.world.query::<(Entity, &mut Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()) {
-            if spared.contains(&entity) {
-                continue;
-            }
-            let hurts = !owner.same_side(tank.owner());
-            explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, params);
-        }
-        let own_side = if owner.is_player() { Side::Player } else { Side::Enemy };
-        let mut dead_bongs = Vec::new();
-        for (entity, bong) in super::ordered(self.world.query::<(Entity, &mut Bong)>().iter(), |(_, b)| super::bong_order(b)) {
-            if bong.is_dead() || bong.side == own_side || spared.contains(&entity) {
-                continue;
-            }
-            let dist = bong.position.distance_to(center);
-            if dist > params.radius {
-                continue;
-            }
-            bong.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
-            if bong.is_dead() {
-                dead_bongs.push(bong.position);
-            }
-        }
-        for pos in dead_bongs {
-            f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
-        }
-        // Collect first: `damage_obstacle` needs the world free.
-        let hits: Vec<(Entity, f32)> = super::tiles_near(self.world.query::<(Entity, &mut Obstacle)>().iter(), center, params.radius)
-            .into_iter()
-            .filter(|(_, o)| !o.destroyed)
-            .filter_map(|(e, o)| {
-                let dist = o.position.distance_to(center);
-                if dist > params.radius {
-                    return None;
-                }
-                if o.material.is_wall() {
-                    o.scorched |= face_toward(o.position, center);
-                }
-                Some((e, 1.0 - dist / params.radius))
-            })
-            .collect();
-        for (entity, falloff) in hits {
-            let amount = params.roll_damage(&mut f.rng) * falloff;
-            self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
-        }
-        self.blast_crates(f, center, params);
     }
 
     /// The show a missile bursting at `center`, coming down along `dir`,
@@ -372,8 +287,9 @@ mod tests {
         assert!(locks.iter().all(|e| matches!(e, Event::MissileLocked { target: Some(s), .. } if *s == slot)), "{locks:?}");
         let blasts = blasts(&events);
         assert_eq!(blasts.len(), 4);
-        // Spread by tube, but each well inside its blast of the hull.
-        let reach = 1.5 * tuning().missile_impact_spread_px + 1.0;
+        // Spread by tube, but each inside its blast of the hull, which
+        // the blasts before it threw about.
+        let reach = tuning().missile_blast_radius;
         assert!(landed.iter().all(|&(b, at)| b.distance_to(at) <= reach), "{landed:?}");
         let spread = blasts.iter().map(|b| b.distance_to(blasts[0])).fold(0.0f32, f32::max);
         assert!(spread >= 2.0 * tuning().missile_impact_spread_px, "the salvo lands spread out: {blasts:?}");

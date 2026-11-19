@@ -173,7 +173,7 @@ When a dive's time is up the drone bursts where its ground point is
   does. Nothing under it is touched. A broadleaf (12) takes three drones, a
   pine (9) three. Two crowns: the nearer tree's centre, then cell order.
 - **On the ground.** Anywhere else, a small side blast
-  (`Game::side_blast_sparing`, §3.2): the missiles' and grenades' rule at
+  (`Game::blast` with a spared list, §3.2): the missiles' and grenades' rule at
   `BlastParams::drone(owner)` - radius `fpv_blast_radius_px` (44), damage
   `fpv_damage` (8) at the centre falling linearly to nothing at the radius,
   **no roll** (`BlastParams::roll_damage` draws nothing when its range is a
@@ -311,7 +311,7 @@ no damage (§12, decision 8). A falling drone is no longer an air target.
 | `src/simulation/fpv.rs` (new) | The world half. `fire_fpv` (the dispatch arm's body), `launch_drones`, `pick_lock`, `guide_drones` (locks and aims, before the step), `advance_drones` (in the fixed step), `resolve_drones(f, live)` (bursts and crashes), `drone_show` (the cosmetic half, which a replica's `DroneBurst` calls too), `spared_by_canopy`, `count_drones_out`, `Game::{air_targets, strike_air, drones, standing_trees, canopy_over}`, `fpv_senses` (what the AI is handed, §4, with the cover search), `air_threats` (§4, with the tree search), `seat_drone_slot` |
 | `src/simulation/hits.rs` | `Terrain::sweep_air` (a bullet's sweep against the air targets, lag-compensated) and `air_along` (the rail's lane); `HitBoxFrame::air` |
 | `src/simulation/weapons.rs` | The `ActiveWeapon::FpvSwarm` dispatch arm; `Projectile::strikes_air` (bullets) |
-| `src/simulation/missiles.rs` | `side_blast_sparing` (`side_blast` with a list of hulls and bongs left out); `BlastParams::drone` lives in `simulation/fpv.rs` |
+| `src/simulation/missiles.rs` | the drone's blast through `Game::blast` with a list of hulls and bongs left out; `BlastParams::drone` lives in `simulation/fpv.rs` |
 | `src/simulation/mod.rs` | `Frame::pending_drones`; `launch_drones` at the end of `spawn_pending`; `guide_drones` beside `guide_missiles`; `advance_drones` in `step_world`'s loop; `resolve_drones` after `resolve_missiles` (both branches); `resolve_projectiles`' air sweep; `enemy_phase` (the senses, the threats, `Ai::air_want` handed to `Tank::fpv_want` before `enemy_trigger`); `tick_presentation` (a replica's drones age); `Event::{DroneLaunched, DroneBurst, DroneDowned, DroneCrashed, DroneLockLost}`; `TankSnapshot::{fpv_drones, fpv_out, air_hold}` |
 | `src/simulation/towers.rs` | The tesla's air arc (`tesla_air`, `Tower::air_cooldown`), the gun tower's air pick and lead (`pick_air`, `Tower::air_target`), `air_candidates`/`air_box_allows` |
 | `src/simulation/emp.rs`, `sonic.rs`, `gauss.rs` | The drones' arm in `tick_emp_pulses` (after the missiles), in the sonic wave's cone, and in the slug's lane (`Pierced::Drone`); `SPAWN_SWAPS` gains the swarm (`sonic.rs`) |
@@ -427,9 +427,9 @@ pale sparks).
   missiles - the EMP's doc keeps the place), the rail's slug
   (`Terrain::air_along` up to where it stops, `Pierced::Drone`, every
   drone in the lane).
-- **`side_blast_sparing(f, center, owner, params, spared)`** - the
-  missiles' and grenades' `side_blast` with a list of hulls and bongs left
-  out; `side_blast` is it with none.
+- **`Game::blast(f, center, params, spared)`** - the one blast
+  (`simulation/combat.rs`), with the missiles' and grenades' rule
+  (`BlastParams::ordnance`) and a list of hulls and bongs left out.
 - **`Projectile::strikes_air()`** - true for bullets, false for shells and
   plasma; `resolve_projectiles` sweeps the air (`Terrain::sweep_air`) only
   for a kind that does.
@@ -1221,8 +1221,8 @@ Protocol 19 (from the rail's 18), once in the PR.
   no drone is ever in the air: `air_targets` is empty (the sweep's air
   candidates, the towers' air arms, the strike walks' air arms and the
   history's air list are all empty), `air_threats` is empty (the `air` tier
-  a `false` with no state touched), no sense is built, `side_blast` is
-  `side_blast_sparing` with nothing spared, the shared id counter is drawn
+  a `false` with no state touched), no sense is built, a missile's blast
+  spares nothing, the shared id counter is drawn
   only by what it always was. The ground sweep is untouched (the air is a
   sweep of its own). `determinism_tests`' pinned streams, the probe
   fixtures' and fields' outputs (byte for byte the rail's reviewed head's,

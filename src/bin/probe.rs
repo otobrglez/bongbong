@@ -2067,7 +2067,7 @@ fn check_fire(
                     fire.rod_calls_offbox += 1;
                 }
             }
-            Event::Hit { target: HitTarget::Player { .. }, .. } => fire.hits_on_seats += 1,
+            Event::Hit { target: HitTarget::Player { .. }, cause, .. } if cause.is_shot() => fire.hits_on_seats += 1,
             _ => {}
         }
     }

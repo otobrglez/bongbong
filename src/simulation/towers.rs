@@ -13,6 +13,7 @@ use crate::math;
 use hecs::Entity;
 use rand::RngExt;
 
+use super::combat::Hurt;
 use super::props::DamageCause;
 use super::*;
 use crate::ai::in_sight_box;
@@ -570,13 +571,11 @@ impl Game {
     }
 
     /// Coat `entity` in ooze and deal it `damage` - a splash's, or a
-    /// puddle's. A coat `by` a shooter marks it hit and alerts an enemy, as
-    /// a shot would - and one by a standing tower gives it a grudge.
+    /// spill's none. The damage is `Game::hurt_tank`'s: a coat `by` a
+    /// standing tower gives an enemy a grudge against it.
     fn coat(&mut self, f: &mut Frame, entity: Entity, damage: f32, by: Option<Owner>) {
-        let hit = by.is_some();
-        let tower = by.and_then(|owner| self.tower_by_owner(owner));
         let slime = tuning().bio_slime_seconds;
-        let (killed, fresh, slot, pos, owner) = {
+        let (fresh, slot, at) = {
             let mut q = self.world.query_one::<&mut Tank>(entity);
             let Ok(tank) = q.get() else { return };
             if tank.is_wreck() {
@@ -584,24 +583,13 @@ impl Game {
             }
             let fresh = !tank.is_slimed();
             tank.slime_timer = slime;
-            if damage > 0.0 {
-                tank.take_damage(damage, MAX_DAMAGE);
-            }
-            if hit {
-                tank.mark_hit();
-            }
-            (tank.is_wreck(), fresh, tank.owner_slot(), tank.position, tank.owner())
+            (fresh, tank.owner_slot(), tank.position)
         };
         if fresh {
             f.events.push(Event::Slimed { slot });
         }
-        if killed {
-            f.kills.push((pos, owner));
-        } else if hit && let Ok(mut ai) = self.world.get::<&mut Ai>(entity) {
-            match tower {
-                Some(at) => ai.notify_tower_hit(at),
-                None => ai.notify_hit(),
-            }
+        if damage > 0.0 {
+            self.hurt_tank(f, entity, Hurt::hit(damage, super::HitCause::Slime, by, at));
         }
     }
 
@@ -676,12 +664,11 @@ impl Game {
             if !tank.is_slimed() {
                 continue;
             }
-            if t.bio_slime_dps > 0.0 {
-                tank.take_damage(t.bio_slime_dps * f.dt, MAX_DAMAGE);
-            }
             tank.slime_timer = (tank.slime_timer - f.dt).max(0.0);
-            if tank.is_wreck() {
-                f.kills.push((tank.position, tank.owner()));
+            let at = tank.position;
+            drop(q);
+            if t.bio_slime_dps > 0.0 {
+                self.hurt_tank(f, entity, Hurt::contact(t.bio_slime_dps * f.dt, super::HitCause::Slime, None, at));
             }
         }
     }
@@ -711,19 +698,7 @@ impl Game {
                         self.tesla_bolts.push(TeslaBolt::new(pos, c.pos, cell_frame_hash(cell, self.frame, 100 + i as u32)));
                         f.events.push(Event::TeslaStrike { x0: pos.x, y0: pos.y, x1: c.pos.x, y1: c.pos.y, chained: true });
                         let damage = t.tesla_death_blast_damage * (1.0 - d / radius);
-                        let (killed, owner, at) = {
-                            let mut q = self.world.query_one::<&mut Tank>(c.entity);
-                            let Ok(tank) = q.get() else { continue };
-                            if tank.is_wreck() {
-                                continue;
-                            }
-                            tank.take_damage(damage, MAX_DAMAGE);
-                            tank.mark_hit();
-                            (tank.is_wreck(), tank.owner(), tank.position)
-                        };
-                        if killed {
-                            f.kills.push((at, owner));
-                        }
+                        self.hurt_tank(f, c.entity, Hurt::hit(damage, super::HitCause::Tesla, None, c.pos));
                     }
                 }
             }

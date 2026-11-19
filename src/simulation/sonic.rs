@@ -23,10 +23,11 @@ use crate::shockwave::Shockwave;
 use crate::sonic::{self, Block, Floor, SonicCone, SonicWave};
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::{Tuning, tuning};
-use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position};
+use crate::{OBSTACLE_GRID_SIZE, Position};
 
+use super::combat::{knock, Hurt};
 use super::props::DamageCause;
-use super::{Event, Footing, Frame, Game, HitCause, HitTarget, RollIn, Spectacle};
+use super::{Event, Footing, Frame, Game, HitCause, RollIn, Spectacle};
 
 /// A blast fired this frame, waiting for `resolve_sonic` to cast it.
 pub(super) struct PendingSonic {
@@ -50,53 +51,9 @@ pub(super) fn fire_sonic(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, 
     f.pending_sonic.push(PendingSonic { origin, facing, owner });
 }
 
-/// Knock `tank` along the unit `dir` at `speed` px/s and off its tracks
-/// (docs/sonic-hammer.md "The knock"): a real impulse sized by its own
-/// mass, then `Tank::skid` for as long as the skid's friction takes to
-/// stop it on its ground (`footing`), and the speed it was left at for the
-/// pose validator. A client-owned seat hears of it as `Event::Shoved` with
-/// its skid. Returns the velocity change. Any weapon that throws hulls
-/// about knocks them through here.
-pub(super) fn knock(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing) -> Vec2 {
-    knock_with(physics, f, tank, dir, speed, footing, true)
-}
-
-/// `knock`, saying whether a client-owned seat hears of it (`echo`): a
-/// knock its client puts on itself - a gauss rail's recoil, kicked on the
-/// release - is not sent, but the pose validator still allows its speed
-/// (`Shoves::allow_knock`).
-pub(super) fn knock_with(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing, echo: bool) -> Vec2 {
-    let Some((dv, skid)) = knock_hull(physics, tank, dir, speed, footing) else { return Vec2::zero() };
-    if echo {
-        f.shoves.push_knock(tank.owner(), dv, skid);
-    } else {
-        f.shoves.allow_knock(tank.owner(), dv, skid);
-    }
-    dv
-}
-
-/// The knock itself, with nobody told (`knock`): the impulse sized by the
-/// hull's own mass, then its skid and the speed it was left at. The
-/// velocity change and the skid; `None` for a hull with no body. What a
-/// client's sandbox kicks its own hull with too (`Game::predict_seat_with`).
-pub(super) fn knock_hull(physics: &mut Physics, tank: &mut Tank, dir: Vec2, speed: f32, footing: Footing) -> Option<(Vec2, f32)> {
-    let handle = tank.body?;
-    let t = tuning();
-    let dv = dir * speed;
-    physics.apply_impulse(handle, Position::new(dv.x * tank.mass(), dv.y * tank.mass()));
-    let v = physics.velocity(handle);
-    let rel = Vec2::new(v.x - footing.flow.x, v.y - footing.flow.y).length();
-    let skid = sonic::skid_seconds(&t, rel, footing.grip);
-    tank.skid = tank.skid.max(skid);
-    tank.skid_speed = rel;
-    Some((dv, skid))
-}
-
-/// The centre and the four corners of a hull's box: the points a wave
-/// reaches it by, the nearest first.
+/// The points a wave reaches a hull by (`TargetShape::points`).
 fn hull_points(tank: &Tank) -> [Position; 5] {
-    let (c, h) = tank.hull_bbox_world();
-    box_points(c, h)
+    tank.target_shape().points()
 }
 
 /// The centre `c` and the four corners of a box `h` either way of it.
@@ -457,7 +414,7 @@ impl Game {
                 if tank.is_wreck() || tank.body.is_none() || tank.owner() == shooter || self.world.get::<&RollIn>(entity).is_ok() {
                     continue;
                 }
-                wave.cone.nearest_reached(&hull_points(&tank)).filter(|&d| d <= to && d >= from - FRONT_SLACK_PX)
+                tank.target_shape().in_cone(|p| wave.cone.reaches(p)).filter(|&d| d <= to && d >= from - FRONT_SLACK_PX)
             };
             if let Some(d) = reached {
                 wave.struck.push(slot);
@@ -507,41 +464,25 @@ impl Game {
     /// One hull the front reached at `d` px from `origin`: the side
     /// opposing `shooter` takes `sonic_damage` times the falloff (no roll,
     /// through a shield first) and logs a sonic `Hit`; a hull it does not
-    /// kill is knocked along the line from the pivot (`knock`) and, an
-    /// enemy, told it was hit.
+    /// kill is knocked along the line from the pivot (`combat::knock`); the
+    /// hurt is `Game::hurt_tank`'s.
     fn strike_hull(&mut self, f: &mut Frame, entity: Entity, d: f32, origin: Position, shooter: Owner, t: &Tuning) {
-        let footing = super::with_tank(&self.world, entity, |tank| Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time));
-        let survived = {
-            let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
-            let falloff = sonic::falloff(t, d);
-            if !shooter.same_side(tank.owner()) {
-                let landed = tank.take_damage(t.sonic_damage * falloff, MAX_DAMAGE);
-                tank.mark_hit();
-                tank.credit(shooter);
-                let killed = tank.is_wreck();
-                let target = match tank.owner() {
-                    Owner::Player(player) => HitTarget::Player { player },
-                    Owner::Enemy(slot) => HitTarget::Enemy { slot },
-                    Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
-                };
-                let at = tank.position;
-                f.events.push(Event::Hit { target, damage: landed, killed, x: at.x, y: at.y, cause: HitCause::Sonic });
-                if killed {
-                    f.kills.push((tank.position, tank.owner()));
-                    return;
-                }
-            }
+        let Some((owner, at, dir, footing)) = self.world.get::<&Tank>(entity).ok().map(|tank| {
             let line = tank.position - origin;
             let len = line.length();
             let dir = if len > 1e-3 { line / len } else { Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec() };
-            let mass_factor = tank.mass() / (tank.scale * tank.scale);
-            let speed = sonic::shove_speed(t, mass_factor, d);
-            knock(&mut self.physics, f, &mut tank, dir, speed, footing);
-            !shooter.same_side(tank.owner())
+            (tank.owner(), tank.position, dir, Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time))
+        }) else {
+            return;
         };
-        if survived && let Ok(mut ai) = self.world.get::<&mut Ai>(entity) {
-            ai.notify_hit();
+        if !shooter.same_side(owner) {
+            let hurt = Hurt::hit(t.sonic_damage * sonic::falloff(t, d), HitCause::Sonic, Some(shooter), at);
+            if self.hurt_tank(f, entity, hurt).is_none_or(|l| l.killed) {
+                return;
+            }
         }
+        let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
+        knock(&mut self.physics, &mut f.shoves, &mut tank, dir, sonic::knock_at(t, d), footing);
     }
 
     /// A drum the wave reached: thrown along the wave's line onto whoever

@@ -801,6 +801,26 @@ pub enum HitCause {
     /// Fragments off the far face of a wall a shell breached
     /// (`Game::spall`, BB-82).
     Spall,
+    /// A hull's share of a blast (`Game::blast`): a wreck's, a drum's, a
+    /// missile's, a grenade's, a bomb's; a tesla tower's dying discharge.
+    Blast,
+    /// Lava's heat on a hull (`Game::lava_phase`).
+    Lava,
+    /// A burning cell under a hull, or the afterburn a stream or lava
+    /// left on it.
+    Fire,
+    /// A bio tower's ooze: a glob's splash, or what a slimed hull loses
+    /// while it sticks.
+    Slime,
+}
+
+impl HitCause {
+    /// Whether a weapon's own shot, beam, stream or wave landed this - what
+    /// draws an impact and points the hit arrow. A blast's share and the
+    /// ground's burns are the world's: their own events draw them.
+    pub fn is_shot(self) -> bool {
+        !matches!(self, HitCause::Blast | HitCause::Lava | HitCause::Fire | HitCause::Slime)
+    }
 }
 
 /// What an `Event::Hit` landed on.
@@ -2562,6 +2582,9 @@ impl Game {
         for tank in ordered(self.world.query::<&mut Tank>().iter(), |t| t.owner_slot()) {
             tank.hit_by_seat = None;
             tank.hit_by_enemy = None;
+            tank.contacts_before = tank.contacts;
+            tank.contacts = 0;
+            tank.tick_credit(dt);
             if !(shells_held && tank.owner().is_player()) {
                 tank.tick_recharge(dt);
             }
@@ -3091,7 +3114,7 @@ impl Game {
             let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
             let jet = weapons::flame_jet(&tank, owner, entity);
             let end = Position::new(jet.origin.x + jet.dir.x * jet.range, jet.origin.y + jet.dir.y * jet.range);
-            let reach = terrain.first_solid_along(jet.origin, end).map_or(jet.range, |t| t * jet.range);
+            let reach = terrain.first_shot_along(jet.origin, end, 0.0).map_or(jet.range, |t| t * jet.range);
             self.flame_jets.push(FlameJet { reach, ..jet });
         }
     }
@@ -3328,16 +3351,9 @@ impl Game {
             let dmg = combat::roll_range(&mut f.rng, tuning().bong_attack_damage_min, tuning().bong_attack_damage_max);
             // A bite never finishes a player off, whichever player it is.
             let cap = if self.is_player(target) { MAX_DAMAGE - 1.0 } else { MAX_DAMAGE };
-            let (became_wreck, victim_pos, victim) = {
-                let mut q = self.world.query_one::<&mut Tank>(target);
-                let tank = q.get().expect("attack target always has a Tank");
-                tank.take_damage(dmg, cap);
-                tank.mark_hit();
-                (tank.is_wreck(), tank.position, tank.owner())
-            };
-            f.events.push(Event::BongBite { side, slot: victim.slot(), damage: dmg, killed: became_wreck });
-            if became_wreck {
-                f.kills.push((victim_pos, victim));
+            // `Event::BongBite` is the bite's report (`Report::Own`).
+            if let Some(bitten) = self.hurt_tank(f, target, combat::Hurt { cap, ..combat::Hurt::own(dmg, None, target_pos) }) {
+                f.events.push(Event::BongBite { side, slot: bitten.owner.slot(), damage: dmg, killed: bitten.killed });
             }
             with_bong_mut(&self.world, bong_entity, |fr| fr.start_attack(target_pos));
         }
@@ -4907,6 +4923,11 @@ impl Game {
                     });
                     if let Some((slot, other_slot, damage)) = rammed {
                         f.events.push(Event::Ram { slot, other_slot, damage });
+                        // Rammed by a seat: it knows where the seat is. Two
+                        // enemies bumping hulls alert nobody.
+                        if let Ok(mut ai) = self.world.get::<&mut Ai>(enemy) {
+                            ai.notify_hit();
+                        }
                     }
                 }
             }
@@ -7397,17 +7418,22 @@ mod determinism_tests {
         // The pairs below run the same rounds with one knob changed, to tell
         // which change moved a pin. Shells chip walls chunk by chunk
         // (`chunks.rs`); with `wall_chunks` off the pair is
-        // (1_311_122_185_973_974_513, 6_901_121_954_650_956_187). The map's
+        // (11_732_861_727_457_925_354, 15_787_706_258_728_626_981). The map's
         // crates are many, and the enemies go round the ones they would
         // leave (`route_crate_cost`); with that at 0 the pair is
-        // (9_286_575_373_190_821_116, 14_483_779_157_577_496_359). An enemy
+        // (10_077_233_387_944_223_772, 18_388_638_122_343_907_837). An enemy
         // holds the seat it chases past the edge of its sight
         // (`enemy_sight_hold_px`), which moves the one-seat round; with that
-        // at 0 the pair is (3_558_694_837_288_099_379,
-        // 3_120_823_617_306_764_509), and with `enemy_lost_seconds` at 0 as
-        // well it is (1_330_122_091_120_726_416, 3_120_823_617_306_764_509).
+        // at 0 the pair is (13_096_341_995_675_792_630,
+        // 18_125_339_335_117_055_137), and with `enemy_lost_seconds` at 0 as
+        // well it is (15_430_349_431_667_688_025, 18_125_339_335_117_055_137).
+        // Every shove follows one mass rule (`knock::Knock`); with a shell's
+        // impact mass-blind (`impact_knock_mass_exponent` 0) and a blast
+        // leaving no skid (`blast_skid_max_seconds` 0) under the common cap
+        // (`blast_knock_max_speed` at `knockback_max_speed`) the pair is
+        // (18_253_144_103_971_971_681, 4_357_366_187_508_363_331).
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (1_311_122_185_973_974_513, 3_120_823_617_306_764_509), "(one seat, two seats)");
+        assert_eq!((one, two), (11_732_861_727_457_925_354, 18_125_339_335_117_055_137), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -12299,5 +12325,351 @@ cells."30,20" = { kind = "bong" }
             }
         }
         panic!("the wreck was never removed");
+    }
+
+    // --- One of each: the damage funnel, the knock, the blast, "is it
+    // solid", the target shape and the pass-over (BB-166). ---
+
+    /// An open field with no enemies of its own and nobody shielded.
+    fn open_round(extra: &str) -> Game {
+        let mut game = sandbox(&format!("version = 1\ntanks = 0\ncells.\"3,11\" = {{ kind = \"start\" }}\n{extra}"));
+        for tank in game.world.query_mut::<&mut Tank>() {
+            tank.shield_hp = 0.0;
+            tank.shield_timer = 0.0;
+        }
+        game
+    }
+
+    /// A parked, unarmed, unshielded enemy of chassis `row` at `at`.
+    fn dummy(game: &mut Game, at: Position, row: i32) -> Entity {
+        let slot = game.debug_spawn_enemy(at, Some(row), Some(Role::Player)).expect("spawns");
+        let entity = game.tank_entity_by_slot(slot).expect("exists");
+        with_tank_mut(&game.world, entity, |t| {
+            t.speed_scale = 0.0;
+            t.shells_ammo = 0;
+            t.disarm();
+            t.shield_hp = 0.0;
+            t.shield_timer = 0.0;
+        });
+        entity
+    }
+
+    /// A frame over the round as it stands, on the round's own generator:
+    /// hand it back with `game.rng = Some(f.rng)`.
+    fn frame_of(game: &mut Game) -> Frame {
+        let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+        Frame::new(1.0 / 60.0, W, H, game.rng.take().expect("the round's generator"), terrain)
+    }
+
+    fn damage_at(game: &Game, entity: Entity) -> f32 {
+        with_tank(&game.world, entity, |t| t.damage)
+    }
+
+    fn hit_causes(events: &[Event]) -> Vec<(HitCause, bool)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Hit { cause, damage, .. } => Some((*cause, *damage > 0.0)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `Game::hurt_tank` is the one way a tank loses health: a shot, a
+    /// blast's share, a stream, lava, fire, ooze and a ram or a bite all
+    /// land through it, each reported its own way, and a seat's hurt is
+    /// credited to it.
+    #[test]
+    fn every_kind_of_hurt_lands_through_the_one_funnel() {
+        use combat::Hurt;
+        let mut game = open_round("");
+        let seat = Owner::Player(0);
+        let at = Position::new(0.0, 0.0);
+        // What is hurting, how, and the `Event::Hit`s of two ticks of it:
+        // (cause, whether it carries the damage).
+        let sources: Vec<(&str, Hurt, Vec<(HitCause, bool)>)> = vec![
+            ("a shot", Hurt::hit(5.0, HitCause::Shell, Some(seat), at), vec![(HitCause::Shell, true), (HitCause::Shell, true)]),
+            ("a blast", Hurt::hit(5.0, HitCause::Blast, None, at), vec![(HitCause::Blast, true), (HitCause::Blast, true)]),
+            ("a flame's stream", Hurt::contact(5.0, HitCause::Flame, Some(seat), at), vec![(HitCause::Flame, false)]),
+            ("lava", Hurt::contact(5.0, HitCause::Lava, None, at), vec![(HitCause::Lava, false)]),
+            ("burning ground", Hurt::contact(5.0, HitCause::Fire, None, at), vec![(HitCause::Fire, false)]),
+            ("ooze", Hurt::contact(5.0, HitCause::Slime, None, at), vec![(HitCause::Slime, false)]),
+            ("a ram or a bite", Hurt::own(5.0, None, at), vec![]),
+        ];
+        for (i, (what, hurt, reported)) in sources.into_iter().enumerate() {
+            let entity = dummy(&mut game, Position::new(300.0 + 100.0 * i as f32, 200.0), 1);
+            let mut f = frame_of(&mut game);
+            let first = game.hurt_tank(&mut f, entity, hurt).expect("a live hull takes it");
+            assert!(first.landed > 0.0 && !first.killed, "{what}: {first:?}");
+            assert_eq!(damage_at(&game, entity), first.landed, "{what}: what landed is what the hull lost");
+            game.hurt_tank(&mut f, entity, hurt).expect("and again");
+            assert_eq!(damage_at(&game, entity), first.landed * 2.0, "{what}: every tick of it lands");
+            assert_eq!(hit_causes(&f.events), reported, "{what}: how it is reported");
+            let credited = with_tank(&game.world, entity, |t| t.last_hit_by);
+            assert_eq!(credited, hurt.by.map(|_| 0), "{what}: the wreck's credit");
+            assert!(f.kills.is_empty(), "{what}");
+            game.rng = Some(f.rng);
+        }
+        // The hurt that wrecks it is on the kill list once, and a wreck
+        // takes nothing more.
+        let entity = dummy(&mut game, Position::new(300.0, 500.0), 1);
+        let mut f = frame_of(&mut game);
+        let last = game.hurt_tank(&mut f, entity, Hurt::contact(crate::MAX_DAMAGE, HitCause::Lava, None, at)).expect("a live hull");
+        assert!(last.killed);
+        assert_eq!(f.kills.len(), 1);
+        assert_eq!(f.events.iter().filter(|e| matches!(e, Event::Hit { killed: true, cause: HitCause::Lava, .. })).count(), 1, "the killing tick is reported");
+        assert!(game.hurt_tank(&mut f, entity, Hurt::hit(5.0, HitCause::Shell, Some(seat), at)).is_none(), "a wreck is past hurting");
+        assert_eq!(f.kills.len(), 1);
+        game.rng = Some(f.rng);
+    }
+
+    /// A seat's credit for a wreck runs out: `kill_credit_seconds` after
+    /// its last hit the hull is nobody's again.
+    #[test]
+    fn the_credit_for_a_wreck_runs_out() {
+        let mut game = open_round("");
+        let entity = dummy(&mut game, Position::new(600.0, 200.0), 1);
+        let mut f = frame_of(&mut game);
+        game.hurt_tank(&mut f, entity, combat::Hurt::hit(1.0, HitCause::Shell, Some(Owner::Player(0)), Position::new(0.0, 0.0)));
+        game.rng = Some(f.rng);
+        let ticks = (tuning().kill_credit_seconds * 60.0) as usize;
+        for _ in 0..ticks - 30 {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(with_tank(&game.world, entity, |t| t.last_hit_by), Some(0), "still the seat's");
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(with_tank(&game.world, entity, |t| t.last_hit_by), None, "nobody's again");
+    }
+
+    /// One mass rule (`Knock::velocity`): whatever shoves a hull, the
+    /// speed it is left with is the knock's over its chassis's mass factor
+    /// to the knock's exponent, capped - so the heaviest chassis moves
+    /// least. A blast takes the hull off its tracks for a moment; a shell's
+    /// impact does not.
+    #[test]
+    fn one_mass_rule_shoves_every_chassis() {
+        use crate::knock::Knock;
+        let t = tuning();
+        let rows: Vec<i32> = (0..t.tank_mass_factor.len() as i32).collect();
+        let light = *rows.iter().min_by(|a, b| t.tank_mass_factor[**a as usize].total_cmp(&t.tank_mass_factor[**b as usize])).unwrap();
+        let heavy = *rows.iter().max_by(|a, b| t.tank_mass_factor[**a as usize].total_cmp(&t.tank_mass_factor[**b as usize])).unwrap();
+        assert!(t.tank_mass_factor[heavy as usize] > t.tank_mass_factor[light as usize], "the chassis differ in mass");
+        let knocks = [
+            ("a blast", Knock::blast(&t, 120.0)),
+            ("an impact", Knock::impact(&t, 120.0)),
+            ("a firm one", Knock { speed: 120.0, mass_exponent: 2.0, max_speed: 1.0e6, skid: 0.0 }),
+            ("a capped one", Knock { speed: 5000.0, mass_exponent: 1.0, max_speed: 90.0, skid: 0.0 }),
+        ];
+        for (what, k) in knocks {
+            let mut game = open_round("");
+            let mut speeds = Vec::new();
+            for (i, row) in [light, heavy].into_iter().enumerate() {
+                let entity = dummy(&mut game, Position::new(400.0 + 300.0 * i as f32, 300.0), row);
+                let mut q = game.world.query_one::<&mut Tank>(entity);
+                let tank = q.get().expect("a tank");
+                let (dv, skid) = combat::knock_hull(&mut game.physics, tank, Vec2::new(1.0, 0.0), k, Footing::DRY).expect("a body to shove");
+                let want = k.velocity(tank.mass_factor());
+                assert!((dv.x - want).abs() < 1e-3 && dv.y == 0.0, "{what}, row {row}: {dv:?} for {want}");
+                assert!(dv.x <= k.max_speed + 1e-3, "{what}: capped");
+                assert_eq!(skid > 0.0, k.skid > 0.0, "{what}: only a knock with a skid takes the hull off its tracks");
+                assert!(skid <= k.skid, "{what}: {skid}");
+                speeds.push(dv.x);
+            }
+            if k.mass_exponent > 0.0 && k.max_speed > 1000.0 {
+                assert!(speeds[1] < speeds[0], "{what}: the heavy chassis moves less: {speeds:?}");
+            }
+        }
+        assert!(Knock::blast(&t, 120.0).skid > 0.0 && Knock::impact(&t, 120.0).skid == 0.0);
+    }
+
+    /// The one blast (`Game::blast`): it reaches a hull at its nearest
+    /// point, a permanent tile between the centre and a hull is cover -
+    /// no hurt, no shove - and a tile that breaks is none.
+    #[test]
+    fn a_blast_reaches_the_near_side_of_a_hull_and_iron_is_cover() {
+        let mut extra = String::new();
+        for row in 7..=13 {
+            extra.push_str(&format!("cells.\"22,{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        extra.push_str("cells.\"20,13\" = { kind = \"wall\", material = \"wood\" }\n");
+        let mut game = open_round(&extra);
+        let cell = crate::map::cell_to_world;
+        let centre = cell(20, 10);
+        let radius = 200.0;
+        let behind_iron = dummy(&mut game, cell(24, 10), 1);
+        let in_the_open = dummy(&mut game, cell(16, 10), 1);
+        let behind_wood = dummy(&mut game, cell(20, 15), 1);
+        // Its centre is outside the radius; its near side is not.
+        let at_the_edge = dummy(&mut game, Position::new(centre.x, centre.y - radius - 4.0), 1);
+        let far = dummy(&mut game, Position::new(centre.x - radius - 80.0, centre.y), 1);
+        let on_it = dummy(&mut game, cell(8, 4), 1);
+        let mut f = frame_of(&mut game);
+        game.blast(&mut f, centre, &combat::BlastParams::world(radius, (10.0, 10.0), 150.0), &[]);
+        let speed = |game: &Game, e: Entity| game.physics.velocity(with_tank(&game.world, e, |t| t.body).expect("a body")).length();
+        assert_eq!(damage_at(&game, behind_iron), 0.0, "iron is cover");
+        assert_eq!(speed(&game, behind_iron), 0.0, "and it is not thrown either");
+        assert!(damage_at(&game, in_the_open) > 0.0, "the same distance in the open is hurt");
+        assert!(speed(&game, in_the_open) > 0.0, "and thrown");
+        assert!(damage_at(&game, behind_wood) > 0.0, "a plank wall is no cover: the blast is what breaks it");
+        assert!(damage_at(&game, at_the_edge) > 0.0, "caught by its near side");
+        assert_eq!(damage_at(&game, far), 0.0, "out of reach");
+        let blasted = f.events.iter().filter(|e| matches!(e, Event::Hit { cause: HitCause::Blast, target: HitTarget::Enemy { .. }, .. })).count();
+        assert_eq!(blasted, 3, "each share is reported as a blast's");
+        // A hull standing on the centre takes the whole of it.
+        let before = f.events.len();
+        game.blast(&mut f, cell(8, 4), &combat::BlastParams::world(60.0, (10.0, 10.0), 0.0), &[]);
+        let whole = with_tank(&game.world, on_it, |t| t.damage);
+        let share = f.events[before..].iter().find_map(|e| match e {
+            Event::Hit { cause: HitCause::Blast, damage, .. } => Some(*damage),
+            _ => None,
+        });
+        assert_eq!(share, Some(whole), "no falloff from inside the hull");
+        game.rng = Some(f.rng);
+    }
+
+    /// One answer to "is it solid" (`TerrainBox::entry`): a whole wall is
+    /// the same wall to a shot and to a hull; a rebar cage stops a hull and
+    /// no shot; and a grenade on the ground meets what a hull would, the
+    /// bong included.
+    #[test]
+    fn a_tile_is_solid_the_same_way_to_everything_that_asks() {
+        use hits::{Entry, TerrainBox};
+        let game = game_on("version = 1\ntanks = 0\ncells.\"3,11\" = { kind = \"start\" }\ncells.\"20,11\" = { kind = \"wall\", material = \"brick\" }\ncells.\"30,5\" = { kind = \"bong\" }\n", 0, None);
+        let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+        let cell = crate::map::cell_to_world;
+        let (p0, p1) = (cell(16, 11), cell(24, 11));
+        let shot = terrain.first_shot_along(p0, p1, 0.0).expect("a shot meets the wall");
+        let hull = terrain.first_solid_along(p0, p1).expect("a hull meets the wall");
+        assert_eq!(shot, hull, "the same face");
+        assert!(terrain.first_shot_along(cell(16, 14), cell(24, 14), 0.0).is_none(), "open ground is not");
+        let solids = terrain.solid_boxes();
+        let &(wall, half) = solids.iter().find(|&&(c, _)| c.distance_to(cell(20, 11)) < 1.0).expect("a grenade bounces off the wall");
+        let face = p0.x + (p1.x - p0.x) * shot;
+        assert!((face - (wall.x - half.x)).abs() < 1e-3, "all three meet the wall's near face: {face}");
+        let bongs: Vec<Position> = game.world.query::<&Bong>().iter().map(|b| b.position).collect();
+        assert!(!bongs.is_empty(), "the round has a bong");
+        assert!(bongs.iter().all(|&at| solids.iter().any(|&(c, _)| c.distance_to(at) < 1.0)), "and off the bong: {solids:?}");
+        // A cage: its rebar stands in a hull's way and in no shot's.
+        let cage = TerrainBox { entity: Entity::DANGLING, center: cell(20, 11), half: Position::new(16.0, 16.0), material: Material::Concrete, burning: false, chunks: Some(0), cage: true };
+        assert_eq!(cage.entry(p0, p1, 0.0, Entry::Shot), None, "every shot passes a cage");
+        assert!(cage.entry(p0, p1, 0.0, Entry::Solid).is_some(), "a hull does not");
+    }
+
+    /// A flame is cast as rays, each stopped by the first tile and then
+    /// the first hull it meets (`TargetShape::swept`): nothing burns
+    /// behind a tank, or behind a wall.
+    #[test]
+    fn a_flame_burns_the_first_hull_in_its_way_and_nothing_behind_it() {
+        let t = tuning();
+        let cell = crate::map::cell_to_world;
+        let run = |extra: &str, targets: &[Position]| {
+            let mut game = open_round(extra);
+            let from = cell(10, 11);
+            game.debug_teleport(0, from, Some(90.0)).unwrap();
+            game.debug_set_tank(0, &debug::TankPatch { flame_fuel: Some(6.0), ..Default::default() }).unwrap();
+            let hulls: Vec<Entity> = targets.iter().map(|&at| dummy(&mut game, at, 1)).collect();
+            for _ in 0..20 {
+                let mut input = Input::default();
+                input.seats[0].fire = true;
+                step(&mut game, input);
+            }
+            hulls.into_iter().map(|e| damage_at(&game, e)).collect::<Vec<f32>>()
+        };
+        let from = cell(10, 11);
+        let near = Position::new(from.x + t.flame_range * 0.45, from.y);
+        let behind = Position::new(from.x + t.flame_range * 0.85, from.y);
+        let alone = run("", &[behind]);
+        assert!(alone[0] > 0.0, "in reach with nothing in the way: {alone:?}");
+        let two = run("", &[near, behind]);
+        assert!(two[0] > 0.0, "the first hull burns: {two:?}");
+        assert_eq!(two[1], 0.0, "the one behind it does not: {two:?}");
+        let walled = run("cells.\"13,10\" = { kind = \"wall\", material = \"iron\" }\ncells.\"13,11\" = { kind = \"wall\", material = \"iron\" }\ncells.\"13,12\" = { kind = \"wall\", material = \"iron\" }\n", &[behind]);
+        assert_eq!(walled[0], 0.0, "nor one behind a wall: {walled:?}");
+    }
+
+    /// One target shape (`Tank::target_shape`): the boxes a shot is swept
+    /// against are the hull and the turret, a ring measures to the hull's
+    /// nearest point, and a cone takes the hull by its centre and corners.
+    #[test]
+    fn every_weapon_asks_the_one_target_shape() {
+        let mut game = open_round("");
+        let at = Position::new(600.0, 300.0);
+        let entity = dummy(&mut game, at, 1);
+        let (shape, hull, turret) = with_tank(&game.world, entity, |t| (t.target_shape(), t.hull_bbox_world(), t.turret_bbox_world()));
+        assert_eq!((shape.hull, shape.turret), (hull, turret));
+        let (c, h) = hull;
+        // A ring: 0 from inside, the gap from outside, never the barrel.
+        assert_eq!(shape.reach_from(c), 0.0);
+        assert!((shape.reach_from(Position::new(c.x + h.x + 30.0, c.y)) - 30.0).abs() < 1e-3);
+        // A shot from the side enters at the hull's face, as the sweep has it.
+        let (p0, p1) = (Position::new(c.x - 200.0, c.y), Position::new(c.x + 200.0, c.y));
+        let t = shape.swept(p0, p1, Vec2::zero()).expect("it crosses the hull");
+        assert!((p0.x + (p1.x - p0.x) * t - (c.x - h.x)).abs() < 1e-2);
+        let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+        let swept = terrain.sweep(&game.world, game.players(), Owner::Player(0), p0, p1, 0.0);
+        // The sweep pads a seat's shot at an enemy, so it may enter sooner.
+        assert!(matches!(swept, Some((ShellTarget::Tank(e), at)) if e == entity && at <= t + 1e-4 && at > t - 0.1), "the sweep meets the same boxes: {swept:?} for {t}");
+        // A cone: the nearest of the centre and corners it reaches.
+        assert_eq!(shape.points()[0], c);
+        let right = shape.in_cone(|p| (p.x > c.x).then_some(p.x)).expect("the right-hand corners");
+        assert_eq!(right, c.x + h.x);
+    }
+
+    /// Whatever an enemy sees over (`Material::blocks_sight` false) a
+    /// lobbed shot can pass over too (`Material::pass_over_chance`), so it
+    /// never fires into a wall it cannot see. And the roll is a lobbed
+    /// shot's alone: what blocks sight and is not a prop stops every shot.
+    #[test]
+    fn what_an_enemy_sees_over_a_shot_can_pass_over() {
+        use Material::*;
+        let all = [
+            Brick, Iron, Wood, Glass, Concrete, Sandbag, Barrel, Fence, Tree, Pine, Tesla, GunTower, BioSlush, Volcano, Lamp, Door, Target, Spruce, Scots, Fir,
+            Birch, Willow, Palm, Snag,
+        ];
+        let mut seen_over = 0;
+        for m in all {
+            if !m.blocks_sight() {
+                seen_over += 1;
+                assert!(m.pass_over_chance() > 0.0, "{m:?} is seen over and stops every shot");
+            }
+            if m.is_wall() {
+                assert_eq!(m.pass_over_chance(), 0.0, "{m:?} is a wall");
+            }
+        }
+        assert_eq!(seen_over, 6, "sandbag, fence, lamp, sapling, palm, snag");
+    }
+
+    /// A shell fired across a fence at a hull behind it sometimes gets
+    /// through and sometimes stops on the fence.
+    #[test]
+    fn a_shell_sometimes_passes_a_fence() {
+        let cell = crate::map::cell_to_world;
+        let (mut through, mut stopped) = (0, 0);
+        for seed in 1..=40u64 {
+            let mut game = Game::default();
+            game.seed_override = Some(seed);
+            game.level_overrides.mission = Some(Mission::Destroy);
+            game.map = MapFile::from_toml_str("version = 1\ntanks = 0\ncells.\"3,11\" = { kind = \"start\" }\ncells.\"14,11\" = { kind = \"fence\" }\n").expect("test map parses");
+            game.init(W, H);
+            game.debug_teleport(0, cell(10, 11), Some(90.0)).unwrap();
+            let target = dummy(&mut game, cell(18, 11), 1);
+            let mut input = Input::default();
+            input.seats[0].fire = true;
+            step(&mut game, input);
+            let mut on_fence = false;
+            for _ in 0..90 {
+                step(&mut game, Input::default());
+                on_fence |= game.events().iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Obstacle { material: Material::Fence }, .. }));
+            }
+            if on_fence {
+                stopped += 1;
+            } else if damage_at(&game, target) > 0.0 {
+                through += 1;
+            }
+        }
+        assert!(through > 5 && stopped > 5, "through {through}, stopped {stopped} of 40");
+        assert_eq!(through + stopped, 40, "every shell did one or the other");
     }
 }

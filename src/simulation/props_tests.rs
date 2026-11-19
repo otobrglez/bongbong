@@ -150,14 +150,19 @@ fn a_fence_dies_in_at_most_two_hits_and_usually_one() {
     for seed in 1..=40u64 {
         let mut game = game_on(&map, seed);
         game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
-        let first: Vec<_> = obstacle_hits(&shoot(&mut game, 90)).into_iter().filter(|(row, _)| *row == 11).collect();
-        assert_eq!(first.len(), 1, "seed {seed}: the first shell hit the fence once: {first:?}");
+        // A shell may go through the mesh (`fence_pass_over_chance`):
+        // the count is of the shells that hit it.
+        let hit = |game: &mut Game| {
+            (0..12).map(|_| obstacle_hits(&shoot(game, 90)).into_iter().filter(|(row, _)| *row == 11).collect::<Vec<_>>()).find(|hits| !hits.is_empty()).unwrap_or_default()
+        };
+        let first = hit(&mut game);
+        assert_eq!(first.len(), 1, "seed {seed}: the first shell to hit the fence hit it once: {first:?}");
         if first[0].1 {
             one_shot += 1;
             assert_eq!(alive_obstacles(&game), 8, "the fence is gone");
             continue;
         }
-        let second: Vec<_> = obstacle_hits(&shoot(&mut game, 90)).into_iter().filter(|(row, _)| *row == 11).collect();
+        let second = hit(&mut game);
         assert!(second.iter().any(|(_, killed)| *killed), "seed {seed}: a damaged fence always dies to the next hit");
         two_shots += 1;
     }
@@ -613,13 +618,16 @@ fn one_shell_usually_fells_every_tree_but_a_spruce() {
         for seed in 1..=20u64 {
             let mut game = game_on(&map, seed);
             game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
-            let events = shoot(&mut game, 150);
+            // The first shell to hit it: one may pass a sapling, a palm
+            // or a snag by (`Material::pass_over_chance`).
+            let struck = |events: &[Event]| events.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Obstacle { material: m }, .. } if *m == material));
+            let events = (0..12).map(|_| shoot(&mut game, 150)).find(|events| struck(events)).unwrap_or_default();
             if events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { material: m, .. } if *m == material)) {
                 felled += 1;
             }
         }
         let floor = if material == Material::Spruce { 5 } else { 12 };
-        assert!(felled >= floor, "{kind}: only {felled}/20 single shells brought it down");
+        assert!(felled >= floor, "{kind}: only {felled}/20 first hits brought it down");
     }
 }
 
