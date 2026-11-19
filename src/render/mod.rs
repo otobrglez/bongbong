@@ -20,6 +20,7 @@ pub mod blast;
 pub mod bubble;
 pub mod bullet;
 pub mod canvas;
+pub mod shapes;
 pub mod decal;
 pub mod dissolve;
 pub mod fish;
