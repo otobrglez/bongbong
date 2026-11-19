@@ -1056,7 +1056,7 @@ enemies' group:
 | `gauss_flash_seconds` | 0.05 | 0.01..=0.5 | The white frame along the line. |
 | `gauss_trail_seconds` | 1.6 | 0.1..=5 | How long the ionised trail takes to thin out. |
 | `gauss_module_flash_seconds` | 0.25 | 0..=2 | The module's shot cell. |
-| `gauss_shock` | 0.4 | 0..=2 | The screen ripple and shake against a tank dying's. |
+| `gauss_shock` | 0.4 | 0..=3 | The screen ripple and shake against a tank dying's. |
 | `gauss_charge_light` | 0.6 | 0..=2 | The light a full charge throws at night, against a headlight's. |
 | `gauss_frame_light` | 1.0 | 0..=2 | The light the white frame throws along the line at night. |
 | `gauss_ai_fire_interval` | 2.0 | 0.1..=20 | Seconds between an enemy's decisions to charge. |

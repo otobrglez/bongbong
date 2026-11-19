@@ -531,6 +531,9 @@ pub(super) trait Projectile: hecs::Component {
     fn prev_position(&self) -> Position;
     /// Mark the current position as this frame's segment start.
     fn begin_frame(&mut self);
+    /// It jumped (a portal): the frame draws it where it landed, with no
+    /// glide across the gap (`pose::Smooth::cut`).
+    fn cut_drawing(&mut self);
     fn velocity(&self) -> Vec2;
     /// The facing in degrees (0 = up), which a bounce turns.
     fn heading(&self) -> f32;
@@ -670,6 +673,7 @@ impl Projectile for Shell {
     fn set_position(&mut self, p: Position) { self.position = p; }
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
+    fn cut_drawing(&mut self) { self.smooth.cut(); }
     fn velocity(&self) -> Vec2 { self.velocity }
     fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }
@@ -719,6 +723,7 @@ impl Projectile for Bullet {
     fn set_position(&mut self, p: Position) { self.position = p; }
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
+    fn cut_drawing(&mut self) { self.smooth.cut(); }
     fn velocity(&self) -> Vec2 { self.velocity }
     fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }
@@ -761,6 +766,7 @@ impl Projectile for Plasma {
     fn set_position(&mut self, p: Position) { self.position = p; }
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
+    fn cut_drawing(&mut self) { self.smooth.cut(); }
     fn velocity(&self) -> Vec2 { self.velocity }
     fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }

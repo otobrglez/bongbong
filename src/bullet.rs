@@ -62,6 +62,10 @@ impl BulletState {
 pub struct Bullet {
     pub state: BulletState,
     pub position: Position,
+    /// The position a frame between two steps draws this at (`pose.rs`).
+    /// Presentation only: the drawing reads it through `drawn`, and
+    /// nothing that plays reads it at all.
+    pub smooth: crate::pose::Smooth,
     /// Direction of travel while flying (pixels per second).
     pub velocity: Vec2,
     /// Facing angle in degrees (matches the tank's rotation when fired, plus
@@ -93,6 +97,13 @@ pub struct Bullet {
 }
 
 impl Bullet {
+    /// The position a frame draws this at: between the last two steps
+    /// when the frame loop asked for that (`Game::pose_at`), else where
+    /// it is.
+    pub fn drawn(&self) -> Position {
+        self.smooth.drawn(crate::pose::Pose::at(self.position)).position
+    }
+
     /// A bullet at a pose somebody else worked out, for drawing only: a
     /// client's provisional bullet (`net::predict`), rebuilt into the
     /// replica each frame like `Shell::at`. Never meets anything.
@@ -101,6 +112,7 @@ impl Bullet {
             id,
             state: BulletState::Flying,
             position,
+            smooth: crate::pose::Smooth::default(),
             prev_position,
             velocity,
             rotation,
@@ -133,6 +145,7 @@ impl Bullet {
         Bullet {
             state: BulletState::Muzzle,
             position,
+            smooth: crate::pose::Smooth::default(),
             velocity: Vec2::new(dir.x * tuning().minigun_bullet_speed, dir.y * tuning().minigun_bullet_speed),
             rotation,
             timer: 0.0,

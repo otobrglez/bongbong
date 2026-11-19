@@ -868,7 +868,7 @@ enemies' group:
 | `emp_tell_seconds` | 0.5 | 0..=3 | An enemy's crackle before its pulse; 0 pulses on the decision. |
 | `emp_ring_seconds` | 0.4 | 0.05..=3 | How long the ring's picture lingers once its front is out. |
 | `emp_flash_seconds` | 0.25 | 0..=2 | The module's pulse cell. |
-| `emp_shock` | 0.25 | 0..=2 | The screen ripple and shake against a tank dying's. |
+| `emp_shock` | 0.25 | 0..=3 | The screen ripple and shake against a tank dying's. |
 | `emp_droop_deg` | 15 | 0..=45 | How far a disabled enemy's turret, and an offline tower's top, sags off its aim (drawn only). |
 | `emp_droop_seconds` | 0.4 | 0.05..=3 | How long the sag takes; it comes back in half that. |
 | `emp_dark_alpha` | 0.75 | 0..=1 | How dark a disabled tank's lamps and strips are drawn over its paint. |

@@ -26,7 +26,10 @@ things when forgotten; this is the detail. Update it with the tool.
   reproduce a situation (teleport, step, screenshot). Example session in docs/dev-server-design.md
   §4.1. Shell: `just mcp-call step '{"frames":120}'`. For a pixel-for-pixel screenshot comparison
   set `fx_max_particles` and `fx_max_pieces` to 0 first (`tuning_set`): the particle layer and the
-  wall pieces draw from `rand::rng()`, so they differ run to run. A builder screenshot differs run to run too: BUILD dresses the
+  wall pieces draw from `rand::rng()`, so they differ run to run. A frozen round is drawn as it stands
+  (`Game::pose_at` at alpha 1, no texel anchor), so a lockstep screenshot is the step itself; a
+  screenshot of a round running in real time is the frame the display got, between two steps
+  (`pose.rs`). A builder screenshot differs run to run too: BUILD dresses the
   canvas in the paused round's looks, so a pinned seed pins its ground and its tiles' variants, but
   its water, portals, grass, trees, bongs and sky move on the wall clock - pin the clock in a
   scratch build to compare the builder pixel for pixel. The `camera` tool pins a zoomed view

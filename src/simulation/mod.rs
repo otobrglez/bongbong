@@ -1636,30 +1636,6 @@ pub(crate) struct Spectacle {
     pub(crate) shocks: Vec<Shockwave>,
 }
 
-// How hard each thing that shakes the screen shakes it, relative to a tank
-// dying. These are ratios between events rather than feel knobs - the
-// overall amount is `camera_shake_magnitude` and `shockwave_strength` in
-// tuning.rs - so they live here next to the code that decides which is
-// which, and a designer turns the whole set up or down with one knob.
-pub(crate) const SHOCK_KILL: f32 = 1.0;
-pub(crate) const SHOCK_BARREL: f32 = 0.7;
-/// A fuel drum: harder than oil, still short of a tank dying.
-pub(crate) const SHOCK_FUEL: f32 = 0.9;
-pub(crate) const SHOCK_BONG: f32 = 0.6;
-/// Ammo cooking off inside a wreck: a faint local ring, and too weak to
-/// move the camera once the shake snaps to 2px blocks - a cook-off is a
-/// pop next to the hulk, not another explosion.
-pub(crate) const SHOCK_COOKOFF: f32 = 0.1;
-/// A rainbow shield shattering. Between a cook-off and a barrel: it is a
-/// real event the whole field should feel, but it kills nobody, so it stays
-/// well under a tank dying. Deliberately no `flash_screen` - the whole-screen
-/// flash is reserved for kills and barrels.
-pub(crate) const SHOCK_SHIELD_BREAK: f32 = 0.45;
-/// A tank leaving or arriving through a portal: one small ring at each
-/// end, so the eye is led from where it vanished to where it appeared.
-/// Under a shield break - nothing was hurt - and no `flash_screen`.
-pub(crate) const SHOCK_TELEPORT: f32 = 0.3;
-
 impl Game {
     /// Put `sky` on the round's map - one sky, or several of which the
     /// round's seed picks one, as `init` would - and fight the rest of the
@@ -2284,6 +2260,7 @@ impl Game {
         debug_assert!(self.rng.is_some(), "Game::rng missing at update entry - init has not run");
         self.frame += 1;
         self.events.clear();
+        self.begin_step_poses();
         if input.pause_pressed {
             self.paused = !self.paused;
         }
@@ -3132,6 +3109,76 @@ impl Game {
         Some((tank.position, tank.rotation, velocity))
     }
 
+    /// A step begins: every tank, projectile and bong notes the pose it starts
+    /// from, which is where a frame drawn between this step and the next
+    /// glides from (`pose.rs`). It also drops whatever pose the last frame
+    /// drew, so all through the step `drawn` answers the live pose.
+    /// Presentation only: no RNG, no events, and nothing here is read back.
+    fn begin_step_poses(&mut self) {
+        for tank in self.world.query_mut::<&mut Tank>() {
+            let pose = tank.pose();
+            tank.smooth.begin_step(pose);
+        }
+        for shell in self.world.query_mut::<&mut Shell>() {
+            shell.smooth.begin_step(crate::pose::Pose::at(shell.position));
+        }
+        for bullet in self.world.query_mut::<&mut Bullet>() {
+            bullet.smooth.begin_step(crate::pose::Pose::at(bullet.position));
+        }
+        for plasma in self.world.query_mut::<&mut Plasma>() {
+            plasma.smooth.begin_step(crate::pose::Pose::at(plasma.position));
+        }
+        for missile in self.world.query_mut::<&mut Missile>() {
+            let pose = missile.pose();
+            missile.smooth.begin_step(pose);
+        }
+        for grenade in self.world.query_mut::<&mut crate::grenade::Grenade>() {
+            let pose = grenade.pose();
+            grenade.smooth.begin_step(pose);
+        }
+        for bong in self.world.query_mut::<&mut crate::bong::Bong>() {
+            bong.smooth.begin_step(crate::pose::Pose::at(bong.position));
+        }
+    }
+
+    /// Pose the round for a frame drawn between two steps (`pose.rs`):
+    /// every tank, projectile and bong `alpha` of the way from where the last
+    /// step began to where it ended, `alpha` being the share of the next
+    /// step the frame loop's clock already holds. 1 is the round as it
+    /// stands. `texel` lands every tank on a whole world pixel, which a
+    /// followed view needs (`follow::TexelLock`). The frame loop calls
+    /// this once its steps have run; a round nobody poses - a thumbnail, a
+    /// test, a replica - draws as it stands. Presentation only: it writes
+    /// each thing's `smooth` and nothing else, draws no RNG, and nothing
+    /// `update` does reads what it wrote (`begin_step_poses`).
+    pub fn pose_at(&mut self, alpha: f32, texel: bool) {
+        use crate::pose::{BODY_JUMP_PX, Pose, SHOT_JUMP_PX};
+        for tank in self.world.query_mut::<&mut Tank>() {
+            let pose = tank.pose();
+            tank.smooth.show(pose, alpha, BODY_JUMP_PX, texel);
+        }
+        for shell in self.world.query_mut::<&mut Shell>() {
+            shell.smooth.show(Pose::at(shell.position), alpha, SHOT_JUMP_PX, false);
+        }
+        for bullet in self.world.query_mut::<&mut Bullet>() {
+            bullet.smooth.show(Pose::at(bullet.position), alpha, SHOT_JUMP_PX, false);
+        }
+        for plasma in self.world.query_mut::<&mut Plasma>() {
+            plasma.smooth.show(Pose::at(plasma.position), alpha, SHOT_JUMP_PX, false);
+        }
+        for missile in self.world.query_mut::<&mut Missile>() {
+            let pose = missile.pose();
+            missile.smooth.show(pose, alpha, SHOT_JUMP_PX, false);
+        }
+        for grenade in self.world.query_mut::<&mut crate::grenade::Grenade>() {
+            let pose = grenade.pose();
+            grenade.smooth.show(pose, alpha, SHOT_JUMP_PX, false);
+        }
+        for bong in self.world.query_mut::<&mut crate::bong::Bong>() {
+            bong.smooth.show(Pose::at(bong.position), alpha, BODY_JUMP_PX, false);
+        }
+    }
+
     pub fn tick_presentation(&mut self, dt: f32) {
         self.tick_effects(dt);
         // An orb's motes turn on its own clock; the interpolator places it.
@@ -3763,8 +3810,8 @@ impl Game {
             if let Some(o) = occupied.iter_mut().find(|(e, _)| *e == entity) {
                 o.1 = to;
             }
-            f.shocks.push(Shockwave::scaled(from, SHOCK_TELEPORT));
-            f.shocks.push(Shockwave::scaled(to, SHOCK_TELEPORT));
+            f.shocks.push(Shockwave::scaled(from, crate::tuning::tuning().teleport_shock));
+            f.shocks.push(Shockwave::scaled(to, crate::tuning::tuning().teleport_shock));
             f.events.push(Event::Teleported { slot, x: from.x, y: from.y, to_x: to.x, to_y: to.y });
         }
     }
@@ -5216,7 +5263,7 @@ impl Game {
     /// Everything but the damage and the cook-offs, which is why a replica
     /// can call it off `Event::Wreck`. No RNG.
     pub(crate) fn wreck_show(&mut self, show: &mut Spectacle, center: Position) {
-        show.shocks.push(Shockwave::scaled(center, SHOCK_KILL));
+        show.shocks.push(Shockwave::scaled(center, crate::tuning::tuning().kill_shock));
         show.blast_fx.push(BlastFx::wreck(center));
         show.impact_flashes.push(Shockwave::new(center));
         self.flash_screen();
@@ -5294,7 +5341,7 @@ impl Game {
     /// nothing screen-level. A replica calls it off `Event::CookOff`.
     pub(crate) fn cookoff_show(show: &mut Spectacle, center: Position) {
         show.blast_fx.push(BlastFx::small(center));
-        show.shocks.push(Shockwave::scaled(center, SHOCK_COOKOFF));
+        show.shocks.push(Shockwave::scaled(center, crate::tuning::tuning().cookoff_shock));
     }
 
     /// Every tank killed this frame gets a shockwave and an explosion, and
@@ -5838,28 +5885,27 @@ impl Game {
             .collect()
     }
 
-    /// Every tank contact hard enough to be worth showing, as
-    /// `(where, how hard, was it another tank)`.
-    ///
-    /// `Physics::contact_stats` has computed this every frame since the
-    /// probe's anomaly work and **nothing in the game has ever read it** -
-    /// so driving into a wall, shunting a wreck and grinding through a
-    /// six-tank pileup all produced no feedback whatsoever. A contact is a
-    /// *state*, not an event (a tank scrapes along a wall for a second, it
-    /// does not scrape at an instant), so this is sampled by the
-    /// presentation layer rather than pushed as an event - which also means
-    /// no new RNG and no simulation change at all.
-    pub fn contacts(&self) -> Vec<(Position, f32, bool)> {
-        self.world
+    /// Every live hull's hardest contact (`Physics::contact_stats`), as
+    /// `(owner slot, where, how hard, was it another tank)`, in slot
+    /// order. A contact is a *state*, not an event - a tank scrapes along
+    /// a wall for a second, it does not scrape at an instant - so the
+    /// presentation layer samples this rather than reading an event, which
+    /// costs the simulation no RNG and no change. A replica steps no
+    /// physics and has none.
+    pub fn contacts(&self) -> Vec<(usize, Position, f32, bool)> {
+        let mut out: Vec<(usize, Position, f32, bool)> = self
+            .world
             .query::<&Tank>()
             .iter()
             .filter(|t| !t.is_dead())
             .filter_map(|t| {
                 let stats = self.physics.contact_stats(t.body?);
                 let at = stats.contact?;
-                (stats.max_impulse > 0.0).then_some((at, stats.max_impulse, stats.touching_tank))
+                (stats.max_impulse > 0.0).then_some((t.owner_slot(), at, stats.max_impulse, stats.touching_tank))
             })
-            .collect()
+            .collect();
+        out.sort_by_key(|c| c.0);
+        out
     }
 
     /// Every prop currently being ground down under a tank's tracks, with
@@ -6549,7 +6595,7 @@ fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind, dro
 
 impl Game {
     /// Announce every shield that shattered this frame: one
-    /// `Event::ShieldBroken` and one `SHOCK_SHIELD_BREAK` ripple per tank,
+    /// `Event::ShieldBroken` and one `shield_break_shock` ripple per tank,
     /// then clear the latch.
     ///
     /// One drain rather than an emit at each seam. A shield is spent in
@@ -6580,7 +6626,7 @@ impl Game {
         }
         for (slot, at) in broken {
             f.events.push(Event::ShieldBroken { slot, x: at.x, y: at.y });
-            f.shocks.push(Shockwave::scaled(at, SHOCK_SHIELD_BREAK));
+            f.shocks.push(Shockwave::scaled(at, crate::tuning::tuning().shield_break_shock));
         }
     }
 }
@@ -7218,6 +7264,65 @@ mod determinism_tests {
                     assert_eq!(key(ta), key(tb), "seed {seed:#x}, sample {i}, tank {t}: state diverged");
                 }
             }
+        }
+    }
+
+    /// The poses a frame draws between two steps (`pose.rs`,
+    /// `Game::pose_at`) are presentation only: a round posed after every
+    /// step, at several shares of a step, on and off the texel grid, with
+    /// every drawn pose read back and the last one left standing for the
+    /// next step to find, replays the round nobody posed bit for bit -
+    /// the same hulls and the same events on the same frames.
+    #[test]
+    fn posing_the_round_for_a_frame_never_changes_the_replay() {
+        let run = |posed: bool| {
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.level_overrides.mission = Some(Mission::Protect);
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+            game.enemy_count_override = Some(4);
+            game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
+            game.init(1280.0, 720.0);
+            let mut stream: Vec<(u32, Vec<_>, String)> = Vec::new();
+            let (mut glided, mut shots) = (false, false);
+            for frame in 1..=600u32 {
+                // The seat drives and fires, so there are shots in flight.
+                let dir = [Dir::Right, Dir::Down, Dir::Left, Dir::Up][(frame / 90 % 4) as usize];
+                let input = Input::single(Intent { move_dir: Some(dir), fire: frame % 20 < 2, ..Intent::default() });
+                game.update(input, 1.0 / 60.0, 1280.0, 720.0);
+                if posed {
+                    for (i, alpha) in [0.0, 0.37, 0.9, 1.0, 0.5].into_iter().enumerate() {
+                        game.pose_at(alpha, (frame as usize + i) % 2 == 0);
+                        for tank in game.world.query::<&Tank>().iter() {
+                            glided |= tank.drawn().position != tank.position;
+                            std::hint::black_box((tank.drawn(), tank.draw_shift()));
+                        }
+                        for shell in game.world.query::<&Shell>().iter() {
+                            shots |= shell.drawn() != shell.position;
+                        }
+                        for bullet in game.world.query::<&Bullet>().iter() {
+                            std::hint::black_box(bullet.drawn());
+                        }
+                        for plasma in game.world.query::<&Plasma>().iter() {
+                            std::hint::black_box(plasma.drawn());
+                        }
+                        for missile in game.world.query::<&Missile>().iter() {
+                            std::hint::black_box(missile.drawn());
+                        }
+                    }
+                }
+                stream.push((frame, game.tank_snapshots().iter().map(key).collect(), format!("{:?}", game.events())));
+            }
+            if posed {
+                assert!(glided, "a posed tank was drawn between two steps: the test poses something");
+                assert!(shots, "and so was a shell");
+            }
+            stream
+        };
+        let (plain, posed) = (run(false), run(true));
+        assert!(plain.iter().any(|(_, _, events)| events.contains("Hit")), "the round fights");
+        for (a, b) in plain.iter().zip(&posed) {
+            assert_eq!(a, b, "frame {}: posing the round changed it", a.0);
         }
     }
 
@@ -9348,6 +9453,63 @@ cells."30,20" = { kind = "bong" }
                 _ => None,
             })
             .collect()
+    }
+
+    /// `pose.rs`: a frame between two steps draws a tank part way along
+    /// the step it just made, and a tank a portal moved where it landed -
+    /// nothing streaks across the field. A round nobody posed draws every
+    /// tank where it stands.
+    #[test]
+    fn a_frame_between_two_steps_glides_a_tank_and_never_across_a_portal() {
+        let map = portal_rooms_map(true, 0);
+        let mut game = game_on(&map, 0, None);
+        let player = game.player().unwrap();
+        let live = |game: &Game| game.world.get::<&Tank>(player).unwrap().position;
+        let drawn = |game: &Game| game.world.get::<&Tank>(player).unwrap().drawn().position;
+        let right = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+        // Up to speed, well short of the portal.
+        for _ in 0..30 {
+            step(&mut game, right);
+        }
+        assert_eq!(drawn(&game), live(&game), "nobody posed it: drawn where it stands");
+        let before = live(&game);
+        step(&mut game, right);
+        let after = live(&game);
+        assert!(after.x > before.x + 0.5, "it moved this step: {before:?} -> {after:?}");
+        game.pose_at(0.25, false);
+        let at = drawn(&game);
+        assert!((at.x - (before.x + (after.x - before.x) * 0.25)).abs() < 1e-3, "a quarter of the way along the step: {at:?}");
+        assert_eq!(live(&game), after, "the tank itself did not move");
+        game.pose_at(1.0, false);
+        assert_eq!(drawn(&game), after, "alpha 1 is the round as it stands");
+        // On a followed map the anchor is a whole texel.
+        game.pose_at(0.25, true);
+        let at = drawn(&game);
+        assert_eq!((at.x.fract(), at.y.fract()), (0.0, 0.0), "a whole texel: {at:?}");
+        // The hop: drawn where it lands at any share of the step.
+        let mut hopped = false;
+        for _ in 0..600 {
+            let before = live(&game);
+            step(&mut game, right);
+            if !teleports_of(&game, 0).is_empty() {
+                let after = live(&game);
+                assert!(after.distance_to(before) > 300.0, "a long way: {before:?} -> {after:?}");
+                for alpha in [0.0, 0.5, 0.99] {
+                    game.pose_at(alpha, false);
+                    assert_eq!(drawn(&game), after, "alpha {alpha}: no streak across the field");
+                }
+                hopped = true;
+                break;
+            }
+        }
+        assert!(hopped, "the player reached portal A");
+        // The step after, it glides again from where it landed.
+        let before = live(&game);
+        step(&mut game, right);
+        let after = live(&game);
+        game.pose_at(0.5, false);
+        let at = drawn(&game);
+        assert!((at.x - (before.x + after.x) / 2.0).abs() < 1e-3 && at.distance_to(after) < 4.0, "{before:?} {at:?} {after:?}");
     }
 
     /// `Game::portal_phase`: the player drives into portal A and comes

@@ -108,6 +108,13 @@ impl PlasmaState {
 }
 
 impl Plasma {
+    /// The position a frame draws this at: between the last two steps
+    /// when the frame loop asked for that (`Game::pose_at`), else where
+    /// it is.
+    pub fn drawn(&self) -> Position {
+        self.smooth.drawn(crate::pose::Pose::at(self.position)).position
+    }
+
     /// How far through its impact burst the bolt is, 0 at the hit to 1 as
     /// the last frame ends, or `None` before it hits.
     pub fn impact_progress(&self) -> Option<f32> {
@@ -152,6 +159,10 @@ impl PlasmaVariant {
 pub struct Plasma {
     pub state: PlasmaState,
     pub position: Position,
+    /// The position a frame between two steps draws this at (`pose.rs`).
+    /// Presentation only: the drawing reads it through `drawn`, and
+    /// nothing that plays reads it at all.
+    pub smooth: crate::pose::Smooth,
     /// Direction of travel while flying (pixels per second).
     pub velocity: Vec2,
     /// Facing angle in degrees (matches the tank's rotation when fired).
@@ -200,6 +211,7 @@ impl Plasma {
             id,
             state: PlasmaState::Flying,
             position,
+            smooth: crate::pose::Smooth::default(),
             prev_position,
             velocity,
             rotation,
@@ -237,6 +249,7 @@ impl Plasma {
         Plasma {
             state: PlasmaState::Fire0,
             position,
+            smooth: crate::pose::Smooth::default(),
             velocity: Vec2::new(dir.x * tuning().plasma_speed, dir.y * tuning().plasma_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,

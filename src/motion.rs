@@ -2,7 +2,9 @@
 //! Apple's "make motion optional", Xbox accessibility guideline 117):
 //! whether the camera moves only where the fight needs it to. Reduced
 //! motion takes away the motion nobody asked for - the camera shake, the
-//! kill ripple that bends the whole screen, the establishing shot's zoom,
+//! kill ripple that bends the whole screen, the edge pulse, the health
+//! number's drop and the hold on a kill (`feedback.rs`), a slam's hull
+//! flash (`fx.rs`), the establishing shot's zoom,
 //! which cuts to the tank instead (`establish.rs`), and a restart's glide,
 //! which cuts to the new start (`follow.rs`) - and leaves
 //! everything that shows the fight: the follow camera itself, the edge

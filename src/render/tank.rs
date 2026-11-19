@@ -22,8 +22,8 @@ pub fn draw_player_label(d: &mut impl RaylibDraw, tank: &Tank, elapsed: f32) {
     // Measured headless (`text::width`): nothing in a draw pass has the
     // handle `MeasureText` needs.
     let w = width(text, size);
-    let x = (tank.position.x - w as f32 / 2.0).round() as i32;
-    let y = (tank.position.y - tank.size() / 2.0 - size as f32 - 4.0).round() as i32;
+    let x = (tank.drawn().position.x - w as f32 / 2.0).round() as i32;
+    let y = (tank.drawn().position.y - tank.size() / 2.0 - size as f32 - 4.0).round() as i32;
     let color = team_color(index);
     d.draw_text(text, x + 1, y + 1, size, BLACK);
     d.draw_text(text, x, y, size, color);

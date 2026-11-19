@@ -161,6 +161,69 @@ additive block (a blend switch breaks raylib's batch).
 | `wear_*` | how the ground keeps tread marks: passes, ages, rain, snow, gusts (docs/ground-memory.md) |
 | `drive_*` | what a moving hull throws: dust, mud, puddle water, powder, ice chips, foam, exhaust |
 
+| the `shock` group | how hard each cause shakes and ripples the screen, on one scale (below) |
+| `ram_fx_*`, `ram_shock` | a slam's floor, full strength, rise, gap, burst and shake |
+| `hurt_*`, `hurt_shock` | being hit: the damage that shows and that is full strength, the edge pulse's length and depth, the health tick's length, the shake |
+| `kill_hitstop_seconds`, `kill_hitstop_gap_seconds` | the hold on a seat's own kill, and how soon another may hold |
+
+## One scale for every blast
+
+Every cause's ripple and shake is a row of the `shock` tuning group, read
+as a multiple of a tank dying's (`kill_shock`, 1). A blast sits where its
+reach puts it - its reach over 140 px, so a missile and a drone (44 px) are
+both 0.3, a bomb (64 px) 0.45, a grenade and a fuel drum (near 125 px) 0.9
+- and a cause with no blast radius (a muzzle, a shield, a slam, a blow
+taken) is placed by ear against those. The simulation's `*_show` halves
+read the rows, so a replica shakes as its room does.
+
+The particles follow the same number: `Fx::explosion(at, size, kind)` is
+the one burst every blast event throws, `size` the cause's shock row and
+`kind` (`fx::Explosion`) only its colours - a charge, oil, fuel, lava, a
+hull, a gravity well's dark, a bong's dull thud. Sparks, smoke, their
+speed and their spread all come from `size` (`explosion_counts`), so two
+causes of one size throw alike and a bigger one throws more.
+
+## Being hit, ramming, a kill
+
+`feedback.rs` (headless, owned by `app.rs` like `fx.rs`) reads the round
+and never writes it, so all of it is the same on a replica and none of it
+is on the wire:
+
+- **A blow taken.** A local seat's hull losing `hurt_min_damage` or more
+  in a step, whatever did it, is a blow of strength damage over
+  `hurt_full_damage`: a shake of that seat's view alone (`hurt_shock`,
+  never under two fifths of it - the shake lands on whole 2 px blocks),
+  an **edge pulse** and a **tick** on its health number. The pulse is a
+  band of 2 px blocks round the view, `hurt_pulse_blocks` deep at full
+  strength, in three steps down the fire ramp, dissolving inward on the
+  Bayer matrix and then fading in eighths over `hurt_pulse_seconds`. The
+  tick lights the number for `hurt_tick_seconds` and drops it 2 px, then 1.
+  On the couch's split each half takes only its own seat's
+  (`feedback::ViewOf`); one shared view takes every local seat's.
+- **A slam.** A hull whose hardest contact rises `ram_fx_rise`-fold to
+  `ram_fx_min_impulse` or more - the blow that opens a contact, not the
+  push after it - throws a burst at the contact point, flashes and shakes
+  (`ram_shock`, a `fx::Jolt`: a shake with no ripple), all scaled by the
+  impulse up to `ram_fx_full_impulse` (`fx::slam_strength`). A ram that
+  hurts (`Event::Ram`) is a slam whatever its impulse and flashes both
+  hulls. The steady scrape of a hull pushing on is one emitter a hull,
+  keyed by owner slot.
+- **A kill.** A local seat's own kill holds the round for
+  `kill_hitstop_seconds` (`Feedback::time_scale`, which `app.rs` multiplies
+  into the step clock's dt beside `Session::time_scale`), no sooner than
+  `kill_hitstop_gap_seconds` after the last. Offline only: a room's round
+  is the server's to pace, a lockstepped dev round steps exactly what it
+  is told to, and the probe and the room server have no `Feedback` at all.
+  The kill that decides the round is `Session::time_scale`'s.
+
+Reduced motion (`motion.rs`) leaves the particles and the health number's
+colour and takes the rest: no shake, no edge pulse, no hull flash on a
+slam, no drop of the number, no hold.
+
+The particle layer stands still with the round (`app::fx_runs`): under a
+dialog, the level select, the builder or the lobby and while paused its dt
+is 0, so a burst hangs where it was and goes on when play does.
+
 ## Adding an effect
 
 Compose it as a pure function returning `Vec<pyro::Shape>` from what it is,
