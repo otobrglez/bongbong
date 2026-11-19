@@ -25,8 +25,8 @@ things when forgotten; this is the detail. Update it with the tool.
   fills) drive it in lockstep and return PNGs - the way to verify rendering, overlays and feel or to
   reproduce a situation (teleport, step, screenshot). Example session in docs/dev-server-design.md
   §4.1. Shell: `just mcp-call step '{"frames":120}'`. For a pixel-for-pixel screenshot comparison
-  set `fx_max_particles` to 0 first (`tuning_set`): the particle layer draws from `rand::rng()`, so
-  particles differ run to run. A builder screenshot differs run to run too: BUILD dresses the
+  set `fx_max_particles` and `fx_max_pieces` to 0 first (`tuning_set`): the particle layer and the
+  wall pieces draw from `rand::rng()`, so they differ run to run. A builder screenshot differs run to run too: BUILD dresses the
   canvas in the paused round's looks, so a pinned seed pins its ground and its tiles' variants, but
   its water, portals, grass, trees, bongs and sky move on the wall clock - pin the clock in a
   scratch build to compare the builder pixel for pixel. The `camera` tool pins a zoomed view
@@ -81,7 +81,8 @@ things when forgotten; this is the detail. Update it with the tool.
   median), `lulls:` (stretches of at least 3 s with no enemy within reach of a live seat or the bong
   between two frames with one; `lulls` in `--json-out`), `rerolls:` with a trace line per straggler
   re-rolled, `first contact:` (the first engagement, shot at a seat and hit on a seat, mean and
-  median) and `timing:` (ms per `Game::update`, flagged in a debug build), carried in `--json-out`
+  median) and `timing:` (ms per `Game::update`, flagged in a debug build; with `--features
+  dev-tools` a `phases:` line splits it by `frame_stages`' `sim.*` groups), carried in `--json-out`
   as `first_contact`/`ms_per_tick`; a single round's header says `map class=field|arena`. On a field
   map a sleeping tank is a deliberate hold, and a sleeping or leashed one is exempt from
   never-arrived, as is a guard keeping its beat (`TankSnapshot::guarding`); a hold within the last
@@ -220,11 +221,103 @@ things when forgotten; this is the detail. Update it with the tool.
   `canvas::CpuCanvas`, no window; gpu: a hidden window through the game's own pass-1 stages),
   `--check` (both, prints their difference; `just mapshot-compare` - a `cargo test` cannot open a
   window on macOS), `--scale`, `--seed` (default `0xB0B5`), `--players`/`--tank`/`--tank2`,
-  `--no-tanks`, `--plain`, `--no-shadows`. `thumbnail.rs` is the library side: `stage_round` (init +
+  `--no-tanks`, `--plain`, `--no-shadows`, `--paint-bench FRAMES` (no PNG: the painters' benchmark,
+  Performance instruments below). `thumbnail.rs` is the library side: `stage_round` (init +
   **one update**, as the window runs before its first render; no intro, `enemy_count_override =
   Some(0)` under a forced Band plan), `render_cpu`, `compare_pixels`; `render/thumbnail.rs` has
   `load_cpu_sheets`, `GpuSheets`, `render_gpu` and `image_png_bytes`; its tests pin the CPU render
   hash of every `SHIPPED_MAPS` entry (re-baseline consciously after an art/map/tuning change).
+
+## Performance instruments
+
+What the window draws, how its frames are paced and what a step costs, measured rather than read
+off the code. All of it is dev tooling: without `dev-tools` every counter and timer is an empty
+call (`cargo check --no-default-features` builds none of it).
+
+- **`frame_stages.rs`** keeps four readings in a dev-tools build. *Stages*: where a frame's
+  processor time goes (`sim`, `fx`, `pictures`, `lights`, `world`, `post`, `chrome`, `swap`),
+  averaged over about half a second, and inside `sim` the groups of phases `Game::update` times
+  itself - `sim.terrain` (`Terrain::build`), `sim.nav`, `sim.seats`, `sim.enemies`, `sim.weapons`
+  (waves, towers, the special weapons, the flame and laser resolves), `sim.physics`, `sim.rams`
+  (`sync_tanks_and_ram` to `ram_props`), `sim.shots`, `sim.fire` (burns, fuses, lava, crates),
+  `sim.grass`, `sim.end`. *Draws* (`Draws`): what the last whole frame drew through `GpuCanvas` and
+  `render::pyro::Rl` - `blits`, `rects`, `shapes` (discs and rings) and `texture_switches` (how
+  often one draw's texture differed from the one before it, rectangles and shapes counting as
+  raylib's shapes texture: the least number of draw calls those draws split into) - and the
+  `blend_scopes`, `shader_scopes` and `target_scopes` it opened, each two forced flushes (every
+  `draw_blend_mode`/`draw_shader_mode`/`draw_texture_mode` call passes its argument through
+  `frame_stages::blend`/`shader`/`target`; write a new one the same way). Chrome that calls raylib
+  directly (the HUD, the builder's bars) is in the scopes but not in the draws. *Pace* (`Pace`):
+  over the last 600 frames, the worst frame, the 99th percentile and how many frames ran 0, 1, 2,
+  3 or 4 steps (only frames the play clock paid out for; a lockstep frame is not one). *Totals*:
+  each stage's time since the thread started, which the probe prints.
+- **Where they are read**: `status.frame_stages` - one key a stage in ms, plus `draws` and `pace`
+  (`frames`, `max_ms`, `p99_ms`, `steps`); the two lines under the left cluster with the
+  `ui_frame_stages` knob on (`frame 8.5 ms | sim 0.1 ...` and `draws 2067 blits 804 rects 6 shapes
+  73 tex | scopes 4 blend 1 shader 2 target | p99 8.7 max 9.4 ms | steps 292/308/0/0/0`); the
+  five-second `bongbong: frame avg` log line; and `probe: phases:` (ms a tick a group, `other` the
+  rest) when the probe is built with `--features dev-tools`.
+- **`just perf-scene`** (`tools/perf/scene.py`; needs a running dev-tools game, `cargo run
+  --release --features dev-tools -- --resolution 1280x720`, picked by `BONGBONG_DEV_PORT`): the
+  default arena with six enemies and longwater at seed `0xB0B5`, each restarted and stepped eight
+  times by 60 frames in lockstep with seat 0 driving and firing, `status.frame_stages.draws` read
+  after every step - twice over, and the run fails unless the two passes agree. `fx_max_particles`
+  and `fx_max_pieces` are pinned to 0 while the counters are read (`fx.rs` and `pieces.rs` draw
+  from `rand::rng()`) and put back for the timed half, where each scene runs twelve seconds in real
+  time for its stage averages, pace and one frame's draws. `counters:` lines are the same on every
+  run and across restarts of the game at one window size; `timing:` lines are that machine's.
+- **`just perf-paint`** (`mapshot --paint-bench FRAMES MAP..`, `thumbnail::paint_bench`): the
+  painters with no window - `Game::paint_field` on one `CpuCanvas` over 60 frames of a live seeded
+  round (the map's own enemies, nobody at the controls, ten steps between frames), ms a frame and a
+  hash of every frame's pixels, the same on every run.
+- **`just perf-field`** / **`just perf-field-wasm`**: the probe on `maps/perf/dense-250.toml` - 250
+  x 250 cells, the format's limit, 15,004 tiles and deep-water cells, 5,256 cells of tall grass and
+  14,539 of road in 31 x 31 town blocks, written by `tools/gen_perf_map.py` (run it again rather
+  than editing the file) - three one-minute rounds of `defend` at seed 1000, printing `timing:` and
+  `phases:`. The wasm recipe builds the probe for `wasm32-unknown-emscripten` and runs it under
+  node (`tools/perf/field_wasm.sh`; `RUSTFLAGS` replaces the game's link arguments with
+  `NODERAWFS`, so it builds its own dependency set): V8 on a desktop, which is not Safari and not
+  a phone. The fixture is under `maps/perf/` so that no ceiling applies to it (`just
+  probe-fixtures` globs `maps/test/*.toml`, `just probe-fields` names its maps); `just thumbnails`
+  does render it, as an 8000 x 8000 PNG.
+- **Baseline, 2026-11-19** (an M3 Pro, release builds, the window 1280x720 on a 120 Hz display
+  with vsync; the tree before any render-pipeline work):
+
+  | Reading | default arena | longwater |
+  |---|---|---|
+  | blits a frame (particles and pieces off) | 2,015 - 2,122 | 1,798 - 2,183 |
+  | rects a frame | 804 - 3,111; 21,164 and 23,576 with a blast on screen | 634 - 2,109 |
+  | shapes a frame | 6 - 14 | 4 - 6 |
+  | texture switches a frame | 73 - 106 | 12 - 24 |
+  | blend / shader / target scopes a frame | 4 - 7 / 1 - 5 / 2 | 4 - 5 / 0 - 1 / 2 |
+  | one real-time frame, particles and pieces on | 2,431 blits, 31,299 rects, 432 switches | 2,270 blits, 3,680 rects, 24 switches |
+  | frame p99 / max, ms (the display's frame is 8.33) | 8.7 - 10.4 / 9.4 - 11.8 | 8.7 - 10.6 / 8.7 - 12.4 |
+  | steps a frame, 0/1/2/3/4 of 600 | 292/308/0/0/0 | 290/310/0/0/0 |
+  | `world` / `chrome` / `post` stage, ms a frame | 2.4 - 2.8 / 1.3 / 0.15 | 0.7 - 0.8 / 1.6 / 0.12 |
+  | `Game::paint_field` on the CPU canvas, ms a frame | 11.3 (1536 x 768 px) | 53.4 (3584 x 2016 px) |
+
+  With the wall pieces on and the particles off the default arena's switches run 324 to 1,304 a
+  frame: the pieces alternate with everything around them.
+
+  | `Game::update`, ms a tick (`defend`, seed 1000) | native | wasm (node 24) |
+  |---|---|---|
+  | default arena | 0.10 | 0.19 |
+  | longwater (112 x 63) | 0.32 | 0.47 |
+  | dense-250, its 16 enemies, one seat | 1.9 - 2.0 | 2.9 - 3.4 |
+  | dense-250, 32 enemies | 3.2 | - |
+  | dense-250, 32 enemies, eight seats | 3.3 | 5.9 |
+  | dense-250, 32 enemies, eight seats, `advance` | 3.8 | 7.4 |
+
+  The dense map's tick by group, native, ms: `terrain` 0.74, `weapons` 0.43 (`resolve_flames`
+  builds the set of every standing tile's cell each tick, jets or none), `grass` 0.42 (`grass::tick`
+  and the worn floor, per tuft and per mover: 0.9 with 32 enemies), `rams` 0.16 (`ram_props`, per
+  hull: 0.9 with eight seats), `enemies` 0.07 (0.64 with 32 enemies awake against eight advancing
+  seats; 1.3 in wasm), `fire` 0.06, `nav` 0.03. On longwater the same groups are `terrain` 0.09,
+  `enemies` 0.11, `weapons` 0.05, `rams` 0.03. So the per-tile walks are the whole cost of a map at
+  the limit and a third of the step on the largest shipped one, and the AI's cost follows the tanks
+  awake, not the map. The wasm probe does not play the native round at the same seed (the anomaly
+  lines differ on all three maps), so the two columns time rounds of the same kind, not the same
+  round.
 
 ## Asset pipeline (generated, not hand-drawn)
 

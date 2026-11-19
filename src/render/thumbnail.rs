@@ -70,7 +70,7 @@ pub fn render_gpu(rl: &mut RaylibHandle, thread: &RaylibThread, sheets: &GpuShee
     let mut upload_banks = BlockTexture::default();
     let banks = if game.lava().is_empty() { None } else { upload_banks.sync(rl, thread, game.lava().banks()) };
     let sheets = WithShade { sheets, shade, banks };
-    rl.draw_texture_mode(thread, &mut scene, |mut d| {
+    rl.draw_texture_mode(thread, crate::frame_stages::target(&mut scene), |mut d| {
         d.clear_background(Color::WHITE);
         game.paint_field(&mut GpuCanvas::new(&mut d, &sheets), PAINT);
     });

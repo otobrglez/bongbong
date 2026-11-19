@@ -89,7 +89,7 @@ impl Dissolve {
         // flips it on the way out.
         let source = Rectangle::new(0.0, 0.0, kept.texture.width as f32, -(kept.texture.height as f32));
         let dest = Rectangle::new(0.0, 0.0, window.0, window.1);
-        d.draw_shader_mode(shader, |mut s| s.draw_texture_pro(kept, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE));
+        d.draw_shader_mode(crate::frame_stages::shader(shader), |mut s| s.draw_texture_pro(kept, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE));
     }
 }
 

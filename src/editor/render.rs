@@ -344,7 +344,7 @@ impl MapEditor {
             // The canvas into the bitmap, the bitmap onto the window.
             match (sky.weather.as_deref_mut(), &weather) {
                 (Some(fx), Some(w)) => self.draw_under_sky(rl, thread, composite, fx, w, &camera, textures, time, cursor),
-                _ => rl.draw_texture_mode(thread, composite, |mut d| {
+                _ => rl.draw_texture_mode(thread, crate::frame_stages::target(composite), |mut d| {
                     d.clear_background(backdrop);
                     self.draw_canvas(&mut d, textures, time, cursor, None);
                 }),
@@ -387,7 +387,7 @@ impl MapEditor {
         {
             self.draw_under_sky(rl, thread, target, fx, w, &c, textures, time, cursor);
             let held = Rectangle::new(plan.origin.x, plan.origin.y, target.texture.width as f32, target.texture.height as f32);
-            rl.draw_texture_mode(thread, target, |mut d| d.draw_mode2D(c.in_target(), |mut d, _| cover_past_field(&mut d, field, held, backdrop)));
+            rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| d.draw_mode2D(c.in_target(), |mut d, _| cover_past_field(&mut d, field, held, backdrop)));
             skied = true;
         }
         if !skied {
@@ -402,7 +402,7 @@ impl MapEditor {
             let cull = camera.cull();
             let in_target = Camera2D { offset: Vector2::new(0.0, 0.0), target: plan.origin.into(), rotation: 0.0, zoom: plan.zoom };
             let held = Rectangle::new(plan.origin.x, plan.origin.y, target.texture.width as f32 / plan.zoom, target.texture.height as f32 / plan.zoom);
-            rl.draw_texture_mode(thread, target, |mut d| {
+            rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| {
                 d.clear_background(backdrop);
                 d.draw_mode2D(in_target, |mut d, _| {
                     self.draw_canvas(&mut d, textures, time, cursor, cull);
@@ -490,7 +490,7 @@ impl MapEditor {
         if frame.plain {
             let Some(light) = fx.light_map() else { return };
             let mut blocks = Vec::new();
-            rl.draw_texture_mode(thread, target, |mut d| {
+            rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| {
                 d.clear_background(Color::WHITE);
                 d.draw_mode2D(in_target, |mut d, _| {
                     frame.plain_snow_cover(&mut blocks);
@@ -524,7 +524,7 @@ impl MapEditor {
             let first_in_target = plan.lit == plan.sky;
             {
                 let first: &mut RenderTexture2D = if first_in_target { &mut *target } else { &mut *lit_target };
-                rl.draw_texture_mode(thread, first, |mut d| {
+                rl.draw_texture_mode(thread, crate::frame_stages::target(first), |mut d| {
                     d.clear_background(Color::WHITE);
                     if plan.ground {
                         passes.draw_ground(&mut d, frame);
@@ -540,16 +540,16 @@ impl MapEditor {
             if plan.lit {
                 let (under, to): (&RenderTexture2D, &mut RenderTexture2D) =
                     if first_in_target { (&*target, &mut *lit_target) } else { (&*lit_target, &mut *target) };
-                rl.draw_texture_mode(thread, to, |mut d| {
+                rl.draw_texture_mode(thread, crate::frame_stages::target(to), |mut d| {
                     passes.draw_lit(&mut d, under, frame);
                     d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools));
                 });
             }
             if plan.sky {
-                rl.draw_texture_mode(thread, target, |mut d| passes.draw_sky(&mut d, lit_target, frame));
+                rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| passes.draw_sky(&mut d, lit_target, frame));
             }
         }
-        rl.draw_texture_mode(thread, target, |mut d| d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_marks(&mut d, textures, time, cursor, cull)));
+        rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_marks(&mut d, textures, time, cursor, cull)));
     }
 
     /// The chrome over the canvas on the window, in UI points through
@@ -622,7 +622,7 @@ impl MapEditor {
         let m = crate::view::CULL_MARGIN_PX;
         let cull = Rectangle::new(w.x - m, w.y - m, w.width + 2.0 * m, w.height + 2.0 * m);
         let field = self.map.field_size();
-        rl.draw_texture_mode(thread, target, |mut d| {
+        rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| {
             d.clear_background(backdrop);
             d.draw_mode2D(in_target, |mut d, _| {
                 self.draw_canvas(&mut d, textures, time, None, Some(cull));
@@ -772,7 +772,7 @@ impl MapEditor {
         if glow <= 0.0 {
             return;
         }
-        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+        d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
             let mut c = GpuCanvas::new(&mut bd, textures);
             for tank in self.still().seats().filter(|tank| !crate::view::culled(cull, tank.position)) {
                 crate::tank::draw_tank_glow(&mut c, tank, time, glow);
