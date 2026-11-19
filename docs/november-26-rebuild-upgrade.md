@@ -213,6 +213,32 @@ dense 250x250 map with eight seats; whether ProMotion iPhones present at
 | A-10 | Enemy C2 (`c2_enabled`, off) is about one third built: five of eight orders have no producer, and the PRD's own sweep showed more rams into the player with it on | read |
 | A-11 | Per-frame cost drivers, none a problem at measured sizes: two whole-grid clones and a compare, flow fields rebuilt from zero, uncached A* per private target, the behaviour tree rebuilt (about 25 `Vec`s) per tank per think | read |
 
+### The follow camera
+
+Measured on 2026-11-19 at `e3211dd` for BB-165: dev-server lockstep on
+`longwater`, seed `0xB0B5`, a 1280 x 720 window (a view of 32 x 18 cells, the
+sight box leaving 144 px of room sideways and 48 up and down), one step a
+frame, the seat's position and the view's centre read after each
+(`camera-preview/tools/record.py` on the BB-165 branch). Speeds are world
+pixels a frame at 60 Hz; the tank's top speed is 3.5. The camera already had
+a dead zone, a look-ahead, an exact critically damped spring with velocity
+feed-forward, an eased field edge, cuts and a Voronoi couch split; what was
+weak is how the look-ahead moved the view.
+
+| Id | Finding | Mark |
+|---|---|---|
+| V-1 | **The view keeps moving after the tank stops.** The look-ahead was 35% of its room at rest and all of it at top speed, so a stop from speed sent the view on 9 px, then slid it back 94 px over 2.3 s. Counted over the drive, 92 px of view motion on frames where the tank stood | measured |
+| V-2 | **The view outruns the tank on every start.** The same ramp ran the view at 5.6 px a frame beside a tank at 3.5 for about a second; the picture moved 1.28 px for each pixel the tank drove | measured |
+| V-3 | **A reversal whips.** The lead flipped after a 0.25 s hold and crossed its whole room in 0.5 s: 260 px of view travel peaking at 9.2 px a frame, 2.6 times the tank. Three 0.4 s dodges back and forth threw the view 150 px each way | measured |
+| V-4 | **Every quarter turn slides the view sideways**, about 105 px, and a turn on the spot to line up a shot swings it 46 px over most of a second; on a staircase route the view's sideways speed runs between +5.6 and -2.0 px a frame. A four-way tank turns constantly, so the view is never still | measured |
+| V-5 | **The look-ahead is whatever room the screen has**, with no limit of its own: 131 x 35 px on this window, 259 x 91 on a monitor's 40 x 21.5 view, about 185 x 8 on a phone. The same turn moves the picture seven times further on one screen than another, and four to twenty times further sideways than up and down | measured here; the other screens are arithmetic from `Framing::room_outside` |
+| V-6 | Settling takes 1.3 to 2 s: a 0.5 s linear ease into a 0.5 s spring, the last 14 px at under a pixel a frame | measured |
+| V-7 | Firing does nothing to the view. The only response to the player's own gun is the hull's physical recoil, which the dead zone absorbs | read |
+| V-8 | Nothing in the fight frames the view: not the enemies closing, not the bong under attack. The arrows and the minimap carry all of it | read |
+| V-9 | A couch pair's shared view and both halves of its split have no look-ahead at all (`Aim::facing` is `None` there) | read |
+| V-10 | On a phone the view cannot put the tank anywhere but the middle of the height: the sight box leaves 0.65 cell (21 px) of room up and down, so no bias away from the thumbs and no vertical look-ahead fits. The room is a consequence of the sight box, which the AI's fire gate reads | arithmetic from section 4 of docs/large-maps-follow-camera.md |
+| V-11 | There is no way to see the camera's reasoning: no overlay draws the dead zone, the sight box, the lead or the goal | read |
+
 ## Friendly fire under decision 2
 
 Decision 2 is one sentence; this is what it does to each source, read from
@@ -330,6 +356,36 @@ hull fits the grid when it turns, and how enemies route on it.
 
 D-1 to D-3 and D-5 move no replay and land in phase 2. D-4 and D-6 to D-12
 move replays and land in the phase 5 batch.
+
+### Track C - the follow camera
+
+BB-165. The craft the findings were held against is in
+`camera-preview/RESEARCH.md` on the issue's branch (Keren's "Scroll Back",
+Eiserloh's "Juicing Your Cameras With Math", Cinemachine's position composer,
+Nijman's "The Art of Screenshake", Holden's spring roll-call, Xbox
+accessibility guideline 117). Three rules came out of it and out of the
+measurements: **the view moves when the player's hands do and stops when they
+stop**; a camera distance is a number of its own, not whatever a screen has
+room for; and anything a shot or a blow does to the picture is a layer over
+the follow, never part of it.
+
+| Id | Item | Finding | Size | Re-baseline |
+|---|---|---|---|---|
+| C-1 | The look-ahead is the same at any speed (`camera_lead_at_rest` 1.0): nothing runs ahead on a start, nothing drifts back after a stop | V-1, V-2 | S | none |
+| C-2 | A limit of its own in world pixels (`camera_lead_max_px`), under the room the sight box leaves; 0 by default after play, so the shipped camera has no look-ahead | V-5 | S | none |
+| C-3 | The look-ahead turns to a new heading only once the tank has driven along it (`camera_lead_commit_px`, 40 px), so a turn on the spot and a short dodge move nothing; the reversal hold stays on top | V-3, V-4 | S | none |
+| C-4 | The swing is paced by the tank: one second from side to side at top speed (`camera_lead_ease_seconds`), and none of it while the tank stands (`camera_lead_idle_pace` 0) | V-3, V-4, V-6 | S | none |
+| C-5 | A shot can kick the picture back against the gun (0 px by default after play) and returns in a quarter of a second (`camera_fire_kick_px`, `camera_fire_kick_seconds`), a layer over the spring, off under reduced motion | V-7 | S | none |
+| C-6 | **Settling.** With C-1 to C-4 the spring is left to do two things: take up the dead zone on a start and carry a swing. Measure its tail again, then decide between a shorter `camera_spring_seconds` and a rest rule (snap once the distance and the speed are both under a quarter of a device pixel) | V-6 | S | none |
+| C-7 | **Framing the fight.** A capped, feathered pull toward the weighted middle of the enemies near the seat and toward the bong while it is being bitten, inside the same room as the look-ahead and smoothed slower than it. It moves the view for something the player did not do, which is the thing C-1 to C-4 removed, so it needs a side-by-side on a real fight before a default is chosen, and it starts at strength 0 | V-8 | M | none |
+| C-8 | Look-ahead for a couch pair: each half along its own seat's heading, the shared view along the pair's common heading when they have one | V-9 | S-M | none |
+| C-9 | **Room up and down on a phone.** Either the sight box loses a row on screens that cannot show it with room to spare, or the phone's view gains one. Both change what the AI's fire gate reads (`ai::in_sight_box`) or what a room's seats see, so this is a simulation item with a proposal first. Only then can the tank sit above the thumbs or the view lead up and down | V-10 | M | yes; `coop` label |
+| C-10 | A dev overlay that draws the dead zone, the sight box, the lead, the committed heading and the spring's goal over the picture, and the same numbers in `status.camera` | V-11 | S | none |
+| C-11 | The blow that hurts a seat shoves its view away from where it came from, through the kick's layer, instead of shaking it on a hash of its position | E-3 | S | none |
+
+C-1 to C-5 are built on the BB-165 branch. Every one is presentation only:
+nothing under `src/simulation/` reads the camera, and an arena's picture does
+not change by a byte.
 
 ### Phase 2 - presentation correctness
 
@@ -491,6 +547,7 @@ Three rules shaped the cut:
 | 13 | **Enemies.** Straight routes, wander on arrival, leading on the axis, a yield that re-routes, per-weapon fire profiles with safe distances, flee with an exit and cover, reachable crates | D-9, D-10, D-11, D-12, P5-12, P5-14, P5-15 | L | full re-baseline |
 | 14 | **Friendly fire.** Every source hurts everyone, with the radius tell, the aircraft's hold, the bong's hop from a blast, credit, the rewritten tests and docs | P5-8 with FF-1 to FF-8 | L | full re-baseline; `coop` label (the room plays the same rule) |
 | 15 | **Round flow.** Stragglers, blocked lanes, the final-wave return, honest level locks | P5-18, P5-19 | M | field-map streams and `probe-fields` |
+| 16 | **Camera.** A look-ahead that is the same at any speed, has a limit of its own, turns only once the tank has driven the new way and swings only while it drives; a shot's kick on the picture. Then the settle, the fight's pull, the couch's look-ahead, the overlay and a directional blow | C-1, C-2, C-3, C-4, C-5 (built, BB-165); C-6, C-7, C-8, C-10, C-11 | M | none |
 
 ### Why this order
 
@@ -505,6 +562,15 @@ Three rules shaped the cut:
   walks before anything else moves the stream (10), the shared funnels
   before the rules built on them (11), the drive before the AI that drives
   on it (12, 13), the AI's safe distances before friendly fire (14).
+- **16 is presentation and can ship at any point after 4.** It stands on
+  stage 4's smooth motion (the view rides the tank's drawn pose and its texel
+  lock, BB-158) and on stage 8's feedback (a hurt seat's own shake and
+  `screen_fx_intensity`, BB-160), both merged. It shares two files with
+  stage 5 - `view.rs` and `render/` - and edits neither, so the two merge in
+  either order. `C-11` waits for stage 9's reduced-motion setting only for
+  its switch on every platform. `C-9` is not in the stage: it changes what
+  the fire gate reads, so it belongs with the replay-moving stages (13 is
+  the nearest) after a proposal.
 
 ### What is honest about the sizes
 
