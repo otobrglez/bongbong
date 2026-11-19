@@ -528,14 +528,9 @@ pub const WALL_THICKNESS: f32 = 100.0;
 // loop's `StepClock` in app.rs, the dev server's lockstep `step`, the probe
 // and the tests - passes exactly this `dt`, so one update is one step and a
 // round replays bit-for-bit from its seed whatever the display's refresh
-// rate. `Game::step_world` still drains the `dt` it is given in chunks of
-// this size, so a caller with a larger `dt` gets several physics steps in
-// one update. Matches rapier2d::prelude::IntegrationParameters::default().dt.
+// rate. `Game::update` asserts it in debug builds and steps the world once.
+// Matches rapier2d::prelude::IntegrationParameters::default().dt.
 pub const PHYSICS_FIXED_DT: f32 = 1.0 / 60.0;
-// Caps how much real time `step_world`'s own accumulator can catch up on
-// inside one update, so a caller passing a long `dt` never dumps a burst of
-// physics steps (the classic fixed-timestep "spiral of death").
-pub const PHYSICS_MAX_CATCHUP_SECONDS: f32 = 0.25;
 // The fastest any body moves (px/s), rapier's speed cap set for a pixel
 // world: one cell a step. Far above every legitimate speed - a knock's
 // 508 px/s wire ceiling on top of a hull's own, a light hull carried by a

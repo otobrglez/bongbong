@@ -2217,13 +2217,13 @@ impl Tank {
     }
 
     /// Decide this tank's rotation and commanded velocity for one frame.
-    /// `move_dir` faces the hull that way and sets `velocity` to its
-    /// damage-scaled speed along that axis (classic 4-direction, no momentum;
-    /// see `effective_speed`). `face` turns the hull in place without moving
-    /// (used when an AI stops to aim). `move_dir` takes precedence. Shared by
-    /// the player and the AI so both move identically. Does not touch
-    /// `position` - that's the physics body's job once `velocity` is handed
-    /// to it; see `Game::drive_tank`.
+    /// `move_dir` faces the hull that way and sets `velocity`, the
+    /// *commanded* cardinal vector, to its damage-scaled speed along that
+    /// axis (see `effective_speed`). `face` turns the hull in place without
+    /// moving (used when an AI stops to aim). `move_dir` takes precedence.
+    /// Shared by the player and the AI so both move identically. Does not
+    /// touch `position` or the body: `simulation::drive_tank` accelerates
+    /// the body toward `velocity` with momentum, and the step moves it.
     pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>) {
         if self.spin > 0.0 {
             // Spun round by an overcharged slug's recoil: the stick

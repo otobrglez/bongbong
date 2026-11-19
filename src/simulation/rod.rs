@@ -246,7 +246,7 @@ impl Game {
     fn rod_bongs(&mut self, f: &mut Frame, c: Position, t: &Tuning) {
         let half = Vec2::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
         let mut dead = Vec::new();
-        for bong in self.world.query_mut::<&mut Bong>() {
+        for bong in super::ordered(self.world.query_mut::<&mut Bong>().into_iter(), |b| super::bong_order(b)) {
             if bong.is_dead() {
                 continue;
             }

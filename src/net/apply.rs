@@ -371,17 +371,21 @@ fn remove_tiles(game: &mut Game, dead: &BTreeSet<u16>, cols: u16) {
     if dead.is_empty() {
         return;
     }
-    let gone: Vec<(Entity, _)> = game
+    let gone: Vec<(Entity, _, _, _)> = game
         .world
         .query::<(Entity, &Obstacle)>()
         .iter()
         .filter(|(_, o)| dead.contains(&cell_index(cols, o.cell())))
-        .map(|(e, o)| (e, o.body))
+        .map(|(e, o)| (e, o.body, o.material, o.position))
         .collect();
     let removed = !gone.is_empty();
-    for (entity, body) in gone {
+    for &(entity, body, ..) in &gone {
         game.physics_mut().remove_body(body);
         game.world.despawn(entity).ok();
+    }
+    // The bodies beside each hole let go of it, as the room's do.
+    for (_, _, material, at) in gone {
+        game.refit_neighbours(material, at);
     }
     if removed {
         game.refresh_edge_masks();

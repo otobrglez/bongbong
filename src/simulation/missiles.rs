@@ -68,7 +68,7 @@ impl Game {
                 }
             });
         }
-        for (entity, tank) in self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
+        for (entity, tank) in super::ordered(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()) {
             if !tank.is_wreck() {
                 targets.push((entity, tank.owner_slot(), tank.owner(), tank.position));
             }
@@ -76,7 +76,7 @@ impl Game {
         }
         targets.sort_by_key(|&(_, slot, _, _)| slot);
         let range = tuning().missile_seek_range;
-        for missile in self.world.query::<&mut Missile>().iter() {
+        for missile in super::ordered(self.world.query::<&mut Missile>().iter(), |m| m.id) {
             if missile.wants_lock() {
                 // Where an enemy's launcher stands (`None` once it is gone);
                 // a seat's missile is bound by no box.
@@ -125,13 +125,12 @@ impl Game {
     /// one (an EMP killed it, `Missile::dud`) bursts nothing: it lands a dud
     /// (`Event::MissileDud`).
     pub(super) fn resolve_missiles(&mut self, f: &mut Frame, live: bool) {
-        let landed: Vec<(Entity, Position, Owner, Vec2, bool)> = self
-            .world
-            .query::<(Entity, &Missile)>()
-            .iter()
-            .filter(|(_, m)| m.arrived)
-            .map(|(e, m)| (e, m.position, m.owner, m.dir, m.dud))
-            .collect();
+        // By shot id: each burst rolls its damage.
+        let landed: Vec<(Entity, Position, Owner, Vec2, bool)> =
+            super::ordered(self.world.query::<(Entity, &Missile)>().iter().filter(|(_, m)| m.arrived), |(_, m)| m.id)
+                .into_iter()
+                .map(|(e, m)| (e, m.position, m.owner, m.dir, m.dud))
+                .collect();
         for (entity, center, owner, dir, dud) in landed {
             self.world.despawn(entity).ok();
             if dud {
@@ -189,7 +188,7 @@ impl Game {
                 f.shoves.push(tank.owner(), dv);
             }
         }
-        for (entity, tank) in self.world.query::<(Entity, &mut Tank)>().with::<&Ai>().iter() {
+        for (entity, tank) in super::ordered(self.world.query::<(Entity, &mut Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()) {
             if spared.contains(&entity) {
                 continue;
             }
@@ -198,7 +197,7 @@ impl Game {
         }
         let own_side = if owner.is_player() { Side::Player } else { Side::Enemy };
         let mut dead_bongs = Vec::new();
-        for (entity, bong) in self.world.query::<(Entity, &mut Bong)>().iter() {
+        for (entity, bong) in super::ordered(self.world.query::<(Entity, &mut Bong)>().iter(), |(_, b)| super::bong_order(b)) {
             if bong.is_dead() || bong.side == own_side || spared.contains(&entity) {
                 continue;
             }
@@ -215,10 +214,8 @@ impl Game {
             f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
         }
         // Collect first: `damage_obstacle` needs the world free.
-        let hits: Vec<(Entity, f32)> = self
-            .world
-            .query::<(Entity, &mut Obstacle)>()
-            .iter()
+        let hits: Vec<(Entity, f32)> = super::tiles_near(self.world.query::<(Entity, &mut Obstacle)>().iter(), center, params.radius)
+            .into_iter()
             .filter(|(_, o)| !o.destroyed)
             .filter_map(|(e, o)| {
                 let dist = o.position.distance_to(center);

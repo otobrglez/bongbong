@@ -9,7 +9,6 @@ use crate::math;
 use hecs::Entity;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
-use crate::math::Vec2;
 
 use crate::ai::{Ai, AiSnapshot, Role};
 use crate::bullet::{Bullet, BulletState};
@@ -1020,41 +1019,6 @@ impl Game {
             return Err(format!("slot {slot} is still rolling in"));
         }
         self.place_tank(entity, pos, rotation)
-    }
-
-    /// Put `entity`'s tank at `pos` with its velocity zeroed and its ring
-    /// snapped, optionally facing `rotation` degrees. Goes through the
-    /// physics body - `sync_tanks_and_ram` would otherwise overwrite the
-    /// position next frame - and re-orients the movement collider when
-    /// the facing axis changed, the same way `drive_tank` does on a turn.
-    /// The one placement path for a jump: the dev server's `teleport` and
-    /// a portal (`Game::portal_phase`) both go through it. The caller
-    /// keeps `tank.position` and the body in step *before* `step_world`,
-    /// so `press_treads` sees no travel.
-    pub(crate) fn place_tank(&mut self, entity: Entity, pos: Position, rotation: Option<f32>) -> Result<(), String> {
-        let (body, half_extents) = {
-            let mut q = self.world.query_one::<&mut Tank>(entity);
-            let tank = q.get().map_err(|e| e.to_string())?;
-            tank.position = pos;
-            tank.velocity = Vec2::new(0.0, 0.0);
-            tank.skid = 0.0;
-            // Arriving facing some way is no pivot.
-            tank.tread.heading = None;
-            // Nor a step: the oil on its treads prints nothing across the
-            // gap (`simulation::oil`).
-            tank.oil_cell = None;
-            if let Some(rot) = rotation {
-                tank.rotation = rot;
-                tank.visual_rotation = rot;
-                tank.turret_visual_rotation = rot;
-            }
-            let body = tank.body.expect("tank should always have a physics body once spawned");
-            (body, tank.move_half_extents(tank.facing_along_x()))
-        };
-        self.physics.set_position(body, pos);
-        let collider = self.physics.collider_of(body);
-        self.physics.resize_collider(collider, half_extents);
-        Ok(())
     }
 
     /// Overwrite the given fields of the tank in `slot`. Setting a special

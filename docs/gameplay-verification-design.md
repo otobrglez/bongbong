@@ -264,12 +264,24 @@ for the record (all safe today, listed so a future change knows the rule):
 on the simulation path where the loop body consumes RNG, spawns entities,
 or breaks ties — sort first.**
 
+The same holds for an ECS query. hecs hands a query back in storage
+order, which moves with every spawn, despawn and component added or
+removed (a tank rolling in gains its `Ai`; a wreck swept away swaps
+another tank into its place). A walk whose body draws RNG, spawns, pushes
+onto an order-carrying list (`f.events`, `f.kills`, a pending blast) or
+keeps the first of a tie is sorted first: tanks by owner slot - seats, then
+enemies (`Game::enemies_by_slot`) - tiles and crates by cell
+(`cell_order`, `tiles_near`), projectiles by shot id, bongs by side then
+cell (`bong_order`); `simulation::ordered` is the helper. `hits::Terrain`
+keeps its tiles in cell order, so two boxes a shot enters at the same
+instant are told apart by where they stand.
+
 ### 1.4 What a seed does and doesn't promise
 
 - probe ↔ probe, same build: **bit-exact** — same layout, same AI
   decisions, same outcome, byte-identical trace. The probe steps `update`
-  with a constant `DT = 1/60` equal to `PHYSICS_FIXED_DT`, so the
-  accumulator fires exactly one physics step per frame.
+  with a constant `DT = 1/60` equal to `PHYSICS_FIXED_DT`, the only step
+  `update` takes (a debug build asserts it): one physics step per call.
 - windowed ↔ probe, same seed: **identical round setup** (map terrain,
   ground cosmetics, spawn positions, chassis/speed rolls, bong placement)
   but divergent evolution over time, because the windowed game feeds real
@@ -1031,6 +1043,18 @@ map tank counts):
 kind to its cross-fixture maximum exactly — deterministic, so an
 exceedance is a real behavior change; the justfile comment carries the
 re-baselining policy.
+
+### Re-baseline 2026-11-19: every order-carrying walk sorted (BB-161)
+
+Sorting the walks (section 1.3) changes which enemy takes an engagement
+slot, a blast roll or a kill first on the frames where storage order and
+slot order disagreed. `the_one_and_two_seat_streams_are_pinned` and every
+`just probe-fixtures` reading are unchanged (an AFK round on these maps
+never reached such a frame). `just probe-survive` and `just probe-fields`
+replay different rounds on some seeds; per map the totals moved by at most
+2 in either direction and no cross-map maximum moved, so every ceiling
+stands as it was. Refitting a dead tile's neighbours' colliders moved no
+reading on its own.
 
 ### Re-baseline 2026-09-03: nav-grid spawn legality
 

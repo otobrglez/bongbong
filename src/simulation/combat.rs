@@ -255,16 +255,14 @@ impl Game {
                 f.shoves.push(tank.owner(), dv);
             }
         }
-        for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
+        for tank in super::ordered(self.world.query::<&mut Tank>().with::<&Ai>().iter(), |t| t.owner_slot()) {
             let chips = !victim.same_side(tank.owner());
             explosion_hit(tank, center, chips, &mut self.physics, &mut f.rng, &mut f.kills, &params);
         }
         // Collect first: `damage_obstacle` needs the world free. Same
         // per-obstacle draw order as iterating directly.
-        let hits: Vec<(Entity, f32)> = self
-            .world
-            .query::<(Entity, &Obstacle)>()
-            .iter()
+        let hits: Vec<(Entity, f32)> = super::tiles_near(self.world.query::<(Entity, &Obstacle)>().iter(), center, params.radius)
+            .into_iter()
             .filter(|(_, o)| !o.destroyed)
             .filter_map(|(e, o)| {
                 let dist = o.position.distance_to(center);

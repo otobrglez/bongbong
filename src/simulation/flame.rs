@@ -122,14 +122,17 @@ impl Game {
         // --- Tanks and bongs in a cone. ---
         let mut touched: Vec<Entity> = Vec::new();
         for (cone, jet) in &cones {
-            let targets: Vec<Entity> = self
+            // By owner slot: the seats, then the enemies.
+            let mut targets: Vec<(usize, Entity)> = self
                 .world
                 .query::<(Entity, &Tank)>()
                 .iter()
                 .filter(|(e, tank)| *e != jet.shooter && !tank.is_wreck() && tank.body.is_some())
                 .filter(|(_, tank)| cone.contains(tank.position, tank.hull_size() * HULL_SLACK_FRACTION))
-                .map(|(e, _)| e)
+                .map(|(e, tank)| (tank.owner_slot(), e))
                 .collect();
+            targets.sort_unstable_by_key(|&(slot, _)| slot);
+            let targets: Vec<Entity> = targets.into_iter().map(|(_, e)| e).collect();
             for entity in targets {
                 let (killed, pos, owner, entered) = {
                     let mut q = self.world.query_one::<&mut Tank>(entity);
@@ -168,7 +171,7 @@ impl Game {
             }
             if t.flame_bong_damage_per_second > 0.0 {
                 let mut dead_at = Vec::new();
-                for (entity, bong) in self.world.query::<(Entity, &mut Bong)>().iter() {
+                for (entity, bong) in super::ordered(self.world.query::<(Entity, &mut Bong)>().iter(), |(_, b)| super::bong_order(b)) {
                     if bong.is_dead() || !cone.contains(bong.position, OBSTACLE_GRID_SIZE * 0.25) {
                         continue;
                     }
@@ -197,7 +200,7 @@ impl Game {
         // enemies, like every other damage walk.
         if t.flame_afterburn_dps > 0.0 {
             let mut order: Vec<Entity> = self.players().into_iter().flatten().collect();
-            order.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
+            order.extend(self.enemies_by_slot());
             for entity in order {
                 if touched.contains(&entity) {
                     continue;
@@ -283,7 +286,8 @@ impl Game {
         let half = OBSTACLE_GRID_SIZE * 0.5;
         let mut collapse: Vec<(Entity, Position, &'static str)> = Vec::new();
         let mut ignited: Vec<(Position, &'static str)> = Vec::new();
-        for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
+        // In cell order: what a tile catching or giving way sets off.
+        for (entity, o) in super::ordered(self.world.query::<(Entity, &mut Obstacle)>().iter(), |(_, o)| super::cell_order(o.position)) {
             if o.destroyed || o.burning || o.fuse.is_some() {
                 continue;
             }
