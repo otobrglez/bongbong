@@ -24,7 +24,7 @@ How the work is done is the `linear-issue` skill: the branch is the issue's `git
 
 # Layout
 
-- `src/main.rs` is a shim calling `bongbong::app::run`; `src/app.rs` is the game; `src/app/{ios,android,macos}.rs` the platform entries; `android/` the Android cdylib crate; `server/` the room server; `netlab/` the network lab; `ntk/` the conference demo crate (`just ntk <bin>`). The `bongbong`, `bbmcp` and `mapshot` bins need `render`; `probe` does not.
+- `src/main.rs` is a shim calling `bongbong::app::run`; `src/app.rs` is the game; `src/app/{ios,android,macos}.rs` the platform entries; `android/` the Android cdylib crate; `server/` the room server; `netlab/` the network lab. The `bongbong`, `bbmcp` and `mapshot` bins need `render`; `probe` does not.
 - `static/` assets and shaders (`static/web/` their GLSL ES twins), `tools/` scripts and sprite generators, `maps/` TOML maps (`maps/stamps/` builder stamps, `maps/test/` probe fixtures), `levels.toml` the level order, `lang/` the Fluent catalogues, `docs/` design docs and sheet specs, `site/` the Astro web page, `k8s/` the room server's manifests, `tests/` integration tests.
 
 ## Module map

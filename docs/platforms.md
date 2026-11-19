@@ -532,7 +532,7 @@ in `Cargo.toml`). Trigger: bump `Cargo.toml`'s `version`, tag `v{X}.{Y}.{Z}`, pu
   same list as sola-raylib's CI). No `LICENSE` file yet - revisit before any installer that surfaces
   one.
 - **dist builds the whole workspace** - every member's library and bins with default features: the
-  room server, netlab, the `ntk` demos and the android crate as well as the game - so a member that
+  room server, netlab and the android crate as well as the game - so a member that
   stops compiling fails the tag, and with it the macOS and Android releases that wait on Release.
   ci.yml's `cargo check --workspace` step catches that on the PR.
 - `pr-run-mode = "skip"`: Release runs on version tags alone (a plan-only PR run woke

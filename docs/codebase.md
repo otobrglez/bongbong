@@ -30,9 +30,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   shipped stamps), `levels.toml` the level order (docs/levels.md), `docs/` design docs and sheet
   specs (read the doc a module names before changing it), `site/` the Astro web page, `k8s/` the
   room server's manifests (see its README and docs/platforms.md, Room server), `tests/` integration
-  tests, `netlab/` the network measurement harness (docs/tooling.md), `ntk/` the conference demo
-  crate (`just ntk <bin>`: numbered single-file raylib examples; `06_explosions` runs the real
-  engine through the `bongbong` lib and is the only one that depends on it).
+  tests, `netlab/` the network measurement harness (docs/tooling.md).
 
 ## App, session and data
 
