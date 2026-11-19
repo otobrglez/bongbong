@@ -958,6 +958,20 @@ mod tests {
         }
     }
 
+    /// A blast's share and the ground's burns travel as their own causes,
+    /// so a replica draws no impact for them (`HitCause::is_shot`).
+    #[test]
+    fn the_blast_and_the_grounds_causes_survive_the_wire() {
+        for cause in [HitCause::Blast, HitCause::Lava, HitCause::Fire, HitCause::Slime] {
+            assert!(!cause.is_shot());
+            let event = Event::Hit { target: HitTarget::Enemy { slot: 4 }, damage: 6.5, killed: false, x: 320.25, y: 160.5, cause };
+            let wire = WireEvent::from_event(&event).expect("sent");
+            let back: WireEvent = postcard::from_bytes(&postcard::to_stdvec(&wire).unwrap()).unwrap();
+            let sim = back.to_event().expect("a simulation form");
+            assert_eq!(serde_json::to_value(&sim).unwrap(), serde_json::to_value(&event).unwrap());
+        }
+    }
+
     /// A well's collapse hit and a drone downed at a core travel and come
     /// back as themselves (`HitCause::Well`, `AirStrike::Well`).
     #[test]

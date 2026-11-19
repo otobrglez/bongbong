@@ -12,18 +12,16 @@ use rand::RngExt;
 use rapier2d::prelude::RigidBodyHandle;
 use crate::math::Vec2;
 
-use crate::ai::Ai;
 use crate::blast::{BlastFx, BlastKind, Lean, Scorch};
 pub(crate) use crate::blast::BlastShape;
 use crate::decal::Decal;
-use crate::bong::Bong;
 use crate::map::{cell_to_world, world_to_cell};
-use crate::obstacle::{face_toward, Drum, Fuse, Material, Obstacle};
+use crate::obstacle::{Drum, Fuse, Material, Obstacle};
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
-use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position, RUBBLE_ROW_BARREL};
+use crate::{OBSTACLE_GRID_SIZE, Position, RUBBLE_ROW_BARREL};
 
-use super::combat::{explosion_hit, BlastParams};
+use super::combat::{BlastParams, Hurt};
 use super::{Event, Frame, Game, Spectacle};
 
 /// Everything `obstacle_died` needs to know about a tile that just died.
@@ -415,12 +413,7 @@ impl Game {
         let mut victims: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
         victims.extend(self.enemies_by_slot());
         for entity in victims {
-            let mut q = self.world.query_one::<&mut Tank>(entity);
-            let Ok(tank) = q.get() else { continue };
-            if tank.is_wreck() || by.same_side(tank.owner()) {
-                continue;
-            }
-            let (hc, hh) = tank.hull_bbox_world();
+            let Some((hc, hh)) = self.world.get::<&Tank>(entity).ok().filter(|tank| !tank.is_wreck() && !by.same_side(tank.owner())).map(|tank| tank.hull_bbox_world()) else { continue };
             let rel = Position::new(hc.x - face.x, hc.y - face.y);
             let along = rel.x * dir.x + rel.y * dir.y;
             let across = (rel.x * dir.y - rel.y * dir.x).abs();
@@ -432,27 +425,7 @@ impl Game {
             if d <= 0.0 {
                 continue;
             }
-            let landed = tank.take_damage(d, crate::MAX_DAMAGE);
-            tank.mark_hit();
-            tank.credit(by);
-            let killed = tank.is_wreck();
-            let target = match tank.owner() {
-                crate::shell::Owner::Player(player) => super::HitTarget::Player { player },
-                crate::shell::Owner::Enemy(slot) => super::HitTarget::Enemy { slot },
-                crate::shell::Owner::Tower { .. } => continue,
-            };
-            let at = tank.position;
-            f.events.push(Event::Hit { target, damage: landed, killed, x: face.x, y: face.y, cause: super::HitCause::Spall });
-            if killed {
-                f.kills.push((at, tank.owner()));
-            }
-            drop(q);
-            if !killed {
-                let mut q = self.world.query_one::<&mut Ai>(entity);
-                if let Ok(ai) = q.get() {
-                    ai.notify_hit();
-                }
-            }
+            self.hurt_tank(f, entity, Hurt::hit(d, super::HitCause::Spall, Some(by), face));
         }
     }
 
@@ -671,73 +644,7 @@ impl Game {
             params.knockback *= t.barrel_ram_kick_factor;
         }
         if live {
-            // The drums a gravity well holds in its reach go off too.
-            self.chain_held_drums(f, center, params.radius);
-            // Players first, in index order, then the enemies - the same
-            // draw order as a wreck's blast (`Game::apply_explosion`).
-            for player in self.seats_on_field().into_iter().flatten() {
-                let mut q = self.world.query_one::<&mut Tank>(player);
-                let tank = q.get().expect("player entity always has a Tank");
-                if let Some(dv) = explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
-                    f.shoves.push(tank.owner(), dv);
-                }
-            }
-            for tank in super::ordered(self.world.query::<&mut Tank>().with::<&Ai>().iter(), |t| t.owner_slot()) {
-                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
-            }
-            let mut dead_bongs = Vec::new();
-            for bong in super::ordered(self.world.query::<&mut Bong>().iter(), |b| super::bong_order(b)) {
-                if bong.is_dead() {
-                    continue;
-                }
-                let dist = bong.position.distance_to(center);
-                if dist > params.radius {
-                    continue;
-                }
-                bong.damage(params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius));
-                if bong.is_dead() {
-                    dead_bongs.push(bong.position);
-                }
-            }
-            for pos in dead_bongs {
-                f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
-            }
-            // A lantern on the ground near the blast is knocked out.
-            let reach = params.radius * 0.6;
-            let mut broken = Vec::new();
-            self.lanterns.retain(|l| {
-                let hit = l.position.distance_to(center) <= reach;
-                if hit {
-                    broken.push(l.position);
-                }
-                !hit
-            });
-            for at in broken {
-                f.events.push(Event::LanternBroken { x: at.x, y: at.y });
-            }
-            // Collect first: `damage_obstacle` needs the world free.
-            let hits: Vec<(Entity, Material, f32)> = super::tiles_near(self.world.query::<(Entity, &mut Obstacle)>().iter(), center, params.radius)
-                .into_iter()
-                .filter(|(_, o)| !o.destroyed && o.fuse.is_none())
-                .filter_map(|(e, o)| {
-                    let dist = o.position.distance_to(center);
-                    if dist > params.radius {
-                        return None;
-                    }
-                    // Soot on whichever face looked at the blast; a
-                    // wall's business only, and cosmetic.
-                    if o.material.is_wall() {
-                        o.scorched |= face_toward(o.position, center);
-                    }
-                    Some((e, o.material, 1.0 - dist / params.radius))
-                })
-                .collect();
-            for (entity, material, falloff) in hits {
-                // Barrels inside always chain - no roll needed.
-                let amount = if material.is_explosive() { f32::MAX } else { params.roll_damage(&mut f.rng) * falloff };
-                self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
-            }
-            self.blast_crates(f, center, &params);
+            self.blast(f, center, &params, &[]);
             // A lava bomb splashes burning lava round where it lands: a
             // plus at one cell, a diamond further, no RNG.
             if drum == Drum::Lava && t.volcano_pool_radius_cells >= 0 {
@@ -977,24 +884,22 @@ impl Game {
                 let mut order: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
                 order.extend(self.enemies_by_slot());
                 for entity in order {
-                    let mut q = self.world.query_one::<&mut Tank>(entity);
-                    let Ok(tank) = q.get() else { continue };
                     // A heat shield keeps a burning cell off the hull too.
-                    if tank.is_wreck() || !tank.takes_heat() {
+                    let Some((at, reach)) = self
+                        .world
+                        .get::<&Tank>(entity)
+                        .ok()
+                        .filter(|tank| !tank.is_wreck() && tank.takes_heat())
+                        .map(|tank| (tank.position, tank.hull_size() * 0.5 + half_cell))
+                    else {
                         continue;
-                    }
-                    let reach = tank.hull_size() * 0.5 + half_cell;
+                    };
                     let over = burning.iter().any(|&(c, r)| {
                         let p = cell_to_world(c, r);
-                        (p.x - tank.position.x).abs() < reach && (p.y - tank.position.y).abs() < reach
+                        (p.x - at.x).abs() < reach && (p.y - at.y).abs() < reach
                     });
-                    if !over {
-                        continue;
-                    }
-                    tank.take_damage(dps * f.dt, MAX_DAMAGE);
-                    tank.mark_hit();
-                    if tank.is_wreck() {
-                        f.kills.push((tank.position, tank.owner()));
+                    if over {
+                        self.hurt_tank(f, entity, Hurt::contact(dps * f.dt, super::HitCause::Fire, None, at));
                     }
                 }
             }

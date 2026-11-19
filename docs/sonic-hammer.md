@@ -609,10 +609,14 @@ the general case:
 
 ### 3.6 The knock: a shove that takes a hull off its tracks
 
-`knock(physics, f, tank, dir, speed)` (`simulation/sonic.rs`) is the shove
-any later weapon that throws tanks about uses (the gravity well):
-an impulse of `speed` along `dir` scaled by the mass as above, then
-`Tank::skid` and `Tank::skid_speed` (the hull's speed after it against
+`combat::knock(physics, shoves, tank, dir, knock, footing)`
+(`simulation/combat.rs`) is the one shove in the round - a shell's impact,
+a blast, a ram, the hammer's wave, the rod's ring, the well's fling, the
+rail's recoil. Its numbers are a `knock::Knock {speed, mass_exponent,
+max_speed, skid}` (the hammer's is `sonic::knock_at`), and one mass rule
+turns them into a speed: `min(speed / mass_factor^mass_exponent,
+max_speed)`. It is an impulse of that speed along `dir`, then - for a
+knock with a skid - `Tank::skid` and `Tank::skid_speed` (the hull's speed after it against
 the ground's flow, which the skid's length is worked out from).
 `drive_tank_with` reads `skid` (the skid model of §1);
 `tick_timers` counts it down for every tank, and `predict_seat` for the

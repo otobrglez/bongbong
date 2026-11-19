@@ -1051,6 +1051,36 @@ kind to its cross-fixture maximum exactly — deterministic, so an
 exceedance is a real behavior change; the justfile comment carries the
 re-baselining policy.
 
+### Re-baseline 2026-11-19: one of each (BB-166)
+
+One damage funnel, one knock, one blast, one "is it solid", one target
+shape and a pass-over chance for everything an enemy sees over, measured
+one at a time on the same binary:
+
+| step | the pinned pair (one seat, two seats) | probe readings |
+|---|---|---|
+| before | 1311122185973974513, 3120823617306764509 | fixtures 68 anomalies, survive 352, fields 213 |
+| the funnel (`hurt_tank`) | unchanged, 528837390636576270 | all three byte-identical |
+| the knock (`Knock`) | 9639597902138545158, 10896379673731459349 | 61, 364, 204: six ceilings passed by one to three |
+| the blast with cover | 11732861727457925354, unchanged | 63, 359, 200 |
+| "is it solid" (`TerrainBox::entry`) | unchanged | unchanged |
+| the target shape | unchanged | unchanged |
+| the pass-over | unchanged, 18125339335117055137 | 63, 360, 200 |
+
+The funnel alone moves no event, position or health in the pinned rounds:
+the two-seat hash differs by the last bit of one recoiling hull's
+velocity, which is the one mass rule's arithmetic (`speed / factor`
+where the recoil multiplied and divided by the mass). The knock is what
+moves the rounds - a shell's impact is now divided by the chassis's mass
+factor and a blast leaves a hull skidding - and it moves them the way
+chaos does: per map the kinds go up and down by a few, the totals stay
+level (and fall on the field maps), and over six seed bases the kinds
+that passed a ceiling read the same before and after (the justfile's
+comments carry the numbers). The ceilings re-recorded: `survive`
+border-stuck 5 to 6, jitter 13 to 14, churn 24 to 25, clustering 4 to 7,
+never-arrived 4 to 5; `fields` staircase 29 to 30. `probe-fixtures`
+passes as it was.
+
 ### Re-baseline 2026-11-19: every order-carrying walk sorted (BB-161)
 
 Sorting the walks (section 1.3) changes which enemy takes an engagement

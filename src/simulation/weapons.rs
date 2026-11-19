@@ -153,8 +153,8 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 
 /// Firing recoil: push the shooter back along the shot's own travel axis
 /// (so a misfire's skew kicks the same way it skews the shot) at `speed`
-/// px/s, normalized against the chassis-free baseline mass and capped at
-/// `max_speed`. Returns the velocity change, `None` when nothing was
+/// px/s on the standard chassis, by the one mass rule (`Knock::recoil`),
+/// capped at `max_speed`. Returns the velocity change, `None` when nothing was
 /// pushed.
 ///
 /// Only a missile launch's and a grenade's go on to `Frame::shoves`. A
@@ -164,16 +164,10 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 /// grenade, so those kicks are the room's to tell it about.
 pub(super) fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
     let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
-    let handle = tank.body?;
     if len <= f32::EPSILON {
         return None;
     }
-    let reference_mass = tank.scale * tank.scale;
-    let push = (speed * reference_mass / tank.mass()).min(max_speed);
-    let impulse = push * tank.mass() / len;
-    let kick = Position::new(-velocity.x * impulse, -velocity.y * impulse);
-    physics.apply_impulse(handle, kick);
-    Some(Vec2::new(kick.x / tank.mass(), kick.y / tank.mass()))
+    super::combat::shove(physics, tank, Vec2::new(-velocity.x / len, -velocity.y / len), crate::knock::Knock::recoil(speed, max_speed))
 }
 
 /// Spawn one shell from `tank`: rolled drop shadow, muzzle-flash ripple,

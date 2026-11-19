@@ -27,6 +27,7 @@ use crate::tuning::tuning;
 use crate::{BONG_COLLIDER_HALF_EXTENT, Position};
 
 use super::with_tank;
+pub(super) use crate::shape::segment_hits_aabb;
 
 /// What a projectile or beam hit. Read-only: the caller applies the effect
 /// (see `Game::apply_hit`).
@@ -55,9 +56,61 @@ pub(crate) struct TerrainBox {
     /// loophole. A cage is `Some(0)`. `None` for a tile that is whole or
     /// breaks whole.
     pub chunks: Option<u16>,
+    /// A rebar cage (`Obstacle::cage`): every shot passes it, and a hull
+    /// meets its whole cell.
+    pub cage: bool,
+}
+
+/// What is asking a tile "are you solid" (`TerrainBox::entry`) - the one
+/// answer every weapon and every rolling thing reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Entry {
+    /// Something that flies at barrel height - a shell, a bullet, a bolt,
+    /// a beam, a gauss slug, a flame's ray: a whole tile by its box, a
+    /// chunked one by the chunks still standing (a hole is a loophole), a
+    /// cage not at all.
+    Shot,
+    /// Something on the ground - a hull, a grenade, a bong on foot: the
+    /// tile's body as the physics has it (`Game::tile_fit`), a chunked
+    /// tile's standing quadrants, a cage's whole cell.
+    Solid,
 }
 
 impl TerrainBox {
+    /// Where the segment `p0..p1`, `pad` wide on each side, enters this
+    /// tile as `mode` meets it: `t` in `0..=1`, `None` where it passes.
+    pub fn entry(&self, p0: Position, p1: Position, pad: f32, mode: Entry) -> Option<f32> {
+        let grow = Position::new(pad, pad);
+        match mode {
+            Entry::Shot => match self.chunks {
+                Some(standing) => segment_hits_chunks(p0, p1, self.center, self.half + grow, standing, pad),
+                None => segment_hits_aabb(p0, p1, self.center, self.half + grow),
+            },
+            Entry::Solid => {
+                let (center, half) = self.solid_box()?;
+                segment_hits_aabb(p0, p1, center, half + grow)
+            }
+        }
+    }
+
+    /// The tile's body as a hull meets it (`Entry::Solid`): its
+    /// seam-closed box, cut down to its standing quadrants
+    /// (`chunks::solid_box_of`) where chunks are broken; a cage's is its
+    /// whole box. `None` with nothing standing.
+    pub fn solid_box(&self) -> Option<(Position, Position)> {
+        let standing = match self.chunks {
+            Some(standing) if !self.cage => standing,
+            _ => return Some((self.center, self.half)),
+        };
+        let (off, h) = crate::chunks::solid_box_of(standing)?;
+        let (x0, x1) = ((-self.half.x).max(off.x - h.x), self.half.x.min(off.x + h.x));
+        let (y0, y1) = ((-self.half.y).max(off.y - h.y), self.half.y.min(off.y + h.y));
+        if x0 >= x1 || y0 >= y1 {
+            return None;
+        }
+        Some((Position::new(self.center.x + (x0 + x1) / 2.0, self.center.y + (y0 + y1) / 2.0), Position::new((x1 - x0) / 2.0, (y1 - y0) / 2.0)))
+    }
+
     /// Whether this tile stops a line from `from` to `to`, the sight a
     /// shot needs. A whole tile by its box; a chunked tile with chunks
     /// broken by its standing chunks, each grown by a shell's half-extent
@@ -203,6 +256,11 @@ impl HitBoxHistory {
     }
 }
 
+/// How far inside a permanent tile's box a blast's line has to pass to be
+/// stopped by it (`Terrain::line_of_fire`), px: a line along the tile's
+/// face, or one starting on it, is not behind it.
+const LINE_OF_FIRE_INSET_PX: f32 = 0.5;
+
 fn bong_half() -> Position {
     Position::new(BONG_COLLIDER_HALF_EXTENT.0, BONG_COLLIDER_HALF_EXTENT.1)
 }
@@ -235,6 +293,7 @@ impl Terrain {
                     // A cage (`Obstacle::cage`) stands as a tile with no
                     // chunks: every shot passes it.
                     chunks: if o.cage.is_some() { Some(0) } else { o.chunks.filter(|c| c.count() < crate::chunks::CHUNKS as u32).map(|c| c.standing()) },
+                    cage: o.cage.is_some(),
                 }
             })
             .collect();
@@ -279,11 +338,12 @@ impl Terrain {
         self.water.depth_at(p)
     }
 
-    /// Every tile's box, as (centre, half-extents) in the snapshot's
-    /// order: what a grenade on the ground bounces off
-    /// (`grenade::Surroundings::solids`).
-    pub fn tile_boxes(&self) -> Vec<(Position, Position)> {
-        self.obstacles.iter().map(|b| (b.center, b.half)).collect()
+    /// Every solid on the ground, as (centre, half-extents): each tile's
+    /// body (`TerrainBox::solid_box`) in the snapshot's order, then the
+    /// bongs' boxes in theirs. What a grenade on the ground bounces off
+    /// (`grenade::Surroundings::solids`) - what a hull would meet there.
+    pub fn solid_boxes(&self) -> Vec<(Position, Position)> {
+        self.obstacles.iter().filter_map(|b| b.solid_box()).chain(self.bongs.iter().map(|&(_, p)| (p, bong_half()))).collect()
     }
 
     /// The field's four walls, as (centre, half-extents): what stops a
@@ -303,15 +363,41 @@ impl Terrain {
             .min_by(|a, b| a.total_cmp(b))
     }
 
-    /// The entry fraction (0..1) of the first solid tile along the
-    /// segment `p0..p1`, if any - what caps a flame stream's reach. Every
-    /// tile counts, sandbags and fences included: a stream does not sail
-    /// over a knee-high wall the way a shell can.
+    /// The entry fraction (0..1) of the first tile a thing on the ground
+    /// meets along the segment `p0..p1` (`Entry::Solid`), if any: what a
+    /// bong on foot cannot walk through.
     pub fn first_solid_along(&self, p0: Position, p1: Position) -> Option<f32> {
-        self.obstacles
-            .iter()
-            .filter_map(|b| segment_hits_aabb(p0, p1, b.center, b.half))
-            .min_by(|a, b| a.total_cmp(b))
+        self.first_along(p0, p1, 0.0, Entry::Solid)
+    }
+
+    /// The entry fraction (0..1) of the first tile a shot `pad` wide
+    /// meets along the segment `p0..p1` (`Entry::Shot`), if any - what
+    /// caps a flame's ray and a shot drawn ahead of the room. Every tile
+    /// counts, sandbags and fences included: nothing here rolls a
+    /// pass-over.
+    pub fn first_shot_along(&self, p0: Position, p1: Position, pad: f32) -> Option<f32> {
+        self.first_along(p0, p1, pad, Entry::Shot)
+    }
+
+    /// The first tile the segment `p0..p1`, `pad` wide, enters as `mode`
+    /// meets tiles (`TerrainBox::entry`), as a fraction of it.
+    pub fn first_along(&self, p0: Position, p1: Position, pad: f32, mode: Entry) -> Option<f32> {
+        self.obstacles.iter().filter_map(|b| b.entry(p0, p1, pad, mode)).min_by(|a, b| a.total_cmp(b))
+    }
+
+    /// Whether a blast at `from` reaches `to` with no permanent tile
+    /// between them (`Material::is_permanent`: iron, a volcano's cone, a
+    /// training door) - the cover a blast respects. Everything that can
+    /// be broken gives none: the blast is what breaks it. A tile `from`
+    /// itself stands in or against is not in the way, so ordnance going
+    /// off on an iron wall's face still reaches its own side of it.
+    pub fn line_of_fire(&self, from: Position, to: Position) -> bool {
+        let inset = Position::new(LINE_OF_FIRE_INSET_PX, LINE_OF_FIRE_INSET_PX);
+        self.obstacles.iter().filter(|b| b.material.is_permanent()).all(|b| {
+            let half = b.half - inset;
+            let inside = (from.x - b.center.x).abs() <= half.x && (from.y - b.center.y).abs() <= half.y;
+            inside || segment_hits_aabb(from, to, b.center, half).is_none()
+        })
     }
 
     /// The nearest obstacle tile in a tank's way along `dir` (a unit
@@ -494,12 +580,9 @@ impl Terrain {
         // shots that nobody can reason about is the worst of both, so they
         // pass through.
         for player in players.into_iter().flatten() {
-            let (owner, wrecked, hull, turret) = with_tank(world, player, |t| {
-                (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world())
-            });
+            let (owner, wrecked, shape) = with_tank(world, player, |t| (t.owner(), t.is_wreck(), t.target_shape()));
             if !skips(owner) && !wrecked {
-                consider_hit(&mut best, segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), 0, ShellTarget::Tank(player));
-                consider_hit(&mut best, segment_hits_aabb(p0, p1, turret.0, turret.1 + pad), 0, ShellTarget::Tank(player));
+                consider_hit(&mut best, shape.swept(p0, p1, pad), 0, ShellTarget::Tank(player));
             }
         }
 
@@ -507,12 +590,11 @@ impl Terrain {
             if skips(tank.owner()) || tank.is_wreck() {
                 continue;
             }
-            let ((hc, hh), (tc, th)) = match past.and_then(|p| p.tank(entity)) {
-                Some(then) => (then.hull, then.turret),
-                None => (tank.hull_bbox_world(), tank.turret_bbox_world()),
+            let shape = match past.and_then(|p| p.tank(entity)) {
+                Some(then) => crate::shape::TargetShape { hull: then.hull, turret: then.turret },
+                None => tank.target_shape(),
             };
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + enemy_pad), 1, ShellTarget::Tank(entity));
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + enemy_pad), 1, ShellTarget::Tank(entity));
+            consider_hit(&mut best, shape.swept(p0, p1, enemy_pad), 1, ShellTarget::Tank(entity));
         }
 
         for &(entity, now) in &self.bongs {
@@ -529,11 +611,7 @@ impl Terrain {
             if shooter.is_tower() && !b.material.blocks_sight() {
                 continue;
             }
-            let entry = match b.chunks {
-                Some(standing) => segment_hits_chunks(p0, p1, b.center, b.half + pad, standing, half_extent),
-                None => segment_hits_aabb(p0, p1, b.center, b.half + pad),
-            };
-            consider_hit(&mut best, entry, 3, ShellTarget::Obstacle(b.entity));
+            consider_hit(&mut best, b.entry(p0, p1, half_extent, Entry::Shot), 3, ShellTarget::Obstacle(b.entity));
         }
 
         for &(center, half) in &self.walls {
@@ -609,7 +687,7 @@ impl Terrain {
         let cell_key = |c: Position| ((c.y / crate::OBSTACLE_GRID_SIZE).floor() as i64) * 65_536 + (c.x / crate::OBSTACLE_GRID_SIZE).floor() as i64;
         let mut stoppers: Vec<f32> = Vec::new();
         for b in &self.obstacles {
-            if let Some(t) = first(&[(b.center, b.half + pad)]) {
+            if let Some(t) = band.reaches(b.center, b.half + pad).then(|| b.entry(p0, p1, half_extent, Entry::Shot)).flatten() {
                 hits.push((t, 3, cell_key(b.center), ShellTarget::Obstacle(b.entity)));
                 if b.material.is_permanent() && (iron_stops || b.material != Material::Iron) {
                     stoppers.push(t);
@@ -657,7 +735,7 @@ impl Terrain {
         let pad = Position::new(half_extent, half_extent);
         let stops = |m: Material| m.is_permanent() && (iron_stops || m != Material::Iron);
         let mut tiles: Vec<(f32, Position, Material)> =
-            self.obstacles.iter().filter_map(|b| segment_hits_aabb(p0, p1, b.center, b.half + pad).map(|t| (t, b.center, b.material))).collect();
+            self.obstacles.iter().filter_map(|b| b.entry(p0, p1, half_extent, Entry::Shot).map(|t| (t, b.center, b.material))).collect();
         tiles.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.y.total_cmp(&b.1.y)).then(a.1.x.total_cmp(&b.1.x)));
         let wall = self.walls.iter().filter_map(|&(c, h)| segment_hits_aabb(p0, p1, c, h + pad)).min_by(f32::total_cmp).unwrap_or(1.0);
         let stop = tiles.iter().find(|&&(_, _, m)| stops(m)).map_or(wall, |&(t, _, _)| t.min(wall));
@@ -802,42 +880,6 @@ fn segment_hits_chunks(p0: Position, p1: Position, center: Position, half: Posit
         .min_by(f32::total_cmp)
 }
 
-/// If the segment `p0..p1` passes through the axis-aligned box at `center`
-/// with half-extents `half`, the parametric time `t` (`0..=1`) at which it
-/// first enters - `None` if it never does. Slab clipping per axis;
-/// `t_enter` starts at `0.0`, so a segment that begins inside the box
-/// reports an immediate hit rather than a negative time, and a zero-length
-/// segment degenerates to a point-in-box test.
-pub(super) fn segment_hits_aabb(p0: Position, p1: Position, center: Position, half: Position) -> Option<f32> {
-    let d = Position::new(p1.x - p0.x, p1.y - p0.y);
-    let mut t_enter = 0.0f32;
-    let mut t_exit = 1.0f32;
-    for axis in 0..2 {
-        let (p0a, da, min_b, max_b) = if axis == 0 {
-            (p0.x, d.x, center.x - half.x, center.x + half.x)
-        } else {
-            (p0.y, d.y, center.y - half.y, center.y + half.y)
-        };
-        if da.abs() < f32::EPSILON {
-            if p0a < min_b || p0a > max_b {
-                return None;
-            }
-        } else {
-            let inv_d = 1.0 / da;
-            let (mut t1, mut t2) = ((min_b - p0a) * inv_d, (max_b - p0a) * inv_d);
-            if t1 > t2 {
-                std::mem::swap(&mut t1, &mut t2);
-            }
-            t_enter = t_enter.max(t1);
-            t_exit = t_exit.min(t2);
-            if t_enter > t_exit {
-                return None;
-            }
-        }
-    }
-    Some(t_enter)
-}
-
 #[cfg(test)]
 mod shell_sweep_tests {
     use super::*;
@@ -920,6 +962,7 @@ mod shell_sweep_tests {
             material: Material::Iron,
             burning: false,
             chunks: None,
+            cage: false,
         };
         // Approaching from the left: clearly outside on X, inside on Y.
         assert_eq!(obstacle_reflect_axis(Position::new(-30.0, 2.0), &hit), (true, false));

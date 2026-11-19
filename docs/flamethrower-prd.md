@@ -67,10 +67,14 @@ against them. It is also the first weapon that can hurt its user.
 - **The cone.** From the muzzle (the shell's own spawn point), along the
   facing, `flame_range` (164 px, five cells) long, half
   angle `flame_half_angle_deg` (21.4 degrees, about 64 px each side at the
-  end). The centre line is swept through `Terrain::sweep` like a laser
-  beam, and the first solid tile it meets caps the effective range for that
-  frame - a stream does not pass through a wall, though it does reach the
-  wall (section 5).
+  end). It is cast as five rays across that width (`flame::RAYS`). Each is
+  capped on its own at the first tile a shot would meet
+  (`Terrain::first_shot_along`, the sweep's own answer: a loophole lets it
+  through, a cage does not stop it) and then at the first hull or bong on
+  it (`TargetShape::swept`, the boxes a shell is tested against) - a
+  stream does not pass through a wall, though it does reach the wall
+  (section 5), a flank does not burn round a wall's corner, and nothing
+  burns behind a tank. The jet is drawn to the centre ray's wall.
 - **Fuel gauge.** The HUD slot shows whole seconds left (rounded up), in a
   fourth weapon slot with an orange accent.
 

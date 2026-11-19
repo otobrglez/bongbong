@@ -53,7 +53,7 @@ weapons along the way").
 | | |
 |---|---|
 | `src/grenade.rs` | the ball: `Grenade::launch`, `roll` (drag, hulls, the sweep), the blink, `draw_grenade` |
-| `src/simulation/grenades.rs` | `roll_grenades`, `resolve_grenades`, `grenade_show`; the blast shares `side_blast` with the missiles |
+| `src/simulation/grenades.rs` | `roll_grenades`, `resolve_grenades`, `grenade_show`; the blast is `Game::blast`, as the missiles' is; a grenade rolls among `Terrain::solid_boxes` - what a hull would meet |
 | `src/simulation/weapons.rs` | `fire_grenade`, the dispatch arm |
 | `src/tank.rs` | `grenade_ammo`, `ActiveWeapon::Grenades`, the drum module's cell |
 | `net/wire.rs` | `GrenadeState` (protocol 14), `WireEvent::GrenadeBlast` |

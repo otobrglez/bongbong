@@ -12,7 +12,7 @@ It is built from what the special weapons laid down. The rod from god
 (docs/rod-from-god.md) gave the pattern of a call on the round clock carried
 whole on the wire, the FPV swarm (docs/fpv-swarm.md) flying hecs entities
 with a ground point and a height, a shadow and the air-target list, the
-missiles `side_blast` - the side-aware area hit - and their seeker volleys,
+missiles `Game::blast` - the side-aware area hit - and their seeker volleys,
 and the tower pack a crate that is not a tank weapon. New here: the call
 that belongs to a seat, the two aircraft, the HUD's box and the sprites.
 
@@ -56,7 +56,7 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
   (0.9), each at the nearest target in the box at that moment, turning to
   face it: `air_heli_salvo_rockets` (4) seeker missiles off its pods
   (`missile.rs` - their climb, seek, lock and blast are a missile's, every
-  rule of theirs kept; the blast is `side_blast`). A missile's seek locks
+  rule of theirs kept; the blast is `Game::blast`). A missile's seek locks
   tanks only, so a salvo at a tower comes down on the tower unless an enemy
   tank is nearer the missile when it turns. Its sixteen rockets bring a
   tesla (120) down. Then it leaves the way it came. It is on the field
@@ -76,7 +76,7 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
   shrink to fit (`gun_burst`, `bombs`). It flies on off the far edge; about
   five seconds on the field.
 - **Friendly fire.** None on hulls and bongs: every hit is
-  `side_blast`/`explosion_hit`, which spare `Owner::same_side` - the seats
+  `Game::blast` with `BlastParams::ordnance`, which spares `Owner::same_side` - the seats
   and the players' bong. Tiles take damage whoever's they are
   (`damage_obstacle` with falloff) and crates break, as for a missile, so a
   player's own tower next to what is struck takes the splash - it is never
@@ -129,7 +129,7 @@ that belongs to a seat, the two aircraft, the HUD's box and the sprites.
 | A flying entity | `fpv::Drone`: a hecs component alone, ground + height |
 | Shot down | `air.rs`: `AirTarget`, a key, `Game::strike_air` the one mutator |
 | The heli's rockets | seeker missiles (`Missile::spawn`, `Frame::pending_missiles`) |
-| The jet's cannon and bombs | `side_blast` with `BlastParams::air_gun`/`air_bomb` |
+| The jet's cannon and bombs | `Game::blast` with `BlastParams::air_gun`/`air_bomb` |
 | Cosmetics a replica plays too | `*_show` into a `Spectacle` |
 | The shadow | a tinted silhouette (docs/sprite-shadows-design.md) |
 
@@ -220,7 +220,7 @@ the two tools (`tool-air_heli`, `tool-air_jet` and their short forms in
 ## 10. Determinism
 
 The call, the arrival, the edge, the flight and the target pick draw no RNG;
-the only draws are `explosion_hit`'s damage rolls and the missiles' own, in a
+the only draws are the blasts' damage rolls and the missiles' own, in a
 round where a seat took an air crate. A round without one reads nothing
 (`air_support_phase` returns at once) and keeps its stream, so
 `the_one_and_two_seat_streams_are_pinned` is unchanged. Walks go by id;

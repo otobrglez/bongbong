@@ -553,6 +553,9 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                     game.charge_end_show(bore, end);
                 }
             }
+            // A blast's share and the ground's burns flash nothing: the
+            // blast's own event draws it.
+            WireEvent::Hit { cause, .. } if !cause.is_shot() => {}
             WireEvent::Hit { target, damage, x, y, .. } => {
                 let contact = damage == 0.0
                     && matches!(target, WireHitTarget::Player { .. } | WireHitTarget::Enemy { .. } | WireHitTarget::Bong { .. })
