@@ -24,7 +24,7 @@ use crate::{MAX_DAMAGE, Position};
 
 use super::hits::{self, ShellTarget};
 use super::props::DamageCause;
-use super::{Event, Footing, Frame, Game, HitCause, HitTarget, SHOCK_BONG, Spectacle, laser_reach, portals};
+use super::{Event, Footing, Frame, Game, HitCause, HitTarget, Spectacle, laser_reach, portals};
 
 /// A slug released this frame, waiting for `resolve_rails` to trace it.
 pub(super) struct PendingRail {
@@ -377,7 +377,7 @@ impl Game {
                     (bong.is_dead(), bong.position)
                 };
                 if dead {
-                    f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
+                    f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
                 }
                 *damage *= t.gauss_pierce_keep;
                 Some(Pierced::Bong)

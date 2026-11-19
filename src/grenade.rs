@@ -40,6 +40,10 @@ pub struct Grenade {
     pub owner: Owner,
     /// The point on the ground under it.
     pub position: Position,
+    /// The position a frame between two steps draws this at (`pose.rs`).
+    /// Presentation only: the drawing reads it through `drawn`, and
+    /// nothing that plays reads it at all.
+    pub smooth: crate::pose::Smooth,
     /// Velocity over the ground (px/s).
     pub velocity: Vec2,
     /// Height above the ground (px): above 0 it is in the air, passing
@@ -95,6 +99,7 @@ impl Grenade {
             id: 0,
             owner,
             position: muzzle,
+            smooth: crate::pose::Smooth::default(),
             velocity,
             height: t.grenade_launch_height,
             climb: t.grenade_launch_climb,
@@ -114,6 +119,18 @@ impl Grenade {
     /// Where the ball is drawn: its ground point lifted by its height.
     pub fn draw_pos(&self) -> Position {
         Position::new(self.position.x, self.position.y - self.height)
+    }
+
+    /// The ground point and the height a frame draws this at: between
+    /// the last two steps when the frame loop asked for that
+    /// (`Game::pose_at`), else where it is.
+    pub fn drawn(&self) -> crate::pose::Pose {
+        self.smooth.drawn(self.pose())
+    }
+
+    /// The ground point and the height the simulation has this at.
+    pub fn pose(&self) -> crate::pose::Pose {
+        crate::pose::Pose { lift: self.height, ..crate::pose::Pose::at(self.position) }
     }
 
     /// Whether the fuse has run out: the blast is due.
@@ -419,7 +436,8 @@ pub fn draw_grenade(c: &mut impl Canvas, grenade: &Grenade) {
     let length = 2.0 * t.grenade_radius * scale;
     let width = 1.2 * t.grenade_radius * scale;
     let along = axis(grenade);
-    let g = grenade.position;
+    let pose = grenade.drawn();
+    let g = pose.position;
     let drop = 3.0 + grenade.height * 0.5;
     let shadow = Position::new(g.x + t.shadow_dir_x * drop, g.y + t.shadow_dir_y * drop);
     let shade = Color::new(0, 0, 0, (80.0 * (1.0 - 0.5 * lift)) as u8);
@@ -427,7 +445,7 @@ pub fn draw_grenade(c: &mut impl Canvas, grenade: &Grenade) {
     capsule(shadow, along, length * shrink / scale, width * shrink / scale, |bx, by, _, _| {
         c.fill_rect(bx * 2, by * 2, 2, 2, shade);
     });
-    let at = grenade.draw_pos();
+    let at = Position::new(g.x, g.y - pose.lift);
     // Which side of the can faces the light (from the upper left).
     let across = Vec2::new(-along.y, along.x);
     let lit_side = if across.x * 0.6 + across.y * 0.8 > 0.0 { -1.0 } else { 1.0 };
@@ -460,6 +478,7 @@ mod tests {
             id: 1,
             owner: Owner::Player(0),
             position: at,
+            smooth: crate::pose::Smooth::default(),
             velocity: v,
             height: 0.0,
             climb: 0.0,

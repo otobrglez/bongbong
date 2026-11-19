@@ -187,7 +187,7 @@ impl Game {
                     }
                 }
                 for pos in dead_at {
-                    f.shocks.push(Shockwave::scaled(pos, super::SHOCK_BONG));
+                    f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
                 }
             }
         }

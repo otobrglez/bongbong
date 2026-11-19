@@ -35,7 +35,7 @@ use crate::ai::Ai;
 
 use super::combat::{explosion_hit, BlastParams};
 use super::props::DamageCause;
-use super::{Event, Frame, Game, Spectacle, SHOCK_BARREL, SHOCK_BONG};
+use super::{Event, Frame, Game, Spectacle};
 
 impl Game {
     /// A blast at `center` reaching the crates: each whole crate within
@@ -165,7 +165,7 @@ impl Game {
                 }
             }
             for pos in dead_bongs {
-                f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
+                f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
             }
             let hits: Vec<(Entity, Material, f32)> = super::tiles_near(self.world.query::<(Entity, &mut Obstacle)>().iter(), center, params.radius)
                 .into_iter()
@@ -203,7 +203,7 @@ impl Game {
     pub(crate) fn crate_cookoff_show(&mut self, show: &mut Spectacle, center: Position) {
         let t = tuning();
         let scale = t.crate_cookoff_scale;
-        show.shocks.push(Shockwave::scaled(center, SHOCK_BARREL * scale));
+        show.shocks.push(Shockwave::scaled(center, crate::tuning::tuning().barrel_shock * scale));
         show.impact_flashes.push(Shockwave::new(center));
         let mut fx = BlastFx::shaped(center, BlastKind::Oil, BlastShape::Plain);
         fx.scale *= scale.max(0.2);

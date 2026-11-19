@@ -40,9 +40,9 @@ fn seed(tank: &Tank) -> u32 {
 /// The point `x` px to the hull's right and `y` px toward its front of
 /// its middle, by its drawn facing.
 fn on_hull(tank: &Tank, x: f32, y: f32) -> Position {
-    let (s, c) = tank.visual_rotation.to_radians().sin_cos();
+    let (s, c) = tank.drawn().rotation.to_radians().sin_cos();
     let (right, front) = (Vec2::new(c, s), Vec2::new(s, -c));
-    Position::new(tank.position.x + right.x * x + front.x * y, tank.position.y + right.y * x + front.y * y)
+    Position::new(tank.drawn().position.x + right.x * x + front.x * y, tank.drawn().position.y + right.y * x + front.y * y)
 }
 
 /// Where a damaged tank smokes and burns: a spot on the engine deck behind
@@ -89,7 +89,7 @@ pub fn fire(tank: &Tank) -> f32 {
 /// middle of a wreck.
 pub fn fire_at(tank: &Tank) -> Position {
     if tank.is_wreck() {
-        tank.position
+        tank.drawn().position
     } else {
         engine_deck(tank)
     }
@@ -138,7 +138,7 @@ pub fn smoulder(tank: &Tank, hot: &crate::smoulder::Hot, time: f32, t: &crate::t
             }
             out.push(Shape::Mark { pos: at, size: if ember > 0.5 { 4 } else { 2 }, color: FIRE[step] });
         }
-        out.push(Shape::Glow { pos: tank.position, radius: 20.0, color: pyro::alpha(FIRE[3], 0.14 * ember) });
+        out.push(Shape::Glow { pos: tank.drawn().position, radius: 20.0, color: pyro::alpha(FIRE[3], 0.14 * ember) });
     }
     crate::smoulder::flare(hot, time, 10.0 * tank.scale / 2.0, t, &mut out);
     out

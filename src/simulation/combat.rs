@@ -25,7 +25,7 @@ use crate::{
 
 use super::hits::{ShellTarget, Terrain};
 use super::props::DamageCause;
-use super::{SHOCK_BONG, with_bong_mut, Event, Frame, Game, HitCause, HitTarget, Shoves};
+use super::{with_bong_mut, Event, Frame, Game, HitCause, HitTarget, Shoves};
 
 /// One explosion's numbers - a tank wreck's or a barrel's - so
 /// `explosion_hit` serves both.
@@ -206,7 +206,7 @@ impl Game {
                     }
                 };
                 if dead {
-                    f.shocks.push(Shockwave::scaled(pos, SHOCK_BONG));
+                    f.shocks.push(Shockwave::scaled(pos, crate::tuning::tuning().bong_shock));
                 } else if let (true, Some(away)) = (can_hop, effects.bong_hop) {
                     let landing = bong_hop_target(&mut f.rng, pos, away, hop_distance, &f.terrain, f.width, f.height);
                     if let Some(new_pos) = landing {

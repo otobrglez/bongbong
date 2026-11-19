@@ -68,7 +68,7 @@ use crate::shell::{Owner, Shell, ShellState};
 use crate::simulation::replica::plasma_variant_from_index;
 use crate::blast::BlastShape;
 use crate::shockwave::Shockwave;
-use crate::simulation::{Game, GroundFire, OilPrint, PlayerCount, SHOCK_BONG, SHOCK_SHIELD_BREAK, SHOCK_TELEPORT, Spectacle, tile_rubble, tile_stump};
+use crate::simulation::{Game, GroundFire, OilPrint, PlayerCount, Spectacle, tile_rubble, tile_stump};
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::tuning;
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, PHYSICS_FIXED_DT, Position, TANK_SHELL_VARIANT_BY_ROW, TANK_WRECK_COLS};
@@ -576,10 +576,10 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                     show.muzzle_flashes.push(Shockwave::new(muzzle));
                 }
             }
-            WireEvent::ShieldBroken { x, y, .. } => show.shocks.push(Shockwave::scaled(at(x, y), SHOCK_SHIELD_BREAK)),
+            WireEvent::ShieldBroken { x, y, .. } => show.shocks.push(Shockwave::scaled(at(x, y), crate::tuning::tuning().shield_break_shock)),
             WireEvent::Teleported { x, y, to_x, to_y, .. } => {
-                show.shocks.push(Shockwave::scaled(at(x, y), SHOCK_TELEPORT));
-                show.shocks.push(Shockwave::scaled(at(to_x, to_y), SHOCK_TELEPORT));
+                show.shocks.push(Shockwave::scaled(at(x, y), crate::tuning::tuning().teleport_shock));
+                show.shocks.push(Shockwave::scaled(at(to_x, to_y), crate::tuning::tuning().teleport_shock));
             }
             // A wave round's wreck leaves its parts where it stood; the
             // hull is still in the world until the tanks are applied.
@@ -1384,6 +1384,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
             game.world.spawn((Shell {
                 state: ShellState::from_col(sh.state as i32).unwrap_or(ShellState::Flying),
                 position,
+                smooth: crate::pose::Smooth::default(),
                 velocity: dir * knobs.shell_speed,
                 rotation,
                 timer: 0.0,
@@ -1402,6 +1403,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
             game.world.spawn((Bullet {
                 state: BulletState::from_col(sh.state as i32).unwrap_or(BulletState::Flying),
                 position,
+                smooth: crate::pose::Smooth::default(),
                 velocity: dir * knobs.minigun_bullet_speed,
                 rotation,
                 timer: 0.0,
@@ -1423,6 +1425,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
             game.world.spawn((Plasma {
                 state: PlasmaState::from_col(sh.state as i32).unwrap_or(PlasmaState::Flying),
                 position,
+                smooth: crate::pose::Smooth::default(),
                 velocity: dir * knobs.plasma_speed,
                 rotation,
                 timer: 0.0,
@@ -1469,7 +1472,7 @@ fn apply_bongs(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) 
             let dead = on(bong_flags::DEAD);
             if dead && !bong.is_dead() {
                 if let Some(show) = show.as_deref_mut() {
-                    show.shocks.push(Shockwave::scaled(position, SHOCK_BONG));
+                    show.shocks.push(Shockwave::scaled(position, crate::tuning::tuning().bong_shock));
                 }
             }
             let hopping = on(bong_flags::HOPPING);

@@ -118,6 +118,10 @@ impl Owner {
 pub struct Shell {
     pub state: ShellState,
     pub position: Position,
+    /// The position a frame between two steps draws this at (`pose.rs`).
+    /// Presentation only: the drawing reads it through `drawn`, and
+    /// nothing that plays reads it at all.
+    pub smooth: crate::pose::Smooth,
     /// Direction of travel while flying (pixels per second).
     pub velocity: Vec2,
     /// Facing angle in degrees (matches the tank's rotation when fired).
@@ -171,6 +175,13 @@ pub struct Shell {
 }
 
 impl Shell {
+    /// The position a frame draws this at: between the last two steps
+    /// when the frame loop asked for that (`Game::pose_at`), else where
+    /// it is.
+    pub fn drawn(&self) -> Position {
+        self.smooth.drawn(crate::pose::Pose::at(self.position)).position
+    }
+
     /// Create a shell at the tank's muzzle, travelling in the direction the tank
     /// faces. `owner` tags which tank fired it for collision purposes.
     /// `aim_offset` (degrees) skews the travel direction off the barrel so a shot
@@ -195,6 +206,7 @@ impl Shell {
             id,
             state: ShellState::Flying,
             position,
+            smooth: crate::pose::Smooth::default(),
             prev_position,
             velocity,
             rotation,
@@ -236,6 +248,7 @@ impl Shell {
         Shell {
             state: ShellState::Fire0,
             position,
+            smooth: crate::pose::Smooth::default(),
             velocity: Vec2::new(dir.x * tuning().shell_speed, dir.y * tuning().shell_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,

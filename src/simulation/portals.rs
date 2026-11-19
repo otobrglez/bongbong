@@ -141,6 +141,7 @@ impl Game {
             let Ok(p) = q.get() else { return };
             p.set_position(to);
             p.begin_frame();
+            p.cut_drawing();
             p.id()
         };
         let passes = self.world.get::<&ShotPortals>(entity).map_or(0, |s| s.passes);

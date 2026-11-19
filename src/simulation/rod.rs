@@ -29,7 +29,7 @@ use crate::{MAX_DAMAGE, MAX_SEATS, OBSTACLE_GRID_SIZE, Position};
 
 use super::combat::BlastParams;
 use super::props::DamageCause;
-use super::{Event, Footing, Frame, Game, HitCause, HitTarget, RollIn, SHOCK_BONG, Spectacle};
+use super::{Event, Footing, Frame, Game, HitCause, HitTarget, RollIn, Spectacle};
 
 /// A rod called this frame, waiting for `place_calls` to put it on the
 /// field.
@@ -260,7 +260,7 @@ impl Game {
             }
         }
         for at in dead {
-            f.shocks.push(Shockwave::scaled(at, SHOCK_BONG));
+            f.shocks.push(Shockwave::scaled(at, crate::tuning::tuning().bong_shock));
         }
     }
 

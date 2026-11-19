@@ -202,6 +202,11 @@ pub struct PlayerHud {
     /// The seat's air support (docs/air-support.md), `None` while it has
     /// none called or in the air.
     pub air: Option<AirHud>,
+    /// The health number's tick while the seat has just been hurt
+    /// (`feedback::tick_look`, 3 down to 1), and whether it nudges the
+    /// number as well as lighting it - not under reduced motion. The
+    /// round knows nothing of it: the frame that draws sets it.
+    pub hurt: Option<(u8, bool)>,
 }
 
 /// A seat's air support as its block shows it: the box under the ammo
@@ -270,6 +275,7 @@ impl PlayerHud {
             lamps: None,
             heat_shield: 0.0,
             air: None,
+            hurt: None,
         }
     }
 
@@ -296,6 +302,7 @@ impl PlayerHud {
                 lamps: game.lamps_in_play().then(|| game.player_index(entity).map_or(0, |seat| game.lamps_left(seat as usize))),
                 heat_shield: tank.heat_shield_fraction(),
                 air: game.player_index(entity).and_then(|seat| AirHud::of(game, seat as u8)),
+                hurt: None,
             }
         })
     }
