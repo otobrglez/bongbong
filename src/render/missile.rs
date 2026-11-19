@@ -33,7 +33,7 @@ pub fn draw_missile_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, missile
     let lift = missile.lift();
     let size = MISSILE_TEXTURE_SIZE * MISSILE_SCALE * (1.0 - 0.3 * lift);
     let source = source_rec(missile);
-    let at = Vec2::new(missile.position.x + tuning().shadow_dir_x * 4.0, missile.position.y + tuning().shadow_dir_y * 4.0);
+    let at = Vec2::new(missile.drawn().position.x + tuning().shadow_dir_x * 4.0, missile.drawn().position.y + tuning().shadow_dir_y * 4.0);
     let dest = dest_rec(at, size, source);
     let alpha = 255.0 * tuning().missile_shadow_opacity * (1.0 - 0.5 * lift);
     let origin = Vec2::new(size / 2.0, size / 2.0);
@@ -44,7 +44,7 @@ pub fn draw_missile_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, missile
 pub fn draw_missile(d: &mut impl RaylibDraw, texture: &Texture2D, missile: &Missile) {
     let size = MISSILE_TEXTURE_SIZE * MISSILE_SCALE * missile.draw_scale();
     let source = source_rec(missile);
-    let dest = dest_rec(missile.draw_pos(), size, source);
+    let dest = dest_rec(missile.shown_pos(), size, source);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     d.draw_texture_pro(texture, source, dest, origin, missile.rotation(), Color::WHITE);
 }
@@ -58,8 +58,8 @@ pub fn draw_missile_exhaust(d: &mut impl RaylibDraw, missile: &Missile, time: f3
     if strength <= 0.0 || missile.is_dead() {
         return;
     }
-    let tail = missile.tail();
-    let nose = missile.draw_pos();
+    let tail = missile.shown_tail();
+    let nose = missile.shown_pos();
     let (dx, dy) = (nose.x - tail.x, nose.y - tail.y);
     let len = (dx * dx + dy * dy).sqrt();
     if len < 0.01 {

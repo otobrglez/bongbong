@@ -273,25 +273,25 @@ impl Game {
         let warm = Color::new(255, 140, 50, 255);
         for shell in self.world.query::<&Shell>().iter() {
             if shell.state == ShellState::Flying {
-                ground_light(d, shell.position, 30.0, warm, 0.28);
+                ground_light(d, shell.drawn(), 30.0, warm, 0.28);
             }
         }
         for bullet in self.world.query::<&Bullet>().iter() {
             if bullet.state == BulletState::Flying {
-                ground_light(d, bullet.position, 12.0, Color::new(255, 200, 90, 255), 0.14);
+                ground_light(d, bullet.drawn(), 12.0, Color::new(255, 200, 90, 255), 0.14);
             }
         }
         for plasma in self.world.query::<&Plasma>().iter() {
             let [_, body, _, _] = plasma.variant.orb_colors();
             match plasma.impact_progress() {
-                Some(p) => ground_light(d, plasma.position, 26.0 + 30.0 * p, body, 0.35 * (1.0 - p)),
-                None if plasma.state == PlasmaState::Flying => ground_light(d, plasma.position, 44.0, body, 0.4),
+                Some(p) => ground_light(d, plasma.drawn(), 26.0 + 30.0 * p, body, 0.35 * (1.0 - p)),
+                None if plasma.state == PlasmaState::Flying => ground_light(d, plasma.drawn(), 44.0, body, 0.4),
                 None => {}
             }
         }
         // A dead missile (an EMP) has no motor to light the ground.
         for missile in self.world.query::<&Missile>().iter().filter(|m| !m.is_dead()) {
-            ground_light(d, missile.position, 26.0, warm, 0.3 * (1.0 - 0.6 * missile.lift()));
+            ground_light(d, missile.drawn().position, 26.0, warm, 0.3 * (1.0 - 0.6 * missile.lift()));
         }
         for jet in self.flames() {
             let flicker = 0.8 + 0.2 * (self.time * 29.0).sin();
@@ -1479,7 +1479,7 @@ impl Game {
             let t = tuning();
             let bands = t.glow_bands.max(0) as u32;
             for tank in self.world.query::<&crate::tank::Tank>().iter().filter(|tank| !culled(cull, tank.position)) {
-                let lean = pyro::smoke_lean(&t, tank.position, self.time);
+                let lean = pyro::smoke_lean(&t, tank.drawn().position, self.time);
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::damage_stage::flames(tank, self.time, lean), bands);
             }
             for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !culled(cull, o.position)) {
@@ -1733,7 +1733,7 @@ impl Game {
             for tank in self.world.query::<&Tank>().iter().filter(|tank| !culled(cull, tank.position)) {
                 // Each weapon's wind-up by its own composer.
                 if let Some(w) = tank.windup().filter(|w| w.weapon == crate::tank::ActiveWeapon::SonicHammer) {
-                    let dish = tank.turret_point(crate::tank_art::SONIC_MUZZLE[tank.row as usize]);
+                    let dish = tank.turret_point(crate::tank_art::SONIC_MUZZLE[tank.row as usize]) + tank.draw_shift();
                     shapes.extend(crate::sonic::tell_arcs(dish, w.facing, w.progress, self.time, &t));
                 }
             }
@@ -1759,10 +1759,10 @@ impl Game {
                 let seed = crate::emp::spark_seed(tank.owner_slot());
                 if tank.is_disabled() {
                     let (c, h) = tank.hull_bbox_world();
-                    shapes.extend(crate::emp::sparks(c, crate::math::Vec2::new(h.x, h.y), seed, self.time, tank.disabled));
+                    shapes.extend(crate::emp::sparks(c + tank.draw_shift(), crate::math::Vec2::new(h.x, h.y), seed, self.time, tank.disabled));
                 }
                 if let Some(w) = tank.windup().filter(|w| w.weapon == crate::tank::ActiveWeapon::Emp) {
-                    let coil = tank.turret_point(crate::tank_art::EMP_COIL[tank.row as usize]);
+                    let coil = tank.turret_point(crate::tank_art::EMP_COIL[tank.row as usize]) + tank.draw_shift();
                     shapes.extend(crate::emp::tell(coil, seed, w.progress, self.time));
                 }
             }
@@ -1795,7 +1795,7 @@ impl Game {
             for tank in self.world.query::<&Tank>().iter().filter(|tank| !tank.is_wreck() && !culled(cull, tank.position)) {
                 if let Some(charge) = tank.charge.filter(|c| c.weapon == crate::tank::ActiveWeapon::GaussRail) {
                     let seed = (tank.owner_slot() as u32).wrapping_mul(0x9E37_79B9) ^ 0x6A55;
-                    shapes.extend(crate::gauss::compose_charge(tank.position, crate::gauss::muzzle(tank), &charge, seed, self.time));
+                    shapes.extend(crate::gauss::compose_charge(tank.drawn().position, crate::gauss::muzzle(tank) + tank.draw_shift(), &charge, seed, self.time));
                 }
             }
             for slug in &self.rail_slugs {

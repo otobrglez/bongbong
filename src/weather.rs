@@ -738,18 +738,18 @@ fn laser_color(variant: LaserVariant) -> Rgb {
 /// A point on the hull, `local` design pixels from the pivot in the art's
 /// frame (`tank_art`), in the world at the hull's drawn facing.
 fn hull_point(tank: &Tank, local: (f32, f32)) -> Position {
-    rotated_point(tank, tank.visual_rotation, local)
+    rotated_point(tank, tank.drawn().rotation, local)
 }
 
 /// A point on the turret, at the turret's drawn facing.
 fn turret_point(tank: &Tank, local: (f32, f32)) -> Position {
-    rotated_point(tank, tank.turret_visual_rotation, local)
+    rotated_point(tank, tank.drawn().turret, local)
 }
 
 fn rotated_point(tank: &Tank, rotation: f32, local: (f32, f32)) -> Position {
     let (sin, cos) = math::sin_cos(rotation.to_radians());
     let (x, y) = (local.0 * tank.scale, local.1 * tank.scale);
-    Position::new(tank.position.x + x * cos - y * sin, tank.position.y + x * sin + y * cos)
+    Position::new(tank.drawn().position.x + x * cos - y * sin, tank.drawn().position.y + x * sin + y * cos)
 }
 
 /// The unit vector a sprite facing `rotation` degrees points along (0 up,
@@ -1103,7 +1103,7 @@ pub fn tank_lights(out: &mut Vec<Light>, tank: &Tank, player: bool, k: f32, t: &
         if !tank.is_dead() {
             let left = 1.0 - (tank.wreck_timer / t.wreck_burn_seconds.max(0.01)).clamp(0.0, 1.0);
             let heat = scale([1.0, 0.5, 0.18], k * t.fire_light_strength * left.sqrt() * flicker(time, tank.position));
-            out.push(Light::point(tank.position, t.fire_light_radius_px * 0.6, heat));
+            out.push(Light::point(tank.drawn().position, t.fire_light_radius_px * 0.6, heat));
         }
         return;
     }
@@ -1111,7 +1111,7 @@ pub fn tank_lights(out: &mut Vec<Light>, tank: &Tank, player: bool, k: f32, t: &
     // spotlight, no glow - only its sparks, in their bursts.
     if tank.is_disabled() {
         if t.emp_spark_light > 0.0 && crate::emp::sparking(crate::emp::spark_seed(tank.owner_slot()), time) {
-            out.push(Light::point(tank.position, 28.0, scale([0.58, 0.93, 0.89], k * t.emp_spark_light)).unshadowed());
+            out.push(Light::point(tank.drawn().position, 28.0, scale([0.58, 0.93, 0.89], k * t.emp_spark_light)).unshadowed());
         }
         return;
     }
@@ -1120,7 +1120,7 @@ pub fn tank_lights(out: &mut Vec<Light>, tank: &Tank, player: bool, k: f32, t: &
     // pair or a four throws about one beam's light; damage puts them
     // out as it puts out the lamps in the art - half from the damaged
     // tier, all at critical. A turret searchlight's cone follows the aim.
-    let dir = heading(tank.visual_rotation);
+    let dir = heading(tank.drawn().rotation);
     let beam = headlight_color(player);
     let length = t.headlight_length_px * if player { 1.0 } else { 0.8 };
     let tier = tank.damage_tier();
@@ -1141,7 +1141,7 @@ pub fn tank_lights(out: &mut Vec<Light>, tank: &Tank, player: bool, k: f32, t: &
     if tier < 3 && t.headlight_strength > 0.0 {
         for &(x, y, off) in crate::tank_art::SPOTLIGHTS[tank.row as usize] {
             let at = turret_point(tank, (x, y));
-            let cone = heading(tank.turret_visual_rotation + off);
+            let cone = heading(tank.drawn().turret + off);
             out.push(Light::cone(at, cone, (t.headlight_half_angle_deg * 0.55).to_radians(), length * 0.8, scale([1.0, 0.93, 0.8], k * t.headlight_strength * 0.75)));
         }
     }
@@ -1151,7 +1151,7 @@ pub fn tank_lights(out: &mut Vec<Light>, tank: &Tank, player: bool, k: f32, t: &
             None => [0.9, 0.55, 0.38],
         };
         let strength = if player { 1.0 } else { 0.7 };
-        out.push(Light::point(tank.position, t.hull_glow_radius_px, scale(glow, k * t.hull_glow_strength * strength)).unshadowed());
+        out.push(Light::point(tank.drawn().position, t.hull_glow_radius_px, scale(glow, k * t.hull_glow_strength * strength)).unshadowed());
     }
 }
 

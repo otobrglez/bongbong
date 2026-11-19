@@ -1380,6 +1380,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
             game.world.spawn((Shell {
                 state: ShellState::from_col(sh.state as i32).unwrap_or(ShellState::Flying),
                 position,
+                smooth: crate::pose::Smooth::default(),
                 velocity: dir * knobs.shell_speed,
                 rotation,
                 timer: 0.0,
@@ -1398,6 +1399,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
             game.world.spawn((Bullet {
                 state: BulletState::from_col(sh.state as i32).unwrap_or(BulletState::Flying),
                 position,
+                smooth: crate::pose::Smooth::default(),
                 velocity: dir * knobs.minigun_bullet_speed,
                 rotation,
                 timer: 0.0,
@@ -1419,6 +1421,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
             game.world.spawn((Plasma {
                 state: PlasmaState::from_col(sh.state as i32).unwrap_or(PlasmaState::Flying),
                 position,
+                smooth: crate::pose::Smooth::default(),
                 velocity: dir * knobs.plasma_speed,
                 rotation,
                 timer: 0.0,

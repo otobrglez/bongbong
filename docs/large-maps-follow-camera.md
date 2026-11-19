@@ -335,6 +335,14 @@ figure.
 Presentation only: nothing in `simulation/` sees it, a replica and the
 local round use the same code, and the dev server reports it.
 
+The view follows each tank where the frame draws it (`pose.rs`: between
+the round's last two steps), and moves by the time that picture moved, so
+on a display that is not in step with the 60 Hz round the tank and the
+view glide together. A followed tank is drawn on a whole texel; while the
+view rides with it the view's corner gives up the same fraction
+(`follow::TexelLock`), so the tank holds its place on the screen and the
+ground passes under it in whole texels.
+
 - **Follow the local seat.** The base point is the tank, held inside a
   dead zone of about 0.4 cell so the 4-way corrections and the collision
   slides do not wobble the view (Keren's camera window).

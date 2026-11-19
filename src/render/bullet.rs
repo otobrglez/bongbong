@@ -31,7 +31,7 @@ pub fn draw_bullet(d: &mut impl RaylibDraw, texture: &Texture2D, bullet: &Bullet
     let src = source_rec(state_col(bullet.state));
     let size = MINIGUN_BULLET_TEXTURE_SIZE * MINIGUN_BULLET_SCALE;
 
-    let dest = Rectangle::new(bullet.position.x, bullet.position.y, size, size);
+    let dest = Rectangle::new(bullet.drawn().x, bullet.drawn().y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
 
     d.draw_texture_pro(texture, src, dest, origin, bullet.rotation, Color::WHITE);
@@ -45,8 +45,8 @@ pub fn draw_bullet_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, bullet: 
     let size = MINIGUN_BULLET_TEXTURE_SIZE * MINIGUN_BULLET_SCALE;
 
     let dest = Rectangle::new(
-        bullet.position.x + tuning().shadow_dir_x * bullet.shadow_offset,
-        bullet.position.y + tuning().shadow_dir_y * bullet.shadow_offset,
+        bullet.drawn().x + tuning().shadow_dir_x * bullet.shadow_offset,
+        bullet.drawn().y + tuning().shadow_dir_y * bullet.shadow_offset,
         size,
         size,
     );
@@ -69,11 +69,11 @@ pub fn draw_bullet_light(d: &mut impl RaylibDraw, bullet: &Bullet, wells: &crate
     let length = tuning().bullet_tracer_length;
     // In a gravity well's pull the tracer follows the curve it came by.
     let t = tuning();
-    if let Some(path) = crate::well::curved_streak(bullet.position, bullet.velocity, length, wells, &t) {
+    if let Some(path) = crate::well::curved_streak(bullet.drawn(), bullet.velocity, length, wells, &t) {
         crate::render::shot_fx::curved_streak(d, &path, 2.0, fade(crate::pyro::alpha(FIRE[5], 0.66), strength), crate::pyro::alpha(FIRE[3], 0.0));
     } else {
-        streak(d, bullet.position, dir, length, 2.0, fade(crate::pyro::alpha(FIRE[5], 0.66), strength), crate::pyro::alpha(FIRE[3], 0.0));
+        streak(d, bullet.drawn(), dir, length, 2.0, fade(crate::pyro::alpha(FIRE[5], 0.66), strength), crate::pyro::alpha(FIRE[3], 0.0));
     }
-    streak(d, bullet.position, dir, length * 0.5, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[6], 0.4), strength));
-    glow(d, bullet.position, 5.0, fade(crate::pyro::alpha(FIRE[6], 0.78), strength));
+    streak(d, bullet.drawn(), dir, length * 0.5, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[6], 0.4), strength));
+    glow(d, bullet.drawn(), 5.0, fade(crate::pyro::alpha(FIRE[6], 0.78), strength));
 }

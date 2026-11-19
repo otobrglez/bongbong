@@ -38,12 +38,21 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 
 - `app.rs` — owns the raylib handle, the loop and the `mode::Session`. Play: gathers a
   `simulation::Input` (`Input::two` from the keyboard and touch) and runs `Game::update` in whole
-  steps of `PHYSICS_FIXED_DT` - `StepClock` pays real frame time out as zero or more steps per
+  steps of `PHYSICS_FIXED_DT` - `pacing::StepClock` pays frame time out as zero or more steps per
   rendered frame, at most `SIM_MAX_STEPS_PER_FRAME` (4, the rest dropped, so a stall never spirals;
   one step every other frame on a 120 Hz display), every step on the frame's input with the one-shot
   presses spent by the first (`Input::held_only`); a frame that ran no step carries its presses into
-  the next (`Input::or_presses`) so a tap is never lost; a dialog, the builder or the dev server's
-  freeze resets the clock, so a resume starts on a fresh step. `Fx::observe_events` runs after every
+  the next (`Input::or_presses`) so a tap is never lost; a dialog or the builder adds nothing to the
+  clock and the dev server's freeze resets it. The frame time is `pacing::Refresh::pace`'s - the raw
+  one snapped to the measured refresh period - for everything but a room's round, which keeps the
+  raw time. Once the steps have run the round is posed for the frame: `Game::pose_at(clock.alpha(),
+  texel)`, `alpha` 1 under the dev server's freeze (so `step` then `screenshot` is the round as it
+  stands) and `texel` on a followed view outside the establishing shot; a frame that ran no
+  `update` (a dialog) leaves the last pose standing. A followed view moves by the time the picture
+  moved - the steps plus the change in `alpha` - and each view's corner goes through its
+  `follow::TexelLock`. A desktop window is vsynced, its fps cap a quarter over the monitor's rate
+  (a net for a driver that ignores the swap interval); the web stays on rAF (fps 0) and the phones
+  on their display's swap. `Fx::observe_events` runs after every
   step so a two-step frame drops no burst, and so does the `indicators::ScreenAwareness` for
   `local_seats` (seat 0, seat 1 on a couch, the room's seat once there is a replica; once a frame on
   a replica); its picture is composed once a frame only while `!camera.shows_whole_field()`, with
@@ -381,6 +390,18 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `Game::update`; nothing in `simulation/` mutates tuning. `request_restart` becomes
   `Input::restart_pressed`. Derived values are methods, not rows. Tests work on local `Tuning`
   values only - never mutate the global in a test (parallel threads).
+- `pacing.rs` — frame pacing, headless and pure. `Refresh` measures the display's refresh period
+  (the median of the last 15 frame times, taken for the nominal rate within 2% of it: 59.94 Hz is
+  60; `None` before 8 frames and at a rate not in `NOMINAL_HZ`); `snap(dt, period, tolerance)` puts
+  a frame time on the nearest whole number of periods when it is within `SNAP_TOLERANCE` (5% of a
+  period) of it, so a wobbling vsync or a 59.94 Hz panel does not make a frame run no step or two;
+  `Refresh::pace` is both. `StepClock` is the play clock (`advance` the steps a frame pays for,
+  `reset`) and `alpha`, how far the frame stands into the next step, which `Game::pose_at` draws
+  at. On a display in step with the simulation - 30 frames in a row each a whole number of steps -
+  `alpha` is 1: drawing between steps shows the round a step late and buys nothing at 60 Hz. The
+  first uneven frame ends it (a hitch, the slowed end of a round; not a frame of no time). A clock
+  in step keeps half a step to a step and a half owed, so going in or out moves the picture by
+  half a step at most, never a whole one.
 - `math.rs` — the plain value types the simulation and the renderer share: `Vec2` (`Position` is its
   alias; positions, velocities and directions, the arithmetic written out component by component in
   the order raylib's `Vector2` performs it so seeded replays and the probe fixtures keep their
@@ -1521,6 +1542,23 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `draw_divider` draws one 2 px block in near-black over both, fading in over the first 8 px the
   halves part; `Zoom` presents the establishing shot's whole-field composite a second time through
   the second half's zoom (`present_zoom_half`, `draw_zoom_divider`).
+- `pose.rs` — render interpolation, headless and presentation only. `Pose` (position, hull and
+  turret angle, lift), `lerp` (straight line, shorter arc, `alpha` 1 the live pose bit for bit) and
+  `Smooth`, the state every `Tank`, `Shell`, `Bullet`, `Plasma`, `Missile`, `Grenade` and `Bong`
+  carries as `smooth`: `begin_step` (the pose a step starts from, called for everything by
+  `Game::update` first thing - it also drops the last frame's pose, so inside a step `drawn` is the
+  live pose), `cut` (a jump: `place_tank`, so a portal and the dev server's teleport, and a shot
+  through a portal), `show(current, alpha, jump_px, texel)` (what `Game::pose_at` runs: the pose
+  `alpha` of the way along the step, the live one for a thing with no past or a move past
+  `BODY_JUMP_PX`/`SHOT_JUMP_PX`, on a whole world pixel with the rest kept as `residual` when
+  `texel`) and `drawn(current)`, which answers what `show` worked out only if it ran for exactly
+  that live pose. So a round nobody posed - a thumbnail, a test, the lockstep, a replica (which has
+  its own interpolation, `net/interp.rs`, and is never posed) - draws as it stands. Painters read
+  `tank.drawn()` / `shell.drawn()` / `missile.shown_pos()`, and add `Tank::draw_shift` to a point
+  worked out from the live pose (a muzzle tell, EMP sparks); the y-sort, the culling, the debug
+  overlays, the HUD, the minimap, the off-screen arrows and the particle layer read the live pose.
+  Everything is shown one step back at `alpha` 0, shots included (no extrapolation). Nothing that
+  plays reads `smooth`: `determinism_tests::posing_the_round_for_a_frame_never_changes_the_replay`.
 - `canvas.rs` (docs/mapshot-prd.md) — the drawing surface the field's leaf draw fns (`ground`,
   `grass`, `obstacle`, `bong`, `pickup`, `tank` rings/hull/turret/modules, `damage_stage`, `track`,
   `blast::draw_scorch`, `decal::draw_decal`) are generic over: `Sheet` names a sprite sheet
@@ -1940,8 +1978,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`split_aims`/`entry`/`holds`), so neither half jumps; the split closes once the pair fits and the
   halves meet (`MERGE_PX`/`MERGE_SPEED`), chasing the shared centre with no dead zone or edge ease;
   a seat going down hands its half on without a cut; `FollowReport::second` is the second half's
-  camera. Tests: 24 in `follow::tests` (dead zone, lead cap, the box under a slow spring, the spring
-  at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, the restart glide, spectating, the couch).
+  camera. `Seats::of` reads each tank where the frame draws it before its texel anchor
+  (`seat_anchor`), so the view and the tank share one pose. **`TexelLock`**: a followed tank is
+  drawn on a whole texel while the view's corner is presented in device pixels, so a view riding
+  with its tank would show the tank shaking a texel against the screen; the lock takes the tank's
+  residual off the corner, by the share of the tank's motion the view's own is (all of it riding
+  along, none in the dead zone or against the field's edge, eased over `TEXEL_LOCK_SECONDS`), so
+  the tank holds its place and the ground passes in whole texels. One per view (`app.rs` keeps the
+  first half's and the split's second); a shared, spectating or cut view gets its exact corner.
+  Tests: 27 in `follow::tests` (dead zone, lead cap, the box under a slow spring, the spring
+  at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, the restart glide, spectating, the couch,
+  the texel lock).
 - `establish.rs` (docs/large-maps-follow-camera.md §6) — the establishing shot: a local round on a
   field map whose view shows part of it, opening behind its mission banner, on a field no more than
   `MAX_TEXELS` (4096) a side (and on a phone or a tablet no more than `EMBEDDED_MAX_AREA`, 2048 x
@@ -2324,7 +2371,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     finished went, which is `mode::Session`'s cue to hand the window back to the lobby) and
     `status()`, the one line `PlayChrome::status` puts over the field *while the round runs*;
     everything before it is `lobby.rs`'s. The intent is paced at one packet per `PHYSICS_FIXED_DT`
-    of real time, `app::StepClock`'s discipline: a frame that covered several ticks sends one packet
+    of real time, `pacing::StepClock`'s discipline: a frame that covered several ticks sends one packet
     per tick up to `SEND_CATCH_UP_TICKS` (a 30 fps phone still sends sixty a second, or the room
     starves every other tick and the sandbox falls behind the hull it moved), and a tap on a frame
     that sends nothing is carried into the next packet. Nothing is sent unless the client's phase is

@@ -72,6 +72,10 @@ pub struct Missile {
     pub stage: MissileStage,
     /// The point on the ground under the missile.
     pub position: Position,
+    /// The position a frame between two steps draws this at (`pose.rs`).
+    /// Presentation only: the drawing reads it through `drawn`, and
+    /// nothing that plays reads it at all.
+    pub smooth: crate::pose::Smooth,
     /// Height above `position` (px): 0 on the ground, `missile_apex_height`
     /// at the top of the climb.
     pub height: f32,
@@ -154,6 +158,7 @@ impl Missile {
             id: 0,
             stage: MissileStage::Climb,
             position: origin,
+            smooth: crate::pose::Smooth::default(),
             height: 0.0,
             dir,
             facing,
@@ -391,6 +396,30 @@ impl Missile {
     pub fn tail(&self) -> Position {
         let back = MISSILE_TEXTURE_SIZE * MISSILE_SCALE * self.draw_scale() * 0.4;
         self.draw_pos() - self.facing * back
+    }
+
+    /// The ground point and the height a frame draws this at: between
+    /// the last two steps when the frame loop asked for that
+    /// (`Game::pose_at`), else where it is.
+    pub fn drawn(&self) -> crate::pose::Pose {
+        self.smooth.drawn(self.pose())
+    }
+
+    /// The ground point and the height the simulation has this at.
+    pub fn pose(&self) -> crate::pose::Pose {
+        crate::pose::Pose { lift: self.height, ..crate::pose::Pose::at(self.position) }
+    }
+
+    /// `draw_pos` for the frame's drawn pose.
+    pub fn shown_pos(&self) -> Position {
+        let pose = self.drawn();
+        Position::new(pose.position.x, pose.position.y - pose.lift)
+    }
+
+    /// `tail` for the frame's drawn pose.
+    pub fn shown_tail(&self) -> Position {
+        let back = MISSILE_TEXTURE_SIZE * MISSILE_SCALE * self.draw_scale() * 0.4;
+        self.shown_pos() - self.facing * back
     }
 
     /// Nearer the camera at the top of the climb, so drawn bigger.
