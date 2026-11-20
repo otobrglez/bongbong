@@ -163,6 +163,14 @@ pub(super) struct EngageCtx<'a> {
     pub reachable: &'a dyn Fn(Position, Position) -> bool,
     /// Whether a shot from the first point reaches the second unobstructed.
     pub line_of_sight: &'a dyn Fn(Position, Position) -> bool,
+    /// The hulls standing where they are - a wreck, an enemy the tree
+    /// stood still (`Ai::stood`) - as (entity, position, radius): a slot
+    /// under one is no slot for a `displaced` tank (`engage_squat_px`).
+    pub standing: &'a [(Entity, Position, f32)],
+    /// The tanks that have waited behind a parked ally past their
+    /// patience (`Ai::displaced`): each is handed a slot no hull stands
+    /// on, in place of the one it was waiting to reach.
+    pub displaced: &'a [Entity],
 }
 
 /// Slot assignment with memory: a tank keeps the slot it already holds for
@@ -245,6 +253,17 @@ impl EngageRing {
                     rejected.off_map += 1;
                     return None;
                 };
+                // Another hull stands on it, and this tank has waited
+                // behind that hull long enough: driving for the slot only
+                // drives into the hull, for as long as it stands there.
+                let squat = tuning().engage_squat_px;
+                if squat > 0.0
+                    && ctx.displaced.contains(&entity)
+                    && ctx.standing.iter().any(|&(other, at, radius)| other != entity && at.distance_to(candidate) < radius + squat)
+                {
+                    rejected.claimed += 1;
+                    return None;
+                }
                 if !(ctx.reachable)(my_pos, candidate) {
                     rejected.unreachable += 1;
                     return None;
@@ -391,11 +410,40 @@ mod tests {
         assert_eq!(EngageSlot { axis: 1, rank: 0, side: -1 }.axis_name(), "right");
     }
 
+    /// A tank that has waited behind the ally standing on its slot is
+    /// handed another: west of the seat, the other slot on its axis. One
+    /// that has not waited keeps the slot, a tank standing on its own
+    /// keeps it, and with `engage_squat_px` at 0 the slot is handed out
+    /// whatever stands on it.
+    #[cfg(feature = "dev-tools")]
+    #[test]
+    fn a_slot_under_a_standing_hull_goes_to_nobody_else() {
+        let (player, w, h, margin) = open_field();
+        let yes = |_: Position, _: Position| true;
+        let west = (entity(1), Position::new(200.0, 350.0));
+        let slots_for = |squat: f32, standing: &[(Entity, Position, f32)], displaced: &[Entity]| {
+            let table = std::sync::Arc::new(crate::tuning::Tuning { engage_squat_px: squat, ..crate::tuning::Tuning::DEFAULT });
+            crate::tuning::in_force(Some(&table), || {
+                let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes, standing, displaced };
+                assign(&mut EngageRing::default(), &[west], &ctx).target(west.0).unwrap()
+            })
+        };
+        let slots = |squat: f32, standing: &[(Entity, Position, f32)]| slots_for(squat, standing, &[west.0]);
+        let free = slots(8.0, &[]);
+        let ally = [(entity(2), free, 20.0)];
+        assert_eq!(slots(0.0, &ally), free, "off, the slot under the ally is still handed out");
+        let moved = slots(8.0, &ally);
+        assert_ne!(moved, free);
+        assert!(moved.x < player.x && (moved.y - free.y).abs() > 20.0, "the other slot west of the seat: {moved:?} for {free:?}");
+        assert_eq!(slots(8.0, &[(west.0, free, 20.0)]), free, "a tank standing on its own slot keeps it");
+        assert_eq!(slots_for(8.0, &ally, &[]), free, "and one that has not waited behind the ally keeps heading for it");
+    }
+
     #[test]
     fn opposite_tanks_get_distinct_slots_on_their_own_axes() {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes, standing: &[], displaced: &[] };
         let mut ring = EngageRing::default();
         let west = (entity(1), Position::new(200.0, 360.0));
         let east = (entity(2), Position::new(1100.0, 360.0));
@@ -427,7 +475,7 @@ mod tests {
         let (half_w, half_h) = tuning().sight_box_half_px();
         let ring = tuning().engage_ring_radius();
         assert!(ring > half_h - OBSTACLE_GRID_SIZE * 0.5, "the defaults this test is about: the ring reaches past the box's half height");
-        let seat = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
+        let seat = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes, standing: &[], displaced: &[] };
         let bong = EngageCtx { sight_box: None, ..seat };
         for i in 0..SLOT_COUNT {
             let slot = EngageSlot::from_index(i);
@@ -459,7 +507,7 @@ mod tests {
         let (centre, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let herd = 128.0;
-        let ctx = EngageCtx { target_pos: centre, width: w, height: h, margin, sight_box: seat_box(), herd: Some(herd), reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: centre, width: w, height: h, margin, sight_box: seat_box(), herd: Some(herd), reachable: &yes, line_of_sight: &yes, standing: &[], displaced: &[] };
         let plain = EngageCtx { herd: None, ..ctx };
         assert!((tuning().engage_ring_radius() - herd).abs() > 1.0, "the defaults this test is about: the herd is not the ring");
         for i in 0..SLOT_COUNT {
@@ -484,7 +532,7 @@ mod tests {
     fn a_held_slot_is_kept_while_it_stays_valid() {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes, standing: &[], displaced: &[] };
         let mut ring = EngageRing::default();
         let tank = entity(7);
         let first = assign(&mut ring, &[(tank, Position::new(200.0, 300.0))], &ctx);
@@ -501,7 +549,7 @@ mod tests {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let no = |_: Position, _: Position| false;
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &no, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &no, line_of_sight: &yes, standing: &[], displaced: &[] };
         let mut ring = EngageRing::default();
         let report = assign(&mut ring, &[(entity(1), Position::new(200.0, 360.0))], &ctx);
         assert!(report.target(entity(1)).is_none());
@@ -517,7 +565,7 @@ mod tests {
         let (_, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let player = Position::new(60.0, 60.0);
-        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, sight_box: seat_box(), herd: None, reachable: &yes, line_of_sight: &yes, standing: &[], displaced: &[] };
         let mut ring = EngageRing::default();
         // From the north-west the tank tries the up and left axes first -
         // both fall outside the battlefield here.

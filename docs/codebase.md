@@ -723,7 +723,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     (the roll, the funnel, the impact's knock, bong hop) and `ram` (impact speed from the bodies'
     *real* velocities; enemy pairs walked sorted i<j with a distance cull so the RNG draw order is
     fixed; a seat's ram alerts the enemy, two enemies bumping alert nobody) stand on them.
-  - `engage.rs` — the engagement-slot ring (`EngageRing`; a seat ring's firing slots stand half a
+  - `engage.rs` — the engagement-slot ring (`EngageRing`; a slot a standing hull is within `engage_squat_px` of goes to no displaced tank - `EngageCtx::standing`, `displaced`; a seat ring's firing slots stand half a
     cell inside the seat's sight box, `EngageCtx::sight_box` - north and south at 224 px): world
     access as closures, reachability from one `Grid::components` flood fill per frame;
     `EngageReport` feeds the overlay, the snapshot and the AI event diff (docs/dev-server-design.md
@@ -1040,7 +1040,24 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   a point kept while out of every danger and walkable), every steering target and every pickup
   headed for is kept outside (`out_of_danger`, `seek`, `nearest_pickup`; a seat at its own danger's
   middle is waited on from a `post`, `Ai::kept_out` a probe hold) and the seats' dangers are priced
-  on the route grid (`enemy_danger_route_cost`). `AiSnapshot` is the memory as plain values. `bt.rs`
+  on the route grid (`enemy_danger_route_cost`). The enemies' road manners (BB-179, each behind its
+  row): in an arena a route keeps to the straightest of the equal ones (`ai_arena_straight_routes`,
+  `Grid::route_ahead_straight`); a wander picks again on arriving or after
+  `enemy_wander_patience_seconds`, and off a leash prefers a waypoint ahead; the aim leads a moving
+  seat by `enemy_lead_by_tier` (`Ai::seat_velocity`); a tank whose way a parked friend blocks asks
+  for a route round it (`Detour`, `KeepOff::and`) and, with none, queues `enemy_queue_gap_px` behind
+  it (`Ai::queued`, a probe hold), asking the ring for another slot after
+  `enemy_queue_patience_seconds` (`Ai::displaced`); each gun has a `FireProfile` (range, interval,
+  whether it needs lining up, the distance its own blast is safe from - `enemy_gun_range`,
+  `enemy_gun_interval`), and `Brain::friendly_hold` holds fire on a line a friend's hull or the
+  shot's blast would reach, always for its own bong (`Ai::own_bong`) and for
+  `enemy_parked_hold_seconds` for a parked friend (`Ai::held_fire`, a probe hold); a flight
+  (`Brain::flees`) ends after `enemy_flee_seconds`, is not started with the seat inside
+  `enemy_cornered_px`, fires from its refuge when the seat lines up (`enemy_refuge_fires`) and
+  prefers a refuge the nav grid hides from the seat (`enemy_refuge_cover`: read off the nav grid,
+  so deep water counts as cover though it stops no shot); a crate is sought only with a way to it
+  (`Brain::crate_in_reach`), and a run at one is measured by the route steered by
+  (`RouteAhead::left`, `Ai::route_left`). `AiSnapshot` is the memory as plain values. `bt.rs`
   is a generic tree whose `tick_traced` names the last action. `pathfind.rs` is one `Grid` with two
   routers behind `next_step`: A* per query, and a **flow field** per shared target (`add_field`: a
   Dijkstra outward from the goal, every enemy then reads its cheapest neighbour - kept open in a

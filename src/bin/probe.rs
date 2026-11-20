@@ -1355,6 +1355,8 @@ const HOLDS: &[(&str, fn(&TankSnapshot) -> bool)] = &[
     ("tell", |t| t.tell),
     ("skid", |t| t.skidding),
     ("kept out", |t| t.kept_out),
+    ("queued", |t| t.queued),
+    ("held fire", |t| t.held_fire),
     ("sheltering", |t| t.sheltering),
     ("charge", |t| t.charging),
     ("air", |t| t.air_hold),
