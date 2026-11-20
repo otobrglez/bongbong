@@ -147,10 +147,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use crate::air_support::AirStage;
 use crate::bullet::BulletState;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    MissileState, ShotKind, ShotState, Snapshot, TankState, dequantise_heading, dequantise_velocity, quantise_pos,
+    AirState, MissileState, ShotKind, ShotState, Snapshot, TankState, dequantise_heading, dequantise_velocity, quantise_pos,
 };
 use crate::plasma::PlasmaState;
 use crate::shell::ShellState;
@@ -1512,13 +1513,17 @@ from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
             drone.heading = lerp_heading(drone.heading, next.heading, alpha);
         }
     }
-    // An aircraft glides like a drone; a call holds.
+    // An aircraft glides like a drone, rolling from one bank to the next;
+    // its stage and its ammunition are the near end's, facts about the
+    // tick. A call holds.
+    let flying = |a: &AirState| AirStage::from_code(a.stage).is_some();
     for craft in &mut out.air {
-        if let Some(next) = to.air.iter().find(|a| a.id == craft.id && a.stage >= 2 && craft.stage >= 2) {
+        if let Some(next) = to.air.iter().find(|a| a.id == craft.id && flying(a) && flying(craft)) {
             craft.x = lerp(craft.x, next.x, alpha);
             craft.y = lerp(craft.y, next.y, alpha);
             craft.height = lerp(craft.height, next.height, alpha);
             craft.heading = lerp_heading(craft.heading, next.heading, alpha);
+            craft.bank = lerp(craft.bank as i16, next.bank as i16, alpha) as i8;
         }
     }
     for bong in &mut out.bongs {
@@ -1844,6 +1849,40 @@ mod tests {
         let m = frame.snapshot.missiles[0];
         assert!((m.x - (1_120 + 120)).abs() <= 2, "another 30 px on: {m:?}");
         assert_eq!(m.y, 1_000);
+    }
+
+    /// An aircraft between two snapshots is halfway along, halfway round
+    /// and halfway into its bank, in every stage it flies; its stage and
+    /// its ammunition are the near end's. A call that became an aircraft
+    /// is not blended from the call's zeroes.
+    #[test]
+    fn an_aircraft_glides_and_rolls_between_snapshots() {
+        use crate::air_support::AIR_COUNTING;
+        let craft = |stage: u8, x: i16, heading: u8, bank: i8, ammo: u8| AirState { id: 9, seat: 0, sortie: 1, stage, arrive: 0, x, y: 1_000, height: 380, heading, bank, ammo };
+        for stage in AirStage::ALL {
+            let mut a = snapshot(0);
+            a.air = vec![craft(stage.code(), 1_000, 250, -40, 3)];
+            let mut b = snapshot(3);
+            b.air = vec![craft(AirStage::Egress.code(), 1_120, 6, 100, 2)];
+            let mut interp = Interpolator::default();
+            interp.accept(a, exact(0));
+            interp.accept(b, exact(3));
+            let frame = interp.sample(at(&interp, 25.0)).expect("a frame");
+            let c = frame.snapshot.air[0];
+            assert!((c.x - 1_060).abs() <= 1, "{stage:?}, halfway along: {c:?}");
+            assert_eq!(c.heading, 0, "{stage:?}, halfway round the short way: {c:?}");
+            assert!((c.bank - 30).abs() <= 1, "{stage:?}, halfway into the bank: {c:?}");
+            assert_eq!((c.stage, c.ammo), (stage.code(), 3), "{stage:?}: the near end's facts");
+        }
+        let mut a = snapshot(0);
+        a.air = vec![AirState { id: 9, seat: 0, sortie: 1, stage: AIR_COUNTING, arrive: 2, ..AirState::default() }];
+        let mut b = snapshot(3);
+        b.air = vec![craft(AirStage::Inbound.code(), 1_120, 64, 100, 2)];
+        let mut interp = Interpolator::default();
+        interp.accept(a.clone(), exact(0));
+        interp.accept(b, exact(3));
+        let frame = interp.sample(at(&interp, 25.0)).expect("a frame");
+        assert_eq!(frame.snapshot.air, a.air, "a call holds until its aircraft's tick");
     }
 
     /// A hull that moved further than it could have driven between two

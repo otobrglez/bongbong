@@ -2,34 +2,35 @@
 //! one per promised rule, on the default 34 x 17 field with the seat at
 //! (96, 192) facing east, the crates and enemies placed by hand. Tests
 //! cannot touch the global tuning table, so every number is read off the
-//! defaults.
+//! defaults. Here: the call, the queue, the shoot-down and the round set
+//! up that `air_heli_tests.rs` and `air_jet_tests.rs` share.
 
 use super::*;
 use crate::ai::Role;
 use crate::air::{AirKey, AirStrike};
-use crate::air_support::{AirStage, Sortie};
+use crate::air_support::Sortie;
 
-const W: f32 = 1088.0;
-const H: f32 = 544.0;
-const DT: f32 = 1.0 / 60.0;
+pub(super) const W: f32 = 1088.0;
+pub(super) const H: f32 = 544.0;
+pub(super) const DT: f32 = 1.0 / 60.0;
 
 /// The seat's pivot.
-const SEAT: Position = Position::new(96.0, 192.0);
+pub(super) const SEAT: Position = Position::new(96.0, 192.0);
 
 /// Six cells east of the seat: inside its sight box.
-const NEAR: Position = Position::new(288.0, 192.0);
+pub(super) const NEAR: Position = Position::new(288.0, 192.0);
 
 /// Across the field: outside the seat's sight box.
-const FAR: Position = Position::new(1000.0, 192.0);
+pub(super) const FAR: Position = Position::new(1000.0, 192.0);
 
 /// A round on an open field, nobody shielded, no banner, the seat facing
 /// east carrying the rod.
-fn round() -> Game {
+pub(super) fn round() -> Game {
     round_with("")
 }
 
 /// `round` on a map with `extra` cells too.
-fn round_with(extra: &str) -> Game {
+pub(super) fn round_with(extra: &str) -> Game {
     let mut game = Game::default();
     game.seed_override = Some(7);
     game.show_intro = false;
@@ -51,7 +52,7 @@ fn round_with(extra: &str) -> Game {
 }
 
 /// A parked enemy at `at`: it cannot drive or shoot, and has no shield.
-fn parked(game: &mut Game, at: Position) -> Entity {
+pub(super) fn parked(game: &mut Game, at: Position) -> Entity {
     let slot = game.debug_spawn_enemy(at, Some(1), Some(Role::Player)).expect("spawns");
     let entity = game.tank_entity_by_slot(slot).expect("exists");
     with_tank_mut(&game.world, entity, |t| {
@@ -65,14 +66,14 @@ fn parked(game: &mut Game, at: Position) -> Entity {
 }
 
 /// An air crate of `sortie` at `at`.
-fn air_crate(game: &mut Game, sortie: Sortie, at: Position) {
+pub(super) fn air_crate(game: &mut Game, sortie: Sortie, at: Position) {
     game.world.spawn((Pickup::placed(sortie.pickup(), at),));
 }
 
 /// One tick with every enemy's gun held, the towers' too: a parked
 /// enemy's shells come back over a 15 s count, and the seat must take
 /// nothing but what air support does.
-fn tick(game: &mut Game) {
+pub(super) fn tick(game: &mut Game) {
     for (tank, _) in game.world.query_mut::<(&mut Tank, &crate::ai::Ai)>() {
         tank.fire_cooldown = 1.0;
     }
@@ -84,7 +85,7 @@ fn tick(game: &mut Game) {
     game.update(Input::default(), DT, W, H);
 }
 
-fn idle(game: &mut Game, ticks: u32) -> Vec<Event> {
+pub(super) fn idle(game: &mut Game, ticks: u32) -> Vec<Event> {
     let mut seen = Vec::new();
     for _ in 0..ticks {
         tick(game);
@@ -94,7 +95,7 @@ fn idle(game: &mut Game, ticks: u32) -> Vec<Event> {
 }
 
 /// Step until an `AirSupportLeft`, at most `cap` ticks: every event.
-fn until_left(game: &mut Game, cap: u32) -> Vec<Event> {
+pub(super) fn until_left(game: &mut Game, cap: u32) -> Vec<Event> {
     let mut seen = Vec::new();
     for _ in 0..cap {
         tick(game);
@@ -108,19 +109,19 @@ fn until_left(game: &mut Game, cap: u32) -> Vec<Event> {
     panic!("air support never left in {cap} ticks");
 }
 
-fn delay_ticks() -> u32 {
+pub(super) fn delay_ticks() -> u32 {
     crate::tank::ticks_of(tuning().air_support_delay_seconds)
 }
 
-fn seat(game: &Game) -> Entity {
+pub(super) fn seat(game: &Game) -> Entity {
     game.player().expect("a seat")
 }
 
-fn damage(game: &Game, e: Entity) -> f32 {
+pub(super) fn damage(game: &Game, e: Entity) -> f32 {
     with_tank(&game.world, e, |t| t.damage)
 }
 
-fn count<F: Fn(&Event) -> bool>(events: &[Event], f: F) -> usize {
+pub(super) fn count<F: Fn(&Event) -> bool>(events: &[Event], f: F) -> usize {
     events.iter().filter(|e| f(e)).count()
 }
 
@@ -155,77 +156,6 @@ fn the_crate_calls_after_the_delay_and_keeps_the_special() {
     assert_eq!(count(&after, |e| matches!(e, Event::AirSupportArrived { armed: true, .. })), 1);
     assert_eq!(game.aircraft().len(), 1);
     assert!(game.air_calls().is_empty());
-}
-
-/// The jet's run hurts the enemies inside the seat's sight box and leaves
-/// the one outside it, the seat and itself untouched; a full-health tank
-/// on its aim point is wrecked.
-#[test]
-fn the_jet_wrecks_what_is_in_the_box_and_spares_the_rest() {
-    let mut game = round();
-    let near = parked(&mut game, NEAR);
-    let far = parked(&mut game, FAR);
-    air_crate(&mut game, Sortie::Jet, SEAT);
-    let seen = until_left(&mut game, delay_ticks() + 1200);
-    assert_eq!(count(&seen, |e| matches!(e, Event::AirStrike { bomb: true, .. })), 2);
-    assert_eq!(count(&seen, |e| matches!(e, Event::AirStrike { bomb: false, .. })), tuning().air_jet_gun_bursts as usize);
-    assert!(with_tank(&game.world, near, |t| t.is_wreck()), "the tank on the aim point is wrecked");
-    assert_eq!(damage(&game, far), 0.0, "outside the box is untouched");
-    assert_eq!(damage(&game, seat(&game)), 0.0, "no friendly fire");
-    assert!(game.aircraft().is_empty());
-}
-
-/// The heli flies in, hovers, fires its salvos at the enemy in the box and
-/// leaves; the seat is untouched and the enemy outside the box too.
-#[test]
-fn the_heli_fires_its_salvos_and_leaves() {
-    let mut game = round();
-    let near = parked(&mut game, NEAR);
-    let far = parked(&mut game, FAR);
-    air_crate(&mut game, Sortie::Heli, SEAT);
-    let mut stages = std::collections::BTreeSet::new();
-    let mut seen = idle(&mut game, delay_ticks() + 1);
-    let mut hit = false;
-    for _ in 0..1800 {
-        tick(&mut game);
-        // Patched up between salvos: the heli goes home early from a box
-        // with nothing left to shoot at, and this is about a full attack.
-        hit |= damage(&game, near) > 0.0;
-        with_tank_mut(&game.world, near, |t| t.damage = 0.0);
-        let events = game.events().to_vec();
-        if let Some(a) = game.aircraft().first() {
-            stages.insert(a.stage.code());
-        }
-        let left = events.iter().any(|e| matches!(e, Event::AirSupportLeft { .. }));
-        seen.extend(events);
-        if left {
-            break;
-        }
-    }
-    assert_eq!(stages.into_iter().collect::<Vec<_>>(), vec![AirStage::Inbound.code(), AirStage::Attack.code(), AirStage::Egress.code()]);
-    assert_eq!(count(&seen, |e| matches!(e, Event::AirSalvo { .. })), tuning().air_heli_salvos as usize);
-    assert!(count(&seen, |e| matches!(e, Event::AirSupportLeft { .. })) == 1, "it left");
-    // Its last rockets may still be in the air when it leaves.
-    idle(&mut game, 240);
-    assert!(hit || damage(&game, near) > 0.0, "the enemy in the box was hit");
-    assert_eq!(damage(&game, far), 0.0, "outside the box is untouched");
-    assert_eq!(damage(&game, seat(&game)), 0.0, "no friendly fire");
-}
-
-/// With no enemy in the seat's sight box the aircraft comes, passes over
-/// the seat and leaves without firing: the crate is spent.
-#[test]
-fn with_no_enemy_in_the_box_it_fires_nothing() {
-    for sortie in [Sortie::Heli, Sortie::Jet] {
-        let mut game = round();
-        let far = parked(&mut game, FAR);
-        air_crate(&mut game, sortie, SEAT);
-        let seen = until_left(&mut game, delay_ticks() + 1800);
-        assert_eq!(count(&seen, |e| matches!(e, Event::AirSupportArrived { armed: false, .. })), 1, "{sortie:?}");
-        assert_eq!(count(&seen, |e| matches!(e, Event::AirStrike { .. } | Event::AirSalvo { .. })), 0, "{sortie:?}");
-        assert_eq!(damage(&game, far), 0.0);
-        assert!(game.air_calls().is_empty());
-    }
 }
 
 /// A second crate while one is counting queues a second sortie: it waits,
@@ -296,79 +226,13 @@ fn a_sortie_replays_bit_for_bit() {
     assert_eq!(run(), run());
 }
 
-/// The jet fires only over the field: every burst and bomb comes on a tick
-/// its ground point is inside it, and none on the tick it arrives.
-#[test]
-fn the_jet_fires_only_over_the_field() {
-    for (seat_at, enemy_at) in [(SEAT, NEAR), (Position::new(96.0, 64.0), Position::new(200.0, 40.0)), (Position::new(990.0, 480.0), Position::new(900.0, 500.0))] {
-        let mut game = round();
-        let seat = seat(&game);
-        game.place_tank(seat, seat_at, Some(90.0)).expect("placed");
-        parked(&mut game, enemy_at);
-        air_crate(&mut game, Sortie::Jet, seat_at);
-        let mut strikes = 0;
-        for _ in 0..delay_ticks() + 1200 {
-            tick(&mut game);
-            let events = game.events().to_vec();
-            let arrived = events.iter().any(|e| matches!(e, Event::AirSupportArrived { .. }));
-            for e in &events {
-                if matches!(e, Event::AirStrike { .. }) {
-                    strikes += 1;
-                    assert!(!arrived, "no strike on the tick it arrives");
-                    let jet = game.aircraft().first().copied().expect("the jet is up");
-                    assert!(jet.ground.x >= 0.0 && jet.ground.x <= W && jet.ground.y >= 0.0 && jet.ground.y <= H, "fired off the field at {:?}", jet.ground);
-                }
-            }
-            if events.iter().any(|e| matches!(e, Event::AirSupportLeft { .. })) {
-                break;
-            }
-        }
-        assert_eq!(strikes, tuning().air_jet_gun_bursts as usize + 2, "seat at {seat_at:?}");
-    }
-}
-
 /// The tower standing on map cell `cell`: whether it still stands and its
 /// health.
-fn tower_at(game: &Game, cell: (i32, i32)) -> (bool, f32) {
+pub(super) fn tower_at(game: &Game, cell: (i32, i32)) -> (bool, f32) {
     // A dead tower leaves `Game::towers` for its ruin.
     let Some(tower) = game.towers.get(&cell) else { return (false, 0.0) };
     let o = game.world.get::<&crate::obstacle::Obstacle>(tower.entity).expect("its tile");
     (!o.destroyed, o.health)
-}
-
-/// An enemy tower is a target like an enemy tank: with only a gun tower in
-/// the seat's sight box the jet comes armed and aims its run on it, taking
-/// most of its health (a bomb lands either side of the aim point, so a
-/// tower's 150 is more than one pass's two bombs).
-#[test]
-fn the_jet_aims_its_run_on_an_enemy_tower_in_the_box() {
-    let mut game = round_with("cells.\"9,6\" = { kind = \"gun_tower\", side = \"enemy\" }\n");
-    // An enemy tank outside the box keeps the round going once the tower falls.
-    parked(&mut game, FAR);
-    let (standing, before) = tower_at(&game, (9, 6));
-    assert!(standing);
-    air_crate(&mut game, Sortie::Jet, SEAT);
-    let seen = until_left(&mut game, delay_ticks() + 1200);
-    assert_eq!(count(&seen, |e| matches!(e, Event::AirSupportArrived { armed: true, .. })), 1, "armed for the tower");
-    assert_eq!(count(&seen, |e| matches!(e, Event::AirStrike { bomb: true, .. })), 2);
-    let (standing, after) = tower_at(&game, (9, 6));
-    assert!(!standing || after < before * 0.5, "the tower on the aim point lost most of its health: {before} -> {after}");
-}
-
-/// The heli puts its salvos into an enemy tower when it is the only target
-/// in the box: its sixteen rockets bring a tesla down.
-#[test]
-fn the_heli_attacks_an_enemy_tower_in_the_box() {
-    let mut game = round_with("cells.\"9,6\" = { kind = \"tesla\", side = \"enemy\" }\n");
-    // An enemy tank outside the box keeps the round going once the tower falls.
-    parked(&mut game, FAR);
-    let (_, before) = tower_at(&game, (9, 6));
-    air_crate(&mut game, Sortie::Heli, SEAT);
-    let seen = until_left(&mut game, delay_ticks() + 1800);
-    assert_eq!(count(&seen, |e| matches!(e, Event::AirSalvo { .. })), tuning().air_heli_salvos as usize);
-    idle(&mut game, 240);
-    let (standing, after) = tower_at(&game, (9, 6));
-    assert!(!standing, "the tesla is down: {before} -> {after}");
 }
 
 /// The seat's own towers are never a target: with only a player tower in
@@ -382,4 +246,32 @@ fn a_players_own_tower_is_no_target() {
     let seen = until_left(&mut game, delay_ticks() + 1200);
     assert_eq!(count(&seen, |e| matches!(e, Event::AirSupportArrived { armed: false, .. })), 1);
     assert_eq!(count(&seen, |e| matches!(e, Event::AirStrike { .. })), 0);
+}
+
+/// An aircraft in the air is on the field's picture (`Game::paint_field`),
+/// which is a headless round's screenshot: its sprite is drawn where it
+/// flies.
+#[test]
+fn the_field_painter_draws_what_flies() {
+    use crate::canvas::{CpuCanvas, Pixels, Sheet};
+    use crate::math::Color;
+    let cell = crate::air_support::AIRCRAFT_CELL as usize;
+    let mut game = round();
+    parked(&mut game, FAR);
+    air_crate(&mut game, Sortie::Heli, SEAT);
+    idle(&mut game, delay_ticks() + 240);
+    let heli = game.aircraft().first().copied().expect("the heli is up");
+    let paint = |sheet: bool| {
+        let mut canvas = CpuCanvas::blank(W as usize, H as usize);
+        if sheet {
+            canvas.insert_sheet(Sheet::Aircraft, Pixels::filled(4 * cell, cell, Color::BLACK));
+        }
+        game.paint_field(&mut canvas, crate::game::PaintOptions { locate_cue: false });
+        canvas
+    };
+    let (with, without) = (paint(true), paint(false));
+    let at = heli.drawn();
+    assert_eq!(with.pixel(at.x as usize, at.y as usize), Color::BLACK, "the heli at {at:?}");
+    assert_ne!(without.pixel(at.x as usize, at.y as usize), Color::BLACK);
+    assert_ne!(with.hash(), without.hash());
 }

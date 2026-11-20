@@ -653,20 +653,26 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     dragging more allies than seats; `ai::PullSense`: brace or drive across). No RNG of its own.
     Tests: `well_tests.rs`.
   - `air_support.rs` (docs/air-support.md) — air support's world half (`air_support.rs` at the
-    top is the call, the aircraft, their flight and drawing): `call_air_support` from
+    top is the call, the aircraft and their drawing; `air_support/heli.rs` and `jet.rs` how each
+    flies): `call_air_support` from
     `pickup_phase` puts an `AirCall` on `Game::air_calls` (`Event::AirSupportCalled`; one sortie of
     a seat at a time, a call made while another counts or flies waits with no arrival and
     `start_next_call` starts it once that one is gone); `air_support_phase` (before
     `spawn_pending`, and with `live` false on the end screen) brings in each due call's `Aircraft`
-    - a hecs component, no body, no nav - from the edge `entry_edge` hashes off its id, aimed at the
-    enemy tanks and standing enemy towers inside the seat's sight box (`air_targets_near`: nearest,
-    a tank before a tower at the same distance, then slot or cell), flies it,
-    and lets it fire: the heli's salvos are seeker missiles (`f.pending_missiles`, every missile
+    - a hecs component, no body, no nav - from the edge `entry_edge` hashes off its id
+    (`air_arrivals`), then for each aircraft by id builds its `AirView` - its seat's position,
+    velocity and wreck (`air_anchor`), and what it may attack this step, the enemy tanks and
+    standing enemy towers inside the seat's sight box (`air_marks`: nearest, a tank before a tower
+    at the same distance, then slot or cell, each with a `MarkKey` and its velocity) -, steps it
+    (`Aircraft::step`) and carries out its `AirAct`s, dropped on the end screen: the heli's salvos
+    are seeker missiles (`air_salvo`, `f.pending_missiles`, every missile
     rule kept), the jet's cannon bursts and bombs `air_strike` (a `Game::blast`, then
-    `air_strike_show`, which a replica plays off `Event::AirStrike`). The heli is an air target
+    `air_strike_show`, which a replica plays off `Event::AirStrike`). An aircraft `gone` off the
+    field is despawned (`Event::AirSupportLeft`). The heli is an air target
     (`AirKey::Aircraft`; `strike_aircraft` via `strike_air`, `air_heli_hits` bullets or any other
     strike, `Event::AircraftDowned`). No RNG but the blasts' damage rolls. Tests:
-    `air_support_tests.rs`.
+    `air_support_tests.rs` (the call, the queue, the shoot-down), `air_heli_tests.rs`,
+    `air_jet_tests.rs`.
   - `hits.rs` — **the only projectile hit test**: `Terrain` (per-frame snapshot of seam-closed
     boxes, bongs, walls) and `Terrain::sweep_rewound`, a nearest-entry segment-vs-box sweep over the
     whole frame's movement (wrecks skipped). A player's shot is tested against an enemy's hull and
@@ -1573,15 +1579,32 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   or within three seconds of one `/pull`. The `well` tuning group.
 
 - `air_support.rs` (docs/air-support.md, docs/AIRCRAFT_SPEC.md) — air support, headless: `Sortie`
-  (Heli, Jet; `of` a crate, `pickup`, `code`), `AirCall` (`left`), `Aircraft` (`AirStage` Inbound,
-  Attack, Egress; `advance` - the heli to its hover and out the way it came, the jet straight along
-  its run counting `flown` -, `gone`, `as_target`, `drawn`), the geometry (`entry_edge`,
-  `entry_point`, `hover_point`, `run_mark`, `gun_burst`, `bombs`) and the drawing on any canvas off
-  `Sheet::Aircraft` (`paint_shadows` after the floor, `paint_aircraft` over everything standing,
-  the rotor a blur over the mast). The `air_support` tuning group. Online the calls and the aircraft
+  (Heli, Jet; `of` a crate, `pickup`, `code`, `ammo`), `AirCall` (`left`), `Aircraft` (`AirStage`
+  Inbound, Attack, Egress, Escort, Loiter; ground point, height, heading, velocity, `bank`, `ammo`
+  - the heli's salvos, the jet's passes -, and each flight's own `HeliState`/`JetState`; `arrive`,
+  `enter`, `step`, `gone`, `as_target`, `drawn`), the door between an aircraft and the world -
+  `AirView` in (its seat, the `AirMark`s it may attack, the field, `live`), `AirAct` out (`Salvo`,
+  `Strike`): **an aircraft reads the world only through its view and changes it only through its
+  acts** -, the geometry (`entry_edge`, `entry_point`, `jet_edge`, `unit`, `turn_toward`) and the
+  drawing on any canvas off `Sheet::Aircraft` (`paint_shadows` after the floor, `paint_aircraft`
+  over everything standing, the rotor a blur over the mast; the jet's cell foreshortened across
+  its wings by its bank, `banked_span`, in whole 2 px steps, no bank drawing the cell as it is).
+  - `air_support/heli.rs` — the companion: to its seat's tank, then on station
+    `air_heli_escort_px` from it as it drives (its velocity the tank's plus what closes the gap,
+    held to a speed and an acceleration), on the nearest target's side with one in view, no nearer
+    any target than `air_heli_standoff_px`; a salvo every `air_heli_salvo_seconds` while it has
+    ammunition, and home when that is spent - never on a clock.
+  - `air_support/jet.rs` — a plane: constant speed, heading only through a turn rate, banked. It
+    locks one mark by key and follows it, runs in (the cannon's stripe, then two bombs astride
+    where the target is at release), extends and turns back while it has passes, goes round a run
+    it cannot make, and with nothing in view circles its seat once; `air_jet_sortie_seconds` is
+    the cap that means it always leaves.
+
+  The `air_support` tuning group. Online the calls and the aircraft
   are one family, `wire::AirState` (a call's arrival tick, an aircraft's ground point, height,
-  heading and stage), applied whole by `apply::apply_air_states`; the HUD's box
-  (`hud::AirHud`, `air_box` under the ammo slot in the lamp row), the minimap's mark
+  heading, bank, ammunition and stage), applied whole by `apply::apply_air_states`; the HUD's box
+  (`hud::AirHud`, `air_box` and `air_box_layout` under the ammo slot in the lamp row: the count,
+  then the ammunition as pips), the minimap's mark
   (`Marks::aircraft`) and the off-screen arrow (`ArrowKind::Aircraft`) read it.
 
 ## Drawing and effects
@@ -1594,7 +1617,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   tank's layers (`tank::draw_tank`) and then its flames, `damage_stage.rs`; each burning ground
   cell's flames at their foot, `ground_fire` and `GROUND_FIRE_FOOT`, so a hull further up the field
   is behind them and one driving through nearer is in front - trees, a burning one with its
-  flames), `paint_field` = all three; reads state, never mutates it. `paint_standing_hit` is the
+  flames), and what flies as two more - `paint_air_shadows` after the floor (the drones' and the
+  aircraft's) and `paint_air` over everything standing; `paint_field` = all five, which a fresh
+  round (a thumbnail) and a headless `screenshot` both are; reads state, never mutates it.
+  `paint_standing_hit` is the
   same walk with the particle layer's hit flashes (`fx::Flash`): a hull or a bong a shot landed on
   is covered by its own silhouette in white straight after it is drawn (`Canvas::solid`,
   `tank::draw_tank_silhouette`, `bong::draw_bong_silhouette`, `hit_flash_alpha`), so the flash is

@@ -1388,15 +1388,10 @@ impl Game {
         // foam - lying on it, under the hulls and under the light.
         crate::render::fx::draw_ground(fx, d, cull);
 
-        // The FPV drones' shadows on the ground under them, under the
-        // tanks (docs/fpv-swarm.md "Drawing"); the drones themselves fly
-        // over everything that stands, below.
-        let drones = self.drones();
-        let aircraft = self.aircraft();
-        if self.shadows_enabled {
-            crate::game::paint_drone_shadows(&mut GpuCanvas::new(d, textures), &drones);
-            crate::air_support::paint_shadows(&mut GpuCanvas::new(d, textures), &aircraft, self.time);
-        }
+        // The shadows of what flies - the FPV drones and air support's
+        // aircraft - on the ground under them, under the tanks; they
+        // themselves fly over everything that stands, below.
+        self.paint_air_shadows(&mut GpuCanvas::new(d, textures));
 
         // Burning ground cells' flames stand among the tanks
         // (`paint_standing_hit`); their light is below.
@@ -1519,13 +1514,11 @@ impl Game {
             pyro::draw(&mut GpuCanvas::new(d, textures), &dust);
         }
 
-        // The FPV drones in the air over everything that stands, their
-        // shadows on what is under them (docs/fpv-swarm.md "Drawing"):
-        // lit with the field, their lamps in `paint_field_glowing`.
-        crate::game::paint_drones(&mut GpuCanvas::new(d, textures), &drones, self.time);
-        // Air support over everything, drones included: it flies highest
-        // (docs/air-support.md "Drawing").
-        crate::air_support::paint_aircraft(&mut GpuCanvas::new(d, textures), &aircraft, self.time);
+        // The FPV drones in the air over everything that stands
+        // (docs/fpv-swarm.md "Drawing"; lit with the field, their lamps in
+        // `paint_field_glowing`), and air support over them: it flies
+        // highest (docs/air-support.md "Drawing").
+        self.paint_air(&mut GpuCanvas::new(d, textures));
 
         // Over everything that stands: each volcano's plume, steam while
         // it sleeps and ash from the rumble on (docs/volcano.md). It is
