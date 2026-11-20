@@ -443,13 +443,12 @@ pub struct TrackRow {
 
 /// Fields `Game::debug_set_tank` overwrites; anything left `None` is untouched.
 ///
-/// Note `serde(default)` means an unknown key parses and is ignored, so a
-/// renamed field silently does nothing over the wire. The dev server's
-/// `set_tank` arm rejects the one rename that has happened
-/// (`shield_timer` -> `shield_hp`) by name for that reason; `slot` rides in
-/// the same object and is read separately, so `deny_unknown_fields` is not
-/// an option here.
+/// `serde(default)` means an unknown key parses here and is ignored. Over
+/// the wire it never gets this far: the dev server's `set_tank` row
+/// flattens this struct into its parameters, and a key the row's schema
+/// does not name is refused (`devserver::ToolSpec::check`).
 #[derive(Default, Deserialize, Debug)]
+#[cfg_attr(all(feature = "dev-tools", not(target_os = "emscripten")), derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct TankPatch {
     pub damage: Option<f32>,
