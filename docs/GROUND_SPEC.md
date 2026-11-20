@@ -476,3 +476,20 @@ the wall clock; a round uses `Game::time`).
 list in `rebuild_ground`). The rules read the same `ground::Layout` through
 `ground::WaterLayout` (open water is deep, everything else painted is a
 ford, a north/south stream carries the current) — docs/water.md.
+
+---
+
+## 10. What a pixel is, and the biome layer (`floor_px`, `ground_mask.rs`)
+
+A painted water cell is not all water (a lake's shore runs half a cell
+inside its outline) and a road cell is not all dirt, so a question about a
+point of the floor goes to the tile drawn there. `tools/ground_mask.py`
+reads every tile the road and water tables above can lay and writes
+`src/ground_mask.rs`: per tile, each of its 16 x 16 source pixels as water
+(`water_tiles.is_water`), bank (any other pixel of a water tile that is not
+a grass-fill colour), road dirt (a warm pixel of a road tile) or plain
+ground. `GroundGrid::floor_px` answers for any field pixel through it; a
+source pixel is a 2 px block. A biome (docs/biomes.md) places its materials
+by it, and `draw` lays that layer (`GroundGrid::materials`) right after the
+tiles. Run the script again after any change to the tables;
+`tests::every_road_and_water_tile_has_a_mask` fails when it is behind.

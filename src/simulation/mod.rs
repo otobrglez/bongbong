@@ -2285,7 +2285,7 @@ impl Game {
         // paint dirt underfoot, and passed separately they cast the baked
         // shading that makes a wall look like it is standing on the floor
         // rather than pasted onto it. A round's field also shades its edge.
-        let look = crate::ground::Look { theme: self.map.theme, edge_shade: true };
+        let look = crate::ground::Look { theme: self.map.theme, edge_shade: true, biome: crate::biome::in_force(self.map.biome, &crate::tuning::tuning()) };
         self.looks.ground_seed = rng.random();
         self.ground = crate::ground::build(width, height, self.looks.ground_seed, &road_cells, &map_water_cells, &wall_positions, look);
 

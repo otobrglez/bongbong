@@ -447,6 +447,9 @@ call (`cargo check --no-default-features` builds none of it).
   and writes both live files (idempotent; `BONGBONG_THEME=x` for one), and `gen_grass.py` writes the
   matching `nature_sheet.png`/`nature_sheet_desert.png` the same way (docs/desert-theme.md). Never
   edit a live PNG or `_original/` directly. Everything else was recoloured to match *it*.
+  `tools/ground_mask.py` (Pillow) reads the live grass tileset and the tile tables in `src/ground.rs`
+  and writes `src/ground_mask.rs`, each road and water tile's pixels as water, bank, dirt or ground
+  (docs/biomes.md): run it after a change to those tables or to `water_tiles.py`, never edit its output.
 - Before a sweeping art pass, copy the current sheets and generators into
   `static/_backup/<label>-<timestamp>/` and `tools/spritegen/_backup/<label>-<timestamp>/`.
 - **Historical, do not run**: `tools/gen_shells.py` (emits the old 3-variant sheet and would regress

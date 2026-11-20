@@ -1561,10 +1561,11 @@ impl MapEditor {
     }
 
     /// Every baked image the canvas draws from, for the window's GPU
-    /// copies: the floor shade, then the forest floor where the canvas has
-    /// trees.
+    /// copies: the floor shade, the biome's materials where the map has a
+    /// biome, then the forest floor where the canvas has trees.
     pub fn block_images(&self) -> Vec<&crate::canvas::BlockImage> {
         let mut images = vec![self.ground.shade()];
+        images.extend(self.ground.materials());
         images.extend(self.still().woods_floor());
         images
     }
@@ -2874,8 +2875,8 @@ impl MapEditor {
             }
         }
         // The floor as a round lays it: the walls' shade and the field's
-        // darkened edge.
-        let look = ground::Look { theme: self.map.theme, edge_shade: true };
+        // darkened edge, and the biome's materials.
+        let look = ground::Look { theme: self.map.theme, edge_shade: true, biome: crate::biome::in_force(self.map.biome, &crate::tuning::tuning()) };
         self.ground = ground::build(width, height, self.ground_seed, &road_cells, &water_cells, &wall_cells, look);
         // The navigator's picture, the water as deep as the ground has it.
         self.minimap = Minimap::of_map(&self.map, |col, row| self.ground.depth(col, row));

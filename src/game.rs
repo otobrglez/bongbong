@@ -503,13 +503,16 @@ impl Game {
 
     /// Every baked image the round draws from, in an order that holds
     /// while the round does, for the window's GPU copies: the floor shade,
-    /// the ground's worn cells, the forest floor, the lava's banks, the kept
-    /// pictures, then each cone's.
+    /// the ground's worn cells, the biome's materials, the forest floor,
+    /// the lava's banks, the kept pictures, then each cone's.
     pub fn with_block_images<R>(&self, f: impl FnOnce(&[&crate::canvas::BlockImage]) -> R) -> R {
         let pictures = self.lava.pictures();
         let wear = self.wear.pictures();
         let cones: Vec<_> = self.volcanoes.iter().map(|v| crate::volcano::cone(&v.outlets)).collect();
         let mut images = vec![self.ground.shade(), &wear.atlas().image];
+        if !self.plain_canvas {
+            images.extend(self.ground.materials());
+        }
         if !self.woods.is_empty() {
             images.push(self.woods.floor());
         }

@@ -697,6 +697,12 @@ pub struct MapFile {
     /// back, so older files re-save unchanged.
     #[serde(default, skip_serializing_if = "is_default_theme")]
     pub theme: Theme,
+    /// The kind of place (TOML: a top-level `biome = "valley"`,
+    /// docs/biomes.md): the materials laid over the floor's tiles - a
+    /// look, nothing that plays reads it. Absent draws the plain tiles and
+    /// is not written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub biome: Option<crate::biome::Biome>,
     /// The skies a round may take (TOML: a top-level `weather = "night"`
     /// or `weather = ["night", "rain"]`, the MAP panel's WEATHER
     /// checklist). Absent means clear, and clear is not written back.
@@ -812,6 +818,7 @@ impl MapFile {
             bong: None,
             enemy_bong: None,
             theme: Theme::default(),
+            biome: None,
             weather: Skies::CLEAR,
             view: None,
             nightfall: None,
@@ -1539,6 +1546,19 @@ mod toml_tests {
         assert_eq!((big.size, big.class()), (Some((112.0, 63.0)), MapClass::Field));
         let study = MapFile::load(Path::new("maps/study/frontier.toml")).unwrap();
         assert_eq!((study.size, study.class()), (Some((96.0, 54.0)), MapClass::Field));
+    }
+
+    #[test]
+    fn a_biome_is_read_written_back_and_left_out_when_absent() {
+        let book = MapFile::load(Path::new("maps/study/look-book.toml")).unwrap();
+        assert_eq!(book.biome, Some(crate::biome::Biome::Valley));
+        let text = book.to_toml_string().unwrap();
+        assert!(text.contains("biome = \"valley\""), "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().biome, Some(crate::biome::Biome::Valley));
+        let plain = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(plain.biome, None);
+        assert!(!plain.to_toml_string().unwrap().contains("biome"), "no biome is not written");
+        assert!(MapFile::from_toml_str("version = 1\nbiome = \"lagoon\"\n").is_err(), "an unknown biome is an error, not a fallback");
     }
 
     #[test]
