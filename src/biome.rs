@@ -220,7 +220,7 @@ fn distance(w: usize, h: usize, near: impl Fn(usize) -> bool) -> Vec<u16> {
 pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[Deck], stamp: u64) -> BlockImage {
     assert_eq!(class.len(), w * h, "a class a block");
     let to_water = distance(w, h, |i| class[i].is_water());
-    let to_deep = distance(w, h, |i| class[i] == FloorPx::Deep);
+    let deepness = deepness(w, h, class);
     let to_road = distance(w, h, |i| class[i] == FloorPx::Road);
     let clear = Color::new(0, 0, 0, 0);
     let mut texels = vec![clear; w * h];
@@ -231,14 +231,23 @@ pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[De
         let wet = to_water[i] as f32 * 2.0;
         let dirt = to_road[i] as f32 * 2.0;
         *texel = match class[i] {
-            FloorPx::Deep | FloorPx::Road => continue,
-            // A ford darkens into the open water over its last 12 px, and
-            // shows a pebble of its bed here and there.
+            FloorPx::Road => continue,
+            // Open water as a soft body rather than the cells' squares
+            // (`deepness`): the tileset paints a deep cell whole, so its
+            // edge lightens back to the ford, and a ford beside it darkens.
+            // A lone deep cell reads as a round pool.
+            FloorPx::Deep => {
+                if deepness[i] >= threshold {
+                    continue;
+                }
+                look.water.fill
+            }
+            // A ford shows a pebble of its bed here and there, away from
+            // the open water.
             FloorPx::Water => {
-                let near_deep = to_deep[i] as f32 * 2.0;
-                if near_deep <= 12.0 && (12.0 - near_deep) / 12.0 >= threshold {
+                if deepness[i] > 0.0 && deepness[i] >= threshold {
                     look.water.deep
-                } else if near_deep > 12.0 && hash(bx, by, 13) % 23 == 0 {
+                } else if deepness[i] <= 0.0 && hash(bx, by, 13) % 23 == 0 {
                     look.water.bed
                 } else {
                     continue;
@@ -271,6 +280,47 @@ pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[De
         lay_deck(look, deck, w, h, class, &mut texels);
     }
     BlockImage { width: w, height: h, block: 2, texels, stamp, patches: Vec::new() }
+}
+
+/// How far into open water each block of a field `w` x `h` blocks lies,
+/// 0 to 1: every deep cell (one whose middle block is `FloorPx::Deep`)
+/// adds a cone `DEEP_REACH` px across its centre, full within
+/// `DEEP_REACH - DEEP_FADE` px, and the sum is held to 1. A run of deep
+/// cells adds up to one body with a soft, rounded edge about where the
+/// cells end; a lone cell is a round pool. Only `sqrt` and the basic
+/// operations, exact on every platform.
+fn deepness(w: usize, h: usize, class: &[FloorPx]) -> Vec<f32> {
+    // A cell's corner is 22.6 px from the four centres round it, so a
+    // reach past that keeps a lake's middle solid where cells meet; full
+    // out to 16 px, a deep cell's own edge.
+    const DEEP_REACH: f32 = 26.0;
+    const DEEP_FADE: f32 = 10.0;
+    let mut out = vec![0.0f32; w * h];
+    // A cell is 16 blocks and centred on its world cell, so cell `c`'s
+    // middle block is `c * 16`.
+    let (cols, rows) = (w as i32 / 16 + 1, h as i32 / 16 + 1);
+    let reach = (DEEP_REACH / 2.0).ceil() as i32;
+    for r in 0..rows {
+        for c in 0..cols {
+            let (cx, cy) = (c * 16, r * 16);
+            if cx as usize >= w || cy as usize >= h || class[cy as usize * w + cx as usize] != FloorPx::Deep {
+                continue;
+            }
+            for by in (cy - reach).max(0)..(cy + reach + 1).min(h as i32) {
+                for bx in (cx - reach).max(0)..(cx + reach + 1).min(w as i32) {
+                    // Block centres, in px.
+                    let (dx, dy) = ((bx - cx) as f32 * 2.0 + 1.0, (by - cy) as f32 * 2.0 + 1.0);
+                    let d2 = dx * dx + dy * dy;
+                    if d2 >= DEEP_REACH * DEEP_REACH {
+                        continue;
+                    }
+                    let i = by as usize * w + bx as usize;
+                    out[i] = (out[i] + ((DEEP_REACH - d2.sqrt()) / DEEP_FADE).min(1.0)).min(1.0);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The planks of `deck` over its cell: a band 24 px across the road's

@@ -98,10 +98,14 @@ they share one colour).
   one tile a deep cell draws, `WATER_SHORE[0b1111]` - in the open-water
   tone. The field draws it as `Sheet::BiomeGround` in place of the theme's
   tileset (`GroundGrid::sheet`); the window loads one per biome up front.
-- **Open water and the ford.** `FloorPx::Deep` is tile 305's water, so the
-  picture's deep water is exactly the rules' deep cells. The materials
-  dither the ford into it over its last 12 px, and lay a pebble of its bed
-  (`WaterRamp::bed`) on about one ford block in 23.
+- **Open water and the ford.** `FloorPx::Deep` is tile 305's water, the
+  rules' deep cells. The materials soften it into a body rather than the
+  cells' squares (`biome::deepness`): every deep cell adds a cone 26 px
+  across its centre, full to 16 px, so a run of cells is solid with a
+  rounded edge that fades within about 10 px of the deep cells, and a lone
+  deep cell - Serpent River has one - is a round pool. The ford shows a
+  pebble of its bed (`WaterRamp::bed`) on about one block in 23 away from
+  the open water.
 - **What follows it.** The current marks take the ripple tone, the spray
   the ripple and water tones (`fx::water_tints`), the minimap its light
   and open-water tones (`minimap::Class::color_in`). Foam stays white. The
