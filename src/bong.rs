@@ -277,6 +277,11 @@ pub struct Bong {
     /// set by `start_hop` from the landing spot `simulation::bong_hop_target`
     /// found. Only meaningful while `hop_timer > 0.0`.
     pub hop_end: Position,
+    /// Who dealt the blow that killed it (`hurt_by`): `None` while it
+    /// lives, and for a death nobody set off (a drum, lava). The end screen
+    /// names a players' bong a seat killed as lost to friendly fire
+    /// (`Game::round_stats`).
+    pub killed_by: Option<crate::shell::Owner>,
     /// Seconds remaining before another hop can trigger - set to
     /// BONG_HOP_COOLDOWN_SECONDS by `start_hop`, so a rapid volley of hits
     /// can't chain-hop the bong every single frame one lands.
@@ -346,6 +351,7 @@ impl Bong {
             hop_timer: 0.0,
             hop_start: position,
             hop_end: position,
+            killed_by: None,
             hop_cooldown: 0.0,
             attack_timer: 0.0,
             attack_cooldown: 0.0,
@@ -440,6 +446,17 @@ impl Bong {
         self.hurt_timer = BONG_HURT_SECONDS;
         if self.health <= 0.0 {
             self.death_elapsed = Some(0.0);
+        }
+    }
+
+    /// `damage` dealt by `by`: a blow that kills it is noted as `by`'s
+    /// (`killed_by`). Every source that hurts a bong in a round goes
+    /// through here.
+    pub fn hurt_by(&mut self, amount: f32, by: Option<crate::shell::Owner>) {
+        let alive = !self.is_dead();
+        self.damage(amount);
+        if alive && self.is_dead() {
+            self.killed_by = by;
         }
     }
 
@@ -666,6 +683,7 @@ mod facing_tests {
             hop_timer: 0.0,
             hop_start: Position::new(x, 300.0),
             hop_end: Position::new(x, 300.0),
+            killed_by: None,
             hop_cooldown: 0.0,
             attack_timer: 0.0,
             attack_cooldown: 0.0,

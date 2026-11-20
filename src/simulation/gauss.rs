@@ -360,7 +360,7 @@ impl Game {
                         return None;
                     }
                     let d = t.gauss_bong_damage * keep;
-                    bong.damage(d);
+                    bong.hurt_by(d, Some(shooter));
                     f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: HitCause::Rail });
                     (bong.is_dead(), bong.position)
                 };

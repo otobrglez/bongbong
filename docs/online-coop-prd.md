@@ -78,7 +78,11 @@ Non-goals, for now
   designed in 4.8 and built when the capacity asks for it.
 - Free-for-all, team versus team, spectators, couch-plus-online: parked
   (section 9). The one rule kept for their sake is that `Owner::same_side`
-  stays the single place deciding who may hurt whom.
+  stays the single place deciding who is whose side. Since BB-188 nothing
+  that hurts asks it - friendly fire is full from every source
+  (docs/november-26-rebuild-upgrade.md decision 2) - but for a tower's own
+  side, whose bullets and spall pass its friends by; the AI and the
+  aircraft ask it what not to fire at.
 - Accounts, friends lists, matchmaking, public room browsers, ranked anything.
 - Datagram transports (WebTransport, WebRTC). The protocol separates droppable
   positions from reliable events from day one so the transport can change
@@ -737,8 +741,11 @@ the browser build is the universal fallback, the apps the upgrade.
 
 The two-player round with the seats spread across machines.
 `Owner::Player(u8)` versus `Owner::Enemy(slot)` is the co-op split;
-`same_side` already keeps players from hurting each other at full damage; the
-end rule from docs/two-players.md (bong dead or every player wrecked) is the
+friendly fire between seats is full from every source, as it is on the
+couch (docs/two-players.md "Rules", BB-188) - a room plays the same rule,
+one code path, and eight seats with grenades is a harder round for it
+(the difficulty patch scales by seat count, FF-9); the end rule from
+docs/two-players.md (bong dead or every player wrecked) is the
 co-op end rule.
 
 | Piece | Today | For online co-op |

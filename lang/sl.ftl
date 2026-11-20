@@ -58,6 +58,19 @@ wave-final = ZADNJI VAL
 level-number = STOPNJA { $n } / { $count }
 result-time = ČAS { $time }
 result-wrecks = UNIČENIH { $n } / { $total }
+result-friendly-tanks = IZGUBE V PRIJATELJSKEM OGNJU: { $n ->
+    [one] { $n } TANK
+    [two] { $n } TANKA
+    [few] { $n } TANKI
+   *[other] { $n } TANKOV
+}
+result-friendly-bong = IZGUBE V PRIJATELJSKEM OGNJU: BONG
+result-friendly-both = IZGUBE V PRIJATELJSKEM OGNJU: { $n ->
+    [one] { $n } TANK
+    [two] { $n } TANKA
+    [few] { $n } TANKI
+   *[other] { $n } TANKOV
+} IN BONG
 result-all-clear = VSE STOPNJE SO OPRAVLJENE!
 result-uncounted = S SPREMEMBAMI SE NE ŠTEJE
 result-again = ŠE ENKRAT

@@ -91,14 +91,16 @@ tool and the `armory` map.
     its axis in a few pixels and lets one shoved across it slide several
     times as far, which would make a head-on shove, the common one, a nudge
     (decisions, below).
-  - *damage*: only to the side opposing the shooter
-    (`Owner::same_side`), `sonic_damage` (4) times the falloff, no roll,
+  - *damage*: to every hull the front reaches, whichever side
+    (docs/november-26-rebuild-upgrade.md decision 2), `sonic_damage` (4)
+    times the falloff, no roll,
     through `Tank::take_damage` (a rainbow shield soaks it), `mark_hit`,
     `credit` (the kill credit and `hit_by_seat`), an `Event::Hit` where it
     landed with `cause: HitCause::Sonic` (§5: a hull flash and dust, never
     a shell's fire), and `Ai::notify_hit` on a surviving enemy - it knows
-    it was hit. A teammate, a fellow enemy and the shooter's own side take none:
-    they are only shoved.
+    it was hit. A teammate and a fellow enemy in the cone are hurt as surely
+    as the side it was fired at; the AI never fires with a friend in the
+    cone (`HammerAim::friend`).
   - A wreck is not moved (as no blast moves one), a tank rolling in through
     a gate is not on the field, and the shooter is never reached.
 - **Glass** (`Material::breaks_by_sound`, glass alone): a glass cell some
@@ -921,7 +923,7 @@ enemies' group:
 | `sonic_skid_decel` | 650 | 50..=5000 | A skidding hull's friction on dry ground (px/s^2): its slide is `v^2 / (2 * this * grip)`. |
 | `sonic_skid_grip_floor` | 0.4 | 0.05..=1 | The least of the ground's grip the skid keeps: ice, a ford and wet ground slide further, at most `1 / this` times as far. |
 | `sonic_skid_max_seconds` | 1.2 | 0..=5 | The longest a hull is off its tracks. |
-| `sonic_damage` | 4 | 0..=50 | Damage at the pivot to the side opposing the shooter, falling off like the shove; no roll. |
+| `sonic_damage` | 4 | 0..=50 | Damage at the pivot to every hull the front reaches, the shooter's side included, falling off like the shove; no roll. |
 | `sonic_recoil_speed`, `sonic_recoil_max_speed` | 30, 40 | 0..=200, 0..=400 | The shooter's kick. |
 | `sonic_grass_flat_seconds` | 6 | 0..=60 | How long a cell of flattened tall grass hides nobody before it stands back up. |
 | `sonic_drum_throw_cells` | 4 | 1..=12 | Cells a drum at the pivot is thrown, scaled by the falloff, at least one. |
@@ -1054,7 +1056,7 @@ seat at cell (3, 6) facing east, parked enemies placed by hand):
   `a_drum_with_no_tank_behind_it_is_thrown_along_the_wave`,
   `a_fused_drum_is_thrown_too`,
   `a_bong_the_wave_reaches_is_stunned_and_neither_hops_nor_bites`,
-  `the_hammer_hurts_only_the_other_side_and_shoves_everyone` (a sonic `Hit`
+  `the_hammer_hurts_and_shoves_everyone_it_reaches` (a sonic `Hit`
   says `HitCause::Sonic`), `a_shield_soaks_the_damage_not_the_shove`,
   `a_grenade_in_the_cone_is_pushed_away`, `a_wreck_is_left_alone`,
   `a_crate_in_the_cone_is_left_alone`,
@@ -1294,7 +1296,7 @@ events on the two maps). How such a pack should play is a question for Oto (§12
 | Grenades | Pushed |
 | Missiles, shells, bullets, plasma, the laser, the flamethrower | Untouched |
 | Field maps | The sight box binds every use; a far coasting tank's tell still goes off; waves, the director, stragglers as ever |
-| The couch and its split | Teammates are shoved (never hurt); nothing else |
+| The couch and its split | A teammate in the cone is shoved and hurt; nothing else |
 | Training | `drop = ["sonic_hammer"]` works by its name; the training dummy never uses it on a seat |
 | Online | §3.3, §8 |
 | Earlier BB-36 weapons | None: it is the first |
@@ -1333,8 +1335,10 @@ events on the two maps). How such a pack should play is a question for Oto (§12
    be pushed as a body; a thrown drum always goes off where it lands, which
    is "sets fuses off early". Rejected: lighting fuses in place only (no
    "toward whoever stands behind").
-7. **Only the opposing side is hurt, everyone is shoved**, bongs of both
-   sides stunned - the side blast's rule (grenades, missiles).
+7. **Everyone in the cone is hurt and shoved**, bongs of both sides
+   stunned and never hurt: friendly fire is full from every source
+   (docs/november-26-rebuild-upgrade.md decision 2, BB-188). Until BB-188
+   only the opposing side was hurt, the side blast's rule of the time.
 8. **The AI owns the trigger**: an enemy carrying the hammer never fires it
    through the generic tiers; it fires by its rule, two per seat close in,
    and the rest keep their places on the seat's ring. The probe chose the

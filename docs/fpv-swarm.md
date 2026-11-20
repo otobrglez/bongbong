@@ -177,12 +177,14 @@ When a dive's time is up the drone bursts where its ground point is
   `BlastParams::drone(owner)` - radius `fpv_blast_radius_px` (44), damage
   `fpv_damage` (8) at the centre falling linearly to nothing at the radius,
   **no roll** (`BlastParams::roll_damage` draws nothing when its range is a
-  point), knockback `fpv_knockback_speed` (30). So: the side opposing the
-  launcher takes the damage through `Tank::take_damage` (a rainbow shield
-  soaks it; the kill is credited to the launcher, `BlastParams::by`),
-  every live tank in reach is shoved a little (a seat's shove on
-  `Frame::shoves` for an owned hull), the opposing side's bong is hurt
-  (8 at the centre; a bong has 40), tiles crack and drums react as to any
+  point), knockback `fpv_knockback_speed` (30). So: every live tank in
+  reach - the launcher's side as surely as the side it was sent at
+  (docs/november-26-rebuild-upgrade.md decision 2) - takes the damage
+  through `Tank::take_damage` (a rainbow shield soaks it; the kill is
+  credited to the launcher, `BlastParams::by`) and is shoved a little (a
+  seat's shove on `Frame::shoves` for an owned hull), either side's bong
+  is hurt (8 at the centre; a bong has 40) and hops away from the burst,
+  tiles crack and drums react as to any
   blast (`damage_obstacle` with falloff - a fence's one-shot odds and a
   drum's fuse are their own rules), breakable crates break
   (`blast_crates`). **Hulls and bongs under canopy are spared** - left out
@@ -194,6 +196,16 @@ When a dive's time is up the drone bursts where its ground point is
   ripple (`fpv_shock`, 0.3 of a tank dying, a missile's), the impact flash, a small
   scorch on dry ground (none in a crown, none on water), the grass round it
   flattened.
+
+### The ring
+
+A seat's drone in its dive draws its burst's reach on the ground at the
+point it dives on - `fpv_blast_radius_px`, one 2 px block wide, in the
+grenade band's flash ramp, for the last `blast_ring_seconds` (1) of the
+dive (`Game::blast_rings`, `blast::draw_blast_ring`; docs/grenade-launcher.md
+"The ring"). Everything inside it is hurt when it lands, the seat and its
+teammate too. A replica knows no dive plan, so it rings a seat's diving
+drone at the ground point under it.
 
 ### Trees
 
@@ -1010,7 +1022,7 @@ in `enemies`:
 | `fpv_dive_speed` | 320 | 20..=2000 | How fast it comes down from the commit to the point (px/s). |
 | `fpv_max_flight_seconds` | 6 | 0.5..=30 | How long after its launch a cruising drone dives where it is going, battery out. |
 | `fpv_aim_px` | 192 | 16..=1000 | With nothing to lock, how far ahead of the launcher it dives. |
-| `fpv_damage` | 8 | 0..=100 | Its burst's damage at the centre to the side opposing the launcher, falling to nothing at the radius; no roll. |
+| `fpv_damage` | 8 | 0..=100 | Its burst's damage at the centre to every hull and bong it reaches, the launcher's side included, falling to nothing at the radius; no roll. |
 | `fpv_blast_radius_px` | 44 | 0..=200 | Its burst's reach (px). |
 | `fpv_knockback_speed` | 30 | 0..=400 | Its burst's shove at the centre (px/s). |
 | `fpv_tree_damage` | 4 | 0..=100 | What a burst in a tree's crown takes off the tree. |
@@ -1237,7 +1249,7 @@ Protocol 19 (from the rail's 18), once in the PR.
   `the_drone_locks_the_nearest_enemy_in_the_seats_sight_box`,
   `with_no_enemy_in_the_box_it_dives_on_the_aim_point`,
   `the_drone_flies_over_walls_and_dives_on_its_target`,
-  `only_the_opposing_side_is_hurt`, `a_shield_soaks_the_burst`,
+  `a_teammate_in_the_burst_is_hurt_too`, `a_shield_soaks_the_burst`,
   `a_disabled_tank_launches_nothing_and_keeps_its_drones`,
   `the_drones_fly_out_on_the_end_screen_and_hurt_nobody`.
 - Trees: `a_tank_under_a_tree_is_never_locked`,
@@ -1450,7 +1462,7 @@ the AI tiers its tank ran over the frames before):
 | Rain, snow | Nothing |
 | Sandstorm gusts | Carry drones in the cruise and the dive: dives land downwind |
 | Towers | The tesla arcs drones on its own clock; the gun tower turns on drones first, fully led; the bio slush ignores them; a burst damages a tower in reach like any tile; an offline tower shoots nothing |
-| Bongs | An enemy hunter sends drones at the players' bong; a burst hurts the opposing side's bong; a bong under canopy is hidden like a tank |
+| Bongs | An enemy hunter sends drones at the players' bong; a burst hurts either side's bong, which hops away from it; a bong under canopy is hidden like a tank |
 | Crates | Flown over; a burst breaks breakable crates in reach; the FPV crate cooks off |
 | Drums, oil, fires | A burst sets drums off by their rules; oil and fires untouched |
 | Trees, grass | Trees hide what is under them and take crown bursts; grass hides nothing from the air and is flattened round a burst |

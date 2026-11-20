@@ -146,12 +146,19 @@ fn the_jet_bombs_a_driving_tank_where_it_is() {
             was.push(at(game, driver));
         }
     });
+    // The tank drives at the seat, so a later release may hold the bomb
+    // that would reach it (`AirView::clear`): a pair goes astride the
+    // tank, a single bomb only where the seat is out of its reach.
     let mut pairs = 0;
+    let seat_at = at(&game, seat(&game));
     for (s, tank) in seen.iter().zip(&was) {
         let bombs = s.strikes(true);
-        if !bombs.is_empty() {
+        if bombs.len() == 2 {
             pairs += 1;
             assert!(((bombs[0] + bombs[1]) * 0.5).distance_to(*tank) < 12.0, "astride the tank at {tank:?}: {bombs:?}");
+        }
+        for bomb in bombs {
+            assert!(bomb.distance_to(seat_at) > tuning().air_jet_bomb_radius_px, "no bomb on the seat: {bomb:?}");
         }
     }
     assert!(pairs >= 1, "it caught the tank");
@@ -271,7 +278,9 @@ fn the_jet_always_leaves() {
 /// wherever the seat stands, on both its passes.
 #[test]
 fn the_jet_fires_only_over_the_field() {
-    for (seat_at, enemy_at) in [(SEAT, NEAR), (Position::new(96.0, 64.0), Position::new(200.0, 40.0)), (Position::new(990.0, 480.0), Position::new(900.0, 500.0))] {
+    // Each enemy far enough from its seat that no bomb astride it reaches
+    // the seat (`AirView::clear`), so every pass drops both.
+    for (seat_at, enemy_at) in [(SEAT, NEAR), (Position::new(96.0, 64.0), Position::new(232.0, 40.0)), (Position::new(990.0, 480.0), Position::new(850.0, 500.0))] {
         let mut game = round();
         let seat = seat(&game);
         game.place_tank(seat, seat_at, Some(90.0)).expect("placed");
@@ -331,4 +340,46 @@ fn a_jet_sortie_replays_bit_for_bit() {
     let (jets, events) = run();
     assert!(events.contains("AirStrike") || events.contains("air_strike"), "it attacked");
     assert_eq!((jets, events), run());
+}
+
+/// Enemies close on the bong, and the jet's blasts hurt whatever they
+/// reach: with the target parked beside the players' bong the jet lets
+/// go no burst and no bomb whose reach takes the bong in, and the bong
+/// comes through the sortie whole; the same target out in the open is
+/// bombed.
+#[test]
+fn the_jet_holds_what_would_reach_the_players_bong() {
+    let bomb = |beside_bong: bool| {
+        let mut game = round();
+        game.level_overrides.mission = Some(Mission::Protect);
+        let cell = if beside_bong { "9,6" } else { "30,14" };
+        let map = format!("version = 1\ntanks = 0\ncells.\"3,6\" = {{ kind = \"start\" }}\ncells.\"{cell}\" = {{ kind = \"bong\" }}\n");
+        game.map = MapFile::from_toml_str(&map).expect("test map parses");
+        game.init(W, H);
+        for tank in game.world.query_mut::<&mut Tank>() {
+            tank.shield_hp = 0.0;
+            tank.shield_timer = 0.0;
+        }
+        let seat = seat(&game);
+        game.place_tank(seat, SEAT, Some(90.0)).expect("placed");
+        with_tank_mut(&game.world, seat, |t| t.disarm());
+        let bong = game.bong.expect("the players' bong");
+        let bong_at = with_bong(&game.world, bong, |b| b.position);
+        let target = if beside_bong { bong_at + Vec2::new(0.0, 48.0) } else { NEAR };
+        let enemy = parked(&mut game, target);
+        air_crate(&mut game, Sortie::Jet, SEAT);
+        // Stunned, it hops nowhere: it stays where the test reads it.
+        with_bong_mut(&game.world, bong, |b| b.stun(1000.0));
+        let seen = sortie(&mut game, |game, _| with_tank_mut(&game.world, enemy, |t| t.damage = 0.0));
+        let health = with_bong(&game.world, bong, |b| (b.health, b.max_health));
+        (strikes(&seen, true), strikes(&seen, false), bong_at, health)
+    };
+    let (bombs, bursts, bong_at, (health, max)) = bomb(true);
+    let t = tuning();
+    let reach = crate::BONG_COLLIDER_HALF_EXTENT.0.max(crate::BONG_COLLIDER_HALF_EXTENT.1) + t.air_hold_margin_px;
+    assert!(bombs.iter().all(|b| b.distance_to(bong_at) > t.air_jet_bomb_radius_px + reach), "no bomb reaches the bong: {bombs:?}");
+    assert!(bursts.iter().all(|b| b.distance_to(bong_at) > t.air_jet_gun_radius_px + reach), "no burst does: {bursts:?}");
+    assert_eq!(health, max, "the bong is whole");
+    let (open, _, _, _) = bomb(false);
+    assert!(!open.is_empty(), "the same target in the open is bombed");
 }

@@ -213,6 +213,17 @@ The placements follow these rules:
   (`Tank::wants_pickup`), so an enemy that gets there first fights with it.
 - **No rod or rail on a Hunt.** The rod's circle kills any bong in it and
   two slugs do too, so on a Hunt map either would end the hunt in one press.
+- **Blasts away from the bong.** Friendly fire is full
+  (docs/november-26-rebuild-upgrade.md decision 2): a blast hurts the
+  players' bong as surely as an enemy, and the bong has `bong_max_health`
+  (40), so a grenade landing within about 25 px of it on a high roll ends a
+  Protect round. On a map with the players' bong a blast weapon's crate -
+  grenades, FPV swarm, air support, the gravity well - lies at least two of
+  its blast's radii from that bong (256 px for the grenade), so the first
+  fight it is used in is not at the bong. The campaign keeps it: Jungle
+  Temple's swarm lies 716 px from its bong, Oasis Bazaar's grenades 559 px.
+  `armory`, free play, does not: its grenades lie 233 px from the bong and
+  its swarm and well 172 px (BB-188 left the map as it was).
 - **Kept setup draws.** A crate takes over a spare ammo or speed-up cell, or
   one cell of a cluster, never a health cell (only health draws its bonus
   roll when a round starts, so the round's opening draws are unchanged),

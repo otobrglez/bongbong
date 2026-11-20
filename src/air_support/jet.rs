@@ -12,7 +12,9 @@
 //!   (`aim_point`). Lined up and in range it is on its run
 //!   (`AirStage::Attack`): the cannon's stripe walks up to the target, then
 //!   two bombs go astride where the target is at that moment. That is a
-//!   pass (`Aircraft::ammo`).
+//!   pass (`Aircraft::ammo`). A burst or a bomb whose reach would take in a
+//!   seat or the players' bong is held (`AirView::clear`); a release with
+//!   both bombs held is no pass, and it comes round again.
 //! - **Passes left**: it flies straight on past the target (`Leg::Extend`,
 //!   `AirStage::Loiter`), turns back - the way that keeps it nearer the
 //!   field - and runs in again, on the same target while it lives, else the
@@ -141,7 +143,7 @@ pub(super) fn step(a: &mut Aircraft, view: &AirView, dt: f32, t: &Tuning, acts: 
         && a.stage != AirStage::Egress
         && a.jet.leg == Leg::Run
     {
-        engage(a, &mark, view.field, t, acts);
+        engage(a, &mark, view, t, acts);
     }
 }
 
@@ -329,7 +331,10 @@ fn extend(a: &mut Aircraft, px: f32) {
 /// long as the run it had. `air_jet_bomb_lead_px` short of the target the
 /// two bombs go, `air_jet_bomb_spacing_px` apart along its heading astride
 /// where the target is now: a pass, and it flies on - home with none left.
-fn engage(a: &mut Aircraft, mark: &AirMark, field: (f32, f32), t: &Tuning, acts: &mut Vec<AirAct>) {
+/// What `view` says would reach a friend is held: a burst (the stripe
+/// counts it and walks on), a bomb, and with both bombs held the pass.
+fn engage(a: &mut Aircraft, mark: &AirMark, view: &AirView, t: &Tuning, acts: &mut Vec<AirAct>) {
+    let field = view.field;
     if !over(a.ground, field) {
         return;
     }
@@ -354,15 +359,29 @@ fn engage(a: &mut Aircraft, mark: &AirMark, field: (f32, f32), t: &Tuning, acts:
         let spacing = if bursts > 1 { (a.jet.gun_from - ahead).max(0.0) / (bursts - 1) as f32 } else { 0.0 };
         let lands = a.ground + a.heading * ahead;
         if d <= ahead + (bursts - 1 - a.jet.bursts) as f32 * spacing && over(lands, field) {
-            acts.push(AirAct::Strike { at: lands, dir: a.heading, bomb: false });
+            // A burst whose reach takes in a seat or the players' bong is
+            // held; the stripe walks on past it.
+            if view.clear(lands, t.air_jet_gun_radius_px, t) {
+                acts.push(AirAct::Strike { at: lands, dir: a.heading, bomb: false });
+            }
             a.jet.bursts += 1;
         }
     }
     if release {
+        // Each bomb whose reach takes in a seat or the players' bong is
+        // held; a release with both held spends no pass, and the jet comes
+        // round again.
         let half = a.heading * (t.air_jet_bomb_spacing_px * 0.5);
-        acts.push(AirAct::Strike { at: mark.at - half, dir: a.heading, bomb: true });
-        acts.push(AirAct::Strike { at: mark.at + half, dir: a.heading, bomb: true });
-        a.ammo = a.ammo.saturating_sub(1);
+        let mut dropped = false;
+        for at in [mark.at - half, mark.at + half] {
+            if view.clear(at, t.air_jet_bomb_radius_px, t) {
+                acts.push(AirAct::Strike { at, dir: a.heading, bomb: true });
+                dropped = true;
+            }
+        }
+        if dropped {
+            a.ammo = a.ammo.saturating_sub(1);
+        }
         if a.ammo == 0 {
             a.enter(AirStage::Egress);
         } else {
@@ -374,7 +393,7 @@ fn engage(a: &mut Aircraft, mark: &AirMark, field: (f32, f32), t: &Tuning, acts:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::air_support::{Sortie, entry_point, jet_edge};
+    use crate::air_support::{AirFriend, Sortie, entry_point, jet_edge};
 
     const DT: f32 = 1.0 / 60.0;
     const FIELD: (f32, f32) = (1088.0, 544.0);
@@ -403,7 +422,7 @@ mod tests {
     }
 
     fn view(seat: Position, marks: &[AirMark]) -> AirView<'_> {
-        AirView { seat: Some(seat), seat_velocity: Vec2::zero(), seat_wrecked: false, marks, field: FIELD, live: true }
+        AirView { seat: Some(seat), seat_velocity: Vec2::zero(), seat_wrecked: false, marks, friends: &[], field: FIELD, live: true }
     }
 
     fn full_load(t: &Tuning) -> u8 {
@@ -635,6 +654,42 @@ mod tests {
         assert!(from <= t.air_jet_bomb_lead_px && from > t.air_jet_bomb_lead_px - step, "let go at the lead: {from}");
         assert_eq!(last.after.ammo, full_load(&t) - 1);
         assert!(pass.iter().any(|tick| tick.after.stage == AirStage::Attack));
+    }
+
+    /// A seat or the players' bong beside the target: no burst or bomb
+    /// whose reach takes it in is let go, a release with both bombs held
+    /// spends no pass, and one far from the target holds nothing.
+    #[test]
+    fn it_holds_what_would_reach_a_seat_or_the_bong() {
+        let t = Tuning::default();
+        let target = Position::new(700.0, 300.0);
+        let friend = AirFriend { at: Position::new(700.0, 330.0), reach: 16.0 };
+        let fly_with = |friends: &[AirFriend]| {
+            let mut a = jet(target, &t);
+            let mut out = Vec::new();
+            for _ in 0..(60.0 / DT) as u32 {
+                let seen = parked(target);
+                let mut acts = Vec::new();
+                a.step(&AirView { friends, ..view(SEAT, &seen) }, DT, &t, &mut acts);
+                out.extend(acts);
+                if a.gone(FIELD, &t) {
+                    break;
+                }
+            }
+            (out, a)
+        };
+        let (acts, a) = fly_with(&[friend]);
+        for act in &acts {
+            if let AirAct::Strike { at, bomb, .. } = *act {
+                let radius = if bomb { t.air_jet_bomb_radius_px } else { t.air_jet_gun_radius_px };
+                assert!(at.distance_to(friend.at) > radius + friend.reach + t.air_hold_margin_px, "{act:?} reaches the friend");
+            }
+        }
+        assert!(!acts.iter().any(|act| matches!(act, AirAct::Strike { bomb: true, .. })), "every bomb astride the target reaches it: none goes");
+        assert_eq!(a.ammo, full_load(&t), "and no pass is spent on a release it held");
+        let far = AirFriend { at: Position::new(200.0, 500.0), reach: 16.0 };
+        let (free, _) = fly_with(&[far]);
+        assert!(free.iter().any(|act| matches!(act, AirAct::Strike { bomb: true, .. })), "a friend far off holds nothing");
     }
 
     /// With passes left it flies on, turns back and runs in on the same

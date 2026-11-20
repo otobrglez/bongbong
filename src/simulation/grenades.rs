@@ -1,8 +1,9 @@
 //! The grenades' world half (`grenade.rs` is the ball): rolling every
 //! grenade on the ground among the tiles, the walls and the hulls each
-//! tick, and setting off the ones whose fuse ran out - the side opposing
-//! the launcher hurt, everything in range shoved, tiles cracked, and a
-//! shockwave. No RNG outside the blast's damage rolls, which are drawn
+//! tick, and setting off the ones whose fuse ran out - everything in
+//! range hurt and shoved, the launcher and its own bong included, tiles
+//! cracked, and a shockwave - and the radius ring of every blast a seat
+//! owns that is about to go off (`Game::blast_rings`). No RNG outside the blast's damage rolls, which are drawn
 //! only for what is inside the radius, so a round with no grenade on the
 //! ground draws exactly what it did before.
 
@@ -139,6 +140,56 @@ impl Game {
             .filter(|g| g.airborne() || g.velocity.length() > fast)
             .map(|g| (g.id, g.draw_pos()))
             .collect()
+    }
+
+    /// The blasts a seat owns that are about to go off, for the radius
+    /// ring (`blast::draw_blast_ring`, docs/grenade-launcher.md "The
+    /// ring"): every seat's grenade in the last `blast_ring_seconds` of its
+    /// fuse, its missiles in their dive and its drones in theirs, each
+    /// with where it will go off, its blast's radius and the seconds left
+    /// (0 where a replica does not know: a drone's dive plan is the
+    /// room's). Grenades by id, then missiles, then drones. What every
+    /// blast it rings hurts is everyone (`Game::blast`): the ring is what
+    /// a player reads of the danger to the team. Reads only.
+    pub fn blast_rings(&self) -> Vec<crate::blast::BlastRing> {
+        use crate::blast::BlastRing;
+        let t = tuning();
+        let window = t.blast_ring_seconds;
+        if window <= 0.0 {
+            return Vec::new();
+        }
+        let mut grenades: Vec<(u32, BlastRing)> = self
+            .world
+            .query::<&Grenade>()
+            .iter()
+            .filter(|g| g.owner.is_player() && g.fuse <= window)
+            .map(|g| (g.id, BlastRing { at: g.drawn().position, radius: t.grenade_blast_radius, left: g.fuse.max(0.0) }))
+            .collect();
+        grenades.sort_by_key(|&(id, _)| id);
+        let mut missiles: Vec<(u32, BlastRing)> = self
+            .world
+            .query::<&crate::missile::Missile>()
+            .iter()
+            .filter(|m| m.owner.is_player() && m.stage == crate::missile::MissileStage::Dive && !m.dud)
+            .map(|m| (m.id, BlastRing { at: m.aim, radius: t.missile_blast_radius, left: m.distance_to_aim() / m.speed.max(1.0) }))
+            .filter(|(_, r)| r.left <= window)
+            .collect();
+        missiles.sort_by_key(|&(id, _)| id);
+        let mut drones: Vec<(u32, BlastRing)> = self
+            .world
+            .query::<&crate::fpv::Drone>()
+            .iter()
+            .filter(|d| d.owner.is_player() && d.stage == crate::fpv::DroneStage::Dive)
+            .map(|d| {
+                let planned = d.dive_seconds > 0.0;
+                let at = if planned { d.aim } else { d.ground };
+                let left = if planned { (d.dive_seconds - d.stage_time).max(0.0) } else { 0.0 };
+                (d.id, BlastRing { at, radius: t.fpv_blast_radius_px, left })
+            })
+            .filter(|(_, r)| r.left <= window)
+            .collect();
+        drones.sort_by_key(|&(id, _)| id);
+        grenades.into_iter().chain(missiles).chain(drones).map(|(_, r)| r).collect()
     }
 
     /// The show a grenade going off at `center` puts on: a big round fireball,

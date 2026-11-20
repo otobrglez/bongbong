@@ -1081,6 +1081,57 @@ for a lull, and a band round brings no seat back.
 
 No ceiling was changed and no reading stands over one.
 
+### Re-baseline: friendly fire (BB-188)
+
+2026-11-20. Friendly fire is full damage from every source (Oto,
+2026-11-19: docs/november-26-rebuild-upgrade.md decision 2, P5-8 with
+FF-1 to FF-8), one step at a time on the same tree:
+
+| step | the pinned pair (one seat, two seats) | probe readings (fixtures, survive, fields) |
+|---|---|---|
+| before | 9140234918546171875, 2367344100585956785 | 46, 319, 198 |
+| a wreck's chip on both sides and both bongs (FF-4) | unchanged | 46, 319, 198 |
+| ordnance spares nobody: missile, grenade, drone, jet (P5-8) | unchanged | 46, 319, 198 |
+| spall hurts a teammate behind the wall | unchanged | unchanged |
+| the hammer and the well hurt their own | unchanged | unchanged |
+| a bong hops from a blast that hurts it (FF-7) | unchanged | unchanged |
+| air support holds what would reach a seat or the bong (FF-2) | unchanged | unchanged |
+| the radius ring, credit and the end screen (FF-1, FF-5, FF-6) | unchanged | unchanged |
+
+No reading moved enough to move a ceiling. The wreck's chip re-timed four
+`survive` maps (choke, props, tight-corridors, towers: a few enemy shots
+more or fewer, towers' jitter 5 to 4 and churn 9 to 10), and the ordnance
+step castle-moat's fire counts on the field maps (enemy hits on enemies 2
+to 4: an enemy's missile now hurts its own pack). Every total and every
+kind's maximum over the maps is what it was, so every ceiling stands; none
+improved, so none came down. The pinned rounds have no blast that reaches
+a hull or a bong it used to spare, so neither pin moved.
+
+`probe-defend` (its recipe's rounds, in a debug build) passes before and
+after: every round won, never-arrived 0 on both maps. The wreck's chip now
+reaches the dying tank's own pack, so the rounds re-time - longwater's
+rounds last 210.8 s on average (211.9 before), the study map's 150.2 s
+(151.8); its anomaly totals, which the recipe does not budget, moved by a
+few each way (longwater jitter 39 to 54, churn 88 to 82, tank-grind 0 to 1;
+the study map jitter 33 to 24, churn 52 to 47).
+
+The seats in these sweeps never fire, so they cannot show what the rule
+changes most: a seat's own grenade, drone or air strike at the bong. What
+they can show is FF-4's question - whether the wreck's chip on the bong
+makes Protect unwinnable - and they say it does not. On 11 Protect maps
+(eight of the fixtures, default, armory and classic; the towers fixture's
+log collided with the shipped map's and was left out), 10 rounds each from
+seed 1000, the rounds' outcomes without the chip and with it: `advance`
+lost 98 of 110 either way; `survive --mortal-bong` won 1 and lost 53
+either way (the armory win 3.3 s later); `defend` with a reach of 100 px,
+where enemies die beside the bong, won 1 and lost 97 either way; with a
+reach of 160 px it won 7 and lost 90 without the chip, 9 and 88 with it
+(pockets and props each a round better), since the chip hurts the dying
+tank's own pack too. With the whole stage in, the same again, but for one
+armory `advance` round left unfinished rather than lost (97 lost of 110).
+The seats never fire, so most of the losses are the seat's own wreck. So `bong_max_health` and the
+wreck's rows stay as they were.
+
 ### Re-baseline: enemies (BB-179)
 
 2026-11-20. Straight routes in an arena, a wander that resamples on

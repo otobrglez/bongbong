@@ -238,6 +238,28 @@ fn a_breach_throws_spall_into_the_tank_sheltering_behind() {
     assert!(spall.iter().all(|&d| d > 0.0 && d <= tuning().spall_damage), "{spall:?}");
 }
 
+/// Spall hurts whoever shelters behind the wall, whichever side: a seat's
+/// breach throws it into its own teammate as into an enemy.
+#[test]
+fn a_seats_spall_hurts_its_teammate_behind_the_wall() {
+    let map = format!("version = 1\ntanks = 0\ncells.\"5,11\" = {{ kind = \"start\" }}\n{}", wall("brick", &[(12, 10), (12, 11), (12, 12)]));
+    let mut game = Game::default();
+    game.seed_override = Some(7);
+    game.enemy_count_override = Some(0);
+    game.level_overrides.mission = Some(Mission::Destroy);
+    game.players = crate::simulation::PlayerCount::from_count(2).expect("two seats");
+    game.map = MapFile::from_toml_str(&map).expect("test map parses");
+    game.init(W, H);
+    let behind = cell_to_world(14, 11);
+    let mut events = Vec::new();
+    for _ in 0..4 {
+        game.debug_teleport(1, behind, Some(270.0)).expect("the second seat");
+        events.extend(shell_away(&mut game, 30, 30));
+    }
+    let spall = events.iter().filter(|e| matches!(**e, Event::Hit { target: HitTarget::Player { player: 1 }, damage, cause: HitCause::Spall, .. } if damage > 0.0)).count();
+    assert!(spall > 0, "the teammate behind the wall took spall");
+}
+
 #[test]
 fn a_collapse_brings_down_the_weak_tiles_of_its_run_and_stops_at_a_whole_one() {
     let run = [(12, 9), (12, 10), (12, 11), (12, 12), (12, 13)];

@@ -305,16 +305,17 @@ centre this tick), `Game::collapse_well` walks, in this order:
    `well_fling_max_speed` (480)) - the hammer's knock and skid, either side,
    the shooter too; a seat's on `Frame::shoves` for an owned hull. A hull
    whose centre stands within 1 px of the centre is flung back along its
-   own facing. **The side opposing the well's owner** takes
+   own facing. **Every hull flung is hurt**, the owner and its side
+   included (docs/november-26-rebuild-upgrade.md decision 2):
    `well_collapse_damage` (10) times `1 - d/R`, no roll, through
    `Tank::take_damage` (a rainbow shield soaks it), credited to the owner,
-   `Event::Hit { cause: HitCause::Well }`; its own side is flung unhurt.
+   `Event::Hit { cause: HitCause::Well }`.
 3. **Bongs hop out**: a bong in `R` hops along the line out from the centre
    `max(1, round(well_fling_bong_cells * (1 - d/R)))` cells
    (`well::bong_fling_target`: the farthest cell on the line it fits, walked
-   back a cell at a time, no jitter) through `Bong::start_hop`; the bong of
-   the side opposing the owner takes the collapse damage too
-   (`Bong::damage`).
+   back a cell at a time, no jitter) through `Bong::start_hop`; either
+   side's bong takes the collapse damage too, the owner's own as surely
+   (`Bong::hurt_by`, credited to the owner).
 4. **Grenades are thrown out in a ring**: every grenade the well holds
    leaves the ring along its own radial at `well_fling_grenade_speed` (220)
    with a lob (`climb` = `well_fling_grenade_climb`), its fuse as it was.
@@ -1199,7 +1200,7 @@ enemies' group:
 | `well_fling_speed` | 400 | 0..=508 | The collapse's shove at the centre (px/s, chassis-free mass), falling to nothing at the reach. |
 | `well_fling_max_speed` | 480 | 0..=508 | The most any fling gives; the wire's shove reaches 508. |
 | `well_fling_mass_exponent` | 1.5 | 0..=4 | How hard a heavy chassis resists the fling. |
-| `well_collapse_damage` | 10 | 0..=100 | The collapse's damage at the centre to the side opposing its owner, falling to nothing at the reach; no roll. |
+| `well_collapse_damage` | 10 | 0..=100 | The collapse's damage at the centre to every hull and bong in its reach, the owner's included, falling to nothing at the reach; no roll. |
 | `well_fling_grenade_speed` | 220 | 0..=1000 | How fast the collapse throws a grenade off the ring. |
 | `well_fling_grenade_climb` | 160 | 0..=2000 | And how high it lobs it (the grenade's `climb`). |
 | `well_fling_crate_speed` | 240 | 0..=1000 | How fast it slides a crate out at the centre. |
@@ -1510,7 +1511,7 @@ orb):
   `a_crate_stops_at_a_wall_deep_water_and_the_edge`,
   `the_bong_slides_in_cannot_hop_and_is_flung_out` (no jitter: the hop's
   target `bong_fling_target`'s), `a_wreck_a_tile_and_a_lantern_are_left_alone`.
-- The collapse: `the_collapse_flings_hulls_hurts_only_the_other_side_and_skids`
+- The collapse: `the_collapse_flings_and_hurts_every_hull_the_owners_included`
   (a seat's fling on `Frame::shoves` with its skid),
   `a_shield_soaks_the_collapse_not_the_fling`,
   `what_flies_in_the_reach_is_turned_out`,
@@ -1833,7 +1834,7 @@ Fields (the seven of `just probe-fields`, 3600 frames):
 | Night, storm, fog | The orb, the snap, the ring, the swirl and the rim are drawn unlit, the ring throws violet light and the core stays black; the AI counts a seat within its sight under the sky |
 | Lamp posts, lanterns | Stand: a post is a tile, a lantern a fixture the pull leaves alone |
 | Towers | Never moved; their bullets bend (a gun tower's burst curves round a well); the tesla arcs drones in a pull as ever; an offline tower is no different |
-| Bongs | Either side's slides in pinned, hops out at the collapse; the opposing side's takes the collapse's damage; Hunt's enemy bong counts as an ally to the AI's rule |
+| Bongs | Either side's slides in pinned, hops out at the collapse and takes the collapse's damage; Hunt's enemy bong counts as an ally to the AI's rule |
 | Crates | Slide in and out, keep their slot, never break by the pull; with `crate_breakable` a held drum's blast breaks them as any blast |
 | Drums, oil, fires | Drums lifted and set off together; oil and fires stay, and the drums' blasts light a trail in reach |
 | Trees, grass | Trees stand and stop the orb; grass leans in (cosmetic) and hides as ever |
@@ -1962,8 +1963,10 @@ Fields (the seven of `just probe-fields`, 3600 frames):
     wire's slot bitmask stay as they are; only an offset moves.
 12. **The bong is pinned and slides**, hopping out at the collapse by a
     computed hop with no jitter.
-13. **The collapse hurts the side opposing the owner a little** (10 at the
-    core), so a well alone pays something; the fling is blind. *For Oto*:
+13. **The collapse hurts everyone in its reach a little** (10 at the
+    core), so a well alone pays something; the fling and the hurt are
+    blind - the owner's side and bong included since BB-188 (friendly fire
+    is full, docs/november-26-rebuild-upgrade.md decision 2). *For Oto*:
     0 makes it pure control.
 14. **An EMP collapses a well early with the whole collapse**, rather than
     switching it off: one collapse path, and an EMP becomes a detonator -

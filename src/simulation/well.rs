@@ -7,7 +7,7 @@
 //! drums in its reach when its pull starts, pulls the bongs and the crates,
 //! swirls the tread marks and bows the grass, and collapses it
 //! (`collapse_well`) - the drums it holds going off together, the hulls in
-//! its reach flung out, the side opposing its owner hurt, bongs hopped out,
+//! its reach flung out and hurt, whoever's, bongs hopped out and hurt,
 //! grenades thrown out in a ring, what flies turned out, crates slid out.
 //! The pull on hulls goes through the drive (`Footing::well`), on shots
 //! through the fixed-step loop (`Projectile::bend`), on grenades, missiles
@@ -438,8 +438,7 @@ impl Game {
     /// A well collapses (docs/gravity-well.md "The collapse"), in this
     /// order: the drums it holds go off together where they circle; with
     /// `live`, every live hull in its reach is flung out (`knock_from`) and
-    /// the side opposing its owner hurt, and bongs hop out, the opposing
-    /// side's hurt; grenades it holds are thrown out in a ring; what flies
+    /// hurt, and bongs hop out, hurt, whichever side each is on; grenades it holds are thrown out in a ring; what flies
     /// in its reach is turned straight out; with `live`, crates slide out.
     /// On the end screen (`live` false) the drums' blasts hurt nobody
     /// (`explosions(f, false)`) and nothing on the ground is moved.
@@ -488,13 +487,13 @@ impl Game {
 
     /// The collapse's hulls: every live one on the field with its box's
     /// nearest point within the reach knocked out from the centre, falling
-    /// off to nothing at the reach; the side opposing `owner` hurt by
-    /// `well_collapse_damage` the same way, no roll.
+    /// off to nothing at the reach, and hurt by `well_collapse_damage` the
+    /// same way, no roll - whichever side it is on, the caller included.
     fn collapse_hulls(&mut self, f: &mut Frame, c: Position, owner: Owner, t: &Tuning) {
         let r = t.well_radius_px;
         for entity in self.hulls_in_order() {
-            let Some((d, whose, at)) = self.world.get::<&Tank>(entity).ok().map(|tank| (tank.target_shape().reach_from(c), tank.owner(), tank.position)) else { continue };
-            if d > r || owner.same_side(whose) || t.well_collapse_damage <= 0.0 {
+            let Some((d, at)) = self.world.get::<&Tank>(entity).ok().map(|tank| (tank.target_shape().reach_from(c), tank.position)) else { continue };
+            if d > r || t.well_collapse_damage <= 0.0 {
                 continue;
             }
             self.hurt_tank(f, entity, Hurt::hit(t.well_collapse_damage * (1.0 - d / r), HitCause::Well, Some(owner), at));
@@ -508,8 +507,8 @@ impl Game {
     }
 
     /// The collapse's bongs: each in the reach hops out along the line from
-    /// the centre (`well::bong_fling_target`, no jitter); the side opposing
-    /// `owner` takes the collapse's damage too.
+    /// the centre (`well::bong_fling_target`, no jitter) and takes the
+    /// collapse's damage, the caller's own bong as surely as the other.
     fn collapse_bongs(&mut self, f: &mut Frame, c: Position, owner: Owner, t: &Tuning) {
         let r = t.well_radius_px;
         let terrain = &f.terrain;
@@ -527,13 +526,9 @@ impl Game {
             if let Some(to) = well::bong_fling_target(c, bong.position, cells, |p| terrain.bong_fits(p)) {
                 bong.start_hop(to);
             }
-            let side_owner = match bong.side {
-                crate::bong::Side::Player => Owner::Player(0),
-                crate::bong::Side::Enemy => Owner::Enemy(0),
-            };
-            if !owner.same_side(side_owner) && t.well_collapse_damage > 0.0 {
+            if t.well_collapse_damage > 0.0 {
                 let dmg = t.well_collapse_damage * (1.0 - d / r);
-                bong.damage(dmg);
+                bong.hurt_by(dmg, Some(owner));
                 hurt.push((bong.side, bong.position, dmg, bong.is_dead()));
             }
         }

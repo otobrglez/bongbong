@@ -682,6 +682,12 @@ impl Game {
             crate::tower::draw_ruin(c, ruin);
         }
         crate::tower::draw_ooze(c, &self.ooze, self.time);
+        // Last on the floor, under everything that stands in it: the reach
+        // of every blast a seat owns that is about to go off. Never culled
+        // by its centre: the ring reaches far past it.
+        for ring in self.blast_rings() {
+            crate::blast::draw_blast_ring(c, &ring, &t);
+        }
     }
 
     /// The tiles: every wall and prop with its shadow and edge cap. Trees

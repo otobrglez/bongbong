@@ -1461,6 +1461,20 @@ pub fn result_stats(game: &Game) -> RoundStats {
     stats
 }
 
+/// The end screen's friendly-fire line (`ResultLayout::friendly_y`): the
+/// seats' tanks and the bong the players' side lost to its own fire, in
+/// the language on screen; `None` when it lost nothing to it.
+pub fn friendly_fire_line(ff: &crate::simulation::FriendlyFire) -> Option<String> {
+    use crate::text::{keys, text};
+    let t = text();
+    match (ff.tanks, ff.bong) {
+        (0, false) => None,
+        (0, true) => Some(t.get(keys::RESULT_FRIENDLY_BONG)),
+        (n, false) => Some(t.fmt(keys::RESULT_FRIENDLY_TANKS, &[("n", n.into())])),
+        (n, true) => Some(t.fmt(keys::RESULT_FRIENDLY_BOTH, &[("n", n.into())])),
+    }
+}
+
 /// A level's end-screen buttons: `PLAY AGAIN` always, and after a win the
 /// way on - unless the win opens nothing, which the screen says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1514,6 +1528,9 @@ pub struct ResultLayout {
     pub stats_y: f32,
     /// The wrecks by seat, from two seats, at `RESULT_SEATS_SIZE`.
     pub seats_y: Option<f32>,
+    /// What friendly fire cost (`RoundStats::friendly_fire`), when it cost
+    /// anything, at `RESULT_SEATS_SIZE`.
+    pub friendly_y: Option<f32>,
     /// A level's buttons; free play has none.
     pub buttons: Option<ResultRects>,
     /// Free play's restart countdown, at `RESULT_LINE_SIZE`, in the
@@ -1580,6 +1597,7 @@ pub fn result_layout(area: Rect, view: &ResultView) -> ResultLayout {
         + line
         + 10.0
         + if view.seats >= 2 { RESULT_SEATS_SIZE as f32 + 10.0 } else { 0.0 }
+        + if view.stats.friendly_fire.any() { RESULT_SEATS_SIZE as f32 + 10.0 } else { 0.0 }
         + 14.0
         + if view.buttons.is_some() { RESULT_BUTTON_H } else { line };
     let top = centred_in(area, 0.0, RESULT_TITLE_SIZE as f32 + rows).y;
@@ -1592,6 +1610,11 @@ pub fn result_layout(area: Rect, view: &ResultView) -> ResultLayout {
     let stats_y = y;
     y += line + 10.0;
     let seats_y = (view.seats >= 2).then(|| {
+        let at = y;
+        y += RESULT_SEATS_SIZE as f32 + 10.0;
+        at
+    });
+    let friendly_y = view.stats.friendly_fire.any().then(|| {
         let at = y;
         y += RESULT_SEATS_SIZE as f32 + 10.0;
         at
@@ -1609,7 +1632,7 @@ pub fn result_layout(area: Rect, view: &ResultView) -> ResultLayout {
             next: b.next.map(|_| Rectangle::new(again.x + w + gap, y, w, h)),
         }
     });
-    ResultLayout { title_y: top, all_clear_y, stats_y, seats_y, buttons, countdown_y }
+    ResultLayout { title_y: top, all_clear_y, stats_y, seats_y, friendly_y, buttons, countdown_y }
 }
 
 /// A round's length as the end screen writes it: `m:ss`, whole seconds.
@@ -1871,7 +1894,7 @@ pub fn covered(corners: &Corners, marks: &[(crate::Position, f32)], screen: &Wor
 mod hud_tests {
     use super::*;
     use crate::map::MapFile;
-    use crate::simulation::PlayerCount;
+    use crate::simulation::{FriendlyFire, PlayerCount};
     use crate::MAX_SEATS;
 
     const W: f32 = crate::DEFAULT_SCREEN_WIDTH as f32;
@@ -2766,9 +2789,19 @@ mod hud_tests {
         assert_eq!(banner_size("LEVEL 3 / 14", LEVEL_NUMBER_SIZE, small), LEVEL_NUMBER_SIZE, "a size under the floor stays");
     }
 
+    /// The friendly-fire line names what was lost, and is not there when
+    /// nothing was.
+    #[test]
+    fn the_friendly_fire_line_names_what_was_lost() {
+        assert_eq!(friendly_fire_line(&FriendlyFire::default()), None);
+        assert_eq!(friendly_fire_line(&FriendlyFire { tanks: 1, bong: false }).as_deref(), Some("LOST TO FRIENDLY FIRE: 1 TANK"));
+        assert_eq!(friendly_fire_line(&FriendlyFire { tanks: 0, bong: true }).as_deref(), Some("LOST TO FRIENDLY FIRE: THE BONG"));
+        assert_eq!(friendly_fire_line(&FriendlyFire { tanks: 2, bong: true }).as_deref(), Some("LOST TO FRIENDLY FIRE: 2 TANKS AND THE BONG"));
+    }
+
     /// The end screen fits the smallest area the chrome is laid out in, in
     /// its tallest and widest form - every level complete, eight seats'
-    /// shares, three buttons - its buttons finger-sized, apart and in one
+    /// shares, a friendly-fire line, three buttons - its buttons finger-sized, apart and in one
     /// row centred on the area, and each form puts its lines top to bottom
     /// without overlapping; a level's countdown is in a button, never a
     /// line.
@@ -2785,14 +2818,15 @@ mod hud_tests {
             Some(ResultButtons { next: None, countdown: Some(3), uncounted: true }),
         ];
         for field in fields {
-            for seats in [1, 2, MAX_SEATS] {
+            for (seats, friendly_fire) in [1, 2, MAX_SEATS].into_iter().flat_map(|n| [(n, FriendlyFire::default()), (n, FriendlyFire { tanks: 2, bong: true })]) {
                 for buttons in forms {
-                    let view = ResultView { stats: RoundStats::default(), seats, buttons };
+                    let view = ResultView { stats: RoundStats { friendly_fire, ..RoundStats::default() }, seats, buttons };
                     let rows = result_layout(field, &view);
-                    let what = format!("{}x{}, {seats} seats, {buttons:?}", field.w, field.h);
+                    let what = format!("{}x{}, {seats} seats, {friendly_fire:?}, {buttons:?}", field.w, field.h);
                     assert!(rows.title_y >= field.y, "{what}");
+                    assert_eq!(rows.friendly_y.is_some(), friendly_fire.any(), "{what}: a friendly-fire line only when it cost something");
                     let mut y = rows.title_y + RESULT_TITLE_SIZE as f32;
-                    for (line, size) in [(rows.all_clear_y, RESULT_LINE_SIZE), (Some(rows.stats_y), RESULT_LINE_SIZE), (rows.seats_y, RESULT_SEATS_SIZE)] {
+                    for (line, size) in [(rows.all_clear_y, RESULT_LINE_SIZE), (Some(rows.stats_y), RESULT_LINE_SIZE), (rows.seats_y, RESULT_SEATS_SIZE), (rows.friendly_y, RESULT_SEATS_SIZE)] {
                         if let Some(at) = line {
                             assert!(at >= y, "{what}: a line overlaps the one above");
                             y = at + size as f32;

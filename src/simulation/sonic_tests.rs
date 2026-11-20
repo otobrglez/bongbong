@@ -305,7 +305,7 @@ fn a_bong_the_wave_reaches_is_stunned_and_neither_hops_nor_bites() {
 }
 
 #[test]
-fn the_hammer_hurts_only_the_other_side_and_shoves_everyone() {
+fn the_hammer_hurts_and_shoves_everyone_it_reaches() {
     let mut game = round_with("", 2, Mission::Destroy);
     let mate = game.seat(1).unwrap();
     let mate_at = Position::new(196.0, 192.0);
@@ -313,8 +313,9 @@ fn the_hammer_hurts_only_the_other_side_and_shoves_everyone() {
     let enemy_at = Position::new(196.0, 236.0);
     let enemy = parked_row(&mut game, enemy_at, 1);
     let events = blast(&mut game, 60);
-    assert_eq!(damage(&game, mate), 0.0, "a teammate is not hurt");
-    assert!(moved(&game, mate, mate_at) > 10.0, "but is shoved");
+    let mate_hurt = damage(&game, mate);
+    assert!(mate_hurt > 0.0 && mate_hurt <= tuning().sonic_damage, "a teammate in the cone is hurt: {mate_hurt}");
+    assert!(moved(&game, mate, mate_at) > 10.0, "and shoved");
     let hurt = damage(&game, enemy);
     assert!(hurt > 0.0 && hurt <= tuning().sonic_damage, "{hurt}");
     let hit = events.iter().find_map(|e| match *e {

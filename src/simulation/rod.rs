@@ -157,7 +157,7 @@ impl Game {
         if live {
             self.chain_held_drums(f, c, t.rod_shove_radius_px);
             self.rod_hulls(f, c, zone.owner, &t);
-            self.rod_bongs(f, c, &t);
+            self.rod_bongs(f, c, zone.owner, &t);
             for target in self.air_targets() {
                 if target.ground.distance_to(c) <= t.rod_kill_radius_px {
                     self.strike_air(f, target.key, crate::air::AirStrike::Rod);
@@ -228,7 +228,7 @@ impl Game {
 
     /// The bongs, either side's: one whose collider reaches into the circle
     /// is killed, one in the shove ring stunned.
-    fn rod_bongs(&mut self, f: &mut Frame, c: Position, t: &Tuning) {
+    fn rod_bongs(&mut self, f: &mut Frame, c: Position, owner: Owner, t: &Tuning) {
         let half = Vec2::new(crate::BONG_COLLIDER_HALF_EXTENT.0, crate::BONG_COLLIDER_HALF_EXTENT.1);
         let mut dead = Vec::new();
         for bong in super::ordered(self.world.query_mut::<&mut Bong>().into_iter(), |b| super::bong_order(b)) {
@@ -237,7 +237,7 @@ impl Game {
             }
             let d = crate::emp::box_reach(c, bong.position, half);
             if d <= t.rod_kill_radius_px {
-                bong.damage(f32::MAX);
+                bong.hurt_by(f32::MAX, Some(owner));
                 f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: MAX_DAMAGE, killed: true, x: bong.position.x, y: bong.position.y, cause: HitCause::Rod });
                 dead.push(bong.position);
             } else if bong.position.distance_to(c) <= t.rod_shove_radius_px {

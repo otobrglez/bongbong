@@ -221,17 +221,17 @@ fn the_drone_flies_over_walls_and_dives_on_its_target() {
     assert_eq!(before, walls(&game), "flew over the wall");
 }
 
-/// The side opposing the launcher is hurt; a teammate in the burst is
-/// shoved and whole.
+/// A burst hurts whoever it reaches: the enemy it dived on, and a
+/// teammate standing beside it as surely.
 #[test]
-fn only_the_opposing_side_is_hurt() {
+fn a_teammate_in_the_burst_is_hurt_too() {
     let mut game = round_with("", 2);
     let mate = game.players()[1].unwrap();
     let enemy = parked(&mut game, cell(12, 6));
     game.place_tank(mate, cell(12, 8), Some(0.0)).unwrap();
     launch(&mut game, 300);
     assert!(tank(&game, enemy, |t| t.damage) > 0.0);
-    assert_eq!(tank(&game, mate, |t| t.damage), 0.0, "a teammate takes nothing");
+    assert!(tank(&game, mate, |t| t.damage) > 0.0, "a teammate in the burst is hurt");
 }
 
 /// A tank whose hull touches a tree's crown is never locked.

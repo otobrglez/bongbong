@@ -10,7 +10,7 @@ use crate::RoundRng;
 use crate::math::Vec2;
 
 use crate::ai::Ai;
-use crate::bong::{Bong, Side};
+use crate::bong::Bong;
 use crate::knock::Knock;
 use crate::obstacle::{face_toward, Material, Obstacle};
 use crate::physics::Physics;
@@ -28,28 +28,10 @@ use super::hits::{ShellTarget, Terrain};
 use super::props::DamageCause;
 use super::{with_bong_mut, Event, Footing, Frame, Game, HitCause, HitTarget, Shoves};
 
-/// Whose hulls a blast hurts. It shoves every live hull it reaches.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum BlastSpares {
-    Nobody,
-    /// The side of this owner is shoved and not hurt: a wreck's own side,
-    /// the side that fired a missile or threw a grenade.
-    SideOf(Owner),
-}
-
-/// Which bongs a blast hurts.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum BlastBongs {
-    None,
-    All,
-    /// Only the bong of the side opposing this owner.
-    Opposing(Owner),
-}
-
-/// One explosion's numbers and what it touches, for `Game::blast` - the
-/// one blast every source goes through: a tank wreck's, a drum's, a lava
-/// bomb's, a crate cooking off, a missile's, a grenade's, a drone's, a
-/// jet's.
+/// One explosion's numbers, for `Game::blast` - the one blast every
+/// source goes through: a tank wreck's, a drum's, a lava bomb's, a crate
+/// cooking off, a missile's, a grenade's, a drone's, a jet's. Every one
+/// hurts every hull and every bong it reaches, whoever set it off.
 pub(super) struct BlastParams {
     pub radius: f32,
     pub damage: (f32, f32),
@@ -58,8 +40,6 @@ pub(super) struct BlastParams {
     /// missile's shooter, the seat that wrecked the tank now exploding.
     /// `None` for a drum's.
     pub by: Option<Owner>,
-    pub spares: BlastSpares,
-    pub bongs: BlastBongs,
     /// Lanterns on the ground within `LANTERN_REACH` of the radius are
     /// knocked out.
     pub lanterns: bool,
@@ -75,38 +55,28 @@ pub(super) struct BlastParams {
 const LANTERN_REACH: f32 = 0.6;
 
 impl BlastParams {
-    /// A blast of the world's own - a drum, a lava bomb: everyone in the
-    /// radius, both bongs, the lanterns, the drums chained.
+    /// A blast of the world's own - a drum, a lava bomb: the lanterns
+    /// knocked out and the drums chained.
     pub fn world(radius: f32, damage: (f32, f32), knockback: f32) -> Self {
-        BlastParams { radius, damage, knockback, by: None, spares: BlastSpares::Nobody, bongs: BlastBongs::All, lanterns: true, grenades: false, chains: true }
+        BlastParams { radius, damage, knockback, by: None, lanterns: true, grenades: false, chains: true }
     }
 
     /// Ordnance fired by `by` going off - a missile, a grenade, a drone, a
-    /// jet's burst or bomb: the side opposing `by` and its bong.
+    /// jet's burst or bomb: `by` and its own side are hurt as surely as the
+    /// side it was fired at, and so is either bong.
     pub fn ordnance(radius: f32, damage: (f32, f32), knockback: f32, by: Owner) -> Self {
-        BlastParams {
-            radius,
-            damage,
-            knockback,
-            by: Some(by),
-            spares: BlastSpares::SideOf(by),
-            bongs: BlastBongs::Opposing(by),
-            lanterns: false,
-            grenades: false,
-            chains: false,
-        }
+        BlastParams { radius, damage, knockback, by: Some(by), lanterns: false, grenades: false, chains: false }
     }
 
-    /// A tank's death (`Game::apply_explosion`): a chip to the side
-    /// opposing `victim`, credited to `by`, and no bong.
-    pub fn tank_wreck(victim: Owner, by: Option<Owner>) -> Self {
+    /// A tank's death (`Game::apply_explosion`): a chip to every hull and
+    /// every bong in reach, whichever side the wreck was on, credited to
+    /// `by`.
+    pub fn tank_wreck(by: Option<Owner>) -> Self {
         BlastParams {
             radius: tuning().explosion_radius,
             damage: (tuning().explosion_damage_min, tuning().explosion_damage_max),
             knockback: tuning().explosion_knockback_speed,
             by,
-            spares: BlastSpares::SideOf(victim),
-            bongs: BlastBongs::None,
             lanterns: false,
             grenades: false,
             chains: false,
@@ -207,7 +177,8 @@ pub(super) struct Landed {
 /// stream, a blast, a ram, a bite, lava, fire, ooze, a rod - lands here:
 /// the damage goes on through `Tank::take_damage` (or the rod's crush),
 /// the hull is marked hit and `hurt.by` credited, the hurt is reported as
-/// its `Report` says, and a hull it wrecks goes on `kills`. `None` for a
+/// its `Report` says, and a hull it wrecks goes on `kills` with `hurt.by`
+/// noted as what wrecked it (`Tank::wrecked_by`). `None` for a
 /// wreck, which nothing hurts further. Draws no RNG: a source rolls its
 /// own damage first. `Game::hurt_tank` is this plus the AI's alert.
 pub(super) fn hurt(tank: &mut Tank, hurt: &Hurt, events: &mut Vec<Event>, kills: &mut Vec<(Position, Owner)>) -> Option<Landed> {
@@ -229,6 +200,9 @@ pub(super) fn hurt(tank: &mut Tank, hurt: &Hurt, events: &mut Vec<Event>, kills:
         }
     }
     let killed = tank.is_wreck();
+    if killed {
+        tank.wrecked_by = hurt.by;
+    }
     let owner = tank.owner();
     let target = match owner {
         Owner::Player(player) => HitTarget::Player { player },
@@ -344,7 +318,7 @@ impl Game {
                         (true, bong.position, false, 0.0)
                     } else {
                         let d = roll_range(&mut f.rng, dmg.0, dmg.1);
-                        bong.damage(d);
+                        bong.hurt_by(d, Some(shooter));
                         let target = HitTarget::Bong { side: bong.side };
                         f.events.push(Event::Hit { target, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: effects.cause });
                         (bong.is_dead(), bong.position, bong.can_hop(), bong.hop_distance())
@@ -380,26 +354,29 @@ impl Game {
     }
 
     /// A tank's death: an outward shove that fades linearly to nothing at
-    /// `explosion_radius`, reaching every live tank regardless of side,
-    /// plus a chip of damage only to the side opposing whoever died,
-    /// credited to the seat the wreck itself is credited to. Obstacles in
+    /// `explosion_radius` and a chip of damage with it, to every live tank
+    /// and every bong in reach, whichever side died - a wreck beside its
+    /// own pack chips the pack, and one beside a bong chips the bong.
+    /// Credited to the seat the wreck itself is credited to. Obstacles in
     /// range crack too - a barrel in range goes off
-    /// (`Game::damage_obstacle`). No bong is hurt. A chip that finishes
-    /// off a tank pushes it onto `f.kills`, so it gets its own blast in
-    /// turn.
+    /// (`Game::damage_obstacle`). A chip that finishes off a tank pushes
+    /// it onto `f.kills`, so it gets its own blast in turn.
     pub(super) fn apply_explosion(&mut self, f: &mut Frame, center: Position, victim: Owner) {
         let by = self.world.query::<&Tank>().iter().find(|t| t.owner() == victim).and_then(|t| t.last_hit_by).map(Owner::Player);
-        self.blast(f, center, &BlastParams::tank_wreck(victim, by), &[]);
+        self.blast(f, center, &BlastParams::tank_wreck(by), &[]);
     }
 
     /// **The one blast.** Everything `params.radius` reaches from `center`
     /// takes its share, falling off linearly to nothing at the radius:
     ///
-    /// - every live hull on the field is shoved out from the centre, and
-    ///   hurt unless `params.spares` its side - reached at the nearest
-    ///   point of its hull (`TargetShape::reach_from`), so a wide hull is
-    ///   not hit from further inside itself than a narrow one;
-    /// - the bongs `params.bongs` names are hurt;
+    /// - every live hull on the field is shoved out from the centre and
+    ///   hurt, whichever side it is on and whoever set the blast off -
+    ///   reached at the nearest point of its hull
+    ///   (`TargetShape::reach_from`), so a wide hull is not hit from
+    ///   further inside itself than a narrow one;
+    /// - every live bong is hurt (an `Event::Hit` of the blast's), and one
+    ///   that lives through it and may hop leaps away from the centre
+    ///   (`bong_hop_target`), as it does from a shot;
     /// - a hull or a bong with a permanent tile between it and the centre
     ///   (`Terrain::line_of_fire` to where it stands - iron, a volcano's
     ///   cone, a training door) is in cover: neither hurt nor shoved;
@@ -410,7 +387,8 @@ impl Game {
     /// `spared` are left out whole. One damage roll for each hull hurt,
     /// each bong and each tile, in that order - the seats in index order,
     /// the enemies by slot, the bongs, the tiles by cell - and the roll is
-    /// drawn for one in cover too, so cover never moves the stream. A tank
+    /// drawn for one in cover too, so cover never moves the stream; a bong
+    /// that hops draws its jitter straight after its own roll. A tank
     /// still rolling in through a gate is out of the fight: a seat by
     /// `seats_on_field`, an enemy by having no `Ai` yet.
     pub(super) fn blast(&mut self, f: &mut Frame, center: Position, params: &BlastParams, spared: &[Entity]) {
@@ -421,31 +399,22 @@ impl Game {
             if spared.contains(&entity) {
                 continue;
             }
-            let (dist, at, owner, footing) = {
+            let (dist, at, footing) = {
                 let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
                 if tank.is_wreck() {
                     continue;
                 }
                 let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
                 let dist = tank.target_shape().reach_from(center);
-                (dist, tank.position, tank.owner(), footing)
+                (dist, tank.position, footing)
             };
             if dist > params.radius {
                 continue;
             }
             let falloff = 1.0 - dist / params.radius;
             let covered = !f.terrain.line_of_fire(center, at);
-            let hurts = match params.spares {
-                BlastSpares::Nobody => true,
-                BlastSpares::SideOf(side) => !side.same_side(owner),
-            };
-            if hurts {
-                let dmg = params.roll_damage(&mut f.rng) * falloff;
-                if !covered && self.hurt_tank(f, entity, Hurt::hit(dmg, HitCause::Blast, params.by, center)).is_some_and(|l| l.killed) {
-                    continue;
-                }
-            }
-            if covered {
+            let dmg = params.roll_damage(&mut f.rng) * falloff;
+            if covered || self.hurt_tank(f, entity, Hurt::hit(dmg, HitCause::Blast, params.by, center)).is_some_and(|l| l.killed) {
                 continue;
             }
             let line = at - center;
@@ -456,33 +425,37 @@ impl Game {
             let tank = q.get().expect("a hull in the blast's walk has a Tank");
             knock(&mut self.physics, &mut f.shoves, tank, dir, Knock::blast(&tuning(), params.knockback * falloff), footing);
         }
-        if params.bongs != BlastBongs::None {
-            let mut dead_bongs = Vec::new();
-            for (entity, bong) in super::ordered(self.world.query::<(Entity, &mut Bong)>().iter(), |(_, b)| super::bong_order(b)) {
-                if bong.is_dead() || spared.contains(&entity) {
-                    continue;
-                }
-                if let BlastBongs::Opposing(owner) = params.bongs
-                    && bong.side == (if owner.is_player() { Side::Player } else { Side::Enemy })
-                {
-                    continue;
-                }
-                let dist = bong.position.distance_to(center);
-                if dist > params.radius {
-                    continue;
-                }
-                let dmg = params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius);
-                if !f.terrain.line_of_fire(center, bong.position) {
-                    continue;
-                }
-                bong.damage(dmg);
-                if bong.is_dead() {
-                    dead_bongs.push(bong.position);
+        let mut dead_bongs = Vec::new();
+        for (entity, bong) in super::ordered(self.world.query::<(Entity, &mut Bong)>().iter(), |(_, b)| super::bong_order(b)) {
+            if bong.is_dead() || spared.contains(&entity) {
+                continue;
+            }
+            let dist = bong.position.distance_to(center);
+            if dist > params.radius {
+                continue;
+            }
+            let dmg = params.roll_damage(&mut f.rng) * (1.0 - dist / params.radius);
+            if !f.terrain.line_of_fire(center, bong.position) {
+                continue;
+            }
+            bong.hurt_by(dmg, params.by);
+            let killed = bong.is_dead();
+            f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: dmg, killed, x: bong.position.x, y: bong.position.y, cause: HitCause::Blast });
+            if killed {
+                dead_bongs.push(bong.position);
+            } else if bong.can_hop() {
+                // It dodges a blast as it dodges a shell: one jitter draw,
+                // straight after its own damage roll.
+                let line = bong.position - center;
+                let len = line.length();
+                let away = if len > 0.001 { line / len } else { Vec2::new(1.0, 0.0) };
+                if let Some(to) = bong_hop_target(&mut f.rng, bong.position, away, bong.hop_distance(), &f.terrain, f.width, f.height) {
+                    bong.start_hop(to);
                 }
             }
-            for pos in dead_bongs {
-                f.shocks.push(Shockwave::scaled(pos, tuning().bong_shock));
-            }
+        }
+        for pos in dead_bongs {
+            f.shocks.push(Shockwave::scaled(pos, tuning().bong_shock));
         }
         if params.lanterns {
             self.break_lanterns(f, center, params.radius * LANTERN_REACH);

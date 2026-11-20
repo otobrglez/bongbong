@@ -33,6 +33,32 @@ use crate::{
     SCORCH_VARIANTS,
 };
 
+/// A blast a seat owns that is about to go off (`Game::blast_rings`):
+/// where, how far it reaches, and the seconds left before it does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlastRing {
+    pub at: Position,
+    pub radius: f32,
+    pub left: f32,
+}
+
+/// The ring a blast that is about to go off draws on the ground at its
+/// reach (docs/grenade-launcher.md "The ring"): one block wide, in the
+/// grenade band's flash ramp (`grenade::BAND_LIT`), coming in through the
+/// field's Bayer pattern over the first third of `blast_ring_seconds` and
+/// burning from red to white as `left` runs out. Everything inside it will
+/// be hurt, whichever side it is on.
+pub fn draw_blast_ring(c: &mut impl Canvas, ring: &BlastRing, t: &crate::tuning::Tuning) {
+    let window = t.blast_ring_seconds;
+    if window <= 0.0 || ring.radius <= 0.0 {
+        return;
+    }
+    let shown = ((window - ring.left) / window).clamp(0.0, 1.0);
+    let cover = (shown * 3.0).clamp(0.0, 1.0);
+    let color = crate::pyro::step(&crate::grenade::BAND_LIT, 0.2 + 0.8 * shown);
+    crate::pyro::block_arc(c, ring.at, ring.radius, crate::pyro::BLOCK, 0.0, std::f32::consts::TAU, color, cover.max(0.25));
+}
+
 /// A cosmetic seed for the blast at `center`: picks flips, rotations and
 /// the scorch variant. Hashed from the position rather than rolled.
 pub fn seed_for(center: Position) -> u32 {
@@ -374,6 +400,32 @@ pub fn draw_scorch_kept(c: &mut impl Canvas, s: &Scorch, keep: f32) {
 
 #[cfg(test)]
 mod conformance_tests {
+
+    /// The ring lies on the blast's reach, one block wide, nothing inside
+    /// or outside it, and is drawn only within its window.
+    #[test]
+    fn the_ring_is_drawn_on_the_reach_and_only_in_its_window() {
+        let t = crate::tuning::Tuning::DEFAULT;
+        let ring = BlastRing { at: Position::new(100.0, 100.0), radius: 40.0, left: 0.0 };
+        // On black: the blank canvas is white, as is the ring's last step.
+        let black = || {
+            let mut c = crate::canvas::CpuCanvas::blank(200, 200);
+            Canvas::fill_rect(&mut c, 0, 0, 200, 200, Color::BLACK);
+            c
+        };
+        let mut c = black();
+        draw_blast_ring(&mut c, &ring, &t);
+        let clear = black();
+        let lit = |c: &crate::canvas::CpuCanvas, x: usize, y: usize| c.pixel(x, y) != clear.pixel(x, y);
+        assert!(lit(&c, 140, 100) || lit(&c, 139, 100), "on the reach to the east");
+        assert!(lit(&c, 100, 60) || lit(&c, 100, 59), "and to the north");
+        assert!(!lit(&c, 100, 100) && !lit(&c, 120, 100), "nothing inside it");
+        assert!(!lit(&c, 150, 100), "nor outside");
+        let mut none = black();
+        draw_blast_ring(&mut none, &ring, &crate::tuning::Tuning { blast_ring_seconds: 0.0, ..t });
+        assert!(none.pixels() == clear.pixels(), "0 seconds draws none");
+    }
+
     use super::*;
 
     #[test]

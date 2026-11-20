@@ -997,6 +997,11 @@ pub struct Tank {
     /// instantaneous fact `TankSnapshot::hit_by_enemy` reports, which the
     /// probe counts enemy-on-enemy hits by.
     pub hit_by_enemy: Option<usize>,
+    /// Who dealt the hurt that wrecked it (`simulation::combat::hurt`):
+    /// `None` while it lives and for a wreck nobody set off. A seat's
+    /// wreck one of the seats dealt is lost to friendly fire on the end
+    /// screen (`Game::round_stats`); it never scores.
+    pub wrecked_by: Option<Owner>,
     /// What its runs are doing to the ground (docs/ground-memory.md):
     /// pressed by `simulation::press_treads`, read by the particle layer
     /// (`Game::driving`) and nothing that plays.
@@ -1178,6 +1183,7 @@ impl Default for Tank {
             contacts_before: 0,
             hit_by_seat: None,
             hit_by_enemy: None,
+            wrecked_by: None,
             slime_timer: 0.0,
             oil_load: 0,
             oil_cell: None,

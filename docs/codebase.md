@@ -549,26 +549,29 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     tank within `missile_seek_range` (ties on slot; none = the launcher's aim point) and keeps its
     aim on that tank while it chases (an enemy's missile locks a seat only while its launcher stands
     inside that seat's sight box); `resolve_missiles` bursts the ones that landed (`missile_blast`:
-    `Game::blast` with `BlastParams::ordnance`: the side opposing the shooter hurt, a shove for
-    everyone, opposing bongs, `damage_obstacle` for tiles). Missiles have **no hit test** - they fly over everything and only
+    `Game::blast` with `BlastParams::ordnance`: every hull and both bongs in reach hurt and shoved,
+    the shooter's side included, `damage_obstacle` for tiles). Missiles have **no hit test** - they fly over everything and only
     the blast touches anything. No RNG beyond the blast's damage rolls.
   - `grenades.rs` (docs/grenade-launcher.md) — the grenades' world half (`grenade.rs` is the ball):
     `roll_grenades` (after `step_world` and the ram, on the end screen too) rolls each among
     `Terrain::solid_boxes` (each tile's body as a hull meets it, `Entry::Solid`, and the bongs),
     `edge_boxes` and every hull with a body (a live one at its body's velocity, a wreck still);
     `resolve_grenades` sets off the spent ones in id order through `Game::blast`
-    (`BlastParams::grenade`: the side opposing the launcher hurt, everyone shoved, opposing bongs,
+    (`BlastParams::grenade`: everyone in reach hurt and shoved, the launcher and both bongs included,
     tiles, crates) and `grenade_show` (a replica's off `Event::GrenadeBlast`: fireball, a
     `grenade_shock` ripple, the screen flash, scorch). A grenade moves no tank and a round without
-    one draws exactly what it did; no RNG beyond the blast's damage rolls.
+    one draws exactly what it did; no RNG beyond the blast's damage rolls. `Game::blast_rings` is
+    the radius ring's one geometry (docs/grenade-launcher.md "The ring"): every seat's grenade in its
+    last `blast_ring_seconds`, its missiles and drones in their dive, by id - what
+    `game.rs`'s floor paints with `blast::draw_blast_ring` and the tests read.
   - `sonic.rs` (docs/sonic-hammer.md) — the sonic hammer's world half (`sonic.rs` at the top is the
     cone, the wave and the drawing): `fire_sonic` from the dispatch arm, `resolve_sonic` casts the
     frame's presses into `Game::sonic_waves`, `tick_sonic_waves` (after `resolve_flames`, before
     `step_world`; on the end screen with `live` false) strikes what each wave's front reaches once -
     `knock` (an impulse and `Tank::skid`, the slide every later shove may use; `Event::Shoved::skid`
     for an owned hull, `Game::seat_knock` the pose validator's allowance - a `SeatKnock`, each pose
-    the knock's speed past the reach and all of them the knock's slide, no more), damage to the
-    opposing side only (`HitCause::Sonic`), glass shattered, grass flattened (`Game::grass_flat`,
+    the knock's speed past the reach and all of them the knock's slide, no more), damage to every
+    hull it reaches, whichever side (`HitCause::Sonic`), glass shattered, grass flattened (`Game::grass_flat`,
     `grass::pin`, `Game::cover_cells` what conceals), drums thrown (`throw_drum`, `drum_landing`),
     bongs stunned, lanterns broken, grenades pushed - no RNG. `sonic_show` is the cosmetic half a
     replica's `SonicBlast` and a client's press take too; `hammer_senses` is what the AI is handed
@@ -647,8 +650,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     in reach into `held_drums` at the pull's start, pulling bongs and crates (`Pickup::drift`),
     burning held fuses, scrubbing tread marks and bowing grass (`drain_marks`, `lean_grass`, a
     replica's too in `tick_presentation`) - and collapses (`collapse_well`: held drums off together
-    where they circle, every hull flung by `knock_from`, the side opposing its owner hurt, bongs
-    hopped out, grenades thrown out in a ring, what flies turned out, crates slid out). The pull
+    where they circle, every hull flung by `knock_from` and hurt, the owner's included, bongs
+    hopped out and hurt (`Bong::hurt_by`), grenades thrown out in a ring, what flies turned out, crates slid out). The pull
     reaches hulls through the drive (`Footing::pulled`: the current along the tracks, the side pull
     across them against the grip), shots through `Projectile::bend` and a swallow at the core in
     `resolve_projectiles`, missiles and drones through `pull_air`, grenades through
@@ -668,7 +671,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     (`air_arrivals`), then for each aircraft by id builds its `AirView` - its seat's position,
     velocity and wreck (`air_anchor`), and what it may attack this step, the enemy tanks and
     standing enemy towers inside the seat's sight box (`air_marks`: nearest, a tank before a tower
-    at the same distance, then slot or cell, each with a `MarkKey` and its velocity) -, steps it
+    at the same distance, then slot or cell, each with a `MarkKey` and its velocity) and what its
+    blasts must not reach (`air_friends`: every seat's live hull on the field and the players' bong,
+    each an `AirFriend` with its half extent) -, steps it
     (`Aircraft::step`) and carries out its `AirAct`s, dropped on the end screen: the heli's salvos
     are seeker missiles (`air_salvo`, `f.pending_missiles`, every missile
     rule kept), the jet's cannon bursts and bombs `air_strike` (a `Game::blast`, then
@@ -715,16 +720,22 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `Report::Contact` - a stream, lava, burning ground, ooze - one with damage 0 on the first tick
     of the contact, `Tank::touch`, and on the tick that wrecks; `Report::Own` for a ram and a bite,
     which log their own event), the kill list, and for an enemy that survives the alert
-    (`Ai::notify_hit`, or the tower grudge). It draws no RNG: a source rolls first. `HitCause`
+    (`Ai::notify_hit`, or the tower grudge); the hurt that wrecks a hull is noted on it
+    (`Tank::wrecked_by`), so a seat's wreck a seat dealt is lost to friendly fire on the end screen
+    and scores for nobody (`RoundStats::friendly_fire`). It draws no RNG: a source rolls first. `HitCause`
     names the source and travels as itself (protocol 34; `is_shot` false for `Blast`/`Lava`/`Fire`/`Slime`, which the painters, the
     hit arrows and the probe's hit count skip). **`knock`/`knock_hull`/`shove` is the one shove**
     over a `knock::Knock` and its one mass rule. **`Game::blast` is the one blast** over
     `BlastParams` (`world`, `ordnance`, `tank_wreck` and the per-weapon constructors beside each
-    weapon): hulls in seat-then-slot order, each reached at the nearest point of its hull
-    (`TargetShape::reach_from`), hurt unless `spares` its side and thrown either way, with no
-    hurt and no shove behind a permanent tile (`Terrain::line_of_fire`; the damage roll is still
-    drawn so cover never moves the stream); then bongs (`BlastBongs`), lanterns, grenades, tiles
-    (`chains` is a drum's way with other drums) and crates, which no cover shields. `apply_hit`
+    weapon): **every blast hurts every hull and every bong it reaches, whoever set it off**
+    (friendly fire is full, docs/november-26-rebuild-upgrade.md decision 2, BB-188) - hulls in
+    seat-then-slot order, each reached at the nearest point of its hull
+    (`TargetShape::reach_from`), hurt and thrown, with no hurt and no shove behind a permanent tile
+    (`Terrain::line_of_fire`; the damage roll is still drawn so cover never moves the stream);
+    then both bongs, each hurt through `Bong::hurt_by` with an `Event::Hit` of `HitCause::Blast`
+    and, living and free to, hopping away from the centre (`bong_hop_target`, its jitter drawn
+    straight after its own roll, as a shot's); then lanterns, grenades, tiles (`chains` is a drum's
+    way with other drums) and crates, which no cover shields. `apply_hit`
     (the roll, the funnel, the impact's knock, bong hop) and `ram` (impact speed from the bodies'
     *real* velocities; enemy pairs walked sorted i<j with a distance cull so the RNG draw order is
     fixed; a seat's ram alerts the enemy, two enemies bumping alert nobody) stand on them.
@@ -1188,7 +1199,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   evasive hop shies from any tank (`combat::bong_hop_target`, a box test via `Terrain::bong_fits`,
   which clears every tile and every hull, standing or wrecked, by `bong_hull_clearance_px`; a well's
   slide asks `Terrain::bong_slides`, which never takes a bong further into a hull).
-  `damage`/`heal` are the only health paths and no-op once dead; healing comes only from the bong
+  A blast that hurts a bong and leaves it living makes it hop from the blast's centre, as a shot
+  does (`Game::blast`). `damage`/`heal` are the only health paths and no-op once dead - a round
+  hurts a bong through `hurt_by`, which notes who dealt the killing blow (`killed_by`: a players'
+  bong a seat or a players' tower killed is lost to friendly fire on the end screen); healing comes only from the bong
   health pack, which a tank delivers or a hurt bong fetches itself: below `bong_pack_seek_below`
   it hops straight at the nearest pack within `bong_pack_seek_range` with no tile on the line
   (`Game::bong_pack_hop`, no RNG), unless a tank of the side it bites is inside its avoid range,
@@ -1268,7 +1282,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `Game::refit_neighbours` hands the four tiles beside a dead one their own width back (one rule,
   `tile_fit`; a breach is as wide for a hull as for a shot; trees and lamp posts close no seam). Every chunk a blow
   breaks is an `Event::ChunksBroken`. What a breach does besides (BB-82, docs/WALLS_SPEC.md §10)
-  lives in `props.rs`: `Game::spall` (a shell's breach hurts the tank sheltering behind,
+  lives in `props.rs`: `Game::spall` (a shell's breach hurts the tank sheltering behind, whichever
+  side - a tower's spares its own,
   `HitCause::Spall`), `lay_rubble` (`chunks::Rubble`, `Game::rubble`: it slows a hull through
   `Footing::on_rubble` and the router prices it in `nav_finish`), and `queue_neighbour_breaks` /
   `tick_breaks` (`Game::pending_breaks`: a weak run comes down a tile at a time, a cracked pane
@@ -1623,9 +1638,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   Inbound, Attack, Egress, Escort, Loiter; ground point, height, heading, velocity, `bank`, `ammo`
   - the heli's salvos, the jet's passes -, and each flight's own `HeliState`/`JetState`; `arrive`,
   `enter`, `step`, `gone`, `as_target`, `drawn`), the door between an aircraft and the world -
-  `AirView` in (its seat, the `AirMark`s it may attack, the field, `live`), `AirAct` out (`Salvo`,
-  `Strike`): **an aircraft reads the world only through its view and changes it only through its
-  acts** -, the geometry (`entry_edge`, `entry_point`, `jet_edge`, `unit`, `turn_toward`) and the
+  `AirView` in (its seat, the `AirMark`s it may attack, the `AirFriend`s its blasts must not
+  reach, the field, `live`), `AirAct` out (`Salvo`, `Strike`): **an aircraft reads the world only
+  through its view and changes it only through its acts**; every blast hurts whoever it reaches,
+  so it holds a burst, a bomb or a salvo `AirView::clear` says would reach a friend
+  (`air_hold_margin_px`; a release with both bombs held spends no pass) -, the geometry (`entry_edge`, `entry_point`, `jet_edge`, `unit`, `turn_toward`) and the
   drawing on any canvas off `Sheet::Aircraft` (`paint_shadows` after the floor, `paint_aircraft`
   over everything standing, the rotor a blur over the mast; the jet's cell foreshortened across
   its wings by its bank, `banked_span`, in whole 2 px steps, no bank drawing the cell as it is).
@@ -1838,7 +1855,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   kept. **A mark whose centre is changed in place must be filed again with `moved(index)`**
   (`props.rs`'s rethrown rubble is the one place). Rubble still in the air is culled by where it is
   drawn (`draw_pos`), not by its anchor, and is walked whole.
-- `blast.rs`, `decal.rs` — blast presentation state (`BlastFx::shaped` hashes the form,
+- `blast.rs`, `decal.rs` — the radius ring (`BlastRing`, `draw_blast_ring`: a seat's blast about
+  to go off draws its reach on the floor, one block wide in the grenade band's flash ramp, coming
+  in through the Bayer pattern and burning red to white over `blast_ring_seconds`; the rings are
+  `Game::blast_rings`, docs/grenade-launcher.md "The ring"), blast presentation state (`BlastFx::shaped` hashes the form,
   mirror, turn, pace and size, the cause overrides; `fireball.rs` composes it), scorches (a blast's,
   and `Scorch::burn`, the scar a burnt-out ground fire leaves - an ember bed while it cools,
   `Scorch::ember` - drawn from `barrel_explosion.png`'s scorch row, the one row of it drawn, at a
@@ -2105,7 +2125,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   lists and panels, the lobby and the level select too; banners are `banner_size` (never under
   `BANNER_MIN_SIZE`, 48). The end screen (docs/levels.md):
   `PlayChrome::level` (`LevelBanner`: number, count, title) and `PlayChrome::result` (`ResultView`:
-  `RoundStats`, the seat count, a level's `ResultButtons`/`NextLevel`), laid out by
+  `RoundStats`, the seat count, a level's `ResultButtons`/`NextLevel`; under the wrecks, only
+  when it cost anything, `friendly_fire_line`'s red line of what friendly fire cost -
+  `RoundStats::friendly_fire`'s seats' tanks and the players' bong), laid out by
   **`result_layout(area, view)`, the one geometry** the painter (`render::hud::draw_result`) and the
   hit tests read - a level's buttons in one centred row, `LEVELS` (`RESULT_LEVELS_W`), `PLAY AGAIN`,
   the way on, the one the screen counts down to carrying the count in its label

@@ -387,11 +387,13 @@ impl Game {
 
     /// Spall (BB-82): a shell breaching the chunks in `broken` of the tile
     /// centred on `center` along `dir` throws fragments off its far face.
-    /// Every live tank on the other side from `by` whose hull lies in the
-    /// cone behind - within `spall_reach_px` of the face, its hull within
-    /// `spall_half_width_px` of the blow's line - takes `spall_damage`,
-    /// falling linearly to nothing at the reach. No RNG: the damage is the
-    /// geometry's. Seats in index order, then the enemies.
+    /// Every live tank whose hull lies in the cone behind - within
+    /// `spall_reach_px` of the face, its hull within `spall_half_width_px`
+    /// of the blow's line - takes `spall_damage`, falling linearly to
+    /// nothing at the reach, whichever side it is on: a seat's spall hurts
+    /// its teammate behind the wall too. A tower's shot spares its own
+    /// side, as its bullets do (`Terrain::sweep_rewound`). No RNG: the
+    /// damage is the geometry's. Seats in index order, then the enemies.
     fn spall(&mut self, f: &mut Frame, center: Position, broken: u16, dir: Vec2, by: crate::shell::Owner) {
         let t = tuning();
         if !t.spall_enabled || t.spall_damage <= 0.0 || t.spall_reach_px <= 0.0 {
@@ -413,7 +415,7 @@ impl Game {
         let mut victims: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
         victims.extend(self.enemies_by_slot());
         for entity in victims {
-            let Some((hc, hh)) = self.world.get::<&Tank>(entity).ok().filter(|tank| !tank.is_wreck() && !by.same_side(tank.owner())).map(|tank| tank.hull_bbox_world()) else { continue };
+            let Some((hc, hh)) = self.world.get::<&Tank>(entity).ok().filter(|tank| !tank.is_wreck() && !(by.is_tower() && by.same_side(tank.owner()))).map(|tank| tank.hull_bbox_world()) else { continue };
             let rel = Position::new(hc.x - face.x, hc.y - face.y);
             let along = rel.x * dir.x + rel.y * dir.y;
             let across = (rel.x * dir.y - rel.y * dir.x).abs();

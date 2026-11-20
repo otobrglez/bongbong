@@ -446,6 +446,27 @@ pub struct RoundStats {
     /// (`Tank::last_hit_by`). A wreck no seat touched - a drum, a fire, a
     /// bong's bite - counts for the team alone.
     pub by_seat: [u32; MAX_SEATS],
+    /// What the players' side lost to its own fire, which never scores.
+    pub friendly_fire: FriendlyFire,
+}
+
+/// What the players' side lost to its own fire in a round
+/// (`RoundStats::friendly_fire`): the end screen names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct FriendlyFire {
+    /// Seats' tanks wrecked by a seat - the seat itself or a teammate
+    /// (`Tank::wrecked_by`).
+    pub tanks: u32,
+    /// The players' bong killed by a seat or a players' tower
+    /// (`Bong::killed_by`).
+    pub bong: bool,
+}
+
+impl FriendlyFire {
+    /// Whether anything was lost.
+    pub fn any(&self) -> bool {
+        self.tanks > 0 || self.bong
+    }
 }
 
 /// One thing that happened during a frame, for tooling (the dev server's
@@ -1197,6 +1218,8 @@ pub struct Game {
     /// (`credit_wreck`).
     enemies_destroyed: u32,
     wrecks_by_seat: [u32; MAX_SEATS],
+    /// Seats' tanks a seat wrecked this round (`credit_wreck`).
+    seats_lost_to_friends: u32,
     /// Shared enemy "last known player position", refreshed every frame any
     /// enemy has the player within ENEMY_VIEW_RANGE and cleared once
     /// `alert_timer` runs out - see `ai::Ai::think`'s `alert` parameter.
@@ -1731,6 +1754,7 @@ impl Game {
         self.ended_at = None;
         self.enemies_destroyed = 0;
         self.wrecks_by_seat = [0; MAX_SEATS];
+        self.seats_lost_to_friends = 0;
         // The R-key restart is allowed while paused; a new round must not
         // start frozen.
         self.paused = false;
@@ -5467,10 +5491,15 @@ impl Game {
     }
 
     /// Count a wreck for `round_stats`: an enemy's goes to the round's
-    /// total, and to the seat that last damaged it, if any did. A tank is
-    /// wrecked once (see `explosions`), so it is counted once.
+    /// total, and to the seat that last damaged it, if any did; a seat's
+    /// that a seat dealt is lost to friendly fire, and scores for nobody. A
+    /// tank is wrecked once (see `explosions`), so it is counted once.
     fn credit_wreck(&mut self, victim: Owner) {
         if victim.is_player() {
+            let by = self.world.query::<&Tank>().iter().find(|t| t.owner() == victim).and_then(|t| t.wrecked_by);
+            if by.is_some_and(Owner::is_player) {
+                self.seats_lost_to_friends += 1;
+            }
             return;
         }
         self.enemies_destroyed += 1;
@@ -5832,6 +5861,10 @@ impl Game {
             destroyed: self.enemies_destroyed,
             enemies,
             by_seat: self.wrecks_by_seat,
+            friendly_fire: FriendlyFire {
+                tanks: self.seats_lost_to_friends,
+                bong: self.bong.and_then(|e| self.world.get::<&Bong>(e).ok().map(|b| b.killed_by.is_some_and(|by| by.same_side(Owner::Player(0))))).unwrap_or(false),
+            },
         }
     }
 
@@ -7751,6 +7784,11 @@ mod determinism_tests {
         // `enemy_yield_reroute_seconds` at 0 and `enemy_lead_by_tier` all 0
         // the pair is (9_140_234_918_546_171_875,
         // 15_604_372_050_397_659_249).
+        // Friendly fire full from every source (BB-188: every blast hurts
+        // every side and both bongs, a bong hops from one, the hammer and
+        // the well hurt their own, spall a teammate, air support holds)
+        // moved neither: no blast in these rounds reaches a hull or a bong
+        // it used to spare.
         let (one, two) = (run(1), run(2));
         assert_eq!((one, two), (9_140_234_918_546_171_875, 2_367_344_100_585_956_785), "(one seat, two seats)");
     }
@@ -8655,7 +8693,7 @@ mod mechanics_tests {
     fn round_stats_count_the_wrecks_and_credit_the_seat_that_shot() {
         let mut game = two_seat_destroy_round(2);
         let slots = enemy_slots(&game);
-        assert_eq!(game.round_stats(), RoundStats { seconds: 0.0, destroyed: 0, enemies: 2, by_seat: [0; MAX_SEATS] });
+        assert_eq!(game.round_stats(), RoundStats { seconds: 0.0, destroyed: 0, enemies: 2, by_seat: [0; MAX_SEATS], friendly_fire: FriendlyFire::default() });
 
         // Player 2's shell, point blank into an enemy one hit finishes.
         let target = slots[0];
@@ -12712,6 +12750,158 @@ cells."30,20" = { kind = "bong" }
         assert!(game.hurt_tank(&mut f, entity, Hurt::hit(5.0, HitCause::Shell, Some(seat), at)).is_none(), "a wreck is past hurting");
         assert_eq!(f.kills.len(), 1);
         game.rng = Some(f.rng);
+    }
+
+    // --- Friendly fire: full damage from every source to everyone
+    // (BB-188, docs/november-26-rebuild-upgrade.md decision 2). ---
+
+    /// A Hunt round with both bongs, no enemies of its own and nobody
+    /// shielded: the seat, one parked enemy and both bongs set round
+    /// `centre`, 22 px out, so every blast reaches all four.
+    fn friendly_fire_round(centre: Position) -> (Game, Entity, Entity, Entity, Entity) {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Hunt);
+        game.map = MapFile::from_toml_str("version = 1\ntanks = 0\ncells.\"3,11\" = { kind = \"start\" }\ncells.\"30,20\" = { kind = \"bong\" }\ncells.\"4,4\" = { kind = \"enemy_bong\" }\n").expect("parses");
+        game.init(W, H);
+        for tank in game.world.query_mut::<&mut Tank>() {
+            tank.shield_hp = 0.0;
+            tank.shield_timer = 0.0;
+        }
+        let seat = game.player().expect("a seat");
+        game.place_tank(seat, Position::new(centre.x, centre.y + 22.0), Some(0.0)).expect("placed");
+        let enemy = dummy(&mut game, Position::new(centre.x, centre.y - 22.0), 1);
+        let (ours, theirs) = (game.bong.expect("the players' bong"), game.enemy_bong.expect("the enemy bong"));
+        with_bong_mut(&game.world, ours, |b| b.position = Position::new(centre.x - 22.0, centre.y));
+        with_bong_mut(&game.world, theirs, |b| b.position = Position::new(centre.x + 22.0, centre.y));
+        (game, seat, enemy, ours, theirs)
+    }
+
+    /// Every blast hurts every hull and every bong it reaches, whoever set
+    /// it off: a seat's grenade, missile, drone, jet's burst and bomb hurt
+    /// the seat itself and its own bong as surely as the enemy and its
+    /// bong, and so does a wreck's chip, whichever side the wreck was on.
+    #[test]
+    fn every_blast_hurts_every_side_and_both_bongs() {
+        let seat = Owner::Player(0);
+        let blasts: Vec<(&str, combat::BlastParams)> = vec![
+            ("a grenade", combat::BlastParams::grenade(seat)),
+            ("a missile", combat::BlastParams::missile(seat)),
+            ("a drone", combat::BlastParams::drone(seat)),
+            ("a jet's burst", combat::BlastParams::air_gun(seat)),
+            ("a jet's bomb", combat::BlastParams::air_bomb(seat)),
+            ("an enemy's missile", combat::BlastParams::missile(Owner::Enemy(1))),
+            ("a wreck's chip", combat::BlastParams::tank_wreck(Some(seat))),
+            ("an unclaimed wreck's chip", combat::BlastParams::tank_wreck(None)),
+        ];
+        for (what, params) in blasts {
+            let centre = Position::new(400.0, 300.0);
+            let (mut game, seat, enemy, ours, theirs) = friendly_fire_round(centre);
+            let mut f = frame_of(&mut game);
+            game.blast(&mut f, centre, &params, &[]);
+            game.rng = Some(f.rng);
+            assert!(damage_at(&game, seat) > 0.0, "{what}: the seat is hurt");
+            assert!(damage_at(&game, enemy) > 0.0, "{what}: the enemy is hurt");
+            for (side, bong) in [("the players'", ours), ("the enemy", theirs)] {
+                assert!(with_bong(&game.world, bong, |b| b.health < b.max_health), "{what}: {side} bong is hurt");
+            }
+        }
+    }
+
+    /// A bong a blast hurts and does not kill leaps away from the blast's
+    /// centre, as it leaps from a shot, and the blast reports its share.
+    #[test]
+    fn a_bong_hops_away_from_a_blast_that_hurts_it() {
+        let centre = Position::new(400.0, 300.0);
+        let (mut game, _, _, ours, theirs) = friendly_fire_round(centre);
+        let mut f = frame_of(&mut game);
+        game.blast(&mut f, centre, &combat::BlastParams::world(120.0, (2.0, 2.0), 0.0), &[]);
+        let reported = f.events.iter().filter(|e| matches!(e, Event::Hit { target: HitTarget::Bong { .. }, cause: HitCause::Blast, damage, .. } if *damage > 0.0)).count();
+        game.rng = Some(f.rng);
+        assert_eq!(reported, 2, "each bong's share is reported");
+        for bong in [ours, theirs] {
+            let (start, end, hopping) = with_bong(&game.world, bong, |b| (b.position, b.hop_end, b.hop_timer > 0.0));
+            assert!(hopping, "it hops");
+            assert!(end.distance_to(centre) > start.distance_to(centre) + 10.0, "away from the blast: {start:?} to {end:?}");
+        }
+    }
+
+    /// A seat's grenade rings its reach in the last `blast_ring_seconds`
+    /// of its fuse, and its missile in its dive, at the blast's radius;
+    /// before then, and for a blast that is not a seat's, there is no ring.
+    #[test]
+    fn a_seats_grenade_and_missile_ring_their_reach_before_they_go_off() {
+        let mut game = open_round("");
+        let t = tuning();
+        let at = Position::new(400.0, 300.0);
+        let mut g = crate::grenade::Grenade::launch(at, Vec2::new(1.0, 0.0), Vec2::zero(), Owner::Player(0));
+        g.fuse = t.blast_ring_seconds + 0.5;
+        let e = game.world.spawn((g,));
+        assert!(game.blast_rings().is_empty(), "not yet");
+        game.world.get::<&mut crate::grenade::Grenade>(e).expect("the grenade").fuse = t.blast_ring_seconds * 0.5;
+        let rings = game.blast_rings();
+        assert_eq!(rings.len(), 1);
+        assert_eq!(rings[0].radius, t.grenade_blast_radius, "at the blast's own reach");
+        assert!((rings[0].left - t.blast_ring_seconds * 0.5).abs() < 1e-4);
+        game.world.get::<&mut crate::grenade::Grenade>(e).expect("the grenade").owner = Owner::Enemy(3);
+        assert!(game.blast_rings().is_empty(), "only a seat's blast is rung");
+        // A seat's missile in its dive rings where it comes down; one still
+        // climbing does not, nor an enemy's in its dive.
+        let aim = Position::new(600.0, 300.0);
+        let m = crate::missile::Missile::spawn(Position::new(600.0, 200.0), Vec2::new(0.0, 1.0), Owner::Player(0), 0, aim);
+        assert!(m.stage != crate::missile::MissileStage::Dive);
+        let speed = m.speed.max(1.0);
+        let me = game.world.spawn((m,));
+        assert!(game.blast_rings().is_empty(), "still climbing");
+        {
+            let mut m = game.world.get::<&mut crate::missile::Missile>(me).expect("the missile");
+            m.stage = crate::missile::MissileStage::Dive;
+            m.aim = aim;
+            m.position = Position::new(aim.x, aim.y - speed * t.blast_ring_seconds * 0.5);
+        }
+        let rings = game.blast_rings();
+        assert_eq!(rings.len(), 1);
+        assert_eq!((rings[0].at, rings[0].radius), (aim, t.missile_blast_radius));
+        game.world.get::<&mut crate::missile::Missile>(me).expect("the missile").owner = Owner::Enemy(3);
+        assert!(game.blast_rings().is_empty(), "an enemy's dive is not rung");
+    }
+
+    /// A seat that wrecks its teammate or kills its own bong scores
+    /// nothing for it, and the end screen's numbers name both as lost to
+    /// friendly fire; a seat an enemy wrecks and a bong an enemy kills are
+    /// not.
+    #[test]
+    fn friendly_fire_never_scores_and_the_end_screen_names_its_losses() {
+        use combat::Hurt;
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Protect);
+        game.players = PlayerCount::from_count(2).expect("two seats");
+        game.map = MapFile::from_toml_str("version = 1\ntanks = 0\ncells.\"3,11\" = { kind = \"start\" }\ncells.\"30,20\" = { kind = \"bong\" }\n").expect("parses");
+        game.init(W, H);
+        for tank in game.world.query_mut::<&mut Tank>() {
+            tank.shield_hp = 0.0;
+            tank.shield_timer = 0.0;
+        }
+        let (one, two) = (game.seat(0).expect("seat 1"), game.seat(1).expect("seat 2"));
+        let at = Position::new(0.0, 0.0);
+        let mut f = frame_of(&mut game);
+        game.hurt_tank(&mut f, two, Hurt::hit(crate::MAX_DAMAGE * 4.0, HitCause::Shell, Some(Owner::Player(0)), at)).expect("a live hull");
+        game.hurt_tank(&mut f, one, Hurt::hit(crate::MAX_DAMAGE * 4.0, HitCause::Shell, Some(Owner::Enemy(5)), at)).expect("a live hull");
+        game.rng = Some(f.rng);
+        game.credit_wreck(Owner::Player(1));
+        game.credit_wreck(Owner::Player(0));
+        let stats = game.round_stats();
+        assert_eq!(stats.friendly_fire, FriendlyFire { tanks: 1, bong: false }, "the teammate, not the seat an enemy wrecked");
+        assert_eq!(stats.by_seat, [0; MAX_SEATS], "and nobody scored");
+        let bong = game.bong.expect("the players' bong");
+        with_bong_mut(&game.world, bong, |b| b.hurt_by(1000.0, Some(Owner::Enemy(5))));
+        assert!(!game.round_stats().friendly_fire.bong, "an enemy's kill is no friendly fire");
+        with_bong_mut(&game.world, bong, |b| {
+            *b = Bong::at_rest(b.side, b.position, b.kind, b.body);
+            b.hurt_by(1000.0, Some(Owner::Player(1)));
+        });
+        assert_eq!(game.round_stats().friendly_fire, FriendlyFire { tanks: 1, bong: true });
     }
 
     /// A seat's credit for a wreck runs out: `kill_credit_seconds` after

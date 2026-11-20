@@ -106,6 +106,9 @@ keys! {
     LEVEL_NUMBER = "level-number";
     RESULT_TIME = "result-time";
     RESULT_WRECKS = "result-wrecks";
+    RESULT_FRIENDLY_TANKS = "result-friendly-tanks";
+    RESULT_FRIENDLY_BONG = "result-friendly-bong";
+    RESULT_FRIENDLY_BOTH = "result-friendly-both";
     RESULT_ALL_CLEAR = "result-all-clear";
     RESULT_UNCOUNTED = "result-uncounted";
     RESULT_AGAIN = "result-again";
@@ -749,7 +752,7 @@ mod text_tests {
     use crate::hud::{
         BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, HUD_LABEL_SIZE, QUESTION_W,
         HUD_TEXT_SIZE, INFO_TITLE_W, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE,
-        MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_STATS_GAP,
+        MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_SEATS_SIZE, RESULT_STATS_GAP,
         RESULT_TEXT_PX, RESULT_TITLE_SIZE, UI_SMALL_TEXT, WAVE_BANNER_SIZE,
     };
     use crate::level::Mission;
@@ -1043,6 +1046,10 @@ mod text_tests {
             (keys::RESULT_UNCOUNTED, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),
             (keys::RESULT_WRECKS, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("n", 99.into()), ("total", 99.into())]),
+            // What friendly fire cost, on a line of its own under them.
+            (keys::RESULT_FRIENDLY_TANKS, RESULT_SEATS_SIZE, RESULT_TEXT_PX, vec![("n", 8.into())]),
+            (keys::RESULT_FRIENDLY_BONG, RESULT_SEATS_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::RESULT_FRIENDLY_BOTH, RESULT_SEATS_SIZE, RESULT_TEXT_PX, vec![("n", 8.into())]),
             (keys::RESULT_AGAIN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
             (keys::RESULT_NEXT, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
             (keys::RESULT_FIRST, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
