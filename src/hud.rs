@@ -2184,10 +2184,6 @@ mod hud_tests {
         assert!(AirHud { sortie: Sortie::Heli, seconds: Some(4), ammo: None, queued: 0 }.lit());
     }
 
-    /// The box's layout: a call's seconds and an aircraft's pips start
-    /// under the weapon's count, every load the knobs allow keeps its pips
-    /// inside the box - one row up to six, two rows past - and the queued
-    /// `+N` follows the readout, clear of the heat shield's gauge.
     /// PAUSED, the opening line, a wave's line and the end screen are
     /// centred on one row, so a frame writes one of them.
     #[test]
@@ -2202,6 +2198,10 @@ mod hud_tests {
         assert_eq!(MiddleRow::of(true, true, false, false), MiddleRow { intro: false, wave: false, paused: false });
     }
 
+    /// The box's layout: a call's seconds and an aircraft's pips start
+    /// under the weapon's count, every load the knobs allow keeps its pips
+    /// inside the box - one row up to six, two rows past - and the queued
+    /// `+N` follows the readout, clear of the heat shield's gauge.
     #[test]
     fn the_air_box_lays_its_pips_out_inside_the_box() {
         use crate::air_support::Sortie;
