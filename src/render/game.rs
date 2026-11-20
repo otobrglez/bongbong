@@ -217,6 +217,9 @@ pub struct Effects<'a> {
     /// (`view::Prescale`, `render::view::PrescaleFx`); `None` scales the
     /// world straight onto the window, the nearest texel to the pixel.
     pub prescale: Option<&'a mut crate::render::view::PrescaleFx>,
+    /// The camera's reasoning over a followed view (dev builds, the
+    /// `overlays` tool's `camera` flag); `None` draws none.
+    pub camera_overlay: Option<&'a crate::follow::CameraOverlay>,
 }
 
 /// The second half of a couch's split screen, as a frame draws it
@@ -820,10 +823,18 @@ impl Game {
             crate::math::Vec2::new(0.0, 0.0)
         } else {
             // The round's ripples, the slams that are no ripple of its
-            // own, and the blows this view's own seats took.
+            // own, and the blows this view's own seats took that came from
+            // nowhere. The ones that came from somewhere shove the view
+            // instead: a followed view's camera itself (`follow.rs`), any
+            // other's picture here, the view moving away from the blow and
+            // so the picture toward it.
             let hurts = effects.feedback.into_iter().flat_map(|feedback| feedback.shakes(view_of));
             let shocks = self.shocks.iter().chain(effects.fx.jolts().iter().map(|jolt| &jolt.shock)).chain(hurts);
-            crate::shockwave::camera_shake_of(shocks, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning())
+            let push = match effects.feedback {
+                Some(feedback) if !camera.follows() => feedback.shove(view_of, &tuning()) * -1.0,
+                _ => crate::math::Vec2::new(0.0, 0.0),
+            };
+            crate::shockwave::camera_shake_with(shocks, push, (!camera.shows_whole_field()).then(|| camera.rect()), &tuning())
         };
         let blit_offset = Vector2::new(shake.x, shake.y);
         // The render texture is stored upside-down relative to the screen; a
@@ -872,6 +883,10 @@ impl Game {
             bend: !still,
             marks,
             pulse: effects.feedback.filter(|_| !still).and_then(|feedback| feedback.pulse(view_of, &tuning())),
+            overlay: effects.camera_overlay.and_then(|o| {
+                let half = if matches!(view_of, ViewOf::Only(_)) { o.second } else { Some(o.first) };
+                half.map(|view| (view, o.sight))
+            }),
         };
         rl.draw_texture_mode(thread, crate::frame_stages::target(composite), |mut d| {
             d.clear_background(Color::BLACK);
@@ -949,6 +964,10 @@ struct WorldPass<'a> {
     /// The pulse round this view's edge while one of its own seats has
     /// just been hurt (`feedback::Pulse`); none under reduced motion.
     pulse: Option<crate::feedback::Pulse>,
+    /// The camera's reasoning over this view and the sight box it keeps
+    /// (`Effects::camera_overlay`).
+    #[cfg_attr(not(feature = "dev-tools"), allow(dead_code))]
+    overlay: Option<(crate::follow::ViewTrace, crate::framing::SightBox)>,
 }
 
 /// Seconds the corner clusters take to step aside once the round is
@@ -1078,6 +1097,9 @@ impl Game {
                 }
             }
             self.draw_debug_overlays(&mut d, field_w, field_h);
+            if let Some((view, sight)) = w.overlay {
+                draw_camera_overlay(&mut d, &view, sight, w.camera.rect());
+            }
         });
 
         // A split screen half's off-screen marks in its own world, so they
@@ -2526,5 +2548,99 @@ impl Game {
                 }
             }
         }
+    }
+}
+
+/// The camera's reasoning over one followed view (`follow::CameraOverlay`),
+/// in the world: the sight box round each seat the view keeps (orange),
+/// the dead zone round its base (yellow), the anchor (white cross), the
+/// look-ahead from the base (cyan) and the fight's pull after it
+/// (magenta), the committed heading (green) and one being turned to, as
+/// long as the seat has driven along it (pale green), the spring's goal
+/// (yellow cross) and where the spring stands (white ring), with what the
+/// kick and a blow's shove lay over it (red); the numbers along the view's
+/// bottom edge.
+#[cfg(feature = "dev-tools")]
+fn draw_camera_overlay(d: &mut impl RaylibDraw, view: &crate::follow::ViewTrace, sight: crate::framing::SightBox, shown: Rectangle) {
+    let t = &view.trace;
+    let v = |p: crate::math::Vec2| Vector2::new(p.x, p.y);
+    let orange = Color::new(255, 150, 40, 255);
+    let yellow = Color::new(255, 230, 60, 255);
+    let cyan = Color::new(60, 220, 255, 255);
+    let magenta = Color::new(255, 80, 220, 255);
+    let green = Color::new(90, 255, 120, 255);
+    let pale = Color::new(170, 255, 190, 200);
+    let red = Color::new(255, 60, 60, 255);
+    let cross = |d: &mut dyn FnMut(Vector2, Vector2), at: crate::math::Vec2, r: f32| {
+        d(Vector2::new(at.x - r, at.y), Vector2::new(at.x + r, at.y));
+        d(Vector2::new(at.x, at.y - r), Vector2::new(at.x, at.y + r));
+    };
+    for keep in view.keeps.iter().flatten() {
+        let (hw, hh) = sight.half;
+        d.draw_rectangle_lines_ex(Rectangle::new(keep.x - hw, keep.y - hh, hw * 2.0, hh * 2.0), 2.0, orange);
+    }
+    let dz = t.dead_zone;
+    d.draw_rectangle_lines_ex(Rectangle::new(t.base.x - dz, t.base.y - dz, dz * 2.0, dz * 2.0), 1.0, yellow);
+    let zero = crate::math::Vec2::new(0.0, 0.0);
+    if t.lead_cap.0 > 0.0 || t.lead_cap.1 > 0.0 {
+        let (cx, cy) = (dz + t.lead_cap.0, dz + t.lead_cap.1);
+        d.draw_rectangle_lines_ex(Rectangle::new(t.base.x - cx, t.base.y - cy, cx * 2.0, cy * 2.0), 1.0, Color::new(60, 220, 255, 110));
+    }
+    if t.lead != zero {
+        d.draw_line_ex(v(t.base), v(t.base + t.lead), 2.0, cyan);
+    }
+    if t.pull != zero || t.pull_want != zero {
+        d.draw_line_ex(v(t.base + t.lead), v(t.base + t.lead + t.pull), 2.0, magenta);
+        d.draw_circle_lines(((t.base + t.lead + t.pull_want).x) as i32, ((t.base + t.lead + t.pull_want).y) as i32, 3.0, magenta);
+    }
+    if t.heading != zero {
+        d.draw_line_ex(v(t.anchor), v(t.anchor + t.heading * 48.0), 2.0, green);
+    }
+    if t.turning != zero {
+        d.draw_line_ex(v(t.anchor), v(t.anchor + t.turning * t.turned_px.max(4.0)), 1.0, pale);
+    }
+    cross(&mut |a, b| d.draw_line_ex(a, b, 1.0, Color::WHITE), t.anchor, 5.0);
+    cross(&mut |a, b| d.draw_line_ex(a, b, 2.0, yellow), t.goal, 7.0);
+    d.draw_circle_lines(t.spring.x.round() as i32, t.spring.y.round() as i32, 6.0, Color::WHITE);
+    let over = t.kick + t.shove;
+    if over != zero {
+        d.draw_line_ex(v(t.spring), v(t.spring + over * 4.0), 2.0, red);
+    }
+    let lines = [
+        format!(
+            "anchor-base {:+.1},{:+.1} (dz {:.0})  lead {:+.1},{:+.1} (cap {:.0},{:.0})  heading {:+.0},{:+.0}  turning {:+.0},{:+.0} {:.0}px",
+            t.anchor.x - t.base.x,
+            t.anchor.y - t.base.y,
+            dz,
+            t.lead.x,
+            t.lead.y,
+            t.lead_cap.0,
+            t.lead_cap.1,
+            t.heading.x,
+            t.heading.y,
+            t.turning.x,
+            t.turning.y,
+            t.turned_px,
+        ),
+        format!(
+            "pull {:+.1},{:+.1} (asks {:+.1},{:+.1})  goal-spring {:+.2},{:+.2}{}  kick {:+.1},{:+.1}  shove {:+.1},{:+.1}",
+            t.pull.x,
+            t.pull.y,
+            t.pull_want.x,
+            t.pull_want.y,
+            t.goal.x - t.spring.x,
+            t.goal.y - t.spring.y,
+            if t.resting { " at rest" } else { "" },
+            t.kick.x,
+            t.kick.y,
+            t.shove.x,
+            t.shove.y,
+        ),
+    ];
+    for (i, line) in lines.iter().enumerate() {
+        // Along the view's bottom edge, clear of the corner clusters.
+        let y = (shown.y + shown.height) as i32 - 34 + i as i32 * 14;
+        d.draw_rectangle(shown.x as i32 + 4, y, line.len() as i32 * 6 + 8, 14, Color::new(0, 0, 0, 170));
+        d.draw_text(line, shown.x as i32 + 8, y + 2, 10, Color::WHITE);
     }
 }

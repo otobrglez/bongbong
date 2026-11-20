@@ -1978,6 +1978,9 @@ struct Shot {
     zoom_split: Option<(View, crate::establish::ZoomSplit, f32)>,
     /// The world the second half shows, for the minimap.
     second_shown: Option<crate::math::Rectangle>,
+    /// The camera's reasoning, where the dev tools draw it over a
+    /// followed view (`follow::CameraOverlay`).
+    overlay: Option<crate::follow::CameraOverlay>,
 }
 
 impl App {
@@ -2604,6 +2607,7 @@ impl App {
         let mut split_view: Option<(Camera, crate::follow::Split)> = None;
         let mut zoom_split: Option<(View, crate::establish::ZoomSplit, f32)> = None;
         let mut second_shown: Option<crate::math::Rectangle> = None;
+        let mut overlay: Option<crate::follow::CameraOverlay> = None;
         let camera = match f.plan.followed {
             Some(frame) => {
                 // The round on screen: a room's replica or the local round
@@ -2629,8 +2633,14 @@ impl App {
                 // the room's seat is nobody's, and the view holds.
                 let local: Vec<usize> = local_seats(&self.session).into_iter().map(usize::from).collect();
                 let stage = crate::follow::Stage { visible: frame.framing.visible, field, sight: frame.sight };
-                let shot = self.follow.update(&crate::follow::Seats::of(game, &local), advanced, &stage, &crate::follow::FollowRules::current());
                 let device_scale = frame.device_scale(framebuffer_ratio(rl));
+                // Each local seat's view takes the shove of the blows it
+                // took (`feedback.rs`) in place of their shake.
+                let mut seats = crate::follow::Seats::of(game, &local);
+                for &seat in &local {
+                    seats.shove(seat, self.feedback.shove(crate::feedback::ViewOf::Only(seat), &tuning()));
+                }
+                let shot = self.follow.update(&seats, advanced, &stage, &crate::follow::FollowRules::current().on_device(device_scale));
                 // Each view's corner, moved by what its own seat's texel
                 // anchor dropped while the view rides with that seat, so
                 // the tank and the ground stay on one texel grid
@@ -2692,6 +2702,7 @@ impl App {
                 } else {
                     split_view = second;
                     second_shown = second.map(|(camera, _)| camera.rect());
+                    overlay = self.dev.camera_overlay().then(|| shot.overlay(frame.sight));
                     follow_camera
                 };
                 self.dev.publish_camera(|| {
@@ -2724,7 +2735,7 @@ impl App {
             }
         };
         (f.layout, f.view) = (layout, view);
-        Shot { camera, establishing, shown_rect, split_view, zoom_split, second_shown }
+        Shot { camera, establishing, shown_rect, split_view, zoom_split, second_shown, overlay }
     }
 
     /// The frame drawn through `shot`: the presentation layers that live
@@ -2734,7 +2745,7 @@ impl App {
     fn frame_draw(&mut self, rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread, f: &Frame, stepped: &Stepped, shot: Shot) {
         let Frame { ui, layout, view, touch_screen, dt, .. } = *f;
         let fx_dt = stepped.fx_dt;
-        let Shot { camera, establishing, shown_rect, split_view, zoom_split, second_shown } = shot;
+        let Shot { camera, establishing, shown_rect, split_view, zoom_split, second_shown, overlay } = shot;
         let steer_right = crate::TOUCH_STEER_RIGHT;
         let game = self.session.shown();
         // Between the steps and the draw: the particle layer samples the
@@ -2956,6 +2967,7 @@ impl App {
                 },
                 dissolve: Some(&mut self.dissolve),
                 prescale: Some(&mut self.prescale_fx),
+                camera_overlay: overlay.as_ref(),
                 swap: self.session.swap().filter(|swap| swap.from == Driver::Build).zip(self.swap_picture.as_ref()).map(|(swap, (picture, _))| (picture, 1.0 - swap.progress())),
             },
             &self.sheets.textures(game.map.theme, blocks),

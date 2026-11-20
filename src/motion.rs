@@ -1,12 +1,13 @@
 //! The one motion switch (docs/large-maps-follow-camera.md section 6:
 //! Apple's "make motion optional", Xbox accessibility guideline 117):
 //! whether the camera moves only where the fight needs it to. Reduced
-//! motion takes away the motion nobody asked for - the camera shake, the
-//! kill ripple that bends the whole screen, the edge pulse, the health
-//! number's drop and the hold on a kill (`feedback.rs`), a slam's hull
-//! flash (`fx.rs`), the establishing shot's zoom,
-//! which cuts to the tank instead (`establish.rs`), and a restart's glide,
-//! which cuts to the new start (`follow.rs`) - and leaves
+//! motion takes away the motion nobody asked for - the camera shake and a
+//! blow's shove, the kill ripple that bends the whole screen, the edge
+//! pulse, the health number's drop and the hold on a kill (`feedback.rs`),
+//! a slam's hull flash (`fx.rs`), the establishing shot's zoom, which cuts
+//! to the tank instead (`establish.rs`), a restart's glide, which cuts to
+//! the new start, a shot's kick, the fight's pull and a couch's look-ahead
+//! (`follow::FollowRules::reduced`) - and leaves
 //! everything that shows the fight: the follow camera itself, the edge
 //! arrows and every effect of the round's own. It also calms what flashes
 //! (WCAG 2.3.1, no more than three flashes a second): a whole-screen
