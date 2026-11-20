@@ -1211,11 +1211,16 @@ pub struct Game {
     /// (see `blast.rs`).
     pub(crate) blast_fx: Vec<BlastFx>,
     /// Burn marks left by barrel blasts this round, oldest first, capped at
-    /// `mark_caps` (`SCORCH_MAX` on an arena).
-    pub(crate) scorches: Vec<Scorch>,
+    /// `mark_caps` (`SCORCH_MAX` on an arena) and filed by where they lie
+    /// (`marks::Marks`), for a painter over part of the field.
+    pub(crate) scorches: crate::marks::Marks<Scorch>,
     /// Rubble left where a wall tile died this round, oldest first, capped
-    /// at `mark_caps` (`DECAL_MAX` on an arena; see `decal.rs`).
-    pub(crate) decals: Vec<Decal>,
+    /// at `mark_caps` (`DECAL_MAX` on an arena; see `decal.rs`), filed the
+    /// same way.
+    pub(crate) decals: crate::marks::Marks<Decal>,
+    /// The tiles by where they stand, for the painters (`tile_index.rs`).
+    /// Nothing that plays reads it.
+    pub(crate) tile_index: std::cell::RefCell<crate::tile_index::TileIndex>,
     /// Cells the map marked as tall grass. The concealment query
     /// (`grass::conceals`) runs against these, not against the drawn tufts:
     /// cover is a property of the ground, not of which way the wind blew.
@@ -1732,6 +1737,8 @@ impl Game {
         self.blast_fx.clear();
         self.scorches.clear();
         self.decals.clear();
+        // The painters' copy of the tiles is the last round's.
+        *self.tile_index.borrow_mut() = crate::tile_index::TileIndex::default();
         self.cookoffs.clear();
         self.fires.clear();
         self.oil_cells.clear();
@@ -2495,15 +2502,9 @@ impl Game {
         self.blast_fx.extend(show.blast_fx);
         let (scorch_max, decal_max) = self.mark_caps();
         self.scorches.extend(show.scorches);
-        if self.scorches.len() > scorch_max {
-            let excess = self.scorches.len() - scorch_max;
-            self.scorches.drain(..excess);
-        }
+        self.scorches.hold(scorch_max);
         self.decals.extend(show.decals);
-        if self.decals.len() > decal_max {
-            let excess = self.decals.len() - decal_max;
-            self.decals.drain(..excess);
-        }
+        self.decals.hold(decal_max);
         self.shocks.extend(show.shocks);
         if self.shocks.len() > SHOCK_MAX {
             // Evict by punch left, not by age: a cascade's little fuse pops
