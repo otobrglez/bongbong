@@ -389,6 +389,16 @@ tunables! {
         /// level, goes on to the next level after a win
         /// (`level_loss_retry_seconds` counts a lost level down).
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
+        /// The straggler rule (`simulation::stragglers`): once no enemy is
+        /// still to come and this many or fewer are left alive, a lull of
+        /// `straggler_call_after_seconds` calls them to the nearest live
+        /// seat, so a round never waits on a tank asleep across the map
+        /// or one that lost the team. 0 turns the rule off.
+        straggler_call_alive: usize = 3 in 0 ..= 31;
+        /// How long the round's last enemies go with no seat or the
+        /// players' bong in any one's sight, and none freshly hit, before
+        /// they are called.
+        straggler_call_after_seconds: f32 = 20.0 in 1.0 ..= 600.0;
         /// A lost level's end screen counts this long before it plays the
         /// level again; a press takes it sooner.
         level_loss_retry_seconds: f32 = 5.0 in 0.0 ..= 30.0;
@@ -482,6 +492,15 @@ tunables! {
         /// Cap on live enemies at once; a wave that would exceed it queues
         /// its surplus until slots free up.
         wave_max_alive: usize = 31 in 1 ..= 31;
+        /// A wave tank or a seat coming back that has found every gate
+        /// lane busy this long (seconds) - seats parked on every gate -
+        /// drops onto the field instead, as a map with no gate places one:
+        /// a wave tank out of sight, a seat near the living seats.
+        wave_lane_wait_seconds: f32 = 6.0 in 0.5 ..= 120.0;
+        /// The final wave brings a seat that falls while it is fought back
+        /// this long (seconds) after it went, there being no next wave to
+        /// bring it with. 0 keeps it where it fell.
+        wave_final_return_seconds: f32 = 10.0 in 0.0 ..= 120.0;
         /// Every wave of the plan the map or the CLI authored is multiplied
         /// by this and rounded (the first wave's size and the tanks each
         /// wave adds, both at least what the plan asked for once rounded);

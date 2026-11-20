@@ -777,8 +777,10 @@ frame it is through the gate. Four rules hold it together:
   entering wave tank gets for free by having no `Ai` yet.
 - **A round that ends first keeps its result.** `wave_phase` only runs while
   the round is Playing, so a seat waiting when the round is won or lost
-  stays where it fell, and a seat wrecked after the final wave is called has
-  no wave left to come back with.
+  stays where it fell. The final wave has no wave after it, so it brings a
+  seat that falls while it is fought back by itself,
+  `wave_final_return_seconds` (10 s) after it went (docs/levels.md, "A
+  round that cannot stall").
 
 **Difficulty scales with seats** - a wave plan authored for one tank is a
 walk for four - and the room is the only thing that scales it, through the

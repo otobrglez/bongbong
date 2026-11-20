@@ -12,7 +12,7 @@ after a win, the same one after a loss - instead of restarting the round.
 |---|---|
 | The list | `levels.toml` at the repository root: `[[level]]` entries in play order, each naming a map (`map`, its file stem under `maps/`, one of `SHIPPED_MAPS`) and the `title` its banner shows. The maps stay separate files. Compiled in. |
 | Order | Boot Camp, the training stage (docs/training-stage.md), first and `skippable`, numbered `LEVEL 0` (`Levels::number`) so Lotus Lagoon is still level 1; then roughly easy to hard: Lotus Lagoon (5 tanks) next, Grand Campaign (7 waves) last. Edit `levels.toml` to change it. |
-| Progression | Only a win opens the next level. A loss offers the same level again. Winning the last level shows "all levels complete" and leads back to level 1 (Lotus Lagoon - never back to Boot Camp). |
+| Progression | Only a win opens the next level, and only a win of the level as it ships ("Honest locks" below). A loss offers the same level again. Winning the last level shows "all levels complete" and leads back to level 1 (Lotus Lagoon - never back to Boot Camp). |
 | Start and save | A session opens on the furthest level reached. On the web that is the page's `localStorage` (`bongbong.level`); on a desktop or a phone, a file. Progress is kept by map name, so reordering the list keeps it. Winning the last level is kept beside it (`complete` in the file, `bongbong.complete` on the web), so its tile shows as won; a store from before that reads as not complete. |
 | End screen | Counts down like free play's (`restart_delay`, 3 s), inside the button it will press: `NEXT LEVEL IN 3, 2, 1` after a win, `PLAY AGAIN IN 3, 2, 1` after a loss, then takes that way by itself - a press on the counting button takes it at once. The last level's win counts nothing down: `ALL 15 LEVELS COMPLETE!` waits for `BACK TO LEVEL 1`, going round being the player's call. The buttons - `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win - take a way at once; Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select, which, like a dialog or the builder, stops the countdown. Whatever way it takes, nothing goes black: the screen's words lift out over its last `round_verdict_lift_seconds` (0.3 s) while its dim stays, and the screen dissolves block by block into the round it leads to over `round_dissolve_seconds` (0.5 s; docs/effects.md, "Between rounds"). |
 | Stats | Time (the round clock, which stands still behind the banner and while paused) and enemies destroyed out of all the round brings, split by seat in a couch round. |
@@ -20,7 +20,8 @@ after a win, the same one after a loss - instead of restarting the round.
 | Builder edits | A level edited in the builder is played as edited for the rest of the session, every time it comes round. On a desktop the builder's Save writes it to `maps/<map>.toml`, which later sessions read first. |
 | Free play | Any map that is not a level (`-m`, the builder's Load list, a Save As under a new name) restarts on its own after `restart_delay`, as every round did before; its end screen shows the same numbers. |
 | Online | Unchanged: a room's round counts down to the room's lobby. |
-| Going back | The level select: every level as a tile, the ones won and the furthest reached open, the rest locked. Opened from the bar's level button (`LEVEL 3`, in the mission word's place on a level), the end screen's `LEVELS` and Esc; the round behind it stands still. A replay moves nothing: only a win on the furthest level reached opens another. No best times. |
+| Going back | The level select: every level as a tile, the ones won and the furthest reached open, the rest locked. Opened from the bar's level button (`LEVEL 3`, in the mission word's place on a level), the end screen's `LEVELS` and Esc; the round behind it stands still. A replay moves nothing: only a win on the furthest level reached, played as it ships, opens another. No best times. |
+| Stalls (BB-189) | A round never waits on what nobody can reach: its last enemies are called to the fight after a lull, a wave gets past seats parked on its lanes, and a fallen seat comes back on the final wave and on a map with no gate ("A round that cannot stall" below). |
 
 ## The flow
 
@@ -91,6 +92,63 @@ seat's shell, bullet, bolt, beam, flame, missile burst or ram. A wreck no
 seat touched (a drum, a fire, a bong's bite) counts for the team alone. All
 of it is bookkeeping: no RNG, so every seeded replay and probe fixture is
 unchanged.
+
+## Honest locks
+
+A win opens the next level only when the level was played as it ships
+(`Session::counts_for_level`, decided on the win's first frame by
+`note_outcome`): the round is on a level, its map is that level's shipped
+map to the revision (`map::shipped_revision` against `MapFile::revision` -
+not the session's builder edit, not a modified copy the player's store or
+`maps/` gave), it is set up as the map is authored (`set_up_as_authored`:
+the map's own start and sky, and no enemy count, mission, spawn plan, wave
+or chassis from the command line, a tool or the `player_tank` knob) and it
+seats one or the couch's two. `played_as_authored`, the clear check's test,
+is the same with exactly one seat.
+
+A win that does not count leads on only where the way was open already - a
+level won before, or the one after a skippable level - and otherwise shows
+no `NEXT LEVEL`: the line over its numbers says `PLAYED WITH CHANGES: NOT
+COUNTED` (`ResultButtons::uncounted`, laid out in the all-clear line's slot
+by `hud::result_layout`), and the countdown plays the level again, as after
+a loss. `next_level` refuses whatever the end screen does not offer.
+
+## A round that cannot stall
+
+A round is won on wrecks, so it must never wait on a tank nobody can reach
+or one that cannot get onto the field. Three rules, none drawing RNG, each
+a no-op in a round that never needs it (docs/gameplay-verification-design.md,
+"Re-baseline: round flow (BB-189)"):
+
+- **The last tanks are called** (`simulation/stragglers.rs`,
+  `Game::straggler_phase`, run before the enemies think). Once no enemy is
+  still to come (`spawn_plan_finished`) and `straggler_call_alive` (3) or
+  fewer are left, a lull of `straggler_call_after_seconds` (20 s) - no live
+  enemy with a seat within the range it is seen at (`sight_on`) or the
+  players' bong within enemy sight, none freshly hit - calls every one of
+  them to the nearest live seat (`FieldMind::called`, `field::call_target`),
+  with an `Event::StragglersCalled` (not sent: a replica sees them come).
+  On a field map that wakes a band tank nothing ever woke and takes a tank
+  off its home leash; on an arena it heads the last tanks at a seat the
+  shared alert has lost. The call ends as a wave's does, within sight range
+  of a seat or on a hit, and another lull calls again. Only a Protect or
+  Destroy round with enemies in its plan - never a Hunt, a sandbox or a
+  training script - and a guard keeping its live bong stays on it. The
+  field map's re-roll (`reroll_stragglers`, docs/large-maps-follow-camera.md
+  section 12) still takes a wave tank lost far off the screens.
+- **A blocked lane is waited out** (`waves.rs`, `wave_phase`). When every
+  lane is busy - seats parked on every gate's inside point, say - for
+  `wave_lane_wait_seconds` (6 s), the one waiting drops onto the field as a
+  gate-less map's would: a wave tank through `spawn_in_band` (out of sight
+  on a field map), a seat coming back as below.
+- **A fallen seat comes back** in a wave round of two or more. The final
+  wave has no next wave to bring it with, so it brings back a seat that has
+  been a wreck for `wave_final_return_seconds` (10 s; 0 keeps it where it
+  fell). On a map with no gate at all, or past the lane wait, the seat is
+  dropped in instead of driving in (`seat_drops_in`): on the cell nearest
+  the first living seat that `Game::drop_cell` takes, a tank can drive to
+  from there and stands clear of every tank, with its body and the stick at
+  once, announced with `Event::TankEntered`.
 
 ## Going back: the level select
 
@@ -171,7 +229,7 @@ The English titles are `levels.toml`'s. Another language translates a title
 as `level-<map>` in its `lang/*.ftl` (`text_tests` allows those ids beyond
 English's and measures every title against the smallest field). The
 chrome is `level-number`, `result-time`, `result-wrecks`,
-`result-all-clear`, `result-again`, `result-next`, `result-first`,
+`result-all-clear`, `result-uncounted`, `result-again`, `result-next`, `result-first`,
 `result-levels`, `result-next-in`, `result-again-in`, `levels-title`,
 `levels-sub`, `levels-back` and `bar-level`, each with its budget in `text_tests::budgets`; every title is
 also held to its tile, whole, on two lines.
@@ -181,8 +239,15 @@ also held to its tile, whole, on two lines.
 - `levels::level_tests` - every level is a shipped map; a broken list is
   refused by name; `--level` by number or name; progress moves once, only
   forward, and round-trips through a file; an edit is the level from then on.
-- `mode::session_tests` - a won level counts down to the next and takes
-  it by itself, the last waits for its button back to the first, a lost one
+- `simulation::mechanics_tests::round_flow` - a field map's sleeping band
+  and an arena's lost tank are called after the lull, a band over the count
+  is left alone, a sandbox and the rule off call nobody, a seat in sight
+  holds the lull; a seat parked on every gate cannot hold a wave out; the
+  final wave brings a fallen seat back (and 0 keeps it); a map with no gate,
+  or a lane blocked past its wait, drops it in near the living.
+- `mode::session_tests` - a win under an enemy count or on an edit opens
+  no level and says so, a couch's counts; a won level counts down to the
+  next and takes it by itself, the last waits for its button back to the first, a lost one
   counts down to the same level again but not behind the level select,
   Enter and the buttons do not wait, an edit is played every time the level
   comes round, a map that is no level is free play.

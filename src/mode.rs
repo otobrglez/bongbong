@@ -68,18 +68,24 @@ impl Driver {
 }
 
 /// Whether `game`'s round is its map played as the map is authored, under
-/// the knobs `t`: one seat, the map's own start and its own sky, and no
-/// enemy count, mission, spawn plan or chassis from the command line, a
-/// tool or the `player_tank` knob (read as it stands at the win; the round
-/// was set up under it unless it was moved since).
+/// the knobs `t`: one seat and the round set up as the map has it
+/// (`set_up_as_authored`). What the clear check stamps a map by.
 fn played_as_authored(game: &Game, t: &crate::tuning::Tuning) -> bool {
+    game.players == PlayerCount::ONE && set_up_as_authored(game, t)
+}
+
+/// Whether `game`'s round is set up as its map is authored, under the
+/// knobs `t`, whatever its seat count: the map's own start and its own
+/// sky, and no enemy count, mission, spawn plan or chassis from the
+/// command line, a tool or the `player_tank` knob (read as it stands at
+/// the win; the round was set up under it unless it was moved since).
+fn set_up_as_authored(game: &Game, t: &crate::tuning::Tuning) -> bool {
     // The map's sky, or the one of its skies this seed picks - or night,
     // once the map's `nightfall` has passed: what the round is fought
     // under when no `--weather` puts another in.
     let key = if game.night_has_fallen() { crate::map::Weather::Night.into() } else { game.map.weather };
     let own_sky = crate::weather::in_force(key, game.round_seed(), true, &crate::tuning::Tuning::DEFAULT);
-    game.players == PlayerCount::ONE
-        && game.start_override.is_none()
+    game.start_override.is_none()
         && game.enemy_count_override.is_none()
         && game.level_overrides == crate::level::LevelOverrides::default()
         && game.player_row_override.is_none()
@@ -187,6 +193,10 @@ pub struct Session {
     /// on the first frame of the win; a round seen playing again lets the
     /// next win be put.
     clear_noted: bool,
+    /// Whether the local round's win counts for its level
+    /// (`counts_for_level`), decided on the first frame of the win by
+    /// `note_outcome`; `None` while the round plays.
+    win_counts: Option<bool>,
     /// The passage between local rounds - the end screen's verdict lifting
     /// out, the way it takes, the dissolve into the next round - and the
     /// real time since the round was decided (`Curtain`).
@@ -302,6 +312,7 @@ impl Session {
             minimap_on: false,
             clear_attempt: None,
             clear_noted: false,
+            win_counts: None,
             curtain: Curtain::default(),
             put_away_note: 0.0,
             swap: None,
@@ -373,6 +384,11 @@ impl Session {
         if self.driver != Driver::Play || self.game.outcome() != Outcome::Won {
             return false;
         }
+        // Only where the end screen offers the way on: a win that opens
+        // nothing (`counts_for_level`) leads nowhere it was not open.
+        if self.result_view().and_then(|view| view.buttons).and_then(|b| b.next).is_none() {
+            return false;
+        }
         let next = self.campaign.as_ref().map_or(i, |c| c.next(i));
         match self.start_level(next) {
             Ok(()) => true,
@@ -387,14 +403,21 @@ impl Session {
     /// Called after every frame's steps: only the first call after a win
     /// moves anything, and `take_progress` hands the move to the store. A
     /// round started from the builder's spot (`play_here`) is a test and
-    /// wins nothing.
+    /// wins nothing, and a win the level was not played for as it ships
+    /// (`counts_for_level`) opens nothing.
     pub fn note_outcome(&mut self) {
         match self.game.outcome() {
-            Outcome::Playing => self.clear_noted = false,
+            Outcome::Playing => {
+                self.clear_noted = false;
+                self.win_counts = None;
+            }
             Outcome::Lost => {}
             Outcome::Won if self.game.start_override.is_some() => {}
             Outcome::Won => {
-                if let (Some(i), Some(campaign)) = (self.level_round(), self.campaign.as_mut()) {
+                if self.win_counts.is_none() {
+                    self.win_counts = Some(self.counts_for_level());
+                }
+                if let (Some(i), Some(campaign), Some(true)) = (self.level_round(), self.campaign.as_mut(), self.win_counts) {
                     campaign.won(i);
                 }
                 if !std::mem::replace(&mut self.clear_noted, true) {
@@ -402,6 +425,20 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// Whether a win of the local round counts for its level, so opens the
+    /// next (docs/levels.md, "Honest locks"): a level round on the level's
+    /// map as it ships - not the session's edit of it, nor a modified copy
+    /// a store or `maps/` gave - set up as the map is authored
+    /// (`set_up_as_authored`: no enemy count, mission, spawn plan, start,
+    /// chassis or sky of its own) by one seat or the couch's two.
+    fn counts_for_level(&self) -> bool {
+        let Some(i) = self.level_round() else { return false };
+        let Some(level) = self.campaign.as_ref().and_then(|c| c.levels.get(i)) else { return false };
+        self.game.players.count() <= PlayerCount::TWO.count()
+            && set_up_as_authored(&self.game, &crate::tuning::tuning())
+            && crate::map::shipped_revision(&level.map) == Some(self.game.map.revision())
     }
 
     /// The clear check on a win: the revision `PLAY` started the round on
@@ -431,14 +468,20 @@ impl Session {
             return None;
         }
         let buttons = self.level_round().zip(self.campaign.as_ref()).map(|(i, campaign)| {
-            let next = (self.game.outcome() == Outcome::Won).then(|| {
+            let won = self.game.outcome() == Outcome::Won;
+            // A win that does not count (`counts_for_level`) leads on only
+            // where the way was open already: a level won before, or the
+            // one after a skippable level.
+            let counts = won && self.win_counts.unwrap_or_else(|| self.counts_for_level());
+            let open = counts || campaign.is_won(i) || (!campaign.is_last(i) && campaign.next(i) <= campaign.open_to());
+            let next = (won && open).then(|| {
                 if campaign.is_last(i) { NextLevel::FirstAgain { levels: campaign.levels.count() } } else { NextLevel::Next }
             });
             // Whole seconds, never 0: at zero the screen is taking its
             // way (`follow_countdown`), which it does the same frame.
             let left = self.game.restart_countdown().min(self.game.end_beats().countdown);
             let countdown = (!matches!(next, Some(NextLevel::FirstAgain { .. }))).then(|| left.ceil().max(1.0) as u32);
-            ResultButtons { next, countdown }
+            ResultButtons { next, countdown, uncounted: won && !open }
         });
         Some(ResultView { stats: crate::hud::result_stats(&self.game), seats: self.game.players.count(), buttons })
     }
@@ -463,8 +506,8 @@ impl Session {
             None => {}
         }
         match self.result_view().and_then(|view| view.buttons) {
-            Some(ResultButtons { countdown: Some(_), next: Some(_) }) => self.next_level(),
-            Some(ResultButtons { countdown: Some(_), next: None }) => {
+            Some(ResultButtons { countdown: Some(_), next: Some(_), .. }) => self.next_level(),
+            Some(ResultButtons { countdown: Some(_), next: None, .. }) => {
                 self.play_again();
                 true
             }
@@ -2508,11 +2551,11 @@ mod session_tests {
         .expect("the test's levels parse")
     }
 
-    /// A session on `levels`, on level `i`, one enemy a round.
+    /// A session on `levels`, on level `i`, each level played as it ships
+    /// (a seed is the only thing pinned), so its wins count.
     fn level_session(levels: crate::levels::Levels, i: usize) -> Session {
         let campaign = Campaign::new(levels, None);
         let mut game = Game::default();
-        game.enemy_count_override = Some(1);
         game.seed_override = Some(7);
         game.map = campaign.map(i).expect("the level opens");
         let (w, h) = game.map.field_size();
@@ -2667,15 +2710,19 @@ mod session_tests {
         assert_eq!(s.dissolve(), None, "PLAY from the builder cuts");
     }
 
-    /// Wreck the round's enemy (`win`) or player 1 (`!win`) and step
-    /// once, so the round ends.
+    /// Wreck every enemy of the round (`win`) or player 1 (`!win`) and
+    /// step once, so the round ends.
     fn finish(s: &mut Session, win: bool) {
-        let slot = if win {
-            s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().expect("an enemy")
+        let slots: Vec<usize> = if win {
+            let tanks: Vec<usize> = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().filter(|t| !t.is_wreck()).map(|t| t.owner_slot()).collect();
+            assert!(!tanks.is_empty(), "an enemy");
+            tanks
         } else {
-            0
+            vec![0]
         };
-        s.game.debug_kill(slot).expect("the tank exists");
+        for slot in slots {
+            s.game.debug_kill(slot).expect("the tank exists");
+        }
         step(s);
         assert_eq!(s.game.outcome(), if win { Outcome::Won } else { Outcome::Lost });
     }
@@ -2729,8 +2776,8 @@ mod session_tests {
         assert_eq!(s.take_progress(), None, "once");
         let view = s.play_chrome().result.expect("the end screen");
         let seconds = crate::tuning::tuning().restart_delay.ceil() as u32;
-        assert_eq!(view.buttons, Some(ResultButtons { next: Some(NextLevel::Next), countdown: Some(seconds) }));
-        assert_eq!((view.stats.destroyed, view.stats.enemies), (1, 1));
+        assert_eq!(view.buttons, Some(ResultButtons { next: Some(NextLevel::Next), countdown: Some(seconds), uncounted: false }));
+        assert_eq!((view.stats.destroyed, view.stats.enemies), (5, 5), "Lotus Lagoon's band, every one");
         assert!(s.play_chrome().result.is_some() && s.game.in_finale(), "the finale plays before the end screen");
         for _ in 0..end_frames(&s) - 30 {
             step(&mut s);
@@ -2750,7 +2797,7 @@ mod session_tests {
         finish(&mut s, true);
         assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("glasshouses".to_string(), true)), "the last level opens nothing further, and winning it is kept");
         let buttons = s.play_chrome().result.and_then(|v| v.buttons).expect("the buttons");
-        assert_eq!(buttons, ResultButtons { next: Some(NextLevel::FirstAgain { levels: 2 }), countdown: None });
+        assert_eq!(buttons, ResultButtons { next: Some(NextLevel::FirstAgain { levels: 2 }), countdown: None, uncounted: false });
         for _ in 0..end_frames(&s) + 60 {
             step(&mut s);
         }
@@ -2783,7 +2830,7 @@ mod session_tests {
         assert_eq!(s.take_progress(), None);
         let view = s.play_chrome().result.expect("the end screen");
         let seconds = crate::tuning::tuning().level_loss_retry_seconds.ceil() as u32;
-        assert_eq!(view.buttons, Some(ResultButtons { next: None, countdown: Some(seconds) }));
+        assert_eq!(view.buttons, Some(ResultButtons { next: None, countdown: Some(seconds), uncounted: false }));
         assert!(!s.next_level(), "no way on after a loss");
         let frames = end_frames(&s);
         to_verdict(&mut s);
@@ -2826,10 +2873,13 @@ mod session_tests {
 
     /// A level edited in the builder is played as edited, and still is
     /// when the campaign comes back round to it; the dialogs and the
-    /// builder keep the end screen's buttons out of reach.
+    /// builder keep the end screen's buttons out of reach. Its win opens
+    /// nothing, so the level is won as it ships first.
     #[test]
     fn a_levels_edit_is_played_every_time_it_comes_round() {
         let mut s = level_session(two_levels(), 0);
+        finish(&mut s, true);
+        s.play_again();
         let mut edited = s.builder.map().clone();
         edited.set_cell(5, 5, CellObject::Gate);
         s.press_build();
@@ -2838,9 +2888,9 @@ mod session_tests {
         assert_eq!(s.level(), Some(0), "the canvas is still that level by name");
         assert_eq!(s.game.map.cell(5, 5), Some(&CellObject::Gate));
         finish(&mut s, true);
-        s.next_level();
+        assert!(s.next_level(), "the way on was open already");
         finish(&mut s, true);
-        s.next_level();
+        assert!(s.next_level());
         assert_eq!(s.level(), Some(0));
         assert_eq!(s.game.map.cell(5, 5), Some(&CellObject::Gate), "played as edited");
         assert_eq!(s.builder.map().cell(5, 5), Some(&CellObject::Gate), "and the builder has the edit");
@@ -2848,6 +2898,51 @@ mod session_tests {
         s.press_build();
         assert_eq!(s.mode(), Driver::Build, "the end screen switches at once");
         assert!(!s.press_result(centre(result_rects(&s).expect("buttons").again), area()), "not while the builder is up");
+    }
+
+    /// Only a level played as it ships opens the next (docs/levels.md,
+    /// "Honest locks"): a win under an enemy count or on the builder's
+    /// edit counts for nothing - no way on, a line that says so, and the
+    /// countdown plays the level again - while the couch's two seats
+    /// count.
+    #[test]
+    fn a_win_with_changes_opens_no_level() {
+        let uncounted = |s: &Session| {
+            let buttons = s.play_chrome().result.and_then(|v| v.buttons).expect("the buttons");
+            let seconds = crate::tuning::tuning().restart_delay.ceil() as u32;
+            assert_eq!(buttons, ResultButtons { next: None, countdown: Some(seconds), uncounted: true });
+        };
+        // One enemy where the level brings five.
+        let mut s = level_session(two_levels(), 0);
+        s.game.enemy_count_override = Some(1);
+        s.play_again();
+        finish(&mut s, true);
+        assert_eq!(s.take_progress(), None, "nothing is reached");
+        uncounted(&s);
+        assert!(!s.next_level(), "and nothing leads on");
+        for _ in 0..end_frames(&s) + 40 {
+            step(&mut s);
+        }
+        assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing), "the countdown plays the level again");
+        assert_eq!(s.campaign.as_ref().map(Campaign::reached), Some(0));
+
+        // The builder's edit of it.
+        let mut s = level_session(two_levels(), 0);
+        let mut edited = s.builder.map().clone();
+        edited.set_cell(5, 5, CellObject::Gate);
+        s.press_build();
+        s.builder.load(edited);
+        s.play();
+        finish(&mut s, true);
+        assert_eq!(s.take_progress(), None);
+        uncounted(&s);
+
+        // The couch's two seats play the level as it ships.
+        let mut s = level_session(two_levels(), 0);
+        s.game.players = PlayerCount::TWO;
+        s.play_again();
+        finish(&mut s, true);
+        assert_eq!(s.take_progress().map(|p| p.level), Some("glasshouses".to_string()), "a couch's win counts");
     }
 
     /// The level select stands over a frozen round and starts only a

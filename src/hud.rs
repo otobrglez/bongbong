@@ -1462,7 +1462,7 @@ pub fn result_stats(game: &Game) -> RoundStats {
 }
 
 /// A level's end-screen buttons: `PLAY AGAIN` always, and after a win the
-/// way on.
+/// way on - unless the win opens nothing, which the screen says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResultButtons {
     pub next: Option<NextLevel>,
@@ -1473,6 +1473,10 @@ pub struct ResultButtons {
     /// already on. `None` after the last level's win, which waits for a
     /// button: going round to level 1 is the player's call.
     pub countdown: Option<u32>,
+    /// A win that opens no level (`Session::counts_for_level`: the level
+    /// was played with changes - an edit, an enemy count, a chassis): no
+    /// way on, and a line under the outcome that says why.
+    pub uncounted: bool,
 }
 
 /// Where a won level's second button goes.
@@ -1503,7 +1507,8 @@ pub struct ResultRects {
 pub struct ResultLayout {
     /// The outcome's top edge, at `RESULT_TITLE_SIZE`.
     pub title_y: f32,
-    /// Every level complete, after the last level's win.
+    /// Every level complete, after the last level's win; or, in its place,
+    /// that a win opens no level (`ResultButtons::uncounted`).
     pub all_clear_y: Option<f32>,
     /// Time and wrecks, at `RESULT_LINE_SIZE`.
     pub stats_y: f32,
@@ -1567,7 +1572,9 @@ pub const RESULT_LEVELS_W: f32 = 160.0;
 /// on the right; free play's countdown stands where they would.
 pub fn result_layout(area: Rect, view: &ResultView) -> ResultLayout {
     let line = RESULT_LINE_SIZE as f32;
-    let all_clear = matches!(view.buttons, Some(ResultButtons { next: Some(NextLevel::FirstAgain { .. }), .. }));
+    // The line over the numbers: every level complete, or a win that
+    // opens none - never both, since an uncounted win has no way on.
+    let all_clear = matches!(view.buttons, Some(ResultButtons { next: Some(NextLevel::FirstAgain { .. }), .. }) | Some(ResultButtons { uncounted: true, .. }));
     let rows = 16.0
         + if all_clear { line + 12.0 } else { 0.0 }
         + line
@@ -2770,11 +2777,12 @@ mod hud_tests {
         let fields = areas();
         let forms = [
             None,
-            Some(ResultButtons { next: None, countdown: Some(3) }),
-            Some(ResultButtons { next: Some(NextLevel::Next), countdown: Some(3) }),
-            Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels: 14 }), countdown: None }),
-            Some(ResultButtons { next: None, countdown: None }),
-            Some(ResultButtons { next: Some(NextLevel::Next), countdown: None }),
+            Some(ResultButtons { next: None, countdown: Some(3), uncounted: false }),
+            Some(ResultButtons { next: Some(NextLevel::Next), countdown: Some(3), uncounted: false }),
+            Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels: 14 }), countdown: None, uncounted: false }),
+            Some(ResultButtons { next: None, countdown: None, uncounted: false }),
+            Some(ResultButtons { next: Some(NextLevel::Next), countdown: None, uncounted: false }),
+            Some(ResultButtons { next: None, countdown: Some(3), uncounted: true }),
         ];
         for field in fields {
             for seats in [1, 2, MAX_SEATS] {
@@ -2928,7 +2936,7 @@ mod hud_tests {
             clear("a map question", question_rects(ui.area).panel);
             // The end screen at its tallest: a won level of a co-op round,
             // from its title down to its row of buttons.
-            let won = ResultView { stats: RoundStats::default(), seats: 2, buttons: Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels: 14 }), countdown: None }) };
+            let won = ResultView { stats: RoundStats::default(), seats: 2, buttons: Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels: 14 }), countdown: None, uncounted: false }) };
             let rows = result_layout(ui.area, &won);
             let buttons = rows.buttons.expect("a level's buttons");
             let bottom = buttons.again.y + buttons.again.height;

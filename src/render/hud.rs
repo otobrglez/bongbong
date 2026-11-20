@@ -714,7 +714,8 @@ pub fn draw_banner(d: &mut impl RaylibDraw, area: Rect, text: &str, size: i32, y
 }
 
 /// Draw the end screen under its outcome (docs/levels.md): every level
-/// complete after the last one's win, the round's time and wrecks, the
+/// complete after the last one's win, or that a win opens no level, the
+/// round's time and wrecks, the
 /// wrecks by seat from two seats, then a level's buttons - the way it is
 /// counting down to carrying the count - or free play's `countdown` in
 /// their place. In UI points over the dim, centred in the chrome's
@@ -729,8 +730,14 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
     let middle = (area.x + area.w / 2.0).round() as i32;
     let t = text();
     let rows = result_layout(area, view);
-    if let (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }), .. })) = (rows.all_clear_y, view.buttons) {
-        centred(d, middle, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, faded(BUILD_COLOR, a));
+    match (rows.all_clear_y, view.buttons) {
+        (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }), .. })) => {
+            centred(d, middle, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, faded(BUILD_COLOR, a));
+        }
+        (Some(y), Some(ResultButtons { uncounted: true, .. })) => {
+            centred(d, middle, &t.get(keys::RESULT_UNCOUNTED), y, RESULT_LINE_SIZE, faded(TEXT, a));
+        }
+        _ => {}
     }
     let time = t.fmt(keys::RESULT_TIME, &[("time", clock_text(view.stats.seconds).into())]);
     let wrecks = t.fmt(keys::RESULT_WRECKS, &[("n", view.stats.destroyed.into()), ("total", view.stats.enemies.into())]);

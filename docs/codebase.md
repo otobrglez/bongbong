@@ -233,9 +233,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   spot, no way on) and clears nothing. **The clear check** (docs/large-maps-patterns.md, "Clear
   check before sharing"): `play` sets `clear_attempt` (the canvas's `MapFile::revision`) and
   `note_outcome` puts a win's first frame to `note_clear` - cleared when the round is that revision
-  played as authored (`played_as_authored`: one seat, no start, enemy, mission, spawn, wave or
-  chassis override, the map's own sky and the `player_tank` knob at its default), the par its round
-  clock, the best kept (`MapEditor::note_clear`). `follow_countdown` (after every frame's steps)
+  played as authored (`played_as_authored`: one seat and `set_up_as_authored` - no start, enemy,
+  mission, spawn, wave or chassis override, the map's own sky and the `player_tank` knob at its
+  default), the par its round clock, the best kept (`MapEditor::note_clear`). **Honest locks**
+  (docs/levels.md): a level's win counts (`counts_for_level`, kept in `win_counts` from the win's
+  first frame) only on the level's shipped map to the revision (`map::shipped_revision`), set up as
+  authored, by one seat or the couch's two; one that does not offers no way on unless it was open
+  already (`ResultButtons::uncounted`, the line `result-uncounted` in the all-clear slot) and
+  `next_level` refuses what the end screen does not offer. `follow_countdown` (after every frame's steps)
   takes the way it counted down to: `next_level` after a win, `play_again` after a loss, nothing
   after the last level's win, which waits for its button. `start_level` opens a level's map (the
   session's edit first) on the field and in the builder as a new document (`MapEditor::open`);
@@ -848,10 +853,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     arrives**, so every `.with::<&Ai>()` query excludes it for free. **A wrecked seat comes back
     with the next wave** (docs/online-coop-prd.md §4.11, decision 7): `call_wave` queues every seat
     that is a wreck, and the queue is drained at the head of the wave's own roll-ins, the seat's
-    tank reset to a fresh one of its chassis at a gate and driven in kinematically - no `Ai` on
-    arrival, the stick again. A round that seats one queues nothing (its one wreck is every seat
-    wrecked, and `check_round_end` has already lost the round) and a band round calls no wave, so
-    both replay byte for byte. While a seat is in the lane it is `seats_on_field()`'s `None`:
+    tank reset to a fresh one of its chassis at a gate (`renew_seat`) and driven in kinematically - no
+    `Ai` on arrival, the stick again. The final wave, with no next wave, queues a seat that has been
+    a wreck for `wave_final_return_seconds` itself (`queue_final_returns`, over
+    `WaveState::wrecked_for`). A seat with no lane to come by - a map with no gate, or every lane
+    busy for `wave_lane_wait_seconds` - is dropped in (`seat_drops_in`: `Game::drop_cell` nearest the
+    first living seat, reachable from it and clear of every tank, its body at once, `TankEntered`),
+    and a wave tank waiting that long for a lane drops in through `spawn_in_band`, so seats parked
+    on every gate never starve a wave (`WaveState::lane_wait`; docs/levels.md, "A round that cannot
+    stall"). A round that seats one queues nothing (its one wreck is every seat wrecked, and
+    `check_round_end` has already lost the round) and a band round calls no wave, so both replay
+    byte for byte. While a seat is in the lane it is `seats_on_field()`'s `None`:
     outside the field, not shot at, blasted, rammed, targeted or routed to, and not counted by
     `waves_finished`. On a field map `pick_gate` keeps the lanes `field::prefer_gates` leaves, a
     seat coming back takes `pick_return_gate`, every tank that rolls in arrives `called`, the
@@ -891,8 +903,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     rolled in again through a free lane `pick_gate` would give a wave, outside every sight box and
     shorter by walk (`reroll_gates`), keeping its slot, role, damage and weapons (`Rejoin` through
     its `RollIn`) and arriving called; `Event::Rerolled` is not sent, and the lane is drawn from the
-    round's RNG like a wave's, so a round with no straggler replays byte for byte. Knobs: the
-    `field` tuning group. Tests: the field cases at the end of `mechanics_tests`.
+    round's RNG like a wave's, so a round with no straggler replays byte for byte. The round's
+    last tanks, a band's included, are also called to the seats after a lull (`stragglers.rs`).
+    Knobs: the `field` tuning group. Tests: the field cases at the end of `mechanics_tests`.
   - `director.rs` (docs/large-maps-patterns.md, "Pacing director") — a field map's wave breather:
     each seat's intensity (0-1) jumps with what its tank loses (health and shield,
     `director_hurt_full` of a pool the whole way; the players' bong's losses raise every seat), is
@@ -905,6 +918,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `director_enabled` off keep `wave_gap_seconds`. The time left travels in
     `RoundState::next_wave`, so a replica's banner holds as long as the room's (a rig test);
     `Game::pacing()` is `status.pacing`.
+  - `stragglers.rs` (docs/levels.md, "A round that cannot stall") — the round's last enemies called
+    to the fight: `straggler_phase` (before `enemy_phase`) counts a lull once the spawn plan is
+    finished and `straggler_call_alive` or fewer enemies are left - no live enemy with a seat within
+    `sight_on` or the players' bong within `enemy_sight`, none hit-alerted - and after
+    `straggler_call_after_seconds` sets `FieldMind::called` on each (a guard keeping its live bong
+    excepted), `Event::StragglersCalled` (`NOT_SENT`). A field map's alert pass ends the call; on an
+    arena the phase ends it within sight range or on a hit, and `enemy_phase` routes a called arena
+    tank at `field::call_target` of the live seats. Protect and Destroy rounds with a plan only (no
+    Hunt, sandbox or training); walks enemies in slot order, no RNG. `Game::straggler_lull` is the
+    clock for tests. Tests: `mechanics_tests::round_flow`.
   - `training.rs` (docs/training-stage.md) — a training map's rules: the map's `[[training.beat]]`
     script (`crate::training`) run one beat at a time by `training_phase` (after the frame's blasts
     and wreck removals, before the cleanup that sweeps the doors it opens). A beat starts what it
@@ -3013,8 +3036,10 @@ seat with hysteresis (`Event::Retarget`, from two seats up); `friendly_fire_dama
 player-on-player damage. **Death**: a wrecked seat waits for the round to end, except in a **wave**
 round of two or more, where it re-enters with the next wave through a gate, no penalty, as a fresh
 tank of its own chassis (`waves.rs`, docs/online-coop-prd.md §4.11 decision 7). The round is still
-lost the frame every seat is a wreck at once, so a solo round is untouched; a seat wrecked after the
-last wave is called, or while the round ends, stays where it fell. `Game::seats_on_field()` is
+lost the frame every seat is a wreck at once, so a solo round is untouched; on the final wave, with
+no wave after it, a seat comes back `wave_final_return_seconds` after it fell, and one with no lane
+to drive in by (a map with no gate, lanes busy past `wave_lane_wait_seconds`) is dropped in near the
+living seats; a seat wrecked while the round ends stays where it fell. `Game::seats_on_field()` is
 `players()` with the seats in a gate lane masked out - the walk every phase that must not touch an
 off-field tank takes. Map: `start2`, `tank2`; editor `Tool::Start2`, `SettingsRow::Tank2` (and
 `SettingsRow::Theme` for the map's look); dev server/probe take `p2_*` intents / `--players N
