@@ -45,7 +45,7 @@
 //! stick is held - the base drawn at the origin the rule measures from, so
 //! the picture can never point somewhere the tank is not going -, a ripple
 //! where a fire tap landed, and a one-time hint the first time a touch is
-//! seen.
+//! seen, which waits while something covers the round (`set_covered`).
 
 use crate::math::Vec2;
 #[cfg(feature = "render")]
@@ -176,6 +176,9 @@ pub struct TouchScheme {
     ripples: Vec<Ripple>,
     /// Seconds of hint left; `None` until the first touch is ever seen.
     hint: Option<f32>,
+    /// Something stands between a tap and the round (`set_covered`): the
+    /// hint is neither shown nor counted down.
+    covered: bool,
     /// Whether any touch has been seen this session - the hint fires once.
     seen: bool,
     /// Where a touch landing is nobody's steering or firing, in UI points:
@@ -195,6 +198,22 @@ impl TouchScheme {
     pub fn set_keep_out(&mut self, rects: &[Rectangle]) {
         self.keep_out.clear();
         self.keep_out.extend_from_slice(rects);
+    }
+
+    /// Whether something stands between a tap and the round this frame -
+    /// a pause, a dialog, the opening banner, the end screen, another mode
+    /// (`mode::Session::round_covered`) - or the bong's speech bubble is
+    /// up, which may stand on the hint's row. The hint says what a tap on the
+    /// field does, so while this holds it is not written and its seconds
+    /// do not run: it shows for its whole time once the round is clear.
+    pub fn set_covered(&mut self, covered: bool) {
+        self.covered = covered;
+    }
+
+    /// Seconds of hint left to show, while it may show: `None` before the
+    /// first touch, once it has run out, and while the round is covered.
+    pub fn hint_left(&self) -> Option<f32> {
+        self.hint.filter(|_| !self.covered)
     }
 
     /// Feed this frame's touch points, in UI points, and get the intent
@@ -218,7 +237,7 @@ impl TouchScheme {
             self.seen = true;
             self.hint = Some(HINT_SECONDS);
         }
-        if let Some(t) = self.hint.as_mut() {
+        if let Some(t) = self.hint.as_mut().filter(|_| !self.covered) {
             *t -= dt;
             if *t <= 0.0 {
                 self.hint = None;
@@ -352,7 +371,8 @@ impl TouchScheme {
     /// inside a camera at the UI scale (`hud::UiFrame::scale`), never the
     /// world's: the stick while held (`stick_drawing`), fire ripples, the
     /// hint across the area's two halves - while a tap is what the hints
-    /// name (`hud::Hints`): a key pressed meanwhile takes it away.
+    /// name (`hud::Hints`): a key pressed meanwhile takes it away - and
+    /// nothing covers the round (`hint_left`).
     #[cfg(feature = "render")]
     pub fn draw(&self, d: &mut impl RaylibDraw, steer_right: bool, hints: crate::hud::Hints) {
         if let Some(s) = self.stick_drawing() {
@@ -367,7 +387,7 @@ impl TouchScheme {
             let alpha = (200.0 * (1.0 - t)) as u8;
             d.draw_circle_lines_v(r.at, radius, Color::new(255, 170, 120, alpha));
         }
-        if let (Some(t), Some(area), crate::hud::Hints::Touch) = (self.hint, self.area, hints) {
+        if let (Some(t), Some(area), crate::hud::Hints::Touch) = (self.hint_left(), self.area, hints) {
             let alpha = ((t / HINT_SECONDS).min(1.0) * 220.0) as u8;
             let y = (area.y + area.h * 0.5) as i32;
             let (steer_x, fire_x) = if steer_right {
@@ -537,6 +557,33 @@ mod touch_tests {
             };
             assert!(off_axis <= RULE.axis_switch_deg + 0.01, "{off_axis} degrees off {:?} at ({x}, {y})", i.move_dir);
         }
+    }
+
+    /// The hint is for the round: under a pause, a dialog or a banner it
+    /// is not written and its seconds do not run, so it still shows for
+    /// its whole time afterwards.
+    #[test]
+    fn the_hint_waits_while_the_round_is_covered() {
+        let rule = StickRule::current();
+        let mut t = TouchScheme::default();
+        assert_eq!(t.hint_left(), None, "no touch yet");
+        // The first touch lands on a dialog's button: the round is covered.
+        t.set_covered(true);
+        t.update_with(&[pt(1, 100.0, 200.0)], area(), false, 1.0 / 60.0, &rule);
+        assert_eq!(t.hint_left(), None);
+        for _ in 0..600 {
+            t.update_with(&[], area(), false, 1.0 / 60.0, &rule);
+        }
+        assert_eq!(t.hint_left(), None, "ten seconds covered write nothing");
+        // Clear: the whole hint is still to come, and then it runs out.
+        t.set_covered(false);
+        assert_eq!(t.hint_left(), Some(HINT_SECONDS));
+        t.update_with(&[], area(), false, 1.0, &rule);
+        assert_eq!(t.hint_left(), Some(HINT_SECONDS - 1.0));
+        t.update_with(&[], area(), false, HINT_SECONDS, &rule);
+        assert_eq!(t.hint_left(), None, "shown once");
+        t.update_with(&[pt(2, 100.0, 200.0)], area(), false, 1.0 / 60.0, &rule);
+        assert_eq!(t.hint_left(), None, "and never again");
     }
 
     #[test]

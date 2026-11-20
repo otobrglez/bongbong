@@ -1195,6 +1195,10 @@ impl Game {
         let area = ui.area;
         let (screen_w, screen_h) = (ui.screen.w.ceil() as i32, ui.screen.h.ceil() as i32);
         let cy = (area.y + area.h / 2.0).round() as i32;
+        // The end screen is up once its banner has begun to ease in; the
+        // banners below share its row (`hud::MiddleRow`).
+        let ended = c.banner.is_some() && c.verdict > 0.0;
+        let row = crate::hud::MiddleRow::of(self.paused, ended, c.intro.is_some(), c.wave_banner.is_some());
         d.draw_mode2D(ui_camera, |mut d, _| {
             // End-of-round banner over a dimming overlay. A local round
             // stacks its numbers and a level's buttons under it
@@ -1231,7 +1235,7 @@ impl Game {
             // Mission banner: big white text over a dim overlay that both
             // fade together once the round unfreezes. A level adds its
             // number above and its title below, at half the size.
-            if let Some((text, alpha)) = &c.intro {
+            if let Some((text, alpha)) = c.intro.as_ref().filter(|_| row.intro) {
                 let a = |max: f32| (max * alpha) as u8;
                 d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, a(120.0)));
                 let size = banner_size(text, BANNER_SIZE, area);
@@ -1244,15 +1248,18 @@ impl Game {
                     draw_banner(&mut d, area, &level.title, LEVEL_TITLE_SIZE, cy + size / 2 + 14, white);
                 }
             }
-            if let Some(text) = &c.wave_banner {
+            if let Some(text) = c.wave_banner.as_ref().filter(|_| row.wave) {
                 let size = banner_size(text, WAVE_BANNER_SIZE, area);
                 draw_banner(&mut d, area, text, size, cy - size / 2, Color::RAYWHITE);
             }
 
-            // Paused overlay draws over everything else, including the
-            // end-of-round banner (its countdown is frozen too).
+            // The pause dims everything under it, the end screen too
+            // (its countdown is frozen), and writes PAUSED where the row
+            // is its own.
             if self.paused {
                 d.draw_rectangle(0, 0, screen_w, screen_h, Color::new(0, 0, 0, 120));
+            }
+            if row.paused {
                 let size = banner_size(&c.paused, BANNER_SIZE, area);
                 draw_banner(&mut d, area, &c.paused, size, cy - size / 2, Color::RAYWHITE);
             }
@@ -1290,9 +1297,10 @@ impl Game {
             }
         });
 
-        // The touch scheme's stick, ripples and hint over everything,
-        // where the thumbs are, in UI points like the HUD - the same size
-        // on the glass whatever scale the world is drawn at.
+        // The touch scheme's stick and ripples over everything, where the
+        // thumbs are, in UI points like the HUD - the same size on the
+        // glass whatever scale the world is drawn at - and its hint, which
+        // waits while anything covers the round (`TouchScheme::set_covered`).
         if let Some((touch, steer_right)) = touch {
             d.draw_mode2D(ui_camera, |mut d, _| touch.draw(&mut d, steer_right, ui.hints));
         }
