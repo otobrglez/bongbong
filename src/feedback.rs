@@ -13,10 +13,18 @@
 //! last blow is held (`Session::time_scale`): offline only, never under a
 //! dev-server lockstep, and nothing the simulation can see.
 //!
-//! Reduced motion (`motion.rs`) takes the shake, the pulse and the hold
-//! away and leaves the tick, which then only lights the number.
+//! A blow that came from somewhere - a shot, a blast, a slug - shoves the
+//! seat's own view away from where it came from instead of shaking it
+//! (`Feedback::shove`): the follow camera takes the shove through the
+//! kick's layer (`follow::SeatTank::shove`), an arena's picture is shifted
+//! by it with the shake (`shockwave::camera_shake_with`). A hurt with no
+//! direction - fire, lava, ooze, a strike landing on the hull itself -
+//! shakes as ever.
+//!
+//! Reduced motion (`motion.rs`) takes the shake, the shove, the pulse and
+//! the hold away and leaves the tick, which then only lights the number.
 
-use crate::math::Color;
+use crate::math::{Color, Vec2};
 use crate::shockwave::Shockwave;
 use crate::simulation::{Game, Outcome};
 use crate::tuning::Tuning;
@@ -59,6 +67,10 @@ struct Hurt {
     age: f32,
     /// The shake of the seat's own view, centred on the hull.
     shock: Shockwave,
+    /// The shove of the seat's own view instead, world px at the blow:
+    /// away from where it came from (`shove_of`). `None` for a blow with
+    /// no direction, which shakes.
+    push: Option<Vec2>,
 }
 
 /// The pulse round a view's edge as a frame draws it (`pulse_look`).
@@ -144,6 +156,10 @@ pub struct Reading {
     pub hulls: [Option<(f32, Position)>; MAX_SEATS],
     /// The enemies each seat has wrecked (`RoundStats::by_seat`).
     pub kills: [u32; MAX_SEATS],
+    /// The way the blows that landed on each seat's hull this frame drove
+    /// it, a unit vector from where they struck through the hull
+    /// (`blow_of`); `None` where nothing struck it from anywhere.
+    pub blows: [Option<Vec2>; MAX_SEATS],
 }
 
 impl Reading {
@@ -153,8 +169,56 @@ impl Reading {
         for (seat, hull) in hulls.iter_mut().enumerate() {
             *hull = game.seat(seat).and_then(|e| game.world.get::<&crate::tank::Tank>(e).ok().map(|tank| (tank.damage, tank.position)));
         }
-        Reading { frame: game.frame(), round: game.round_seed(), playing: game.outcome() == Outcome::Playing, hulls, kills: game.round_stats().by_seat }
+        let mut blows = [None; MAX_SEATS];
+        for (seat, blow) in blows.iter_mut().enumerate() {
+            if let Some((_, hull)) = hulls[seat] {
+                *blow = blow_of(hull, game.events(), seat);
+            }
+        }
+        Reading { frame: game.frame(), round: game.round_seed(), playing: game.outcome() == Outcome::Playing, hulls, kills: game.round_stats().by_seat, blows }
     }
+}
+
+/// The way this frame's blows on `seat`'s hull at `hull` drove it: from
+/// each `Event::Hit` that landed damage on it to the hull, weighted by the
+/// damage, as a unit vector. A blow struck on the hull's own point (a
+/// tesla's arc) has no way, and contacts report no damage in their
+/// events, so fire, lava and ooze have none either; `None` when nothing
+/// gives one, or the blows cancel out.
+pub fn blow_of(hull: Position, events: &[crate::simulation::Event], seat: usize) -> Option<Vec2> {
+    use crate::simulation::{Event, HitTarget};
+    let mut way = Vec2::new(0.0, 0.0);
+    for event in events {
+        if let Event::Hit { target: HitTarget::Player { player }, damage, x, y, .. } = *event {
+            let off = Vec2::new(hull.x - x, hull.y - y);
+            let len = off.length();
+            if player as usize == seat && damage > 0.0 && len >= 1.0 && len.is_finite() {
+                way = way + off * (damage / len);
+            }
+        }
+    }
+    let len = way.length();
+    (len > 1e-3 && len.is_finite()).then(|| way * (1.0 / len))
+}
+
+/// How far a blow of `strength` (0 to 1) shoves its seat's view, world px:
+/// `camera_hurt_shove` times the shake it stands in for - its length
+/// (`camera_shake_magnitude` times `hurt_shock`, two fifths of it at
+/// nothing and all of it at 1) under `screen_fx_intensity` - never past the
+/// shake's cap (`camera_shake_magnitude` times `camera_shake_max_stack`).
+pub fn shove_length(strength: f32, t: &Tuning) -> f32 {
+    let magnitude = (t.camera_shake_magnitude * t.screen_fx_intensity).max(0.0);
+    let length = t.camera_hurt_shove.max(0.0) * magnitude * t.hurt_shock.max(0.0) * (0.4 + 0.6 * strength.clamp(0.0, 1.0));
+    length.min(magnitude * t.camera_shake_max_stack)
+}
+
+/// What is left `age` seconds after a blow of a shove that began as
+/// `push`: all of it at the blow, falling to about a third every
+/// `camera_hurt_shove_seconds`; nothing once under a hundredth of a pixel.
+pub fn shove_left(push: Vec2, age: f32, t: &Tuning) -> Vec2 {
+    let seconds = t.camera_hurt_shove_seconds;
+    let left = if age <= 0.0 { push } else if seconds > 0.0 { push * crate::math::exp(-age / seconds) } else { Vec2::new(0.0, 0.0) };
+    if left.length() < 0.01 { Vec2::new(0.0, 0.0) } else { left }
 }
 
 /// What the local seats feel (the module docs).
@@ -198,7 +262,8 @@ impl Feedback {
                 if lost > 0.0 && lost >= t.hurt_min_damage {
                     let strength = (lost / t.hurt_full_damage.max(1.0)).clamp(0.0, 1.0);
                     self.hurts.retain(|h| h.seat != seat || h.strength > strength);
-                    self.hurts.push(Hurt { seat, strength, age: 0.0, shock: Shockwave::scaled(at, t.hurt_shock * (0.4 + 0.6 * strength)) });
+                    let push = now.blows[seat].filter(|_| t.camera_hurt_shove > 0.0).map(|way| way * shove_length(strength, t));
+                    self.hurts.push(Hurt { seat, strength, age: 0.0, shock: Shockwave::scaled(at, t.hurt_shock * (0.4 + 0.6 * strength)), push });
                 }
             }
             let killed = now.kills[seat] > before.kills[seat];
@@ -212,7 +277,7 @@ impl Feedback {
     /// Age it: the blows on the time the round on screen ran (`round_dt`,
     /// none while it stands still), the hold on real time.
     pub fn tick(&mut self, round_dt: f32, real_dt: f32, t: &Tuning) {
-        let life = t.hurt_pulse_seconds.max(t.hurt_tick_seconds).max(t.camera_shake_duration);
+        let life = t.hurt_pulse_seconds.max(t.hurt_tick_seconds).max(t.camera_shake_duration).max(t.camera_hurt_shove_seconds * 4.0);
         self.hurts.retain_mut(|h| {
             h.age += round_dt;
             h.shock.time += round_dt;
@@ -230,10 +295,19 @@ impl Feedback {
         if self.hold > 0.0 { 0.0 } else { 1.0 }
     }
 
-    /// The shakes of the blows the seats of `view` took, for
-    /// `shockwave::camera_shake_of`.
+    /// The shakes of the blows the seats of `view` took that have no
+    /// shove in their place, for `shockwave::camera_shake_of`.
     pub fn shakes(&self, view: ViewOf) -> impl Iterator<Item = &Shockwave> {
-        self.hurts.iter().filter(move |h| view.has(h.seat)).map(|h| &h.shock)
+        self.hurts.iter().filter(move |h| view.has(h.seat) && h.push.is_none()).map(|h| &h.shock)
+    }
+
+    /// The shove the blows the seats of `view` took ask of it now, world
+    /// px: the view moves this way (`shove_left` of each), the sum no
+    /// longer than one shove can be at its hardest (`shove_length` of 1).
+    pub fn shove(&self, view: ViewOf, t: &Tuning) -> Vec2 {
+        let sum = self.hurts.iter().filter(|h| view.has(h.seat)).filter_map(|h| h.push.map(|push| shove_left(push, h.age, t))).fold(Vec2::new(0.0, 0.0), |a, b| a + b);
+        let (len, most) = (sum.length(), shove_length(1.0, t));
+        if len > most && len > 0.0 { sum * (most / len) } else { sum }
     }
 
     /// The pulse round the edge of `view`: its hardest-hit seat's.
@@ -264,7 +338,7 @@ mod tests {
         hulls[1] = Some((damage[1], Position::new(900.0, 400.0)));
         let mut by_seat = [0; MAX_SEATS];
         by_seat[0] = kills;
-        Reading { frame, round: 7, playing: true, hulls, kills: by_seat }
+        Reading { frame, round: 7, playing: true, hulls, kills: by_seat, blows: [None; MAX_SEATS] }
     }
 
     /// A blow shows on the seat that took it and on no other: its own
@@ -290,6 +364,65 @@ mod tests {
         let hard = fb.shakes(ViewOf::Every).next().expect("a shake").strength;
         assert_eq!(fb.shakes(ViewOf::Every).count(), 1, "the harder blow takes the lighter one's place");
         assert!((hard - t.hurt_shock).abs() < 1e-4, "and is capped at the whole of `hurt_shock`");
+    }
+
+    /// A blow that came from somewhere shoves the hurt seat's own view
+    /// away from it instead of shaking it, harder for a harder blow, never
+    /// past the shake's cap, fading on the round's time; one from nowhere
+    /// shakes as ever, and with `camera_hurt_shove` at 0 every blow does.
+    #[test]
+    fn a_blow_from_somewhere_shoves_and_one_from_nowhere_shakes() {
+        let t = Tuning::default();
+        let mut fb = Feedback::default();
+        fb.read(reading(1, [0.0, 0.0], 0), &[0, 1], &t, true);
+        // Seat 1 struck from its left: its view goes right.
+        let mut struck = reading(2, [0.0, 15.0], 0);
+        struck.blows[1] = Some(Vec2::new(1.0, 0.0));
+        fb.read(struck, &[0, 1], &t, true);
+        assert_eq!(fb.shakes(ViewOf::Every).count(), 0, "the shove stands in for the shake");
+        let shove = fb.shove(ViewOf::Only(1), &t);
+        assert!((shove.x - shove_length(0.5, &t)).abs() < 1e-5 && shove.y == 0.0, "{shove:?}");
+        assert!((shove_length(0.5, &t) - 1.5 * 3.0 * 0.6 * 0.7).abs() < 1e-5, "one and a half times the shake's length");
+        assert_eq!(fb.shove(ViewOf::Except(1), &t), Vec2::new(0.0, 0.0), "the other half of a split feels nothing");
+        let cap = t.camera_shake_magnitude * t.camera_shake_max_stack;
+        assert!(shove_length(1.0, &t) <= cap && shove_length(1.0, &Tuning { camera_hurt_shove: 2.5, hurt_shock: 3.0, ..t }) == cap);
+        // It fades on the round's time and is gone with the blow.
+        fb.tick(t.camera_hurt_shove_seconds, 0.0, &t);
+        let later = fb.shove(ViewOf::Only(1), &t);
+        assert!((later.x - shove.x * crate::math::exp(-1.0)).abs() < 1e-4, "{later:?}");
+        fb.tick(1.0, 0.0, &t);
+        assert_eq!(fb.shove(ViewOf::Every, &t), Vec2::new(0.0, 0.0));
+        // From nowhere - fire, lava, an arc on the hull - it shakes.
+        fb.read(reading(3, [0.0, 15.0], 0), &[0, 1], &t, true);
+        fb.read(reading(4, [0.0, 40.0], 0), &[0, 1], &t, true);
+        assert_eq!((fb.shakes(ViewOf::Every).count(), fb.shove(ViewOf::Every, &t)), (1, Vec2::new(0.0, 0.0)));
+        // With no shove asked for, a blow from somewhere shakes too.
+        let off = Tuning { camera_hurt_shove: 0.0, ..t };
+        let mut fb = Feedback::default();
+        fb.read(reading(1, [0.0, 0.0], 0), &[0], &off, true);
+        let mut struck = reading(2, [15.0, 0.0], 0);
+        struck.blows[0] = Some(Vec2::new(0.0, -1.0));
+        fb.read(struck, &[0], &off, true);
+        assert_eq!((fb.shakes(ViewOf::Every).count(), fb.shove(ViewOf::Every, &off)), (1, Vec2::new(0.0, 0.0)));
+    }
+
+    /// `blow_of`: the way this frame's hits drove a hull, from where they
+    /// struck through it, weighted by damage; a hit on the hull's own point,
+    /// one that landed nothing, another seat's and blows that cancel out
+    /// give none.
+    #[test]
+    fn a_blow_is_read_from_where_it_struck() {
+        use crate::simulation::{Event, HitCause, HitTarget};
+        let hull = Position::new(500.0, 300.0);
+        let hit = |player: u8, damage: f32, x: f32, y: f32| Event::Hit { target: HitTarget::Player { player }, damage, killed: false, x, y, cause: HitCause::Shell };
+        assert_eq!(blow_of(hull, &[hit(0, 20.0, 488.0, 300.0)], 0), Some(Vec2::new(1.0, 0.0)), "struck on its left, driven right");
+        assert_eq!(blow_of(hull, &[hit(0, 20.0, 500.0, 330.0)], 0), Some(Vec2::new(0.0, -1.0)));
+        let both = blow_of(hull, &[hit(0, 30.0, 488.0, 300.0), hit(0, 10.0, 500.0, 312.0)], 0).expect("a way");
+        assert!(both.x > 0.9 && both.y < 0.0 && (both.length() - 1.0).abs() < 1e-5, "{both:?}");
+        assert_eq!(blow_of(hull, &[hit(0, 20.0, 500.0, 300.0)], 0), None, "on the hull's own point");
+        assert_eq!(blow_of(hull, &[hit(0, 0.0, 488.0, 300.0)], 0), None, "nothing landed");
+        assert_eq!(blow_of(hull, &[hit(1, 20.0, 488.0, 300.0)], 0), None, "another seat's");
+        assert_eq!(blow_of(hull, &[hit(0, 20.0, 488.0, 300.0), hit(0, 20.0, 512.0, 300.0)], 0), None, "cancelled out");
     }
 
     /// A trickle under `hurt_min_damage`, a repair, a seat this screen

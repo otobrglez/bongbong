@@ -3510,9 +3510,11 @@ tunables! {
         /// Windows say nothing, which is full motion -, 1 is full motion
         /// and 2 reduced. Reduced motion has no camera shake, no ripple
         /// bending the whole screen, no zoom at a round's opening (the
-        /// establishing shot cuts to the tank) and no glide when a round
-        /// starts over (the view cuts to the new start); the follow
-        /// camera, the arrows and every effect of the fight itself stay.
+        /// establishing shot cuts to the tank), no glide when a round
+        /// starts over (the view cuts to the new start), and no shot's
+        /// kick, blow's shove, fight's pull or couch look-ahead on the
+        /// follow camera; the follow camera, the arrows and every effect
+        /// of the fight itself stay.
         reduce_motion: i32 = 0 in 0 ..= 2;
         /// What reduced motion keeps of a whole-screen flash - a kill's
         /// (`blast_screen_flash_alpha`), a lightning strike's - as a share
@@ -3567,9 +3569,18 @@ tunables! {
         camera_lead_reverse_hold_seconds: f32 = 0.25 in 0.0 ..= 3.0;
         /// The spring the view chases its goal on: a critically damped
         /// spring of this smoothing time (Unity's `SmoothDamp`), the seat's
-        /// velocity fed forward so a steady drive does not trail. 0 sticks
-        /// the view to its goal.
-        camera_spring_seconds: f32 = 0.5 in 0.0 ..= 2.0;
+        /// velocity fed forward so a steady drive does not trail. A spring
+        /// carries its speed through a stop: measured on longwater, at
+        /// 0.5 s the view ran 19 px past where it rests and crept back for
+        /// 1.4 to 1.9 s after the tank stood; at 0.16 s it runs 3.7 px past
+        /// and is still 0.23 to 0.38 s after. 0 sticks the view to its goal.
+        camera_spring_seconds: f32 = 0.16 in 0.0 ..= 2.0;
+        /// The spring's smoothing time while the view comes onto a new
+        /// target near enough not to cut - a hand-over to a teammate, a
+        /// couch pair's view joining or parting - until it is within the
+        /// dead zone of its goal, and while a split's halves close: a pan
+        /// at the follow's pace would whip across.
+        camera_pan_seconds: f32 = 0.5 in 0.0 ..= 2.0;
         /// Seconds a screen stays on its seat's wreck before it follows the
         /// nearest live teammate - in a wave round the seat comes back
         /// through a gate with the next wave, and the view cuts back to it
@@ -3608,6 +3619,50 @@ tunables! {
         /// Seconds the kick takes to fall to about a third of itself on
         /// its way back.
         camera_fire_kick_seconds: f32 = 0.08 in 0.0 ..= 1.0;
+        /// The rest rule, in device pixels: the spring is put on its goal
+        /// once it is nearer than this and moving less than this in a
+        /// sixtieth of a second, so its tail ends on a step nobody sees
+        /// and a view at rest holds one position exactly. 0 lets the
+        /// spring run on toward its goal for ever.
+        camera_rest_px: f32 = 0.25 in 0.0 ..= 4.0;
+        /// The blow that hurts a seat shoves its own view away from where
+        /// it came from, in place of that blow's shake (`feedback.rs`):
+        /// this many times the shake's own length (`camera_shake_magnitude`
+        /// times `hurt_shock`, two fifths of it for the lightest blow that
+        /// shows) under `screen_fx_intensity`, never past the shake's cap.
+        /// A followed view moves through the kick's layer; an arena's
+        /// picture is shifted as a shake shifts it, in whole blocks. A hurt
+        /// with no direction - fire, lava, ooze - shakes as ever. None
+        /// under reduced motion. 0 gives every blow its shake back.
+        camera_hurt_shove: f32 = 1.5 in 0.0 ..= 2.5;
+        /// Seconds the shove takes to fall to about a third of itself on
+        /// its way back.
+        camera_hurt_shove_seconds: f32 = 0.12 in 0.0 ..= 1.0;
+        /// Framing the fight: how much of the way to the weighted middle
+        /// of the enemies near the seat - and to the players' bong while
+        /// it is being hurt - the view's goal leans, inside the room the
+        /// sight box leaves and what the look-ahead has not spent. It
+        /// moves the view for something the player did not do, so it is 0,
+        /// off, until a play test chooses a strength; none under reduced
+        /// motion.
+        camera_fight_pull: f32 = 0.0 in 0.0 ..= 1.0;
+        /// How far from the seat, in world pixels (15 cells), an enemy
+        /// starts to count in the pull: for nothing at this distance and
+        /// for more the nearer it stands, so one crossing the line moves
+        /// nothing at once.
+        camera_fight_radius_px: f32 = 480.0 in 32.0 ..= 4096.0;
+        /// The furthest the pull moves the view's goal on an axis, world
+        /// pixels (2 cells).
+        camera_fight_max_px: f32 = 64.0 in 0.0 ..= 512.0;
+        /// Seconds the pull takes to come about two thirds of the way to
+        /// what the fight asks: slower than the look-ahead swings, so a
+        /// tank rolling into range draws the view over and never tugs it.
+        camera_fight_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        /// How many enemies the players' bong counts for in the pull the
+        /// moment it is hurt ...
+        camera_fight_bong_weight: f32 = 2.0 in 0.0 ..= 10.0;
+        /// ... fading to nothing this many seconds after its last hurt.
+        camera_fight_bong_seconds: f32 = 3.0 in 0.0 ..= 30.0;
     }
 
     group builder {

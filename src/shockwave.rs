@@ -117,7 +117,16 @@ pub fn camera_shake(shocks: &[Shockwave], view: Option<Rectangle>, t: &Tuning) -
 /// are no ripple of its own - a hull's slam (`fx::Jolt`), a hurt seat's
 /// own view (`feedback.rs`) - summed under the one cap.
 pub fn camera_shake_of<'a>(shocks: impl IntoIterator<Item = &'a Shockwave>, view: Option<Rectangle>, t: &Tuning) -> Vec2 {
-    let mut offset = Vec2::new(0.0, 0.0);
+    camera_shake_with(shocks, Vec2::new(0.0, 0.0), view, t)
+}
+
+/// `camera_shake_of` with `push` added to the sum before the cap and the
+/// snap: a hurt seat's shove (`feedback::Feedback::shove`) on a picture the
+/// follow camera does not move, as the scene's own offset - so a shoved
+/// and shaken arena still moves no further than the cap, inside what the
+/// overscan holds.
+pub fn camera_shake_with<'a>(shocks: impl IntoIterator<Item = &'a Shockwave>, push: Vec2, view: Option<Rectangle>, t: &Tuning) -> Vec2 {
+    let mut offset = if push.x.is_finite() && push.y.is_finite() { push } else { Vec2::new(0.0, 0.0) };
     // `screen_fx_intensity` scales every whole-screen effect together;
     // folding it into the magnitude keeps the stack cap proportional.
     let magnitude = t.camera_shake_magnitude * t.screen_fx_intensity;
@@ -284,6 +293,13 @@ mod shake_tests {
             for shocks in sets() {
                 let s = camera_shake(&shocks, None, &t);
                 assert!(s.x.abs() <= reach && s.y.abs() <= reach, "{s:?} past {reach}");
+                // A hurt seat's shove on top, as hard as one can be and
+                // past it, any way.
+                for (x, y) in [(1.0, 0.0), (0.0, -1.0), (0.7, 0.7), (-40.0, 25.0)] {
+                    let push = Vec2::new(x, y) * crate::feedback::shove_length(1.0, &t);
+                    let s = camera_shake_with(&shocks, push, None, &t);
+                    assert!(s.x.abs() <= reach && s.y.abs() <= reach, "{s:?} past {reach} under {push:?}");
+                }
             }
         }
     }
