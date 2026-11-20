@@ -3035,11 +3035,22 @@ tunables! {
         blast_screen_flash_alpha: f32 = 0.12 in 0.0 ..= 1.0;
         /// How long that screen flash takes to fade.
         blast_screen_flash_seconds: f32 = 0.06 in 0.0 ..= 0.5;
+        /// How opaque a hit's white silhouette over a hull or a bong is at
+        /// its first step (`fx::Flash`, `Game::paint_standing_hit`): 1
+        /// hides the sprite under it for those frames, less lets its art
+        /// read through under sustained fire.
+        hit_flash_alpha: f32 = 0.85 in 0.0 ..= 1.0;
+        /// Flecks of its own body a bong throws when a shot lands on it
+        /// (`fx.rs`), before `fx_density`.
+        bong_hit_flecks: i32 = 6 in 0 ..= 40;
         /// Minimum spacing between two whole-screen flashes, so a barrel
         /// chain or a multi-kill reads as one flash rather than a strobe.
         blast_screen_flash_min_gap_seconds: f32 = 0.35 in 0.0 ..= 2.0;
         /// Opacity of the pulsing glow on a barrel whose fuse is lit.
         barrel_fuse_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
+        /// Opacity, at its brightest flicker, of the one daylight glow a
+        /// fire of burning ground cells throws on the ground around it.
+        fire_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
         /// Opacity of the burn mark a blast leaves on the ground.
         scorch_opacity: f32 = 1.0 in 0.0 ..= 1.0;
         /// Seconds a fresh scorch mark takes to fade in under the fireball.
@@ -3310,6 +3321,12 @@ tunables! {
         /// starts over (the view cuts to the new start); the follow
         /// camera, the arrows and every effect of the fight itself stay.
         reduce_motion: i32 = 0 in 0 ..= 2;
+        /// What reduced motion keeps of a whole-screen flash - a kill's
+        /// (`blast_screen_flash_alpha`), a lightning strike's - as a share
+        /// of its strength (`motion::flash`); 0 is none. A lit fuse's
+        /// strobe is slowed to two held steps whatever this says
+        /// (`motion::beat`).
+        reduced_flash_scale: f32 = 0.4 in 0.0 ..= 1.0;
         /// The follow camera on a field map (`follow.rs`,
         /// docs/large-maps-follow-camera.md section 6): how far the seat
         /// moves inside the view on an axis, in pixels either way, before
@@ -4160,9 +4177,10 @@ tunables! {
         /// is in, so an arena's shake is every ripple's whole. 0 stops the
         /// shake at the margin.
         camera_shake_fade_screens: f32 = 1.0 in 0.0 ..= 20.0;
-        /// Muzzle-flash heat haze (muzzle_flash.fs): a one-sided outward
-        /// puff at the barrel. Hits full strength at the leading edge, so
-        /// tuned lower than the shockwave for similar visual intensity.
+        /// Muzzle-flash heat haze (shockwave.fs, the `puff` terms): a
+        /// one-sided outward puff at the barrel. Hits full strength at the
+        /// leading edge, so tuned lower than the shockwave for similar
+        /// visual intensity.
         muzzle_flash_duration: f32 = 0.12 in 0.01 ..= 2.0;
         /// Front growth, in standard field heights a second
         /// (`shockwave::RIPPLE_FRAME`).
@@ -4171,13 +4189,8 @@ tunables! {
         muzzle_flash_width: f32 = 0.032 in 0.0 ..= 0.5;
         /// How hard the puff shoves the image, in standard field heights.
         muzzle_flash_strength: f32 = 0.015 in 0.0 ..= 0.5;
-        /// Half-extent (world px) of the quad the muzzle flash is drawn
-        /// into - it must hold the puff's whole reach, speed x duration
-        /// plus the band in standard field heights of 544 px (about 76 px
-        /// at the defaults), or the puff visibly clips.
-        muzzle_flash_quad_radius: f32 = 90.0 in 10.0 ..= 500.0;
-        /// Shell-impact flash (impact.fs): a one-sided punch plus a warm
-        /// spark at the hit point - a sharp "thwack".
+        /// Shell-impact flash (shockwave.fs, the `punch` terms): a thin
+        /// ring punched out from the hit point - a sharp "thwack".
         impact_flash_duration: f32 = 0.14 in 0.01 ..= 2.0;
         /// Pulse growth, in standard field heights a second
         /// (`shockwave::RIPPLE_FRAME`).
@@ -4186,11 +4199,6 @@ tunables! {
         impact_flash_width: f32 = 0.02 in 0.0 ..= 0.5;
         /// How hard the pulse bends the image, in standard field heights.
         impact_flash_strength: f32 = 0.018 in 0.0 ..= 0.5;
-        /// Half-extent (world px) of the impact flash's quad - it must hold
-        /// the punch's whole reach, speed x duration plus the band in
-        /// standard field heights of 544 px (about 95 px at the defaults),
-        /// or the punch visibly clips.
-        impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;
 
         // --- what a moving hull throws (fx.rs, `Game::driving`) ---
         /// Dust puffs a second a hull of chassis press 1 raises at its top

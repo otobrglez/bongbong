@@ -269,8 +269,75 @@ impl Scorch {
     }
 }
 
+/// A sprite scale of about `k` at which every texel is the same whole
+/// number of pixels, or every drawn pixel the same whole number of texels:
+/// the nearest whole number from 1 up, the nearest whole fraction under
+/// it. A scorch drawn at 1.2 texels a pixel would show some of its texels
+/// two pixels wide and some one.
+pub fn texel_scale(k: f32) -> f32 {
+    if k >= 1.0 {
+        k.round()
+    } else {
+        1.0 / (1.0 / k.max(1.0 / 8.0)).round()
+    }
+}
+
+/// Burning ground cells that touch, as one fire: what one daylight glow
+/// is drawn for, so a lit pool reads as a pool of fire and not as a
+/// grid of discs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FireGroup {
+    /// The middle of its cells.
+    pub centre: Position,
+    /// How far its furthest cell's centre lies from `centre`, px.
+    pub reach: f32,
+    /// How many cells burn in it.
+    pub cells: usize,
+    /// The longest any of its cells has left to burn, seconds.
+    pub left: f32,
+    /// The largest share of its burn any of its cells has left, 0 to 1.
+    pub share: f32,
+}
+
+/// The fires among burning `cells` (each its centre, the seconds it has
+/// left and its whole burn, `Game::burning_cells`): cells joined edge to
+/// edge on the obstacle grid are one. In the order of each fire's first
+/// cell, top row first, whatever order the cells came in.
+pub fn fire_groups(cells: &[(Position, f32, f32)]) -> Vec<FireGroup> {
+    use std::collections::BTreeMap;
+    let grid = crate::OBSTACLE_GRID_SIZE;
+    let key = |at: Position| ((at.y / grid).round() as i32, (at.x / grid).round() as i32);
+    let mut open: BTreeMap<(i32, i32), (Position, f32, f32)> = BTreeMap::new();
+    for &(at, left, total) in cells {
+        if left > 0.0 {
+            open.insert(key(at), (at, left, total));
+        }
+    }
+    let mut out = Vec::new();
+    while let Some((&first, _)) = open.iter().next() {
+        let mut members: Vec<(Position, f32, f32)> = Vec::new();
+        let mut stack = vec![first];
+        while let Some(k) = stack.pop() {
+            let Some(cell) = open.remove(&k) else { continue };
+            members.push(cell);
+            stack.extend([(k.0 - 1, k.1), (k.0 + 1, k.1), (k.0, k.1 - 1), (k.0, k.1 + 1)].into_iter().filter(|n| open.contains_key(n)));
+        }
+        let n = members.len() as f32;
+        let centre = Position::new(members.iter().map(|m| m.0.x).sum::<f32>() / n, members.iter().map(|m| m.0.y).sum::<f32>() / n);
+        out.push(FireGroup {
+            centre,
+            reach: members.iter().map(|m| m.0.distance_to(centre)).fold(0.0, f32::max),
+            cells: members.len(),
+            left: members.iter().map(|m| m.1).fold(0.0, f32::max),
+            share: members.iter().map(|m| (m.1 / m.2.max(0.01)).clamp(0.0, 1.0)).fold(0.0, f32::max),
+        });
+    }
+    out
+}
+
 /// The scorch decal, variant/mirror/quarter-turn picked by the seed (90
-/// degree steps keep the pixels crisp), fading in over
+/// degree steps keep the pixels crisp), at a whole-texel size
+/// (`texel_scale`), stepping in over
 /// `scorch_fade_in_seconds` so it appears under the fireball, not before.
 /// A shot's scorch also gets the streak cell, turned to the nearest
 /// quarter toward the shot.
@@ -285,10 +352,10 @@ pub fn draw_scorch_kept(c: &mut impl Canvas, s: &Scorch, keep: f32) {
     let variant = (s.seed % SCORCH_VARIANTS as u32) as f32;
     let flip = if s.seed & 4 != 0 { -1.0 } else { 1.0 };
     let src = Rectangle::new(variant * cell, SCORCH_ROW as f32 * cell, cell * flip, cell);
-    let size = cell * tuning().scorch_scale * s.scale;
+    let size = cell * texel_scale(tuning().scorch_scale * s.scale);
     let rotation = ((s.seed >> 3) % 4) as f32 * 90.0;
-    let fade = (s.age / tuning().scorch_fade_in_seconds.max(1e-3)).clamp(0.0, 1.0);
-    let keep = (keep.clamp(0.0, 1.0) * 8.0).round() / 8.0;
+    let fade = crate::pyro::eighths(s.age / tuning().scorch_fade_in_seconds.max(1e-3));
+    let keep = crate::pyro::eighths(keep);
     if keep <= 0.0 {
         return;
     }
@@ -302,5 +369,49 @@ pub fn draw_scorch_kept(c: &mut impl Canvas, s: &Scorch, keep: f32) {
         let quarter = ((angle / 90.0).round() * 90.0).rem_euclid(360.0);
         let src = Rectangle::new(SCORCH_STREAK_COL as f32 * cell, SCORCH_ROW as f32 * cell, cell, cell);
         c.blit(Sheet::BarrelExplosion, src, dest, Vec2::new(size / 2.0, size / 2.0), quarter, tint);
+    }
+}
+
+#[cfg(test)]
+mod conformance_tests {
+    use super::*;
+
+    #[test]
+    fn a_scorch_is_drawn_at_whole_texels() {
+        assert_eq!(texel_scale(2.0), 2.0);
+        assert_eq!(texel_scale(1.2), 1.0, "a burn's 0.6 of the default 2 is one pixel a texel");
+        assert_eq!(texel_scale(1.6), 2.0);
+        assert_eq!(texel_scale(3.4), 3.0);
+        assert_eq!(texel_scale(0.6), 0.5, "under 1 it is a whole number of texels a pixel");
+        assert_eq!(texel_scale(0.3), 1.0 / 3.0);
+        assert!(texel_scale(0.0) > 0.0, "and never nothing");
+        for k in 1..80 {
+            let s = texel_scale(k as f32 * 0.05);
+            assert!(s.fract() == 0.0 || (1.0 / s - (1.0 / s).round()).abs() < 1e-5, "{k}: {s}");
+        }
+    }
+
+    fn cell(c: i32, r: i32, left: f32) -> (Position, f32, f32) {
+        (Position::new(c as f32 * crate::OBSTACLE_GRID_SIZE, r as f32 * crate::OBSTACLE_GRID_SIZE), left, 4.0)
+    }
+
+    #[test]
+    fn burning_cells_that_touch_are_one_fire() {
+        // An L of three, a cell touching it only by a corner, and one far
+        // off; a burnt-out cell between two that would join them.
+        let cells = [cell(3, 3, 2.0), cell(4, 3, 4.0), cell(4, 4, 1.0), cell(5, 5, 3.0), cell(10, 3, 0.5), cell(11, 3, 0.0), cell(12, 3, 2.0)];
+        let fires = fire_groups(&cells);
+        assert_eq!(fires.iter().map(|f| f.cells).collect::<Vec<_>>(), [3, 1, 1, 1], "top row first, the corner cell its own");
+        let l = fires[0];
+        let g = crate::OBSTACLE_GRID_SIZE;
+        assert!((l.centre.x - 11.0 / 3.0 * g).abs() < 1e-3 && (l.centre.y - 10.0 / 3.0 * g).abs() < 1e-3, "{:?}", l.centre);
+        assert!(l.reach > 0.5 * g && l.reach < g, "{}", l.reach);
+        assert_eq!((l.left, l.share), (4.0, 1.0), "as long as its longest cell");
+        assert_eq!(fires[3].reach, 0.0);
+        // Whatever order they come in.
+        let mut shuffled = cells;
+        shuffled.reverse();
+        assert_eq!(fire_groups(&shuffled), fires);
+        assert!(fire_groups(&[]).is_empty());
     }
 }

@@ -12,12 +12,11 @@ use crate::Position;
 
 impl LaserVariant {
     /// (glow, core) colors `draw_laser_beam` renders this variant's beam
-    /// with, at full alpha - scaled down by the beam's fade-out separately.
+    /// with, at full alpha - scaled down by the beam's fade-out separately:
+    /// its ramp's beam step, translucent, round its white-hot step.
     fn colors(self) -> (Color, Color) {
-        match self {
-            LaserVariant::Red => (Color::new(255, 40, 40, 200), Color::new(255, 220, 220, 255)),
-            LaserVariant::Blue => (Color::new(40, 130, 255, 200), Color::new(220, 235, 255, 255)),
-        }
+        let ramp = self.ramp();
+        (Color::new(ramp[2].r, ramp[2].g, ramp[2].b, 200), ramp[4])
     }
 }
 

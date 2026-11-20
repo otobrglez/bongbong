@@ -67,6 +67,23 @@ pub enum BongKind {
 }
 
 impl BongKind {
+    /// The kind's body colours - lit, base and shaded - as its sheet is
+    /// drawn in (`tools/spritegen/bongs/sprites.js`; Capi's are its cap's):
+    /// what flies off it when it is hit.
+    pub fn body(self) -> [Color; 3] {
+        let rgb = |hex: u32| Color::new((hex >> 16) as u8, (hex >> 8) as u8, hex as u8, 255);
+        let (lit, base, shade) = match self {
+            BongKind::Spike => (0x6AD8A4, 0x2FB07E, 0x1E7E5C),
+            BongKind::Oggle => (0xF585C0, 0xDB4C9E, 0xA12F6F),
+            BongKind::Gloop => (0xA6F2EC, 0x3ACBD0, 0x1D8EA6),
+            BongKind::Puff => (0xFFFFFF, 0xF2F5FA, 0xB5C0D6),
+            BongKind::Capi => (0xFF7A4A, 0xE4421A, 0x9C3527),
+            BongKind::Blip => (0xDCC6F4, 0xB48CDC, 0x8462B0),
+            BongKind::Fuzz => (0x5E5E76, 0x3B3B4A, 0x26262F),
+        };
+        [rgb(lit), rgb(base), rgb(shade)]
+    }
+
     /// Every kind, the player's three first.
     pub const ALL: [BongKind; 7] = [
         BongKind::Spike,
@@ -605,6 +622,12 @@ pub fn draw_bong_ring(c: &mut impl Canvas, bong: &Bong, time: f32) {
 /// `mirror` turns `Bong::facing` into the source rectangle's width sign
 /// plus the destination offset that keeps the body over the same ground.
 pub fn draw_bong(c: &mut impl Canvas, bong: &Bong, t: f32) {
+    let (sheet, src, dest, origin) = bong_quad(bong, t);
+    c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
+}
+
+/// The sheet cell `draw_bong` shows at clock `t` and where it lands.
+fn bong_quad(bong: &Bong, t: f32) -> (Sheet, Rectangle, Rectangle, Vec2) {
     let (anim, frame) = bong.anim(t);
     let sheet = Sheet::Bong { kind: bong.kind, clip: anim };
     let (flip, offset) = mirror(bong.facing);
@@ -616,8 +639,14 @@ pub fn draw_bong(c: &mut impl Canvas, bong: &Bong, t: f32) {
     );
     let size = bong.size();
     let dest = Rectangle::new(bong.drawn().x + offset, bong.drawn().y, size, size);
-    let origin = Vec2::new(size / 2.0, size / 2.0);
-    c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
+    (sheet, src, dest, Vec2::new(size / 2.0, size / 2.0))
+}
+
+/// The bong's shape in one flat `color`, over the frame `draw_bong` shows:
+/// a hit's flash.
+pub fn draw_bong_silhouette(c: &mut impl Canvas, bong: &Bong, t: f32, color: Color) {
+    let (sheet, src, dest, origin) = bong_quad(bong, t);
+    c.solid(sheet, src, dest, origin, 0.0, color);
 }
 
 #[cfg(test)]

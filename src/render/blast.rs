@@ -8,7 +8,7 @@
 
 use sola_raylib::prelude::*;
 
-use crate::blast::seed_at;
+use crate::blast::{seed_at, FireGroup};
 use crate::math::{Color, Vec2};
 use crate::render::shot_fx::glow;
 use crate::tuning::tuning;
@@ -35,20 +35,29 @@ pub fn draw_flame_glow(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, rea
 }
 
 /// The pulsing glow on a barrel whose fuse is lit (additive, like the
-/// bloom). `time` is the round clock, only used to phase the pulse.
+/// bloom). `time` is the round clock, only used to phase the pulse, which
+/// reduced motion slows to a held beat (`motion::beat`).
 pub fn draw_fuse_glow(d: &mut impl RaylibDraw, center: Position, time: f32) {
-    let pulse = 0.5 + 0.5 * (time * 50.0).sin();
+    let pulse = crate::motion::beat(time, 0.5 + 0.5 * (time * 50.0).sin(), crate::motion::reduced());
+    let lit = crate::pyro::LIGHT.fuse;
     let a = (255.0 * tuning().barrel_fuse_glow_strength * pulse) as u8;
-    pixel_disc(d, center, 22.0, Color::new(255, 120, 40, a));
+    pixel_disc(d, center, 22.0, Color::new(lit.r, lit.g, lit.b, a));
 }
 
-/// The glow of a burning ground cell (an oil pool or a lit trail): a soft
-/// additive pool of light, flickering at its own hashed phase, dying down
-/// over the last part of `left`.
-pub fn draw_fire_glow(d: &mut impl RaylibDraw, center: Position, time: f32, left: f32) {
-    let phase = (seed_at(center, 23) % 100) as f32 / 100.0 * std::f32::consts::TAU;
+/// The glow of burning ground (an oil pool or a lit trail), one for the
+/// whole of a fire however many cells burn in it (`blast::fire_groups`):
+/// a soft additive pool of light as wide as the fire, flickering at its
+/// own hashed phase, dying down as its last cell does, as strong as
+/// `fire_glow_strength`.
+pub fn draw_fire_glow(d: &mut impl RaylibDraw, fire: &FireGroup, time: f32) {
+    let phase = (seed_at(fire.centre, 23) % 100) as f32 / 100.0 * std::f32::consts::TAU;
     let flicker = 0.7 + 0.3 * (time * 31.0 + phase).sin();
-    let dying = (left / 0.6).clamp(0.0, 1.0);
-    let a = (255.0 * 0.3 * flicker * dying) as u8;
-    glow(d, center, 26.0, Color::new(255, 130, 40, a));
+    let dying = (fire.left / 0.6).clamp(0.0, 1.0);
+    let lit = crate::pyro::LIGHT.fire;
+    let a = (255.0 * tuning().fire_glow_strength * flicker * dying) as u8;
+    glow(d, fire.centre, FIRE_GLOW_RADIUS + fire.reach, Color::new(lit.r, lit.g, lit.b, a));
 }
+
+/// How far one burning cell's glow reaches from its centre, px; a fire of
+/// several reaches that far past its furthest cell.
+const FIRE_GLOW_RADIUS: f32 = 26.0;

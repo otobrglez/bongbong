@@ -37,7 +37,12 @@ The rules live in code in `src/pyro.rs`; everything else composes from it.
    so a blast's bloom by day and a lamp at night are the same light. Every
    glow is drawn inside an additive blend. A fire throws *one* light, over
    where it burns hottest - never one per puff, which pile up into a white
-   blot where two shells land together.
+   blot where two shells land together - and burning ground cells that
+   touch are one fire with one glow by day, as strong as `fire_glow_strength` (at night each cell keeps its own light, which add up)
+   (`blast::fire_groups`). A source's light is one colour at noon and at
+   midnight: `pyro::LIGHT` is the table the daylight's glow pools and the
+   night's light map both read (fire, a fuse, a shell, a bullet, a missile,
+   a muzzle, an impact, each laser).
 5. **Shaded, not outlined.** A puff has a shadow step down and right, its
    body, a lit side up and left (the field is lit from the top left, as the
    shadows fall) and, while it burns, a hotter core (`pyro::Puff`,
@@ -89,7 +94,9 @@ blows up - they throw none.
 | Every hit | `burst.rs` | a shell's flash and small fireball thrown back toward the gun; a bullet's spark star; plasma and tesla rings; a laser's molten splash; ooze |
 | Every muzzle flash | `burst::muzzle` | a tongue of fire down the shot's line in three steps; a plasma cannon's flash burns in its bolt's colour |
 | Dust off a tile a shot hit; a tile coming down | `burst.rs` (`ImpactKind::Dust`, `Collapse`, `Ash`) | in the material's dust; a tile that burnt out falls in as ash |
-| A hit's flash | `fx::Flash`, drawn by `render/game.rs` | the hull, tile or tower drawn again over itself in an additive blend, stepping down in three over `hit_flash_seconds` |
+| A hit's flash | `fx::Flash`; a hull's and a bong's in `Game::paint_standing_hit`, a tile's in `render/game.rs` | a hull or a bong covered by its own silhouette in white (`Canvas::solid`, `hit_flash_alpha`) straight after it is drawn in the y-sorted walk - as bright on a dark chassis as on a pale one, under the grass in front of it and under every crown; a tile, tree or tower drawn again over itself in an additive blend; each stepping down in three over `hit_flash_seconds` |
+| A shot landing on a bong | `Fx::bong_hit` | its flash, flecks of its own body (`BongKind::body`, `bong_hit_flecks`) and a puff of dust - never the sparks and smoke of armour |
+| What bends the picture - a blast's ripple, a muzzle's puff, an impact's punch | `render/shockwave.rs`, `static/shockwave.fs` | one pass the scene leaves its target through: every bend summed and the scene sampled once, moved by whole 2 px blocks, a block at a time, through the source rectangle the camera's shake moves; none under reduced motion |
 | Flames on the ground, a burning tile, a burning tank | `pyro::tongues` | teardrop tongues in three nested layers, flickering through four heights and leaning with the wind |
 | A tank's damage | the tank sheet, then `damage_stage.rs` | the sheet's damage tiers and wrecks carry the wear; the code adds smoke from the damaged tier, deck fire from the critical one and a wreck burning down |
 | A burnt-out ground fire | `Scorch::burn` | a soft burn scar, not a darkened square; an ember bed while it cools (`smoulder::glints`) |
@@ -142,10 +149,31 @@ leaves glows out; `pyro::draw_glows(b, &shapes, bands)` paints the glows
 and belongs inside an additive blend block. `b` is any `pyro::Blocks`:
 every `Canvas` (so `game.rs`'s stages and the CPU tests paint the same
 shapes) and the raylib handle through `render::pyro::Rl`. The field's
-stages draw what stands - a tank's marks and flames, burning tiles - in
-their y order; `Game::render`'s glowing pass draws the hits, blasts and
-flashes over everything, each list composed once a frame, its glows in one
-additive block (a blend switch breaks raylib's batch).
+stages draw what stands - a tank's marks and flames, burning tiles, the
+flames of each burning ground cell at their foot (`game::ground_fire`,
+`GROUND_FIRE_FOOT`), a hit's silhouette - in their y order;
+`Game::render`'s glowing pass draws the hits, blasts and flashes over
+everything, each list composed once a frame, its glows in one additive
+block (a blend switch breaks raylib's batch).
+
+What only reflects light is drawn in the lit field, which a weathered
+frame multiplies by its light map and fogs; what gives light is drawn in
+the glowing pass after it. The particle layer is split on that line
+(`render/fx.rs`): dust and foam with the floor (`draw_ground`), smoke, a
+missile's trail, a grenade's plume, dust, chips and spray at the end of the
+lit field (`draw_air`) - so a wreck's smoke is dark at night and grey in
+fog - and sparks and embers in the glowing pass (`draw_light`). A
+particle's ramp is a field of its tint (`fx::Tint`, `fx::Ramp`), set where
+it is thrown; the drawing never tells fire from a colour by comparing
+them.
+
+Everything fades in steps: an alpha through `pyro::alpha` (eighths), a
+strength that is not yet a colour through `pyro::eighths` - a scorch and a
+decal stepping in, the whole-screen flash stepping out. A sprite laid on
+the ground is drawn at whole texels (`blast::texel_scale`): a scorch at
+1.2 pixels a texel would show some texels two pixels wide and some one. A
+laser is one red (or blue): its beam, its sparks and its light are steps
+of `pyro::LASER_RED` (`LaserVariant::ramp`, `light`).
 
 ## Knobs
 
@@ -159,10 +187,14 @@ additive block (a blend switch breaks raylib's batch).
 | `ground_fire_tongues`, `ground_fire_height_px`, `ground_fire_spread_px` | flames on a burning cell |
 | `*_hit_seconds`, `hit_fx_scale` | how long each hit plays and its size |
 | `tile_dust_seconds`, `tile_collapse_seconds` | a tile's dust when hit and when it comes down |
-| `hit_flash_seconds` | a hit's flash; 0 turns it off |
+| `hit_flash_seconds`, `hit_flash_alpha` | a hit's flash and how opaque a hull's or a bong's white silhouette starts; 0 seconds turns it off |
+| `fire_glow_strength` | how strongly a fire of burning ground warms the ground around it by day (its one glow, `blast::fire_groups`) |
+| `bong_hit_flecks` | flecks of its body a hit bong throws |
+| `reduced_flash_scale` | what reduced motion keeps of a whole-screen flash |
 | `hull_smoke_rate` | smoke off a damaged hull's deck |
 | the `aftermath` group | how long what a fight leaves smoulders, its columns, embers, flare-ups and rust, and the battle's haze (docs/aftermath.md) |
 | `muzzle_flash_duration`, `muzzle_glow_radius` | a muzzle flash's life and size |
+| `muzzle_flash_speed`/`width`/`strength`, `impact_flash_*`, `shockwave_*` | each bend of the picture: how fast its front runs, how thick it is and how hard it pushes, in standard field heights |
 | `shot_glow_strength` | the light shots throw; 0 draws the plain sprites |
 | `wear_*` | how the ground keeps tread marks: passes, ages, rain, snow, gusts (docs/ground-memory.md) |
 | `drive_*` | what a moving hull throws: dust, mud, puddle water, powder, ice chips, foam, exhaust |
@@ -224,7 +256,15 @@ is on the wire:
 
 Reduced motion (`motion.rs`) leaves the particles and the health number's
 colour and takes the rest: no shake, no edge pulse, no hull flash on a
-slam, no drop of the number, no hold.
+slam, no drop of the number, no hold, and nothing bending the picture -
+no ripple, no muzzle puff, no impact punch. What flashes is calmed (WCAG
+2.3.1): a whole-screen flash - a kill's or a blast's, a lightning strike's
+- keeps `reduced_flash_scale` of its strength (`motion::flash`), a strike
+is one flash stepping down in quarters with no second flicker
+(`weather::lightning_shown`), and a lit fuse beats once a second between
+two held steps, by day and at night, instead of strobing (`motion::beat`).
+The switch is the `reduce_motion` row; iOS and the web read the platform's
+setting, and there is no control for it in the game yet.
 
 The particle layer stands still with the round (`app::fx_runs`): under a
 dialog, the level select, the builder or the lobby and while paused its dt

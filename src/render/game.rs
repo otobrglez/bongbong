@@ -64,7 +64,7 @@ use crate::tank::{ActiveWeapon, Dir};
 use crate::tuning::tuning;
 use crate::view::{culled, Camera, View};
 use crate::feedback::ViewOf;
-use crate::{Layout, Position, SHOCK_MAX};
+use crate::{Layout, Position};
 #[cfg(feature = "dev-tools")]
 use crate::math::Vec2;
 #[cfg(feature = "dev-tools")]
@@ -167,8 +167,6 @@ impl Sheets for Textures<'_> {
 /// same reason as `Textures`. See `shockwave.rs` for what each one does.
 pub struct Effects<'a> {
     pub shock: &'a mut RippleFx,
-    pub muzzle: &'a mut RippleFx,
-    pub impact: &'a mut RippleFx,
     /// The plasma orb and flame jet shaders (`render/shot_shaders.rs`);
     /// `None` flies the baked plasma sprite and draws the flamethrower from
     /// its particles alone.
@@ -315,15 +313,16 @@ impl Game {
                 ground_light(d, at, radius, color, strength * k);
             }
         };
-        let warm = Color::new(255, 140, 50, 255);
+        let light = pyro::LIGHT;
+        let warm = light.fire;
         for shell in self.world.query::<&Shell>().iter() {
             if shell.state == ShellState::Flying {
-                ground_light(d, shell.drawn(), 30.0, warm, 0.28);
+                ground_light(d, shell.drawn(), 30.0, light.shell, 0.28);
             }
         }
         for bullet in self.world.query::<&Bullet>().iter() {
             if bullet.state == BulletState::Flying {
-                ground_light(d, bullet.drawn(), 12.0, Color::new(255, 200, 90, 255), 0.14);
+                ground_light(d, bullet.drawn(), 12.0, light.bullet, 0.14);
             }
         }
         for plasma in self.world.query::<&Plasma>().iter() {
@@ -336,7 +335,7 @@ impl Game {
         }
         // A dead missile (an EMP) has no motor to light the ground.
         for missile in self.world.query::<&Missile>().iter().filter(|m| !m.is_dead()) {
-            ground_light(d, missile.drawn().position, 26.0, warm, 0.3 * (1.0 - 0.6 * missile.lift()));
+            ground_light(d, missile.drawn().position, 26.0, light.missile, 0.3 * (1.0 - 0.6 * missile.lift()));
         }
         for jet in self.flames() {
             let flicker = 0.8 + 0.2 * (self.time * 29.0).sin();
@@ -348,15 +347,15 @@ impl Game {
         }
         for beam in &self.laser_beams {
             let k = (beam.timer / tuning().laser_beam_display_seconds).clamp(0.0, 1.0);
-            ground_light(d, beam.end, 36.0, Color::new(255, 90, 70, 255), 0.5 * k);
+            ground_light(d, beam.end, 36.0, beam.variant.light(), 0.5 * k);
         }
         for flash in &self.muzzle_flashes {
             let k = 1.0 - (flash.time / tuning().muzzle_flash_duration.max(0.01)).clamp(0.0, 1.0);
-            ground_light(d, flash.center, 32.0, Color::new(255, 190, 90, 255), 0.28 * k);
+            ground_light(d, flash.center, 32.0, light.muzzle, 0.28 * k);
         }
         for flash in &self.impact_flashes {
             let k = 1.0 - (flash.time / tuning().impact_flash_duration.max(0.01)).clamp(0.0, 1.0);
-            ground_light(d, flash.center, 38.0 - 10.0 * k, warm, 0.3 * k);
+            ground_light(d, flash.center, 38.0 - 10.0 * k, light.impact, 0.3 * k);
         }
         if !self.towers.is_empty() || !self.ooze.is_empty() || !self.tesla_bolts.is_empty() {
             self.draw_towers_ground_light(d, k);
@@ -790,34 +789,16 @@ impl Game {
         // The ripples are measured in the standard field's units from the
         // corner of the camera's part of the world the scene target holds
         // (`Camera::ripple_view`).
-        for ripple in [&mut *effects.shock, &mut *effects.muzzle, &mut *effects.impact] {
-            ripple.set_view(camera);
-        }
-        // If a shockwave is playing, push its current center/time to the shader
-        // before the blit below samples through it.
-        // Every live ripple goes up as one set of arrays and resolves in a
-        // single blit below - see static/shockwave.fs for why N passes
-        // would be both wrong and slower. Unused slots carry gain 0.
-        if !self.shocks.is_empty() {
-            let mut centers = [Vector2::new(0.0, 0.0); SHOCK_MAX];
-            let mut times = [0.0f32; SHOCK_MAX];
-            let mut gains = [0.0f32; SHOCK_MAX];
-            let mut starts = [0.0f32; SHOCK_MAX];
-            let mut signs = [1.0f32; SHOCK_MAX];
-            for (i, shock) in self.shocks.iter().take(SHOCK_MAX).enumerate() {
-                centers[i] = effects.shock.uv_of(shock.center);
-                times[i] = shock.time;
-                gains[i] = shock.strength;
-                (starts[i], signs[i]) = effects.shock.start_and_sign(shock);
-            }
-            effects.shock.shader.set_shader_value_v(effects.shock.centers_loc, &centers);
-            effects.shock.shader.set_shader_value_v(effects.shock.times_loc, &times);
-            effects.shock.shader.set_shader_value_v(effects.shock.gains_loc, &gains);
-            if effects.shock.starts_loc >= 0 && effects.shock.signs_loc >= 0 {
-                effects.shock.shader.set_shader_value_v(effects.shock.starts_loc, &starts);
-                effects.shock.shader.set_shader_value_v(effects.shock.signs_loc, &signs);
-            }
-        }
+        effects.shock.set_view(camera, (scene_target.texture.width, scene_target.texture.height));
+        // Every live bend - the ripples, the muzzles' puffs, the impacts'
+        // punches - goes up as one set of arrays and resolves in the single
+        // blit below: see static/shockwave.fs for why N passes would be
+        // both wrong and slower.
+        effects.shock.set_bends(
+            &self.shocks,
+            self.muzzle_flashes.iter().map(|flash| (flash.center, flash.time)),
+            self.impact_flashes.iter().map(|flash| (flash.center, flash.time)),
+        );
 
         // Camera shake (`shockwave::camera_shake`): a short decaying wobble
         // on the same kill-shockwave trigger as `self.shock` itself, applied
@@ -829,11 +810,11 @@ impl Game {
         // (`Camera::overscanned`), and past an arena's field the target's
         // clamped edge repeats its last texel. A view of part of
         // the field is shaken only by what happens near it; the whole field,
-        // an arena's, by everything. Muzzle/impact flash quads
-        // and the HUD deliberately aren't shifted: they're either their own
-        // small on-screen quad or meant to stay put.
-        // Reduced motion (`motion.rs`) has no shake, and no ripple bending
-        // the whole screen either (`WorldPass::bend`).
+        // an arena's, by everything. The bends are part of the
+        // same blit, so a muzzle's puff moves with the picture it bends;
+        // the HUD is not shifted.
+        // Reduced motion (`motion.rs`) has no shake, and nothing bending
+        // the picture either (`WorldPass::bend`).
         let still = crate::motion::reduced();
         let shake = if still {
             crate::math::Vec2::new(0.0, 0.0)
@@ -887,7 +868,6 @@ impl Game {
             area_camera: Camera2D { offset: Vector2::new(world_origin.x + shown.x, world_origin.y + shown.y), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: 1.0 },
             area: (shown.width as i32, shown.height as i32),
             camera: *camera,
-            cull,
             backdrop,
             bend: !still,
             marks,
@@ -958,10 +938,9 @@ struct WorldPass<'a> {
     area_camera: Camera2D,
     area: (i32, i32),
     camera: Camera,
-    cull: Option<Rectangle>,
     backdrop: Color,
-    /// Whether the kill ripples bend the whole scene: not under reduced
-    /// motion (`motion.rs`).
+    /// Whether anything bends the scene and a whole-screen flash is drawn
+    /// at full strength: not under reduced motion (`motion.rs`).
     bend: bool,
     /// The indicators' blocks that lie in this view's world: a split
     /// screen half's (`Effects::split`); empty otherwise, the indicators
@@ -1010,24 +989,20 @@ struct ChromeFrame<'a> {
 }
 
 impl Game {
-    /// Pass 2's world: the scene target (through the shockwave while one
-    /// plays, unless motion is reduced), the muzzle and impact ripples'
-    /// quads over it, the kill flash
-    /// over the whole of it, a followed view's world past the field's edge
+    /// Pass 2's world: the scene target (through the bending shader while
+    /// a ripple, a muzzle's puff or an impact's punch plays, unless motion
+    /// is reduced), the kill flash over the whole of it, a followed view's world past the field's edge
     /// in the backdrop's colour, and the debug overlays.
     fn draw_world_layer<D: RaylibDraw>(&self, d: &mut D, w: &WorldPass, effects: &mut Effects) {
         let camera = &w.camera;
-        let cull = w.cull;
         let (field_w, field_h) = camera.field;
-        // A point of the world as the scene target's texel, y up the way a
-        // render texture reads.
-        let target_height = camera.target_size().1;
-        let texel = |at: Position| Vector2::new(at.x - camera.origin.x, target_height as f32 - (at.y - camera.origin.y));
 
-        // The scene and the ripples' patches of it replace what is under
-        // them (`draw_opaque`): the scene target's alpha is what its
-        // translucent draws left in it, not a coverage.
-        let bent = !self.shocks.is_empty() && w.bend;
+        // The scene replaces what is under it (`draw_opaque`): the scene
+        // target's alpha is what its translucent draws left in it, not a
+        // coverage. It goes through the bending shader while a ripple, a
+        // muzzle's puff or an impact's punch is live.
+        let live = !self.shocks.is_empty() || !self.muzzle_flashes.is_empty() || !self.impact_flashes.is_empty();
+        let bent = live && w.bend;
         crate::render::view::draw_opaque(d, |d| {
             if bent {
                 d.draw_shader_mode(crate::frame_stages::shader(&mut effects.shock.shader), |mut sd| {
@@ -1038,98 +1013,11 @@ impl Game {
             }
         });
 
-        // The ripples' quads lie in the world: drawn through `on_field`.
-        crate::render::view::draw_opaque(d, |d| d.draw_mode2D(w.on_field, |mut d, _| {
-            // Layer each muzzle flash's tiny heat-haze ripple on top, one small
-            // quad at a time: source and dest are the same on-screen patch (just
-            // re-sampling that bit of the already-composited scene through the
-            // ripple shader), so this reads as a localized wobble rather than
-            // redistorting the whole frame.
-            for flash in self.muzzle_flashes.iter().filter(|f| !culled(cull, f.center)) {
-                let uv = effects.muzzle.uv_of(flash.center);
-                effects
-                    .muzzle
-                    .shader
-                    .set_shader_value(effects.muzzle.center_loc, uv);
-                effects
-                    .muzzle
-                    .shader
-                    .set_shader_value(effects.muzzle.time_loc, flash.time);
-
-                let r = tuning().muzzle_flash_quad_radius;
-                let at = texel(flash.center);
-                let flash_source = Rectangle {
-                    x: at.x - r,
-                    y: at.y - r,
-                    width: r * 2.0,
-                    height: -(r * 2.0),
-                };
-                let flash_dest = Rectangle {
-                    x: flash.center.x,
-                    y: flash.center.y,
-                    width: r * 2.0,
-                    height: r * 2.0,
-                };
-                let origin = Vector2::new(r, r);
-
-                d.draw_shader_mode(crate::frame_stages::shader(&mut effects.muzzle.shader), |mut sd| {
-                    sd.draw_texture_pro(
-                        w.scene,
-                        flash_source,
-                        flash_dest,
-                        origin,
-                        0.0,
-                        Color::WHITE,
-                    );
-                });
-            }
-
-            // Same treatment for every in-flight shell-impact flash.
-            for flash in self.impact_flashes.iter().filter(|f| !culled(cull, f.center)) {
-                let uv = effects.impact.uv_of(flash.center);
-                effects
-                    .impact
-                    .shader
-                    .set_shader_value(effects.impact.center_loc, uv);
-                effects
-                    .impact
-                    .shader
-                    .set_shader_value(effects.impact.time_loc, flash.time);
-
-                let r = tuning().impact_flash_quad_radius;
-                let at = texel(flash.center);
-                let flash_source = Rectangle {
-                    x: at.x - r,
-                    y: at.y - r,
-                    width: r * 2.0,
-                    height: -(r * 2.0),
-                };
-                let flash_dest = Rectangle {
-                    x: flash.center.x,
-                    y: flash.center.y,
-                    width: r * 2.0,
-                    height: r * 2.0,
-                };
-                let origin = Vector2::new(r, r);
-
-                d.draw_shader_mode(crate::frame_stages::shader(&mut effects.impact.shader), |mut sd| {
-                    sd.draw_texture_pro(
-                        w.scene,
-                        flash_source,
-                        flash_dest,
-                        origin,
-                        0.0,
-                        Color::WHITE,
-                    );
-                });
-            }
-        }));
-
         // A kill or a barrel blast opens with a brief whole-screen
         // flash (`Game::screen_flash`, started and spaced out by
-        // `Game::flash_screen`), over the whole field area. After the
-        // ripple quads, which re-blit patches of the un-flashed scene and
-        // would otherwise punch darker squares through it.
+        // `Game::flash_screen`), over the whole field area, stepping out
+        // in eighths. Reduced motion keeps `reduced_flash_scale` of it
+        // (`motion::flash`).
         d.draw_mode2D(w.area_camera, |mut d, _| {
             if let Some(age) = self.screen_flash {
                 // A rod's flash is stronger and longer than a drum's
@@ -1138,8 +1026,11 @@ impl Game {
                 let seconds = tuning().blast_screen_flash_seconds * strength;
                 if seconds > 0.0 && age < seconds {
                     let peak = (tuning().blast_screen_flash_alpha * strength).min(0.9) * tuning().screen_fx_intensity;
-                    let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
-                    d.draw_rectangle(0, 0, w.area.0, w.area.1, Color::new(255, 240, 200, a));
+                    let peak = crate::motion::flash(peak.clamp(0.0, 1.0), !w.bend, tuning().reduced_flash_scale);
+                    let ink = pyro::alpha(Color::new(255, 240, 200, (255.0 * peak) as u8), 1.0 - age / seconds);
+                    if ink.a > 0 {
+                        d.draw_rectangle(0, 0, w.area.0, w.area.1, ink);
+                    }
                 }
             }
             if let Some(pulse) = &w.pulse {
@@ -1420,11 +1311,13 @@ impl Game {
         self.world.query::<&crate::bong::Bong>().iter().find(|b| b.side == side).map(|b| b.position)
     }
 
-    /// Every hit's flash (`fx::Flash`), inside an additive blend: the hull
-    /// or the tile it landed on drawn again over itself, which doubles its
-    /// light - the white-hot frames of a hit. A tile is found under the
-    /// point the shot struck.
-    fn draw_flashes(&self, c: &mut impl crate::canvas::Canvas, flashes: &[crate::fx::Flash]) {
+    /// Every hit's flash on a tile (`fx::Flash`), inside an additive
+    /// blend: the tile, tree or tower it landed on drawn again over itself,
+    /// which doubles its light - the white-hot frames of a hit. A tile is
+    /// found under the point the shot struck. A hull's and a bong's flash
+    /// is a silhouette at its place among what stands
+    /// (`Game::paint_standing_hit`).
+    fn draw_tile_flashes(&self, c: &mut impl crate::canvas::Canvas, flashes: &[crate::fx::Flash]) {
         use crate::fx::Flashed;
         for flash in flashes {
             let k = flash.strength();
@@ -1433,12 +1326,7 @@ impl Game {
             }
             let tint = Color::new(255, 255, 255, (255.0 * k) as u8);
             match flash.what {
-                Flashed::Tank(slot) => {
-                    for tank in self.world.query::<&crate::tank::Tank>().iter().filter(|t| t.owner_slot() == slot) {
-                        crate::tank::draw_tank_hull(c, tank, self.time, tint);
-                        crate::tank::draw_tank_turret(c, tank, self.time, tint);
-                    }
-                }
+                Flashed::Tank(_) | Flashed::Bong(_) => {}
                 Flashed::Tile(at) => {
                     let mut q = self.world.query::<&Obstacle>();
                     let struck = q
@@ -1510,31 +1398,8 @@ impl Game {
             crate::air_support::paint_shadows(&mut GpuCanvas::new(d, textures), &aircraft, self.time);
         }
 
-        // Burning ground cells: tongues of flame standing on each
-        // (`pyro::tongues`), leaning with the wind, over the ground, under
-        // the tiles beside them (a burning doorway's walls still stand
-        // over the fire) and under whatever drives through them. Upper
-        // cells first, so a lower cell's flames stand in front.
-        // A bomb's splash of lava is drawn as molten rock on the floor
-        // (`lava::draw_pools`), not as flames.
-        let mut cells: Vec<(Position, f32, f32)> =
-            self.fires.iter().filter(|f| f.left > 0.0 && !f.lava).map(|f| (f.position(), f.left, f.total)).collect();
-        cells.retain(|(at, ..)| !culled(cull, *at));
-        if !cells.is_empty() {
-            cells.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
-            let t = tuning();
-            let mut flames = Vec::new();
-            for (at, left, total) in cells {
-                let dying = (left / 0.6).clamp(0.0, 1.0);
-                let catching = ((total - left) / 0.25).clamp(0.0, 1.0);
-                let seed = crate::blast::seed_at(at, 23);
-                let lean = pyro::smoke_lean(&t, at, self.time);
-                let foot = Position::new(at.x, at.y + 9.0);
-                pyro::tongues(&mut flames, foot, t.ground_fire_spread_px, t.ground_fire_height_px, t.ground_fire_tongues.max(0) as u32, seed, self.time, lean, dying.min(catching));
-            }
-            pyro::draw(&mut GpuCanvas::new(d, textures), &flames);
-        }
-
+        // Burning ground cells' flames stand among the tanks
+        // (`paint_standing_hit`); their light is below.
         self.paint_tiles(&mut GpuCanvas::culled(d, textures, cull));
 
         // A barrel whose fuse is lit pulses (additive, so it reads as
@@ -1553,9 +1418,11 @@ impl Game {
                     draw_fuse_glow(&mut bd, obstacle.position, self.time);
                 }
             }
-            for (at, left, _total) in self.burning_cells() {
-                if !culled(cull, at) {
-                    draw_fire_glow(&mut bd, at, self.time, left);
+            // One pool of light under each fire, however many cells burn
+            // in it (`blast::fire_groups`).
+            for fire in crate::blast::fire_groups(&self.burning_cells()) {
+                if !culled(cull.map(|r| Rectangle::new(r.x - fire.reach, r.y - fire.reach, r.width + 2.0 * fire.reach, r.height + 2.0 * fire.reach)), fire.centre) {
+                    draw_fire_glow(&mut bd, &fire, self.time);
                 }
             }
             // The flamethrower's nozzle while it fires: a hot disc at
@@ -1597,7 +1464,7 @@ impl Game {
             }
         });
 
-        self.paint_standing(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true });
+        self.paint_standing_hit(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true }, fx.flashes());
 
         // The dust a sonic hammer's wave lifts and the shards of the panes
         // it shatters (docs/sonic-hammer.md): lingering, so lit with the
@@ -1678,6 +1545,13 @@ impl Game {
         // (docs/aftermath.md). Smoke, so the night darkens it with the rest
         // - and the fires under it light it again.
         air.paint_over(&mut GpuCanvas::new(d, textures));
+
+        // The particle layer's air and matter - smoke, a missile's trail,
+        // dust, chips and spray - over everything that stands and, like
+        // it, under the light: the night darkens a wreck's smoke and the
+        // fog takes it. Its sparks and embers shine in
+        // `paint_field_glowing`.
+        crate::render::fx::draw_air(fx, d, cull);
     }
 
     /// What shines by its own light, over the lit field and so as bright
@@ -1701,10 +1575,10 @@ impl Game {
         ammo_seats: &[u8],
     ) {
         let cull = camera.cull();
-        // A hit lights up what it landed on: the hull or the tile drawn
-        // again in light for a few frames, stepping down.
-        if !fx.flashes().is_empty() {
-            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| self.draw_flashes(&mut GpuCanvas::new(&mut bd, textures), fx.flashes()));
+        // A hit lights up the tile it landed on: drawn again in light for
+        // a few frames, stepping down.
+        if fx.flashes().iter().any(|f| matches!(f.what(), crate::fx::Flashed::Tile(_))) {
+            d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| self.draw_tile_flashes(&mut GpuCanvas::new(&mut bd, textures), fx.flashes()));
         }
         // The towers' light (a charging coil, a mortar's ooze, a
         // tower on fire) and the globs in the air over everything that
@@ -2282,10 +2156,11 @@ impl Game {
         // Wall pieces in flight, with their shadows, over the tiles and
         // the tanks.
         fx.pieces().draw(&mut GpuCanvas::culled(d, textures, cull), true);
-        // Sparks, chips, dust and smoke over the top of everything in
-        // the scene, but still inside pass 1 so an in-flight shockwave
-        // warps them and the camera shake carries them along.
-        crate::render::fx::draw(fx, d, cull);
+        // Sparks and embers over the top of everything in the scene, but
+        // still inside pass 1 so an in-flight shockwave warps them and
+        // the camera shake carries them along. The layer's smoke, dust
+        // and chips are lit with the field (`paint_field_lit`).
+        crate::render::fx::draw_light(fx, d, cull);
     }
 }
 

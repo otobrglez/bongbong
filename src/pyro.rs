@@ -114,6 +114,46 @@ pub const VOID: [Color; 5] = [rgb(0x2C, 0x1A, 0x5C), rgb(0x6B, 0x3C, 0xC9), rgb(
 pub const LASER_RED: [Color; 5] = [rgb(0x6A, 0x14, 0x10), rgb(0xC8, 0x28, 0x1E), rgb(0xFF, 0x32, 0x28), rgb(0xFF, 0xAA, 0x96), rgb(0xFF, 0xFF, 0xFF)];
 pub const LASER_BLUE: [Color; 5] = [rgb(0x10, 0x30, 0x6A), rgb(0x28, 0x60, 0xD0), rgb(0x28, 0x70, 0xFF), rgb(0x96, 0xC8, 0xFF), rgb(0xFF, 0xFF, 0xFF)];
 
+/// The colour of the light each source throws: the one table the
+/// daylight's glow pools (`render/game.rs`, `render/blast.rs`) and the
+/// night's light map (`weather::lights_in`) both read, so a shell lights
+/// the ground the same warm at noon as at midnight. A laser's light is
+/// its ramp's beam step - the one red (or blue) its beam, its sparks and
+/// its light share.
+pub struct Lights {
+    /// A burning cell, tile, deck or wreck.
+    pub fire: Color,
+    /// A barrel's lit fuse.
+    pub fuse: Color,
+    /// A shell in flight.
+    pub shell: Color,
+    /// A minigun bullet in flight.
+    pub bullet: Color,
+    /// A missile's or a grenade's burn.
+    pub missile: Color,
+    /// A muzzle flash.
+    pub muzzle: Color,
+    /// A shell landing.
+    pub impact: Color,
+    /// The red laser.
+    pub laser_red: Color,
+    /// The blue laser.
+    pub laser_blue: Color,
+}
+
+/// The light table.
+pub const LIGHT: Lights = Lights {
+    fire: rgb(0xFF, 0x8F, 0x38),
+    fuse: rgb(0xFF, 0x66, 0x33),
+    shell: rgb(0xFF, 0x9E, 0x47),
+    bullet: rgb(0xFF, 0xCC, 0x6B),
+    missile: rgb(0xFF, 0x99, 0x4D),
+    muzzle: rgb(0xFF, 0xD1, 0x8C),
+    impact: rgb(0xFF, 0xA8, 0x59),
+    laser_red: LASER_RED[2],
+    laser_blue: LASER_BLUE[2],
+};
+
 /// Ooze, dark to wet highlight (the bio slush's own acid lime, `tower::OOZE_*`).
 pub const OOZE: [Color; 4] = [crate::tower::OOZE_DK, crate::tower::OOZE_MD, crate::tower::OOZE_LT, crate::tower::OOZE_HI];
 
@@ -177,6 +217,12 @@ pub fn snap(v: f32) -> i32 {
 pub fn alpha(c: Color, a: f32) -> Color {
     let a = ((a.clamp(0.0, 1.0) * 8.0).round() / 8.0 * c.a as f32) as u8;
     Color::new(c.r, c.g, c.b, a)
+}
+
+/// `a` (0..1) stepped to eighths: the steps `alpha` fades in, for a
+/// strength that is not yet a colour.
+pub fn eighths(a: f32) -> f32 {
+    (a.clamp(0.0, 1.0) * 8.0).round() / 8.0
 }
 
 /// The step of `ramp` at `t` (0 the darkest, 1 the brightest): the nearest

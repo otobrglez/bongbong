@@ -276,10 +276,9 @@ mod tests {
         let pairs = [
             ("dissolve", include_str!("../../static/dissolve.fs"), include_str!("../../static/web/dissolve.fs")),
             ("flame_jet", include_str!("../../static/flame_jet.fs"), include_str!("../../static/web/flame_jet.fs")),
-            ("impact", include_str!("../../static/impact.fs"), include_str!("../../static/web/impact.fs")),
-            ("muzzle_flash", include_str!("../../static/muzzle_flash.fs"), include_str!("../../static/web/muzzle_flash.fs")),
             ("plasma_orb", include_str!("../../static/plasma_orb.fs"), include_str!("../../static/web/plasma_orb.fs")),
             ("shockwave", include_str!("../../static/shockwave.fs"), include_str!("../../static/web/shockwave.fs")),
+            ("solid", include_str!("../../static/solid.fs"), include_str!("../../static/web/solid.fs")),
             ("turn", include_str!("../../static/turn.fs"), include_str!("../../static/web/turn.fs")),
             ("weather_ground", include_str!("../../static/weather_ground.fs"), include_str!("../../static/web/weather_ground.fs")),
             ("weather_light", include_str!("../../static/weather_light.fs"), include_str!("../../static/web/weather_light.fs")),

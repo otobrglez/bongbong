@@ -27,6 +27,25 @@ impl LaserVariant {
     /// Every variant, in wire order (`index`).
     pub const ALL: [LaserVariant; 2] = [LaserVariant::Red, LaserVariant::Blue];
 
+    /// The variant's ramp, dark to white (`pyro::LASER_RED`,
+    /// `LASER_BLUE`): the one red, or blue, its beam, its sparks and its
+    /// light are all steps of.
+    pub fn ramp(self) -> [crate::math::Color; 5] {
+        match self {
+            LaserVariant::Red => crate::pyro::LASER_RED,
+            LaserVariant::Blue => crate::pyro::LASER_BLUE,
+        }
+    }
+
+    /// The colour of the light the beam throws: the ramp's beam step
+    /// (`pyro::LIGHT`).
+    pub fn light(self) -> crate::math::Color {
+        match self {
+            LaserVariant::Red => crate::pyro::LIGHT.laser_red,
+            LaserVariant::Blue => crate::pyro::LIGHT.laser_blue,
+        }
+    }
+
     /// Lower-case name for tooling/JSON (`Event::LaserBeam`).
     pub fn name(self) -> &'static str {
         match self {

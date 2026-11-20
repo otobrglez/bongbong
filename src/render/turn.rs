@@ -28,13 +28,16 @@ pub struct Fit {
     pivot: Vec2,
     corner: f32,
     shear: bool,
+    /// The sprite's shape in the tint's colour, not its paint
+    /// (`Canvas::solid`).
+    solid: bool,
 }
 
 impl Fit {
     /// The uniforms for `turned` drawn from `texture`, a sheet of `block`
     /// texels to the design pixel: sheared, or sampled with its corners
     /// cut `corner` of the way.
-    pub fn of(texture: &Texture2D, turned: &Turned, block: f32, shear: bool, corner: f32) -> Fit {
+    pub fn of(texture: &Texture2D, turned: &Turned, block: f32, shear: bool, corner: f32, solid: bool) -> Fit {
         Fit {
             texture: texture.id,
             texel: Vec2::new(block / texture.width.max(1) as f32, block / texture.height.max(1) as f32),
@@ -42,6 +45,7 @@ impl Fit {
             pivot: turned.pivot,
             corner,
             shear,
+            solid,
         }
     }
 }
@@ -54,6 +58,11 @@ pub struct TurnShader {
     pivot: i32,
     corner: i32,
     shear: i32,
+    solid: i32,
+    /// The shader an unturned sprite's silhouette is drawn with
+    /// (`render::solid`), loaded and held with this one so every canvas
+    /// that turns sprites can draw their silhouettes too.
+    flat: Option<crate::render::solid::SolidShader>,
 }
 
 /// What the shader is called when it cannot be made (`target::trouble`).
@@ -70,21 +79,30 @@ impl TurnShader {
         };
         let made = rl.load_shader_from_memory(thread, Some(vs), Some(fs)).map_err(|e| e.to_string()).and_then(|shader| {
             let loc = |name: &str| shader.get_shader_location(name);
-            let (texel, cell, pivot, corner, shear) = (loc("texel"), loc("cell"), loc("pivot"), loc("corner"), loc("shear"));
+            let (texel, cell, pivot, corner, shear, solid) = (loc("texel"), loc("cell"), loc("pivot"), loc("corner"), loc("shear"), loc("solid"));
             // raylib hands back its default shader's locations for a
             // source that did not compile: none of these is there.
-            if texel < 0 || cell < 0 || pivot < 0 || corner < 0 || shear < 0 {
+            if texel < 0 || cell < 0 || pivot < 0 || corner < 0 || shear < 0 || solid < 0 {
                 return Err("did not compile".to_string());
             }
-            Ok(TurnShader { shader, texel, cell, pivot, corner, shear })
+            Ok(TurnShader { shader, texel, cell, pivot, corner, shear, solid, flat: None })
         });
         match made {
-            Ok(shader) => Some(shader),
+            Ok(mut shader) => {
+                shader.flat = crate::render::solid::SolidShader::load(rl, thread);
+                Some(shader)
+            }
             Err(e) => {
                 crate::render::target::trouble(TURN_SHADER, &e);
                 None
             }
         }
+    }
+
+    /// The shader for an unturned sprite's silhouette; `None` where the
+    /// driver refused it.
+    pub fn solid(&self) -> Option<&crate::render::solid::SolidShader> {
+        self.flat.as_ref()
     }
 
     /// Make this the shader the batch draws with, flushing what was
@@ -118,6 +136,7 @@ impl TurnShader {
             ffi::SetShaderValue(raw, self.pivot, pair(fit.pivot).as_ptr().cast(), vec2);
             ffi::SetShaderValue(raw, self.corner, [fit.corner].as_ptr().cast(), float);
             ffi::SetShaderValue(raw, self.shear, [if fit.shear { 1.0f32 } else { 0.0 }].as_ptr().cast(), float);
+            ffi::SetShaderValue(raw, self.solid, [if fit.solid { 1.0f32 } else { 0.0 }].as_ptr().cast(), float);
         }
     }
 
