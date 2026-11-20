@@ -20,7 +20,8 @@
 //!   heat haze and the white of lightning, over the finished field.
 //!
 //! The passes ping-pong between `scene_target` and this module's `lit`
-//! target and always end in `scene_target`, so pass 2, the ripple
+//! target and always end in `scene_target` (`run_stages`, which a round
+//! and the builder's canvas both draw through), so pass 2, the ripple
 //! re-blits and the dev server's screenshots read the weathered field
 //! with no change of their own. Every target is the camera's view
 //! (`view::Camera`) and every pass works in world pixels, so the snow, the
@@ -1189,6 +1190,112 @@ impl ShaderPasses<'_> {
     /// `source` with the air over it (`draw_sky`).
     pub fn sky<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame, at: &PassView) {
         self.shaders.sky(d, source, frame, at);
+    }
+}
+
+/// What pass 1 draws between a sky's stages (`run_stages`): a round's
+/// field (`Game::draw_world`) or the builder's canvas
+/// (`editor::render`), each in world pixels.
+pub trait StagePainter {
+    /// The bare ground tileset alone, for a sky drawn without its shaders
+    /// to lay its snow on as blocks.
+    fn ground<D: RaylibDraw>(&mut self, d: &mut D);
+
+    /// The field as it stands under the light. `ground_drawn` says the
+    /// stage before it covered the target in place of the ground tileset.
+    fn lit<D: RaylibDraw>(&mut self, d: &mut D, ground_drawn: bool);
+
+    /// What shines by itself, over the lit field; `day_pools` is
+    /// `WeatherFrame::day_light_pools`.
+    fn glowing<D: RaylibDraw>(&mut self, d: &mut D, day_pools: f32);
+}
+
+/// Pass 1 under `frame`'s sky into `target`, the size of the frame's view
+/// a texel a world pixel, `in_target` the camera the world is drawn
+/// through: the field under the light - on the ground pass's bare,
+/// weathered ground where the sky has one -, multiplied by the light map,
+/// then what shines by itself, then the air over it all. With the shaders
+/// each stage draws into the other buffer from the one before it - `target`
+/// and the weather's own - so the last lands in `target`: under light and
+/// sky the first stage starts there, under one of them it starts in the
+/// weather's. Without them (`WeatherFrame::plain`) every stage goes
+/// straight into `target`: the field on snow lying over the bare ground,
+/// the light map multiplied in by a blend mode, what shines by itself,
+/// then the air as plain blocks. A pass that covers the whole target is
+/// drawn in the target's own pixels. Draws nothing where `begin` readied no
+/// targets.
+pub fn run_stages(
+    rl: &mut RaylibHandle,
+    thread: &RaylibThread,
+    fx: &mut WeatherFx,
+    frame: &WeatherFrame,
+    target: &mut RenderTexture2D,
+    in_target: Camera2D,
+    painter: &mut impl StagePainter,
+) {
+    let plan = frame.plan;
+    let day_pools = frame.day_light_pools();
+    if frame.plain {
+        let Some(light) = fx.light_map() else { return };
+        let mut blocks = Vec::new();
+        rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| {
+            d.clear_background(Color::WHITE);
+            d.draw_mode2D(in_target, |mut d, _| {
+                frame.plain_snow_cover(&mut blocks);
+                let snowed = !blocks.is_empty();
+                if snowed {
+                    painter.ground(&mut d);
+                    draw_blocks(&mut d, &blocks);
+                }
+                painter.lit(&mut d, snowed);
+                if !plan.lit {
+                    painter.glowing(&mut d, day_pools);
+                }
+            });
+            if plan.lit {
+                multiply_light(&mut d, light, frame);
+                d.draw_mode2D(in_target, |mut d, _| painter.glowing(&mut d, day_pools));
+            }
+            if plan.sky {
+                blocks.clear();
+                frame.plain_air(&mut blocks);
+                d.draw_mode2D(in_target, |mut d, _| draw_blocks(&mut d, &blocks));
+                draw_flash(&mut d, frame);
+            }
+        });
+        return;
+    }
+    let Some((lit_target, mut passes)) = fx.stages() else { return };
+    let first_in_target = plan.lit == plan.sky;
+    {
+        let first: &mut RenderTexture2D = if first_in_target { &mut *target } else { &mut *lit_target };
+        rl.draw_texture_mode(thread, crate::frame_stages::target(first), |mut d| {
+            d.clear_background(Color::WHITE);
+            // The ground pass draws the bare ground with the sky's mark on
+            // it in place of the ground tileset.
+            if plan.ground {
+                passes.draw_ground(&mut d, frame);
+            }
+            d.draw_mode2D(in_target, |mut d, _| {
+                painter.lit(&mut d, plan.ground);
+                if !plan.lit {
+                    painter.glowing(&mut d, day_pools);
+                }
+            });
+        });
+    }
+    if plan.lit {
+        let (under, to): (&RenderTexture2D, &mut RenderTexture2D) =
+            if first_in_target { (&*target, &mut *lit_target) } else { (&*lit_target, &mut *target) };
+        rl.draw_texture_mode(thread, crate::frame_stages::target(to), |mut d| {
+            passes.draw_lit(&mut d, under, frame);
+            d.draw_mode2D(in_target, |mut d, _| painter.glowing(&mut d, day_pools));
+        });
+    }
+    if plan.sky {
+        // Whichever stage came before left the field in the weather's
+        // target.
+        rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| passes.draw_sky(&mut d, lit_target, frame));
     }
 }
 

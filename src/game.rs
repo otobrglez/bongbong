@@ -60,7 +60,9 @@ enum Standing<'a> {
 /// out (`scratch`), fills it and puts it back (`keep`).
 #[derive(Default)]
 struct Scratch {
-    fences: HashSet<(i32, i32)>,
+    picked: Vec<Entity>,
+    picked_for: Option<(u64, [u32; 4])>,
+    shown: Vec<&'static Obstacle>,
     rollins: HashSet<Entity>,
     standing: Vec<(f32, Standing<'static>)>,
     trees: Vec<&'static Obstacle>,
@@ -372,6 +374,10 @@ impl Game {
     /// (`with_block_images`); a painter draws from the pictures only on the
     /// frame they were brought up to.
     pub fn refresh_pictures(&self, views: &[crate::math::Rectangle]) {
+        let tiles_as_they_stand = self.tile_index.borrow().matches(&self.world);
+        if !tiles_as_they_stand {
+            self.tile_index.borrow_mut().rebuild(&self.world);
+        }
         let surface = |p: crate::Position| self.surface_at(p);
         self.wear.refresh_pictures(
             &crate::wear::PictureFrame { time: self.time, look: self.wear_look(), views, surface: &surface },
@@ -392,6 +398,78 @@ impl Game {
             cones: &cones,
             bands: t.glow_bands.max(0) as u32,
         });
+    }
+
+    /// The tiles by where they stand (`tile_index.rs`), built again here
+    /// if the world's rows are not the ones it was built from.
+    pub(crate) fn tile_index(&self) -> std::cell::Ref<'_, crate::tile_index::TileIndex> {
+        let stands = self.tile_index.borrow().stands(&self.world);
+        if !stands {
+            self.tile_index.borrow_mut().rebuild(&self.world);
+        }
+        self.tile_index.borrow()
+    }
+
+    /// The entities of the obstacles standing inside `rect`, in the order
+    /// a walk of the world meets them (`TileIndex::gather`), with the key
+    /// they were gathered under: once for a rectangle and a build of the
+    /// index, and handed again to the frame's other painters of the same
+    /// view. Give both back with `keep_picked`; while they are out another
+    /// painter gathers its own.
+    fn picked_in(&self, rect: crate::math::Rectangle) -> (Vec<Entity>, (u64, [u32; 4])) {
+        let index = self.tile_index();
+        let key = (index.built(), [rect.x.to_bits(), rect.y.to_bits(), rect.width.to_bits(), rect.height.to_bits()]);
+        let mut picked = scratch(|s| &mut s.picked);
+        if scratch(|s| &mut s.picked_for) != Some(key) {
+            index.gather(rect, &mut picked);
+        }
+        (picked, key)
+    }
+
+    /// Put `picked_in`'s list back for the next painter.
+    fn keep_picked(&self, picked: Vec<Entity>, key: (u64, [u32; 4])) {
+        keep(|s| &mut s.picked, picked);
+        keep(|s| &mut s.picked_for, Some(key));
+    }
+
+    /// Hand `paint` the obstacles a painter culling to `cull` draws
+    /// (`view::culled` on each one's position), in the order a walk of the
+    /// world meets them - the order tiles lie over one another in. With no
+    /// rectangle that is the walk; with one they are found through the
+    /// tile index, so a view of a large field reads what stands in it
+    /// rather than the field.
+    pub fn with_obstacles_in<R>(&self, cull: Option<crate::math::Rectangle>, paint: impl FnOnce(&[&Obstacle]) -> R) -> R {
+        let mut query = self.world.query::<&Obstacle>();
+        let mut shown: Vec<&Obstacle> = emptied(scratch(|s| &mut s.shown));
+        let view;
+        match cull {
+            None => shown.extend(query.iter()),
+            Some(rect) => {
+                let (picked, key) = self.picked_in(rect);
+                view = query.view();
+                shown.extend(picked.iter().filter_map(|&entity| view.get(entity)));
+                self.keep_picked(picked, key);
+            }
+        }
+        let out = paint(&shown);
+        keep(|s| &mut s.shown, emptied(shown));
+        out
+    }
+
+    /// The few of those obstacles `keep` answers true for, each held
+    /// (`hecs::Ref`) for a painter that cannot draw inside
+    /// `with_obstacles_in`.
+    pub fn obstacles_in(&self, cull: Option<crate::math::Rectangle>, keep: impl Fn(&Obstacle) -> bool) -> Vec<hecs::Ref<'_, Obstacle>> {
+        let held = |entity: Entity| self.world.get::<&Obstacle>(entity).ok();
+        let mut query = self.world.query::<(Entity, &Obstacle)>();
+        let Some(rect) = cull else {
+            return query.iter().filter(|(_, o)| keep(o)).filter_map(|(entity, _)| held(entity)).collect();
+        };
+        let (picked, key) = self.picked_in(rect);
+        let view = query.view();
+        let out = picked.iter().filter(|&&entity| view.get(entity).is_some_and(|(_, o)| keep(o))).filter_map(|&entity| held(entity)).collect();
+        self.keep_picked(picked, key);
+        out
     }
 
     /// Every baked image the round draws from, in an order that holds
@@ -468,7 +546,7 @@ impl Game {
 
         // Burn marks under everything that stands, so a barrel that
         // survived a neighbour's blast sits on the mark it left.
-        for scorch in &self.scorches {
+        for scorch in self.scorches.shown(c.cull()) {
             if !c.culls(scorch.center) {
                 // Under snow a cold mark goes under it (docs/aftermath.md).
                 let cold = if scorch.ember { self.cold_for(crate::smoulder::Kind::Bed, scorch.age, &t) } else { scorch.age };
@@ -499,7 +577,7 @@ impl Game {
         // (a barrel that took a wall with it scorched the ground first)
         // but under everything that still stands, so a wall built over
         // old rubble still reads as solid.
-        for decal in self.decals.iter().filter(|dc| dc.landed()) {
+        for decal in self.decals.shown(c.cull()).filter(|dc| dc.landed()) {
             if !c.culls(decal.center) {
                 let kind = if decal.upright { crate::smoulder::Kind::Stump } else { crate::smoulder::Kind::Ruin };
                 let cold = if decal.hot { self.cold_for(kind, decal.age, &t) } else { decal.age };
@@ -581,9 +659,10 @@ impl Game {
     /// are not tiles here - their canopies belong over the tanks, so they
     /// close `paint_standing` instead.
     pub fn paint_tiles(&self, c: &mut impl Canvas) {
-        let mut fences = scratch(|s| &mut s.fences);
-        fences.clear();
-        fences.extend(self.world.query::<&Obstacle>().iter().filter(|o| o.material == Material::Fence).map(|o| o.cell()));
+        // Every fence's cell: a fence joins its neighbours, in view or not.
+        let index = self.tile_index();
+        let fences = index.fences();
+        let cull = c.cull();
         // Towers stand in `paint_standing`; their shadows fall here, under
         // the tiles and everything that drives past.
         let towers = self.tower_views();
@@ -611,40 +690,41 @@ impl Game {
             crate::volcano::draw_cone_with(c, v.centre(), &picture, molten, &v.phase(self.time, &t), self.time);
         }
         drop(pictures);
-        let mut tiles = self.world.query::<&Obstacle>();
-        paint_tile_run(c, tiles.iter().filter(|o| is_tile(o)), &fences, self.shadows_enabled, self.time, &t);
-        drop(tiles);
-        keep(|s| &mut s.fences, fences);
-        // Training doors and flags (docs/training-stage.md): drawn by
-        // their own code, doors with the tiles, flags standing on the
-        // ground beside them.
-        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.material == crate::obstacle::Material::Door) {
-            if !c.culls(obstacle.position) {
-                crate::training::draw_door(c, obstacle.position);
+        // What stands in the canvas's part of the field, in the world's
+        // order.
+        self.with_obstacles_in(cull, |shown| {
+            paint_tile_run(c, shown.iter().copied().filter(|o| is_tile(o)), fences, self.shadows_enabled, self.time, &t);
+            // Training doors and flags (docs/training-stage.md): drawn by
+            // their own code, doors with the tiles, flags standing on the
+            // ground beside them.
+            for obstacle in shown.iter().filter(|o| o.material == crate::obstacle::Material::Door) {
+                if !c.culls(obstacle.position) {
+                    crate::training::draw_door(c, obstacle.position);
+                }
             }
-        }
-        for flag in self.training_flags() {
-            if !c.culls(flag.at) {
-                crate::training::draw_flag(c, flag.at, crate::tank::team_color(0), flag.taken, self.time);
+            for flag in self.training_flags() {
+                if !c.culls(flag.at) {
+                    crate::training::draw_flag(c, flag.at, crate::tank::team_color(0), flag.taken, self.time);
+                }
             }
-        }
-        // A range board's own fire (`target.rs`): the soot creeping in
-        // under the stream, the embers pulsing over its char once it
-        // burns - under the flames that stand on it.
-        let ignite = t.flame_ignite_seconds;
-        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.material == Material::Target) {
-            if !c.culls(obstacle.position) {
-                crate::pyro::draw(c, &crate::target::fire_shapes(obstacle, ignite));
+            // A range board's own fire (`target.rs`): the soot creeping in
+            // under the stream, the embers pulsing over its char once it
+            // burns - under the flames that stand on it.
+            let ignite = t.flame_ignite_seconds;
+            for obstacle in shown.iter().filter(|o| o.material == Material::Target) {
+                if !c.culls(obstacle.position) {
+                    crate::pyro::draw(c, &crate::target::fire_shapes(obstacle, ignite));
+                }
             }
-        }
-        // Burning timber: flames standing on each plank, over the tiles
-        // round it so a burning door in a wall is not cut off by the wall
-        // beside it.
-        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !o.material.is_tree()) {
-            if !c.culls(obstacle.position) {
-                crate::pyro::draw(c, &tile_flames(obstacle, self.time));
+            // Burning timber: flames standing on each plank, over the tiles
+            // round it so a burning door in a wall is not cut off by the wall
+            // beside it.
+            for obstacle in shown.iter().filter(|o| o.burning && !o.material.is_tree()) {
+                if !c.culls(obstacle.position) {
+                    crate::pyro::draw(c, &tile_flames(obstacle, self.time));
+                }
             }
-        }
+        });
     }
 
     /// Everything standing on the ground: pickups, then tanks, bongs and
@@ -726,10 +806,16 @@ impl Game {
         }
         standing.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-        let mut next_tuft = 0usize;
+        // The tufts are sorted by root, so the ones a canvas over part of
+        // the field can show are one run of them: from the first rooted at
+        // its top edge to the last above its bottom one.
+        let (mut next_tuft, last_tuft) = match cull {
+            Some(r) => (self.grass.partition_point(|g| g.base.y < r.y), self.grass.partition_point(|g| g.base.y < r.y + r.height)),
+            None => (0, self.grass.len()),
+        };
         let grass_up_to = |c: &mut _, upto: f32, from: usize| {
             let mut i = from;
-            while i < self.grass.len() && self.grass[i].base.y <= upto {
+            while i < last_tuft && self.grass[i].base.y <= upto {
                 if !culled(cull, self.grass[i].base) {
                     crate::grass::draw_tuft(c, &self.grass[i], self.map.theme, self.time, &t);
                 }
@@ -775,32 +861,33 @@ impl Game {
         let mut movers = scratch(|s| &mut s.movers);
         movers.clear();
         movers.extend(self.world.query::<&Tank>().iter().filter(|t| !t.is_dead()).map(|t| t.position));
-        let mut tree_query = self.world.query::<&Obstacle>();
-        let mut trees: Vec<&Obstacle> = emptied(scratch(|s| &mut s.trees));
-        trees.extend(tree_query.iter().filter(|o| o.material.is_tree() && !culled(cull, o.position)));
-        sort_trees(&mut trees);
-        // The players' hulls, for the canopy cutaway: the crowns hiding
-        // much of one are drawn see-through, so a player never loses their
-        // own tank under a wood. An enemy under a canopy stays hidden.
-        let mut seats = scratch(|s| &mut s.seats);
-        seats.clear();
-        seats.extend(
-            self.world
-                .query::<(Entity, &Tank)>()
-                .iter()
-                .filter(|&(e, tank)| !tank.is_dead() && !self.hide_players && self.is_player(e))
-                .map(|(_, tank)| tank.hull_bbox_world()),
-        );
-        let cutaway = crate::obstacle::canopy_cutaway(&trees, &seats, t.canopy_cutaway_cover);
-        for (tree, &see_through) in trees.iter().zip(&cutaway) {
-            // A sonic wave passing sways the crown away from its pivot.
-            let lean = tree_lean(tree, &movers, &t) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
-            let alpha = if see_through { t.canopy_cutaway_alpha } else { 1.0 };
-            paint_tree(c, tree, lean, alpha, self.shadows_enabled, self.time, &t);
-        }
-        keep(|s| &mut s.trees, emptied(trees));
+        self.with_obstacles_in(cull, |shown| {
+            let mut trees: Vec<&Obstacle> = emptied(scratch(|s| &mut s.trees));
+            trees.extend(shown.iter().copied().filter(|o| o.material.is_tree() && !culled(cull, o.position)));
+            sort_trees(&mut trees);
+            // The players' hulls, for the canopy cutaway: the crowns hiding
+            // much of one are drawn see-through, so a player never loses their
+            // own tank under a wood. An enemy under a canopy stays hidden.
+            let mut seats = scratch(|s| &mut s.seats);
+            seats.clear();
+            seats.extend(
+                self.world
+                    .query::<(Entity, &Tank)>()
+                    .iter()
+                    .filter(|&(e, tank)| !tank.is_dead() && !self.hide_players && self.is_player(e))
+                    .map(|(_, tank)| tank.hull_bbox_world()),
+            );
+            let cutaway = crate::obstacle::canopy_cutaway(&trees, &seats, t.canopy_cutaway_cover);
+            for (tree, &see_through) in trees.iter().zip(&cutaway) {
+                // A sonic wave passing sways the crown away from its pivot.
+                let lean = tree_lean(tree, &movers, &t) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
+                let alpha = if see_through { t.canopy_cutaway_alpha } else { 1.0 };
+                paint_tree(c, tree, lean, alpha, self.shadows_enabled, self.time, &t);
+            }
+            keep(|s| &mut s.trees, emptied(trees));
+            keep(|s| &mut s.seats, seats);
+        });
         keep(|s| &mut s.movers, movers);
-        keep(|s| &mut s.seats, seats);
     }
 
     /// What of a mark that went cold `cold` seconds ago still shows through

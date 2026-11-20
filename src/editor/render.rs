@@ -272,6 +272,32 @@ impl Sheets for EditorTextures<'_> {
         self.sheets.texture(sheet)
     }
 }
+
+/// The builder's canvas between its sky's stages
+/// (`render::weather::run_stages`).
+struct CanvasStages<'a> {
+    editor: &'a MapEditor,
+    textures: &'a EditorTextures<'a>,
+    time: f32,
+    cull: Option<Rectangle>,
+}
+
+impl crate::render::weather::StagePainter for CanvasStages<'_> {
+    fn ground<D: RaylibDraw>(&mut self, d: &mut D) {
+        if !self.editor.plain_canvas {
+            ground::draw(&mut GpuCanvas::culled(d, self.textures, self.cull), &self.editor.ground, self.editor.map.theme, self.time);
+        }
+    }
+
+    fn lit<D: RaylibDraw>(&mut self, d: &mut D, ground_drawn: bool) {
+        self.editor.draw_canvas_world(d, self.textures, self.time, self.cull, ground_drawn);
+    }
+
+    fn glowing<D: RaylibDraw>(&mut self, d: &mut D, day_pools: f32) {
+        self.editor.draw_canvas_glowing(d, self.textures, self.time, self.cull, day_pools);
+    }
+}
+
 impl MapEditor {
     /// The field cell under the last pointer position, when that is on
     /// the canvas and not on chrome - what the hover highlight and the
@@ -467,14 +493,11 @@ impl MapEditor {
     }
 
     /// Pass 1 of the canvas under `frame`'s sky into `target`, the size of
-    /// `camera`'s view a texel a world pixel, as `Game::draw_world` runs a
-    /// round's: the canvas under the light (`draw_canvas_world`) - on the
-    /// ground pass's bare, weathered ground where the sky has one -,
-    /// multiplied by the light map, then what shines by itself
-    /// (`draw_canvas_glowing`), then the air over it all; with the
-    /// shaders the stages ping-pong with the weather's own target and end
-    /// in `target`, without them each goes straight into it. The editing
-    /// marks go over the finished sky, so the dark never hides them.
+    /// `camera`'s view a texel a world pixel, in the stages a round's runs
+    /// (`render::weather::run_stages`): the canvas under the light
+    /// (`draw_canvas_world`), what shines by itself (`draw_canvas_glowing`).
+    /// The editing marks go over the finished sky, so the dark never hides
+    /// them.
     #[allow(clippy::too_many_arguments)]
     fn draw_under_sky(
         &self,
@@ -488,73 +511,10 @@ impl MapEditor {
         time: f32,
         cursor: Option<(i32, i32)>,
     ) {
-        use crate::render::weather::{draw_blocks, draw_flash, multiply_light};
         let cull = camera.cull();
         let in_target = camera.in_target();
-        let plan = frame.plan;
-        let day_pools = frame.day_light_pools();
-        if frame.plain {
-            let Some(light) = fx.light_map() else { return };
-            let mut blocks = Vec::new();
-            rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| {
-                d.clear_background(Color::WHITE);
-                d.draw_mode2D(in_target, |mut d, _| {
-                    frame.plain_snow_cover(&mut blocks);
-                    let snowed = !blocks.is_empty();
-                    if snowed {
-                        if !self.plain_canvas {
-                            ground::draw(&mut GpuCanvas::culled(&mut d, textures, cull), &self.ground, self.map.theme, time);
-                        }
-                        draw_blocks(&mut d, &blocks);
-                    }
-                    self.draw_canvas_world(&mut d, textures, time, cull, snowed);
-                    if !plan.lit {
-                        self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools);
-                    }
-                });
-                if plan.lit {
-                    multiply_light(&mut d, light, frame);
-                    d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools));
-                }
-                if plan.sky {
-                    blocks.clear();
-                    frame.plain_air(&mut blocks);
-                    d.draw_mode2D(in_target, |mut d, _| draw_blocks(&mut d, &blocks));
-                    draw_flash(&mut d, frame);
-                }
-            });
-        } else {
-            let Some((lit_target, mut passes)) = fx.stages() else { return };
-            // Each stage draws into the other buffer from the one before
-            // it, so the last lands in `target`.
-            let first_in_target = plan.lit == plan.sky;
-            {
-                let first: &mut RenderTexture2D = if first_in_target { &mut *target } else { &mut *lit_target };
-                rl.draw_texture_mode(thread, crate::frame_stages::target(first), |mut d| {
-                    d.clear_background(Color::WHITE);
-                    if plan.ground {
-                        passes.draw_ground(&mut d, frame);
-                    }
-                    d.draw_mode2D(in_target, |mut d, _| {
-                        self.draw_canvas_world(&mut d, textures, time, cull, plan.ground);
-                        if !plan.lit {
-                            self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools);
-                        }
-                    });
-                });
-            }
-            if plan.lit {
-                let (under, to): (&RenderTexture2D, &mut RenderTexture2D) =
-                    if first_in_target { (&*target, &mut *lit_target) } else { (&*lit_target, &mut *target) };
-                rl.draw_texture_mode(thread, crate::frame_stages::target(to), |mut d| {
-                    passes.draw_lit(&mut d, under, frame);
-                    d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_glowing(&mut d, textures, time, cull, day_pools));
-                });
-            }
-            if plan.sky {
-                rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| passes.draw_sky(&mut d, lit_target, frame));
-            }
-        }
+        let mut painter = CanvasStages { editor: self, textures, time, cull };
+        crate::render::weather::run_stages(rl, thread, fx, frame, target, in_target, &mut painter);
         rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| d.draw_mode2D(in_target, |mut d, _| self.draw_canvas_marks(&mut d, textures, time, cursor, cull)));
     }
 
