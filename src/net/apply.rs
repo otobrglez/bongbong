@@ -650,7 +650,8 @@ fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
             WeaponKind::FpvSwarm => tank.kick_fpv(),
             WeaponKind::RodFromGod => tank.kick_rod(),
             WeaponKind::GravityWell => tank.kick_well(),
-            WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
+            WeaponKind::Minigun => tank.kick_minigun(),
+            WeaponKind::Missiles | WeaponKind::Flamethrower | WeaponKind::Grenades => {}
         }
         break;
     }
@@ -1426,6 +1427,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 prev_position: position,
                 passed_over: Vec::new(),
                 id,
+                glanced: false,
             },));
         }
         ShotKind::Orb => {}

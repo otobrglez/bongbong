@@ -32,8 +32,9 @@
 //! nothing. Shells and plasma fire on the press edge, the minigun while
 //! the key is held - `drive_player`'s rule. A press opens a `Press`: the
 //! first shot at once and the rest on their own delays (a twin barrel's
-//! second shell `tank_twin_shot_delay_seconds` on, the burst's bullets
-//! `minigun_bullet_delay_seconds` apart), each spawned from the sandbox's
+//! second shell `tank_twin_shot_delay_seconds` on, a minigun burst's
+//! bullets `Tuning::minigun_round_ticks` apart after the barrels' spin-up,
+//! which this client counts as the room does), each spawned from the sandbox's
 //! pose on the frame it is due, as the server's `tick_queued_shots` would.
 //! A provisional runs its projectile's own state machine - the muzzle
 //! frames, then flight (`ProvisionalShot::advance`) - and is swept every
@@ -331,6 +332,8 @@ struct Press {
     /// Shots of an undrawn press that have left the muzzle: owed against
     /// the gate as a drawn press's live shots are.
     undrawn: usize,
+    /// Its first drawn shot has left and rippled the muzzle.
+    muzzled: bool,
 }
 
 impl Press {
@@ -536,6 +539,13 @@ pub struct Predictor {
     /// (`confirm_press`), so only the room's shows the client drew are kept
     /// off the picture. Dropped past the refusal wait.
     drawn_presses: VecDeque<(WeaponKind, u32, f32)>,
+    /// How fast this seat's minigun barrels turn, 0..1, as the room's
+    /// `Tank::minigun_spin` has them: the first round of a press waits for
+    /// what is left of their way up.
+    gun_spin: f32,
+    /// Sandbox ticks this seat's minigun burst still runs (`gun_spin` goes
+    /// up meanwhile, down after).
+    gun_run: u32,
     /// Shows pressed this tick, for the round to finish and draw.
     shows: Vec<PressShow>,
     /// The cell the last stepped packet's rod reticle stood on
@@ -613,6 +623,8 @@ impl Predictor {
             next_press: 0,
             owed_presses: VecDeque::new(),
             drawn_presses: VecDeque::new(),
+            gun_spin: 0.0,
+            gun_run: 0,
             shows: Vec::new(),
             reticle: None,
             impacts: Vec::new(),
@@ -691,6 +703,7 @@ impl Predictor {
         self.cooldown = (self.cooldown - PHYSICS_FIXED_DT).max(0.0);
         self.offline_left = (self.offline_left - PHYSICS_FIXED_DT).max(0.0);
         self.orb_grace = (self.orb_grace - PHYSICS_FIXED_DT).max(0.0);
+        self.spin_gun();
         let pressed = intent.fire && !self.trigger_held;
         let trigger = (pressed, self.charge_gate_open());
         // The round tick this input lands on, for a well's pull.
@@ -715,6 +728,17 @@ impl Predictor {
             Some(charge) => self.charge_edge(tick, charge),
             None => self.pull_trigger(tick, pressed, intent.fire),
         }
+    }
+
+    /// One tick of this seat's minigun barrels, the room's
+    /// `Tank::tick_minigun_spin`: up while its burst runs, down after.
+    fn spin_gun(&mut self) {
+        let t = tuning();
+        let running = self.gun_run > 0;
+        self.gun_run = self.gun_run.saturating_sub(1);
+        let seconds = if running { t.minigun_spinup_seconds } else { t.minigun_spindown_seconds };
+        let step = if seconds > 0.0 { PHYSICS_FIXED_DT / seconds } else { 1.0 };
+        self.gun_spin = if running { (self.gun_spin + step).min(1.0) } else { (self.gun_spin - step).max(0.0) };
     }
 
     /// The cell this client's rod reticle stood on for the packet just
@@ -894,18 +918,23 @@ impl Predictor {
                 if left <= 0 {
                     return;
                 }
-                let burst = (t.minigun_burst_size.max(1) as i32).min(left);
+                // The room's burst (`weapons::dispatch_fire_from`): its
+                // first round after what is left of the barrels' spin-up,
+                // the rest a round's ticks apart.
+                let rounds = t.minigun_burst_size.max(1);
+                let burst = (rounds as i32).min(left);
                 let spread = t.minigun_bullet_spread_deg;
                 let press = self.next_press;
-                let every = grid(t.minigun_bullet_delay_seconds);
+                let spinup = t.minigun_spinup_ticks(self.gun_spin);
+                let every = t.minigun_round_ticks();
                 let pending = (0..burst)
                     .map(|k| Pending {
-                        due_ticks: k as u32 * every,
+                        due_ticks: spinup + k as u32 * every,
                         lateral: 0.0,
                         aim: (hash01(press, k as u32) * 2.0 - 1.0) * spread,
                     })
                     .collect();
-                (ProvisionalKind::Bullet, 1, t.minigun_burst_cooldown_seconds(), pending)
+                (ProvisionalKind::Bullet, 1, t.minigun_burst_cooldown_seconds(spinup, rounds), pending)
             }
             // The laser is full-auto while held, a charge a beam: drawn on
             // the press from the predicted muzzle, stopped by the round at
@@ -1011,6 +1040,11 @@ impl Predictor {
             return;
         }
         self.cooldown = cooldown;
+        if kind == ProvisionalKind::Bullet {
+            // The burst runs for its cooldown: whole ticks, less the half
+            // `tick_timer` keeps back.
+            self.gun_run = (cooldown / PHYSICS_FIXED_DT).ceil() as u32;
+        }
         let mut press = Press {
             kind,
             tick,
@@ -1023,15 +1057,13 @@ impl Predictor {
             pending,
             live: Vec::new(),
             undrawn: 0,
+            muzzled: false,
         };
         self.next_press = self.next_press.wrapping_add(1);
         // The first shot leaves on the press itself, from the pose this
-        // tick produced, and ripples the muzzle as the room's `Fired`
-        // does on a replica - once a press.
+        // tick produced - but a minigun's from barrels at rest, which
+        // waits for them (`launch_due` ripples the muzzle when it goes).
         self.launch_due(&mut press);
-        if let Some(first) = press.live.first() {
-            self.muzzles.push((first.shot.position, press.kind));
-        }
         self.presses.push_back(press);
         if drawn {
             self.report.shots_drawn += 1;
@@ -1068,6 +1100,12 @@ impl Predictor {
                     self.sandbox.seat_recoil(self.seat, press.kind, shot.velocity);
                 }
                 if press.drawn {
+                    // The press's first shot ripples the muzzle, as the
+                    // room's does - once a press.
+                    if !press.muzzled {
+                        press.muzzled = true;
+                        self.muzzles.push((shot.position, press.kind));
+                    }
                     let id = self.next_shot;
                     self.next_shot = self.next_shot.wrapping_add(1);
                     let leaving = portals::inside(shot.position, self.sandbox.shot_portals(), tuning().portal_shot_radius);
@@ -1178,7 +1216,7 @@ impl Predictor {
         let t = tuning();
         let interval = match weapon {
             WeaponKind::Shell | WeaponKind::Plasma | WeaponKind::Laser => t.player_fire_interval,
-            WeaponKind::Minigun => t.minigun_burst_cooldown_seconds(),
+            WeaponKind::Minigun => t.minigun_burst_cooldown_seconds(t.minigun_spinup_ticks(self.gun_spin), t.minigun_burst_size),
             WeaponKind::Missiles => t.missile_volley_cooldown_seconds(),
             WeaponKind::Grenades => t.grenade_reload_seconds,
             WeaponKind::SonicHammer => t.sonic_reload_seconds,
@@ -1207,7 +1245,8 @@ impl Predictor {
     ///
     /// **A copy that never shows cannot take the next shot's.** A press's
     /// first shot leaves the room's muzzle on the tick that logs its
-    /// `Fired`, so its copy is in the picture on the frame that confirms the
+    /// `Fired` (a minigun's from barrels at rest, their spin-up after it),
+    /// so its copy is in the picture on the frame that confirms the
     /// press (`confirm_fired` runs before this), and each later shot's its
     /// own delay after (`Live::after`). A shot still unpaired on the frame
     /// after its copy came due never had one in the picture - the snapshot
@@ -1992,11 +2031,15 @@ mod tests {
         let patch = TankPatch { minigun_ammo: Some(40), ..Default::default() };
         predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
         predictor.step(press());
+        assert_eq!(predictor.provisional_count(), 0, "barrels at rest spin up before the first round");
+        for _ in 0..tuning().minigun_spinup_ticks(0.0) {
+            predictor.step(press());
+        }
         let kinds: Vec<ProvisionalKind> = predictor.shots().map(|(_, s)| s.kind).collect();
         assert_eq!(kinds, [ProvisionalKind::Bullet], "the first bullet of the burst, and no shell");
         // The rest of the burst leaves on the room's tick grid while held.
         let burst = tuning().minigun_burst_size.max(1) as usize;
-        let every = (tuning().minigun_bullet_delay_seconds / PHYSICS_FIXED_DT).ceil() as usize;
+        let every = tuning().minigun_round_ticks() as usize;
         for _ in 0..(burst - 1) * every {
             predictor.step(press());
         }

@@ -249,22 +249,26 @@ pub struct PendingPlasmaShot {
     pub lateral_offset: f32,
 }
 
-/// A minigun burst in progress: `bullets_remaining` more bullets queued to
-/// fire at MINIGUN_BULLET_DELAY_SECONDS spacing after the one that just
-/// fired - see `Tank::minigun_burst`. Generalizes `PendingShot`'s "one
-/// queued extra shot" to "N queued burst bullets" using the identical
-/// tick-once-per-frame shape.
+/// A minigun burst in progress - see `Tank::minigun_burst`: the rounds one
+/// pull of the trigger still owes, one every `Tuning::minigun_round_ticks`
+/// once the barrels are up to speed (`Tank::minigun_spin`). It outlives its
+/// last round by that round's own beat, so the burst a held trigger starts
+/// as this one ends keeps the stream's time.
 #[derive(Clone, Copy)]
 pub struct MinigunBurst {
+    /// Rounds still to leave. 0 while the last round's beat runs out.
     pub bullets_remaining: u32,
-    /// Seconds remaining until the next queued bullet fires.
+    /// Seconds until the next round leaves - the barrels' spin-up before
+    /// the first - or, with none left, until the burst is over.
     pub timer: f32,
     /// Same point-blank misfire skew as `PendingShot::aim_offset` - rolled
     /// once when the burst starts and shared by every bullet in it; each
-    /// bullet additionally gets its own fresh MINIGUN_BULLET_SPREAD_DEG
+    /// bullet additionally gets its own fresh `minigun_bullet_spread_deg`
     /// jitter on top of this at the moment it actually fires (see
-    /// `simulation::fire_bullet`).
+    /// `simulation::weapons::fire_bullet`).
     pub aim_offset: f32,
+    /// Its first round is still to leave: the one that lights the muzzle.
+    pub opening: bool,
 }
 
 /// A seeker-missile volley in progress: `missiles_remaining` more to leave
@@ -714,13 +718,23 @@ pub struct Tank {
     /// `PendingPlasmaShot`. `None` the rest of the time; a single-barrel
     /// chassis never sets this.
     pub pending_plasma_shot: Option<PendingPlasmaShot>,
-    /// A minigun burst in progress, queued the same way `pending_shot`
-    /// above queues a twin-barrel chassis's second shell - generalized from
-    /// "one queued extra shot" to "N queued burst bullets". `None` the rest
-    /// of the time. Ticked/resolved once per frame in `Game::update`, at
-    /// the same call sites `pending_shot` is already ticked for player and
-    /// enemy.
+    /// A minigun burst in progress (`MinigunBurst`): the gun running.
+    /// `None` the rest of the time. Ticked once per frame in
+    /// `Game::update`, at the same call sites `pending_shot` is ticked for
+    /// player and enemy.
     pub minigun_burst: Option<MinigunBurst>,
+    /// How fast the minigun's barrels turn, 0 at rest to 1 at full speed:
+    /// up over `minigun_spinup_seconds` while the gun runs, down over
+    /// `minigun_spindown_seconds` once it stops (`tick_minigun_spin`). A
+    /// pull's first round waits for what is left of the way up
+    /// (`Tuning::minigun_spinup_ticks`), so this is simulation state, and
+    /// no RNG touches it.
+    pub minigun_spin: f32,
+    /// Seconds a replica's gun is still shown running: the burst the
+    /// room's `Fired` told it of (`kick_minigun`), which it has no
+    /// `minigun_burst` for. Presentation only, never set in a round that
+    /// simulates.
+    pub minigun_show: f32,
     /// A seeker-missile volley in progress (`MissileVolley`), ticked with
     /// the other queued shots so a volley always completes unless the tank
     /// is wrecked. `None` the rest of the time.
@@ -760,12 +774,12 @@ pub struct Tank {
     /// Presentation only: the drawing reads it through `drawn`, and
     /// nothing that plays reads it at all.
     pub smooth: crate::pose::Smooth,
-    /// Seconds accumulated toward the minigun module's next "hot barrel"
-    /// cell (see `module_cols`), advanced while `minigun_burst` is active
-    /// (see `tick_minigun_spin`) and held in place - not reset to 0 - the
-    /// rest of the time, so the module doesn't visually snap back to frame 0
-    /// between bursts. Wrapped to `minigun_cycle_seconds * 3.0` (one full
-    /// lap of the 3 frames) rather than growing unbounded.
+    /// Seconds accumulated toward the minigun module's next turning cell
+    /// (see `module_cols`), advanced at the barrels' speed (`minigun_spin`,
+    /// see `tick_minigun_spin`) - so the cells step slower as the gun
+    /// spins up and runs down - and held in place at rest. Wrapped to
+    /// `minigun_cycle_seconds * 3.0` (one full lap of the 3 frames) rather
+    /// than growing unbounded.
     ///
     /// This deliberately drives a discrete cell swap, not a continuous
     /// rotation: the barrels point along the ground plane toward the
@@ -1152,6 +1166,8 @@ impl Default for Tank {
             pending_shot: None,
             pending_plasma_shot: None,
             minigun_burst: None,
+            minigun_spin: 0.0,
+            minigun_show: 0.0,
             missile_volley: None,
             missile_tubes_empty: 0,
             damage_variant: 0,
@@ -1980,15 +1996,30 @@ impl Tank {
         }
     }
 
-    /// Advance the minigun's barrel-cycle timer while a burst is active;
-    /// hold it otherwise (see `minigun_cycle_timer`'s doc comment). Called
-    /// once per frame for every tank alongside `tick_recharge`/`tick_wreck`
-    /// in `Game::update`'s unified per-tank timer loop.
+    /// Run the minigun's barrels for one step: up toward full speed while
+    /// the gun runs (a burst in progress, or a replica's shown one), down
+    /// toward rest otherwise (`minigun_spin`), and the module's turning
+    /// cells on at that speed (`minigun_cycle_timer`). Called once per
+    /// frame for every tank alongside `tick_recharge`/`tick_wreck` in
+    /// `Game::update`'s unified per-tank timer loop, before the trigger.
     pub fn tick_minigun_spin(&mut self, dt: f32) {
-        if self.minigun_burst.is_some() {
-            self.minigun_cycle_timer =
-                (self.minigun_cycle_timer + dt) % (tuning().minigun_cycle_seconds * 3.0);
+        let t = tuning();
+        let running = self.minigun_burst.is_some() || self.minigun_show > 0.0;
+        self.minigun_show = (self.minigun_show - dt).max(0.0);
+        let seconds = if running { t.minigun_spinup_seconds } else { t.minigun_spindown_seconds };
+        let step = if seconds > 0.0 { dt / seconds } else { 1.0 };
+        self.minigun_spin = if running { (self.minigun_spin + step).min(1.0) } else { (self.minigun_spin - step).max(0.0) };
+        if self.minigun_spin > 0.0 {
+            self.minigun_cycle_timer = (self.minigun_cycle_timer + dt * self.minigun_spin) % (t.minigun_cycle_seconds * 3.0);
         }
+    }
+
+    /// A replica's gun starting a burst (the room's `Fired`): shown
+    /// running for as long as the room's runs - the barrels' way up from
+    /// where they turn now, then the burst's rounds.
+    pub fn kick_minigun(&mut self) {
+        let t = tuning();
+        self.minigun_show = t.minigun_burst_cooldown_seconds(t.minigun_spinup_ticks(self.minigun_spin), t.minigun_burst_size);
     }
 
     /// Keep `missile_tubes_empty` in step with the launcher: a volley in
@@ -2005,7 +2036,7 @@ impl Tank {
         self.missile_tubes_empty = self.missile_tubes_empty.min(empty);
     }
 
-    /// Which of the minigun module's 3 "hot barrel" cells
+    /// Which of the minigun module's 3 turning cells
     /// (`tank_modules.png`) to draw right now - see `minigun_cycle_timer`'s
     /// doc comment for why this is a discrete frame index, not a rotation
     /// angle.
@@ -2512,8 +2543,8 @@ fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) 
 }
 
 /// Which weapon-module cells a tank shows: one per special weapon it holds,
-/// each in the state the game already tracks - the minigun's hot barrel
-/// while a burst fires (`minigun_cycle_frame`), the launcher's empty tubes
+/// each in the state the game already tracks - the minigun's barrels
+/// turning while they spin (`minigun_cycle_frame`), the launcher's empty tubes
 /// (`missile_tubes_empty`), plasma and laser idle / armed (the live weapon)
 /// / firing, the flamethrower's pilot flickering or its jet while held. A
 /// module is hardware, not a firing-mode indicator: it shows whenever the
@@ -2526,7 +2557,7 @@ fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 12] {
     // offline (an EMP) shows its idle cell, its lights out.
     let live = tank.active_weapon();
     let minigun = (tank.minigun_ammo > 0 || tank.minigun_burst.is_some()).then(|| {
-        TANK_MODULE_MINIGUN_COL + if tank.minigun_burst.is_some() { 1 + tank.minigun_cycle_frame() } else { 0 }
+        TANK_MODULE_MINIGUN_COL + if tank.minigun_spin > 0.0 { 1 + tank.minigun_cycle_frame() } else { 0 }
     });
     let missiles = (tank.missile_ammo > 0 || tank.missile_volley.is_some())
         .then(|| TANK_MODULE_MISSILES_COL + (tank.missile_tubes_empty as i32).clamp(0, MISSILE_TUBE_OFFSETS.len() as i32));

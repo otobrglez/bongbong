@@ -308,6 +308,11 @@ pub struct Fx {
     particles: crate::particles::Particles<Particle>,
     /// What broken wall chunks threw (`pieces.rs`), flying and lying.
     pieces: crate::pieces::Pieces,
+    /// The brass the miniguns threw (`casings.rs`), flying and lying.
+    casings: crate::casings::Casings,
+    /// Ids of the bullets already seen, so each throws its case once
+    /// (`watch_casings`).
+    casings_seen: HashSet<u32>,
     /// The last `Game::frame()` `observe` consumed. The dev server can
     /// render many times without advancing (`pause`, `step`), and
     /// `Game::events` still holds the previously advanced frame's
@@ -371,6 +376,11 @@ pub struct Fx {
     /// hull's dust off.
     sky: crate::map::Weather,
 }
+
+/// How near its gun's muzzle a bullet is first seen for it to throw a case
+/// (`Fx::watch_casings`), px: a round still in its muzzle frames, or a
+/// frame or two out of them.
+const CASING_MUZZLE_REACH: f32 = 48.0;
 
 /// How fast a particle in a gravity well's pull is drawn toward the core
 /// and as fast again round it, clockwise, at the strongest (px/s;
@@ -476,12 +486,19 @@ impl Fx {
         &self.pieces
     }
 
+    /// The spent cases (`casings.rs`), for the field painter.
+    pub fn casings(&self) -> &crate::casings::Casings {
+        &self.casings
+    }
+
     /// Drop everything. Called when a new round starts - the `Fx` outlives
     /// `Game::init`, which knows nothing about it, so without this the
     /// previous round's smoke hangs over the new one's opening frame.
     pub fn clear(&mut self) {
         self.particles.clear();
         self.pieces.clear();
+        self.casings.clear();
+        self.casings_seen.clear();
         self.accum.clear();
         self.wading.clear();
         self.trail_last.clear();
@@ -1319,6 +1336,51 @@ impl Fx {
         self.impacts_seen.retain(|id| live.contains(id));
     }
 
+    /// A spent case out of the gun's port for every tank's bullet first
+    /// seen at its muzzle (`casings.rs`). Watched from the world, keyed by
+    /// projectile id, as `watch_impacts` is, so a replica and a client's
+    /// own provisional bullets throw theirs too; a bullet first seen away
+    /// from its gun - the room's copy taking over a shot already drawn -
+    /// throws none, and a gun tower's never does.
+    fn watch_casings(&mut self, game: &Game) {
+        let density = tuning().fx_density;
+        let mut live: HashSet<u32> = HashSet::new();
+        let mut fresh: Vec<(usize, Position)> = Vec::new();
+        for b in game.world.query::<&Bullet>().iter() {
+            live.insert(b.id);
+            if self.casings_seen.insert(b.id) && !b.owner.is_tower() {
+                fresh.push((b.owner.slot(), b.position));
+            }
+        }
+        self.casings_seen.retain(|id| live.contains(id));
+        if fresh.is_empty() || density <= 0.0 {
+            return;
+        }
+        let mut rng = rand::rng();
+        for tank in game.world.query::<&crate::tank::Tank>().iter() {
+            let slot = tank.owner_slot();
+            if tank.is_wreck() || !fresh.iter().any(|&(s, _)| s == slot) {
+                continue;
+            }
+            let row = tank.row as usize;
+            let (muzzle, port) = (crate::tank_art::MINIGUN_MUZZLE[row], crate::tank_art::MINIGUN_PORT[row]);
+            let at = tank.turret_point(port);
+            if !self.sees(at) {
+                continue;
+            }
+            let from = tank.turret_point(muzzle);
+            let facing = tank.rotation.to_radians();
+            let barrel = Vec2::new(facing.sin(), -facing.cos());
+            let side = if port.0 >= muzzle.0 { 1.0 } else { -1.0 };
+            let rounds = fresh.iter().filter(|&&(s, pos)| s == slot && pos.distance_to(from) < CASING_MUZZLE_REACH).count();
+            for _ in 0..rounds {
+                if density >= 1.0 || rng.random::<f32>() < density {
+                    self.casings.eject(at, barrel, side);
+                }
+            }
+        }
+    }
+
     /// Continuous emitters. These are *states*, not events - a tile is
     /// burning for a second and a half, not at one instant - so they are
     /// sampled from the world every render frame and rate-limited through
@@ -1336,6 +1398,7 @@ impl Fx {
         self.sky = game.weather();
         self.wells = if game.zones().is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(game.zones(), game.time) };
         self.watch_impacts(game);
+        self.watch_casings(game);
         // Spray off a wading hull (docs/water.md): a splash the frame it
         // wades in, then droplets at a rate that follows its speed.
         let spray = tuning().water_spray_rate;
@@ -1957,6 +2020,7 @@ impl Fx {
 
     pub fn tick(&mut self, dt: f32) {
         self.pieces.tick(dt);
+        self.casings.tick(dt);
         self.impacts.retain_mut(|i| {
             i.age += dt;
             i.age < i.kind.seconds()

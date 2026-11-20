@@ -12,7 +12,8 @@ Writes, under the repo (docs/SPRITESHEET_SPEC.md has the layout):
   static/tank_modules.png        the weapon modules: 44 columns x 12 rows
   static/tank_modules_glow.png   their light layer
   src/tank_art.rs                the anchors the engine reads (lamps, muzzles,
-                                 missile tubes), generated - never edited by hand
+                                 the minigun's ejection port, missile tubes),
+                                 generated - never edited by hand
 """
 
 import os
@@ -57,6 +58,15 @@ def fmt(v):
 
 def pair(p):
     return '(%s, %s)' % (fmt(p[0]), fmt(p[1]))
+
+
+def minigun_port(meta):
+    """The minigun module's ejection port: where its own function put it,
+    else on the module's outer side, level with its housing."""
+    if 'port' in meta:
+        return meta['port']
+    mx, my = meta['muzzle']
+    return (mx + (1.5 if mx >= 0 else -1.5), my + 7.0)
 
 
 def main(argv):
@@ -112,7 +122,8 @@ def main(argv):
         spots = [(l['x'], l['y'], l.get('dir') or 0.0) for l in r.turret_lights if l['kind'] == 'spot']
         muzzles = [tuple(m) for m in r.turret_meta.get('muzzles', [])]
         art.append(dict(chassis=ch, codename=design.codename, heads=heads, spots=spots, muzzles=muzzles,
-                        minigun=mm['minigun']['muzzle'], laser=mm['laser']['muzzle'], flame=mm['flame']['muzzle'],
+                        minigun=mm['minigun']['muzzle'], minigun_port=minigun_port(mm['minigun']),
+                        laser=mm['laser']['muzzle'], flame=mm['flame']['muzzle'],
                         grenade=mm['grenade']['muzzle'], sonic=mm['sonic']['muzzle'], emp=mm['emp']['coil'],
                         gauss=mm['gauss']['muzzle'], rod=mm['rod']['lens'],
                         tubes=mm['missiles']['tubes']))
@@ -160,6 +171,8 @@ def write_rust(path, line_key, art):
     L.append('')
     for key, name, doc in (
             ('minigun', 'MINIGUN_MUZZLE', 'The minigun module\'s muzzle, where its bullets leave (turret frame).'),
+            ('minigun_port', 'MINIGUN_PORT',
+             'The minigun module\'s ejection port, where its spent cases leave (turret frame).'),
             ('laser', 'LASER_MUZZLE', 'The laser module\'s lens, where its beam starts (turret frame).'),
             ('flame', 'FLAME_MUZZLE', 'The flamethrower module\'s nozzle, where its jet starts (turret frame).'),
             ('grenade', 'GRENADE_MUZZLE',

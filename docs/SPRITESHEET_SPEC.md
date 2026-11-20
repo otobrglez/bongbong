@@ -155,7 +155,7 @@ the shared pivot:
 
 | Cols | Module | States |
 |---|---|---|
-| 0–3 | minigun | idle, then the three hot-barrel cells a burst cycles (`minigun_cycle_frame`) |
+| 0–3 | minigun | the barrel bundle at rest, then its three turning steps, cycled faster as the barrels spin up (`minigun_cycle_frame`, `Tank::minigun_spin`) |
 | 4–8 | missile launcher | 0–4 tubes empty (`missile_tubes_empty`) |
 | 9–11 | plasma | idle, armed (the live weapon), firing |
 | 12–14 | laser | idle, armed, firing (the lens flash) |
@@ -185,6 +185,10 @@ from the pivot (x right, y toward the tail):
   the tunables.
 - `MINIGUN_MUZZLE` - where bullets leave, boresighted onto the gun line
   `minigun_boresight_px` ahead (`Bullet::spawn`).
+- `MINIGUN_PORT` - the minigun's ejection port, where its spent cases leave
+  (`casings.rs`); a line whose module sets no `port` gets one on the
+  module's outer side, level with its housing (`export.py`'s
+  `minigun_port`).
 - `MISSILE_TUBES` - the four tube mouths in firing order, front pair first
   (`MISSILE_TUBE_OFFSETS` is each tube's place in the fan and the landing).
 - `GRENADE_MUZZLE` - the launcher's barrel mouth, where a grenade leaves.

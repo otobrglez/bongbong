@@ -134,11 +134,16 @@ probe-waves:
 # the nine maps' total is 46 as before, every kind's maximum as before -
 # so every ceiling stands (docs/gameplay-verification-design.md, the
 # BB-188 re-baseline).
+# jitter=4 (3 before) is choke, re-read 2026-11-20 (BB-187) with the
+# minigun's rounds at half their damage (1-2): a seat outlasts an enemy's
+# stream, so the rounds replay differently. Seed base 1000 reads 4 against
+# 3 at the old damage; over six seed bases (60 rounds) jitter reads 10
+# against 9 - the one extra tank, not a trend.
 # Extra arguments go to every run - a weapon's `--crate <kind>` or an armed
 # `--tuning <file>` (docs/sonic-hammer.md "Probe") - under the same
 # ceilings. How the maps are run is `_probe-maps`; CI runs this recipe
 # (.github/workflows/ci.yml), so these are the only copy of the ceilings.
-fixture_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=3 --budget staircase=8 --budget spin=1 --budget churn=10 --budget clustering=1 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=1 --budget invariant=0 --budget tank-grind=0 --budget pile-up=1 --budget offbox-fire=0"
+fixture_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=4 --budget staircase=8 --budget spin=1 --budget churn=10 --budget clustering=1 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=1 --budget invariant=0 --budget tank-grind=0 --budget pile-up=1 --budget offbox-fire=0"
 
 probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames 1800 --rounds 10 --seed 1000 " + fixture_ceilings + " " + args)
 
@@ -190,9 +195,13 @@ probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames
 # maps' rounds (choke, props, tight-corridors, towers: a few shots more
 # or less, towers jitter 5 -> 4 and churn 9 -> 10), the nine maps' total
 # stayed 319 and no kind's maximum moved, so every ceiling stands.
+# jitter=16 (15 before) is choke, re-read 2026-11-20 (BB-187) with the
+# minigun rebuilt (its spin-up, half the damage, the rounds that glance):
+# seed base 1000 reads 16 against master's 15, and over three seed bases
+# (30 rounds) 38 against master's 37 - the one extra tank, not a trend.
 # Re-baseline as `probe-fixtures` is: on purpose, never to go green. CI
 # runs this recipe too.
-survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=15 --budget staircase=14 --budget spin=3 --budget churn=25 --budget clustering=3 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 --budget offbox-fire=0"
+survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=16 --budget staircase=14 --budget spin=3 --budget churn=25 --budget clustering=3 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 --budget offbox-fire=0"
 
 probe-survive *args: (_probe-maps "probe-survive" "maps/test/*.toml" "--scenario survive --frames 1800 --rounds 10 --seed 1000 " + survive_ceilings + " " + args)
 

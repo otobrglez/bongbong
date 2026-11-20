@@ -4815,8 +4815,13 @@ fn act_air(b: &mut Brain) -> Status {
         b.intent.move_dir = None;
         // The bullets strike the drone's column, from its shadow up to its
         // body (`air::AirTarget::strike_box`): on the line is the gun line
-        // crossing that column, or passing within the tolerance of it.
-        let to = threat.drone - me;
+        // crossing that column, or passing within the tolerance of it. The
+        // barrels spin up before the first round, so the column is judged
+        // where the drone will be when it leaves - that much of its way
+        // here nearer.
+        let wait = t.minigun_spinup_ticks(b.me.minigun_spin) as f32 * crate::PHYSICS_FIXED_DT;
+        let left = if threat.eta > 0.0 { (1.0 - wait / threat.eta).max(0.0) } else { 0.0 };
+        let to = (threat.drone - me) * left;
         let top = Position::new(to.x, to.y - threat.height);
         let line = face.vec();
         let along = |p: Position| p.x * line.x + p.y * line.y;
