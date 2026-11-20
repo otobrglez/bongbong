@@ -203,6 +203,15 @@ impl DevHooks {
         false
     }
 
+    /// Whether the dev server's `overlays {camera}` asks for the camera's
+    /// reasoning over a followed view (`follow::CameraOverlay`).
+    pub fn camera_overlay(&self) -> bool {
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        return self.server.as_ref().is_some_and(|server| server.camera_overlay());
+        #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+        false
+    }
+
     /// The camera the frame draws through, as `report` composes it.
     pub fn publish_camera(&mut self, report: impl FnOnce() -> CameraReport) {
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]

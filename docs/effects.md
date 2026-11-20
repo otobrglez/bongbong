@@ -231,7 +231,19 @@ is on the wire:
   in a step, whatever did it, is a blow of strength damage over
   `hurt_full_damage`: a shake of that seat's view alone (`hurt_shock`,
   never under two fifths of it - the shake lands on whole 2 px blocks),
-  an **edge pulse** and a **tick** on its health number. The pulse is a
+  an **edge pulse** and a **tick** on its health number. A blow that came
+  from somewhere - the `Event::Hit`s that landed damage on the hull that
+  step, a shot's impact or a blast's centre off the hull's own point
+  (`feedback::blow_of`) - **shoves** the view instead of shaking it: away
+  from where it came from, `camera_hurt_shove` (1.5) times the shake's
+  length, never past the shake's cap, falling to a third every
+  `camera_hurt_shove_seconds` (0.12). A followed view takes it on its
+  camera, the kick's layer (docs/large-maps-follow-camera.md section 6), in
+  device pixels; an arena's picture is shifted by it with the shake, inside
+  the same cap and the same 6 px of overscan
+  (`shockwave::camera_shake_with`). A hurt with no direction - fire, lava,
+  ooze, a tesla's arc on the hull - shakes as before, and
+  `camera_hurt_shove` 0 gives every blow its shake back. The pulse is a
   band of 2 px blocks round the view, `hurt_pulse_blocks` deep at full
   strength, in three steps down the fire ramp, dissolving inward on the
   Bayer matrix and then fading in eighths over `hurt_pulse_seconds`. The
@@ -255,7 +267,7 @@ is on the wire:
   The kill that decides the round is `Session::time_scale`'s.
 
 Reduced motion (`motion.rs`) leaves the particles and the health number's
-colour and takes the rest: no shake, no edge pulse, no hull flash on a
+colour and takes the rest: no shake or shove, no edge pulse, no hull flash on a
 slam, no drop of the number, no hold, and nothing bending the picture -
 no ripple, no muzzle puff, no impact punch. What flashes is calmed (WCAG
 2.3.1): a whole-screen flash - a kill's or a blast's, a lightning strike's

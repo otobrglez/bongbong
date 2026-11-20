@@ -24,7 +24,9 @@
 //!     show them - a Voronoi split, the LEGO games' and Godot's - so the
 //!     split opens with neither half jumping, turns as the pair does, and
 //!     closes once the pair fits one view again and the two halves have
-//!     met. Each half keeps its own seat's sight box in its view; what of
+//!     met. Where the look-ahead is on, the shared view leads along the
+//!     pair's common heading and each half along its own seat's. Each
+//!     half keeps its own seat's sight box in its view; what of
 //!     it lies past the divider is the other half's picture, which the
 //!     arrows (`indicators::ViewFrame::split_at`) treat as off screen, so a
 //!     threat there is marked on the divider. A seat that is a wreck or on
@@ -52,11 +54,23 @@
 //!     return over `camera_fire_kick_seconds`: a layer on top of the
 //!     spring, never written into it, under the same sight-box and field
 //!     rules. None under reduced motion.
+//!   - **Shove.** A blow that hurts the seat shoves its view away from
+//!     where it came from (`SeatTank::shove`, from `feedback.rs`), on the
+//!     kick's layer, never past the camera shake's cap. None under
+//!     reduced motion.
+//!   - **The fight's pull.** With `camera_fight_pull` above 0 (it ships at
+//!     0), the goal leans toward the weighted middle of the enemies near
+//!     the seat and toward the players' bong while it is bitten, inside
+//!     the room the look-ahead leaves, more slowly than the look-ahead
+//!     swings (`fight_pull`). None under reduced motion.
 //!   - **Spring.** The view chases the anchor plus the lead on a
 //!     critically damped spring (`camera_spring_seconds`, Unity's
 //!     `SmoothDamp` smoothing time), integrated exactly, so it moves the
 //!     same at any frame rate, with the anchor's velocity fed forward as
-//!     the goal's, so a steady drive does not trail.
+//!     the goal's, so a steady drive does not trail. A pan onto a new
+//!     target, and a split closing, take `camera_pan_seconds`. Within a
+//!     quarter of a device pixel of its goal and as slow, the spring is put
+//!     on it (`camera_rest_px`), so a view that has stopped holds still.
 //!   - **The sight box stays on screen.** Enemies fire at a seat only from
 //!     inside its sight box, so the view's centre never strays further from
 //!     a seat it shows than the room outside the box
@@ -104,8 +118,14 @@ pub struct FollowRules {
     /// `camera_lead_reverse_hold_seconds`: how long a reversal holds before
     /// the look-ahead flips.
     pub reverse_hold_seconds: f32,
-    /// `camera_spring_seconds`: the spring's smoothing time.
+    /// `camera_spring_seconds`: the spring's smoothing time while the view
+    /// follows its seat.
     pub spring_seconds: f32,
+    /// `camera_pan_seconds`: the spring's smoothing time while the view
+    /// comes onto a new target near enough not to cut - a hand-over to a
+    /// teammate, a couch pair's view joining or parting - and while the
+    /// halves of a split close.
+    pub pan_seconds: f32,
     /// `camera_spectate_delay_seconds`: how long a screen stays on its own
     /// seat's wreck before it follows a teammate.
     pub spectate_delay_seconds: f32,
@@ -131,6 +151,41 @@ pub struct FollowRules {
     /// `camera_fire_kick_seconds`: the time the kick takes to fall to
     /// about a third.
     pub fire_kick_seconds: f32,
+    /// `camera_rest_px` as world pixels (`on_device`): the spring comes to
+    /// rest on its goal once it is nearer than this and moving less than
+    /// this in a sixtieth of a second; 0 never snaps.
+    pub rest_px: f32,
+    /// How much of a blow's shove (`SeatTank::shove`) the view takes: all
+    /// of it, or none under reduced motion.
+    pub blow_share: f32,
+    /// The longest shove a view takes, world px: the camera shake's own
+    /// cap (`camera_shake_magnitude` times `camera_shake_max_stack` under
+    /// `screen_fx_intensity`), so a blow moves the view no further than
+    /// the shake it stands in for could.
+    pub shove_max_px: f32,
+    /// `camera_fight_pull`: how much of the way to the middle of the fight
+    /// the view's goal leans, 0 not at all.
+    pub fight_pull: f32,
+    /// `camera_fight_radius_px`: an enemy counts from this far off, for
+    /// more the nearer it stands.
+    pub fight_radius_px: f32,
+    /// `camera_fight_max_px`: the furthest the pull moves the goal on an
+    /// axis, inside the room the look-ahead leaves.
+    pub fight_max_px: f32,
+    /// `camera_fight_seconds`: the time the pull takes to come about two
+    /// thirds of the way to where the fight asks it.
+    pub fight_seconds: f32,
+    /// `camera_fight_bong_weight`: how many enemies the players' bong
+    /// counts for while it is being hurt.
+    pub fight_bong_weight: f32,
+    /// `camera_fight_bong_seconds`: how long after its last hurt the bong
+    /// goes on pulling, fading.
+    pub fight_bong_seconds: f32,
+    /// Whether a couch pair's views look ahead - the shared view along the
+    /// pair's common heading, each half of a split along its own seat's -
+    /// where the look-ahead is on (`lead_max_px`); not under reduced
+    /// motion.
+    pub couch_lead: bool,
 }
 
 impl FollowRules {
@@ -141,10 +196,18 @@ impl FollowRules {
         if crate::motion::reduced() { rules.reduced() } else { rules }
     }
 
-    /// These rules under reduced motion (`motion.rs`): a restart cuts and
-    /// a shot kicks nothing.
+    /// These rules under reduced motion (`motion.rs`): a restart cuts, a
+    /// shot kicks nothing, a blow shoves nothing, the fight pulls nothing
+    /// and a couch's views lead nowhere.
     pub fn reduced(self) -> FollowRules {
-        FollowRules { restart_glide_seconds: 0.0, fire_kick_px: 0.0, ..self }
+        FollowRules { restart_glide_seconds: 0.0, fire_kick_px: 0.0, blow_share: 0.0, fight_pull: 0.0, couch_lead: false, ..self }
+    }
+
+    /// These rules on a screen that shows a world pixel as `scale` device
+    /// pixels (`FollowFrame::device_scale`): the rest rule's quarter of a
+    /// device pixel in world pixels.
+    pub fn on_device(self, scale: f32) -> FollowRules {
+        FollowRules { rest_px: if scale.is_finite() && scale > 0.0 { self.rest_px / scale } else { self.rest_px }, ..self }
     }
 
     /// The rules in `t`.
@@ -163,6 +226,17 @@ impl FollowRules {
             lead_idle_pace: t.camera_lead_idle_pace,
             fire_kick_px: t.camera_fire_kick_px * t.screen_fx_intensity,
             fire_kick_seconds: t.camera_fire_kick_seconds,
+            pan_seconds: t.camera_pan_seconds,
+            rest_px: t.camera_rest_px,
+            blow_share: 1.0,
+            shove_max_px: (t.camera_shake_magnitude * t.screen_fx_intensity * t.camera_shake_max_stack).max(0.0),
+            fight_pull: t.camera_fight_pull,
+            fight_radius_px: t.camera_fight_radius_px,
+            fight_max_px: t.camera_fight_max_px,
+            fight_seconds: t.camera_fight_seconds,
+            fight_bong_weight: t.camera_fight_bong_weight,
+            fight_bong_seconds: t.camera_fight_bong_seconds,
+            couch_lead: true,
         }
     }
 }
@@ -185,6 +259,20 @@ pub struct SeatTank {
     pub top_speed: f32,
     /// In the fight: not a wreck, and not on its way back through a gate.
     pub live: bool,
+    /// The shove the blows this seat took ask of its own view this frame,
+    /// world px (`feedback::Feedback::shove`); none for a seat this screen
+    /// does not play.
+    pub shove: Vec2,
+}
+
+/// The fight as the camera reads it (`fight_pull`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Fight {
+    /// Where every enemy tank in the fight stands - not a wreck, and on
+    /// the field - in owner-slot order.
+    pub enemies: Vec<Vec2>,
+    /// Where the players' bong stands while it lives.
+    pub bong: Option<Vec2>,
 }
 
 /// The round's seats as the camera reads them.
@@ -194,6 +282,8 @@ pub struct Seats {
     pub local: Vec<usize>,
     /// Every seat's tank, in seat order.
     pub tanks: Vec<SeatTank>,
+    /// What the fight's pull reads.
+    pub fight: Fight,
 }
 
 impl Seats {
@@ -223,10 +313,33 @@ impl Seats {
                     velocity,
                     top_speed,
                     live: !wreck && on_field[seat].is_some(),
+                    shove: Vec2::new(0.0, 0.0),
                 })
             })
             .collect();
-        Seats { local: local.iter().copied().filter(|&s| s < game.players.count()).collect(), tanks }
+        let field = game.map.field_size();
+        let on = |p: Vec2| p.x.is_finite() && p.y.is_finite() && p.x >= 0.0 && p.y >= 0.0 && p.x <= field.0 && p.y <= field.1;
+        let mut enemies: Vec<(usize, Vec2)> = game
+            .world
+            .query::<&crate::tank::Tank>()
+            .iter()
+            .filter(|t| matches!(t.owner(), crate::shell::Owner::Enemy(_)) && !t.is_wreck() && on(t.position))
+            .map(|t| (t.owner_slot(), t.position))
+            .collect();
+        enemies.sort_by_key(|&(slot, _)| slot);
+        let bong = game.bong_position().filter(|&p| on(p));
+        Seats {
+            local: local.iter().copied().filter(|&s| s < game.players.count()).collect(),
+            tanks,
+            fight: Fight { enemies: enemies.into_iter().map(|(_, at)| at).collect(), bong },
+        }
+    }
+
+    /// Give seat `seat`'s view the shove its blows ask this frame.
+    pub fn shove(&mut self, seat: usize, by: Vec2) {
+        if let Some(t) = self.tanks.iter_mut().find(|t| t.seat == seat).filter(|_| by.x.is_finite() && by.y.is_finite()) {
+            t.shove = by;
+        }
     }
 
     fn tank(&self, seat: usize) -> Option<SeatTank> {
@@ -411,6 +524,41 @@ pub struct Shot {
     /// this shot is then the first half's, seat 0's, and `split` holds the
     /// second half's and the line between them. `None` for one view.
     pub split: Option<Split>,
+    /// How the view came to stand here (`Trace`).
+    pub trace: Trace,
+}
+
+/// One view's reasoning this frame, for the dev overlay and
+/// `status.camera.trace`: every point is world px.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Trace {
+    /// The point the view is on: the seat, or a pair's middle.
+    pub anchor: Vec2,
+    /// The dead zone: its middle and how far the anchor may move from it
+    /// on an axis before dragging it.
+    pub base: Vec2,
+    pub dead_zone: f32,
+    /// The look-ahead in force, and the longest it may be on each axis.
+    pub lead: Vec2,
+    pub lead_cap: (f32, f32),
+    /// The heading the look-ahead has committed to (zero for none), and
+    /// one the hull has turned to that it has not, with how far the seat
+    /// has driven along it.
+    pub heading: Vec2,
+    pub turning: Vec2,
+    pub turned_px: f32,
+    /// The fight's pull in force and what the fight asks.
+    pub pull: Vec2,
+    pub pull_want: Vec2,
+    /// The spring's goal, eased into the field, and where the spring
+    /// stands under the sight-box and field rules.
+    pub goal: Vec2,
+    pub spring: Vec2,
+    /// Whether the spring stands on its goal (`FollowRules::rest_px`).
+    pub resting: bool,
+    /// What lies over the spring: a shot's kick and a blow's shove.
+    pub kick: Vec2,
+    pub shove: Vec2,
 }
 
 impl Shot {
@@ -422,6 +570,37 @@ impl Shot {
     pub fn boxes_in(&self, view: Rectangle, field: (f32, f32), sight: SightBox, slack: f32) -> bool {
         boxes_in(&self.keeps, view, field, sight, slack)
     }
+
+    /// What the camera overlay draws over this shot's views (`CameraOverlay`).
+    pub fn overlay(&self, sight: SightBox) -> CameraOverlay {
+        CameraOverlay {
+            first: ViewTrace { trace: self.trace, keeps: self.keeps },
+            second: self.split.map(|split| ViewTrace { trace: split.trace, keeps: split.keeps }),
+            sight,
+        }
+    }
+}
+
+/// The dev overlay of the camera's reasoning (dev builds, the `overlays`
+/// tool's `camera` flag): over each view the dead zone round its base, the
+/// sight box round each seat it keeps, the look-ahead and the fight's
+/// pull, the committed heading and one being turned to, the spring's goal
+/// and where the spring stands, and what a shot's kick and a blow's shove
+/// lay over it (`render::game`'s `draw_camera_overlay`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraOverlay {
+    /// The view, or a split's first half.
+    pub first: ViewTrace,
+    /// A split's second half.
+    pub second: Option<ViewTrace>,
+    pub sight: SightBox,
+}
+
+/// One view's `Trace` and the seats whose sight boxes it keeps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewTrace {
+    pub trace: Trace,
+    pub keeps: [Option<Vec2>; 2],
 }
 
 /// Whether the sight box round every seat at `keeps` is in `view`, as far
@@ -457,6 +636,8 @@ pub struct Split {
     pub keeps: [Option<Vec2>; 2],
     /// Whether this half cut to this frame.
     pub cut: bool,
+    /// How this half came to stand here.
+    pub trace: Trace,
     /// The divider, in a view's own pixels (world px from the view's
     /// top-left corner, which is what a followed bitmap's pixels are): a
     /// point on it, halfway between where the two halves show their seats
@@ -541,6 +722,12 @@ struct Aim {
     /// The way the followed seat's gun pointed when it fired since the
     /// last frame: the picture kicks back against it.
     fired: Option<Vec2>,
+    /// The shove the blows the view's seats took ask this frame, world px.
+    shove: Vec2,
+    /// The halves of a split closing, which have to meet: the look-ahead
+    /// swings at its whole pace even under a seat standing still, and the
+    /// spring takes the pan's time.
+    closing: bool,
 }
 
 /// One view's camera from one frame to the next.
@@ -563,6 +750,14 @@ struct Tracker {
     turned_px: f32,
     /// A shot's kick still on the picture (`FollowRules::fire_kick_px`).
     kick: Vec2,
+    /// The fight's pull in force (`FollowRules::fight_pull`).
+    pull: Vec2,
+    /// Whether the view is coming onto a new target (`FollowRules::pan_seconds`):
+    /// from a frame on another key that did not cut until the spring is
+    /// within the dead zone of its goal.
+    panning: bool,
+    /// How the view came to stand where the last `step` put it.
+    trace: Trace,
     /// Who the view was on last frame, and where the anchor stood.
     last: Option<(Key, Vec2)>,
 }
@@ -573,7 +768,7 @@ impl Tracker {
     /// where the view comes to a new target more than a screen away; else
     /// the dead zone, the look-ahead and the spring. Then the sight boxes,
     /// then the field. The view's centre, and whether it cut.
-    fn step(&mut self, aim: &Aim, cut: bool, dt: f32, stage: &Stage, rules: &FollowRules) -> (Vec2, bool) {
+    fn step(&mut self, aim: &Aim, cut: bool, dt: f32, fight: &Threat, stage: &Stage, rules: &FollowRules) -> (Vec2, bool) {
         let room = stage.room();
         let anchor = aim.anchor;
         let same = self.last.is_some_and(|(k, _)| k == aim.key);
@@ -585,6 +780,7 @@ impl Tracker {
                 .is_some_and(|c| (anchor.x - c.x).abs() > stage.visible.0 || (anchor.y - c.y).abs() > stage.visible.1);
         let cut = self.center.is_none() || cut || jumped || far;
         self.last = Some((aim.key, anchor));
+        self.panning = !cut && (self.panning || !same);
 
         // How the anchor moves: what it did since the last frame, when that
         // was a drive and not a jump - the body's velocity reports motion
@@ -595,7 +791,20 @@ impl Tracker {
         let dead_zone = aim.dead_zone.max(0.0);
         let longest = if rules.lead_max_px.is_nan() { 0.0 } else { rules.lead_max_px.max(0.0) };
         let cap = ((room.0 - dead_zone).max(0.0).min(longest), (room.1 - dead_zone).max(0.0).min(longest));
+        // The fight's pull: what the fight asks, inside what the room and
+        // the look-ahead's own limit leave.
+        let pull_room = ((room.0 - dead_zone).max(0.0), (room.1 - dead_zone).max(0.0));
+        let pull_want = fight_pull(anchor, fight, rules);
+        let pull_within = |pull: Vec2, lead: Vec2| {
+            let keep = |p: f32, lead: f32, room: f32| {
+                let most = (room - lead.abs()).max(0.0).min(rules.fight_max_px.max(0.0));
+                p.clamp(-most, most)
+            };
+            Vec2::new(keep(pull.x, lead.x, pull_room.0), keep(pull.y, lead.y, pull_room.1))
+        };
         let goal_velocity;
+        let mut resting = false;
+        let mut goal_shown;
         if cut {
             self.base = anchor;
             self.lead_dir = aim.facing.unwrap_or(Vec2::new(0.0, 0.0));
@@ -604,8 +813,11 @@ impl Tracker {
             self.turned_px = 0.0;
             self.kick = Vec2::new(0.0, 0.0);
             self.lead = lead_for(self.lead_dir, speed, cap, rules);
+            let no_pull = Vec2::new(0.0, 0.0);
+            self.pull = if pull_want == no_pull { no_pull } else { pull_within(pull_want, self.lead) };
             goal_velocity = velocity;
-            self.center = Some(anchor + self.lead);
+            goal_shown = if self.pull == no_pull { anchor + self.lead } else { anchor + self.lead + self.pull };
+            self.center = Some(goal_shown);
             self.velocity = goal_velocity;
         } else {
             // Dead zone: the anchor drags the base once it is past the
@@ -659,7 +871,7 @@ impl Tracker {
             // It swings at its pace while the seat drives at top speed,
             // and at `lead_idle_pace` of it while the seat stands: a
             // view that only moves under a moving tank.
-            let idle = rules.lead_idle_pace.clamp(0.0, 1.0);
+            let idle = if aim.closing { 1.0 } else { rules.lead_idle_pace.clamp(0.0, 1.0) };
             let swing = dt * (idle + (1.0 - idle) * speed);
             let want = lead_for(self.lead_dir, speed, cap, rules);
             self.lead = Vec2::new(
@@ -671,12 +883,39 @@ impl Tracker {
             // over its last `aim.ease` pixels (`camera_edge_ease_px`), so
             // the view slows into the field's edge rather than running into
             // it.
+            // The pull comes round to what the fight asks slower than the
+            // look-ahead swings, and with no fight and none in force is
+            // not there at all.
+            let no_pull = Vec2::new(0.0, 0.0);
+            if pull_want != no_pull || self.pull != no_pull {
+                let want = pull_within(pull_want, self.lead);
+                let share = if rules.fight_seconds > 0.0 { 1.0 - (-dt / rules.fight_seconds).exp() } else { 1.0 };
+                let pull = pull_within(self.pull + (want - self.pull) * share, self.lead);
+                // Under any screen's device pixel from nothing asked, it
+                // is over.
+                self.pull = if want == no_pull && pull.length() < KICK_REST_PX { no_pull } else { pull };
+            }
+
             let center = self.center.unwrap_or(anchor);
-            let goal = self.base + self.lead;
+            let goal = if self.pull == no_pull { self.base + self.lead } else { self.base + self.lead + self.pull };
             let (gx, kx) = ease_into_field(goal.x, stage.visible.0, stage.field.0, aim.ease);
             let (gy, ky) = ease_into_field(goal.y, stage.visible.1, stage.field.1, aim.ease);
-            let (x, vx) = spring(center.x, self.velocity.x, gx, goal_velocity.x * kx, dt, rules.spring_seconds);
-            let (y, vy) = spring(center.y, self.velocity.y, gy, goal_velocity.y * ky, dt, rules.spring_seconds);
+            let smooth = if self.panning || aim.closing { rules.pan_seconds.max(rules.spring_seconds) } else { rules.spring_seconds };
+            let (x, vx) = spring(center.x, self.velocity.x, gx, goal_velocity.x * kx, dt, smooth);
+            let (y, vy) = spring(center.y, self.velocity.y, gy, goal_velocity.y * ky, dt, smooth);
+            // The pan is over once the view is within the dead zone of its
+            // goal: from there the spring follows at its own pace.
+            if self.panning && (x - gx).abs() <= dead_zone.max(1.0) && (y - gy).abs() <= dead_zone.max(1.0) {
+                self.panning = false;
+            }
+            // The rest rule: nearer the goal than a quarter of a device
+            // pixel and moving less than that a sixtieth of a second
+            // against it, the spring is on it - its tail ends, and a view
+            // at rest is at rest.
+            let (x, vx, rest_x) = at_rest(x, vx, gx, goal_velocity.x * kx, dt, rules.rest_px);
+            let (y, vy, rest_y) = at_rest(y, vy, gy, goal_velocity.y * ky, dt, rules.rest_px);
+            resting = rest_x && rest_y;
+            goal_shown = Vec2::new(gx, gy);
             self.center = Some(Vec2::new(x, y));
             self.velocity = Vec2::new(vx, vy);
         }
@@ -692,6 +931,16 @@ impl Tracker {
         let (cx, held_x) = keep_within(center.x, &along_x);
         let (cy, held_y) = keep_within(center.y, &along_y);
         center = Vec2::new(cx, cy);
+        // A couch view the pair's boxes hold short of its look-ahead keeps
+        // only the lead it shows, so a split that frees a half does not
+        // send it rushing to a lead that was never on screen.
+        let shown = |lead: f32, shows: f32| if lead > 0.0 { lead.min(shows.max(0.0)) } else { lead.max(shows.min(0.0)) };
+        if aim.clipped && held_x && self.lead.x != 0.0 {
+            self.lead.x = shown(self.lead.x, cx - self.base.x - self.pull.x);
+        }
+        if aim.clipped && held_y && self.lead.y != 0.0 {
+            self.lead.y = shown(self.lead.y, cy - self.base.y - self.pull.y);
+        }
         if held_x {
             self.velocity.x = goal_velocity.x;
         }
@@ -708,10 +957,39 @@ impl Tracker {
             self.velocity.y = 0.0;
         }
         self.center = Some(center);
+        if cut {
+            goal_shown = center;
+        }
+        // A blow's shove (`feedback.rs` ages it), where the rules show it.
+        let shove = if rules.blow_share > 0.0 && aim.shove.x.is_finite() && aim.shove.y.is_finite() {
+            let shove = aim.shove * rules.blow_share.min(1.0);
+            let (len, most) = (shove.length(), rules.shove_max_px.max(0.0));
+            if len > most { shove * (most / len) } else { shove }
+        } else {
+            Vec2::new(0.0, 0.0)
+        };
+        self.trace = Trace {
+            anchor,
+            base: self.base,
+            dead_zone,
+            lead: self.lead,
+            lead_cap: cap,
+            heading: self.lead_dir,
+            turning: self.turned,
+            turned_px: self.turned_px,
+            pull: self.pull,
+            pull_want,
+            goal: goal_shown,
+            spring: center,
+            resting: resting && !cut,
+            kick: Vec2::new(0.0, 0.0),
+            shove,
+        };
 
         // The kick: what is left of the last shots' and this frame's,
         // never more than one kick long - on top of the spring, under the
-        // same two rules, and no part of the spring's own state.
+        // same two rules, and no part of the spring's own state - and with
+        // it a blow's shove.
         let reach = rules.fire_kick_px.max(0.0);
         if !cut {
             self.kick = if rules.fire_kick_seconds > 0.0 { self.kick * (-dt / rules.fire_kick_seconds).exp() } else { Vec2::new(0.0, 0.0) };
@@ -726,9 +1004,13 @@ impl Tracker {
         // A kick too small to show is over, so a view at rest is at rest.
         if len < KICK_REST_PX {
             self.kick = Vec2::new(0.0, 0.0);
+        }
+        if self.kick == Vec2::new(0.0, 0.0) && shove.length() < KICK_REST_PX {
+            self.trace.shove = Vec2::new(0.0, 0.0);
             return (center, cut);
         }
-        let kicked = center + self.kick;
+        self.trace.kick = self.kick;
+        let kicked = center + self.kick + shove;
         let shown = Vec2::new(
             keep_in_field(keep_within(kicked.x, &along_x).0, stage.visible.0, stage.field.0).0,
             keep_in_field(keep_within(kicked.y, &along_y).0, stage.visible.1, stage.field.1).0,
@@ -754,6 +1036,11 @@ pub struct Follow {
     cut_all: bool,
     /// Seats (a bit each) that fired since the last frame.
     fired_seats: u32,
+    /// Whether the players' bong was hurt since the last frame, and the
+    /// seconds since its last hurt (`None` before the first): the fight's
+    /// pull leans toward it for `camera_fight_bong_seconds` after.
+    bong_hurt: bool,
+    bong_hurt_for: Option<f32>,
     /// Whether the round started over since the last frame: the view
     /// glides to its new start (`Glide`).
     restarted: bool,
@@ -790,6 +1077,7 @@ impl Follow {
                     self.cut_seats |= 1 << slot;
                 }
                 Event::Fired { slot, .. } if slot < seats.min(MAX_SEATS) => self.fired_seats |= 1 << slot,
+                Event::Hit { target: crate::simulation::HitTarget::Bong { side: crate::bong::Side::Player }, damage, .. } if damage > 0.0 => self.bong_hurt = true,
                 _ => {}
             }
         }
@@ -840,6 +1128,14 @@ impl Follow {
 
     /// The follow view this frame, before a restart's glide.
     fn track(&mut self, seats: &Seats, dt: f32, stage: &Stage, rules: &FollowRules) -> Shot {
+        // How long since the players' bong was hurt, and so how much of
+        // its weight it has in the fight's pull.
+        self.bong_hurt_for = if std::mem::take(&mut self.bong_hurt) { Some(0.0) } else { self.bong_hurt_for.map(|since| since + dt) };
+        let bong = match self.bong_hurt_for {
+            Some(since) if rules.fight_bong_seconds > 0.0 => (1.0 - since / rules.fight_bong_seconds).clamp(0.0, 1.0),
+            _ => 0.0,
+        };
+        let fight = &Threat { fight: &seats.fight, bong };
         let Some(target) = self.choose(seats, dt, stage, rules) else {
             return self.hold(stage);
         };
@@ -869,14 +1165,17 @@ impl Follow {
                     dead_zone: rules.dead_zone_px,
                     ease: rules.edge_ease_px,
                     fired: fired(&t).filter(|_| kind == ShotKind::Seat),
+                    shove: t.shove,
+                    closing: false,
                 };
-                let (center, cut) = self.view.step(&aim, asked(t.seat), dt, stage, rules);
+                let (center, cut) = self.view.step(&aim, asked(t.seat), dt, fight, stage, rules);
                 self.shot(center, kind, t.seat, aim.keeps, cut, None, stage)
             }
             Target::Shared(a, b) => {
                 let aim = Aim {
                     anchor: (a.position + b.position) * 0.5,
-                    facing: None,
+                    // The pair's common heading, when they have one.
+                    facing: (a.facing == b.facing && rules.couch_lead).then_some(a.facing),
                     velocity: (a.velocity + b.velocity) * 0.5,
                     top_speed: a.top_speed.min(b.top_speed),
                     keeps: [Some(a.position), Some(b.position)],
@@ -885,23 +1184,29 @@ impl Follow {
                     dead_zone: rules.dead_zone_px,
                     ease: rules.edge_ease_px,
                     fired: None,
+                    shove: a.shove + b.shove,
+                    closing: false,
                 };
-                let (center, cut) = self.view.step(&aim, asked(a.seat) || asked(b.seat), dt, stage, rules);
+                let (center, cut) = self.view.step(&aim, asked(a.seat) || asked(b.seat), dt, fight, stage, rules);
                 self.shot(center, ShotKind::Shared, a.seat, aim.keeps, cut, None, stage)
             }
             Target::Split(a, b) => {
                 let aims = split_aims(a.position, b.position, stage);
-                // Each half follows its own seat. The dead zone and the
-                // edge's ease hold while the split is open; once the pair
-                // fits one view again both halves chase the one shared
-                // centre without either - the ease would set each half's
-                // goal off the edge where one seat's box holds its half on
-                // it - so they meet exactly and close into one view with no
-                // step.
+                // Each half follows its own seat and looks ahead along its
+                // own seat's heading. The dead zone and the edge's ease
+                // hold while the split is open; once the pair fits one
+                // view again both halves chase the one shared centre
+                // without either - the ease would set each half's goal off
+                // the edge where one seat's box holds its half on it - and
+                // look ahead as the shared view will, along the pair's
+                // common heading, swinging there even standing still, so
+                // they meet exactly and close into one view with no step.
                 let (dead_zone, ease) = if aims.open { (rules.dead_zone_px, rules.edge_ease_px) } else { (0.0, 0.0) };
+                let common = (a.facing == b.facing && rules.couch_lead).then_some(a.facing);
+                let own = |t: &SeatTank| rules.couch_lead.then_some(t.facing);
                 let aim_a = Aim {
                     anchor: aims.a,
-                    facing: None,
+                    facing: if aims.open { own(&a) } else { common },
                     velocity: a.velocity,
                     top_speed: a.top_speed,
                     keeps: [Some(a.position), None],
@@ -910,8 +1215,20 @@ impl Follow {
                     dead_zone,
                     ease,
                     fired: fired(&a),
+                    shove: a.shove,
+                    closing: !aims.open,
                 };
-                let aim_b = Aim { anchor: aims.b, velocity: b.velocity, top_speed: b.top_speed, keeps: [Some(b.position), None], key: (b.seat, Some(a.seat)), fired: fired(&b), ..aim_a };
+                let aim_b = Aim {
+                    anchor: aims.b,
+                    facing: if aims.open { own(&b) } else { common },
+                    velocity: b.velocity,
+                    top_speed: b.top_speed,
+                    keeps: [Some(b.position), None],
+                    key: (b.seat, Some(a.seat)),
+                    fired: fired(&b),
+                    shove: b.shove,
+                    ..aim_a
+                };
                 // The split opening: the second half starts as the view
                 // stands, so neither half jumps.
                 let mut half = match self.second.take() {
@@ -922,8 +1239,8 @@ impl Follow {
                         half
                     }
                 };
-                let (center_a, cut_a) = self.view.step(&aim_a, asked(a.seat), dt, stage, rules);
-                let (center_b, cut_b) = half.step(&aim_b, asked(b.seat), dt, stage, rules);
+                let (center_a, cut_a) = self.view.step(&aim_a, asked(a.seat), dt, fight, stage, rules);
+                let (center_b, cut_b) = half.step(&aim_b, asked(b.seat), dt, fight, stage, rules);
                 let apart = (center_b - center_a).length();
                 if !aims.open && apart <= MERGE_PX && (half.velocity - self.view.velocity).length() <= MERGE_SPEED {
                     return self.shot(center_a, ShotKind::Shared, a.seat, [Some(a.position), Some(b.position)], cut_a, None, stage);
@@ -940,6 +1257,7 @@ impl Follow {
                     seat: b.seat,
                     keeps: aim_b.keeps,
                     cut: cut_b,
+                    trace: half.trace,
                     at: (on_a + on_b) * 0.5,
                     normal,
                     apart,
@@ -963,6 +1281,7 @@ impl Follow {
             cut,
             glide: None,
             split,
+            trace: self.view.trace,
         }
     }
 
@@ -1012,6 +1331,8 @@ impl Follow {
         self.view.center = Some(center);
         self.view.velocity = Vec2::new(0.0, 0.0);
         self.view.last = None;
+        self.view.pull = Vec2::new(0.0, 0.0);
+        self.view.trace = Trace { anchor: center, base: center, goal: center, spring: center, resting: true, ..Trace::default() };
         Shot {
             corner: Vec2::new(center.x - stage.visible.0 / 2.0, center.y - stage.visible.1 / 2.0),
             center,
@@ -1022,6 +1343,7 @@ impl Follow {
             cut: false,
             glide: None,
             split: None,
+            trace: self.view.trace,
         }
     }
 }
@@ -1182,6 +1504,65 @@ pub fn spring(x: f32, v: f32, goal: f32, goal_v: f32, dt: f32, smooth: f32) -> (
     let j = de + w * e;
     let decay = (-w * dt).exp();
     (goal + (e + j * dt) * decay, goal_v + (de - w * j * dt) * decay)
+}
+
+/// One axis of the rest rule: a spring at `x` moving at `v` toward `goal`
+/// moving at `goal_v` is put on the goal, at the goal's speed, once it is
+/// within `rest` of it and closing or parting by less than `rest` in a
+/// sixtieth of a second; and whether it rests there. No `rest`, or no time
+/// passing, never snaps.
+fn at_rest(x: f32, v: f32, goal: f32, goal_v: f32, dt: f32, rest: f32) -> (f32, f32, bool) {
+    if x == goal && v == goal_v {
+        return (x, v, true);
+    }
+    if rest > 0.0 && dt > 0.0 && (x - goal).abs() < rest && (v - goal_v).abs() < rest * 60.0 {
+        return (goal, goal_v, true);
+    }
+    (x, v, false)
+}
+
+/// What the fight's pull reads this frame: the fight, and how much of its
+/// weight the players' bong has, 1 the moment it is hurt and fading to 0
+/// over `camera_fight_bong_seconds`.
+#[derive(Clone, Copy, Debug)]
+struct Threat<'a> {
+    fight: &'a Fight,
+    bong: f32,
+}
+
+/// Where the fight asks a view on `anchor` to lean, world px from it,
+/// before the room's limit: `fight_pull` of the way to the weighted middle
+/// of the enemies within `fight_radius_px` - each counting for more the
+/// nearer it stands, feathered to nothing at the radius, so one driving in
+/// or out of it moves nothing at once - and of the players' bong while it
+/// is being hurt. Under one enemy's whole weight the pull is that much
+/// less. Nothing with the pull off.
+fn fight_pull(anchor: Vec2, threat: &Threat, rules: &FollowRules) -> Vec2 {
+    let nothing = Vec2::new(0.0, 0.0);
+    if rules.fight_pull.is_nan() || rules.fight_pull <= 0.0 {
+        return nothing;
+    }
+    let radius = rules.fight_radius_px.max(1.0);
+    let (mut sum, mut weight) = (nothing, 0.0f32);
+    for &enemy in &threat.fight.enemies {
+        let off = enemy - anchor;
+        let w = ease(1.0 - off.length() / radius);
+        if w > 0.0 {
+            sum = sum + off * w;
+            weight += w;
+        }
+    }
+    if let Some(bong) = threat.fight.bong {
+        let w = rules.fight_bong_weight.max(0.0) * threat.bong.clamp(0.0, 1.0);
+        if w > 0.0 {
+            sum = sum + (bong - anchor) * w;
+            weight += w;
+        }
+    }
+    if weight <= 0.0 || !weight.is_finite() {
+        return nothing;
+    }
+    sum * (rules.fight_pull.min(1.0) * weight.min(1.0) / weight)
 }
 
 /// One axis of the sight boxes: `center` moved into every one of `holds`
@@ -1361,11 +1742,12 @@ mod follow_tests {
             velocity: Vec2::new(0.0, 0.0),
             top_speed: 210.0,
             live: true,
+            shove: Vec2::new(0.0, 0.0),
         }
     }
 
     fn one(t: SeatTank) -> Seats {
-        Seats { local: vec![t.seat], tanks: vec![t] }
+        Seats { local: vec![t.seat], tanks: vec![t], ..Seats::default() }
     }
 
     const DT: f32 = 1.0 / 60.0;
@@ -1379,7 +1761,10 @@ mod follow_tests {
     fn the_rules_come_from_the_camera_group() {
         let r = defaults();
         assert_eq!(r.dead_zone_px, 32.0, "one cell");
-        assert_eq!((r.lead_at_rest, r.lead_ease_seconds, r.spring_seconds), (1.0, 1.0, 0.5));
+        assert_eq!((r.lead_at_rest, r.lead_ease_seconds, r.spring_seconds, r.pan_seconds), (1.0, 1.0, 0.16, 0.5), "a short follow, a long pan");
+        assert_eq!((r.rest_px, r.blow_share, r.fight_pull), (0.25, 1.0, 0.0), "the rest rule, the whole shove and no pull");
+        assert_eq!(r.shove_max_px, 4.5, "the shake's own cap");
+        assert_eq!(r.on_device(2.0).rest_px, 0.125, "a quarter of a device pixel in world pixels");
         assert_eq!((r.lead_max_px, r.lead_commit_px, r.lead_idle_pace), (0.0, 40.0, 0.0), "no look-ahead, and a little over one cell");
         assert_eq!((r.fire_kick_px, r.fire_kick_seconds), (0.0, 0.08), "no kick");
         // The kick is a whole-screen effect: `screen_fx_intensity` scales it.
@@ -1399,6 +1784,16 @@ mod follow_tests {
             "camera_spectate_delay_seconds",
             "camera_edge_ease_px",
             "camera_restart_glide_seconds",
+            "camera_pan_seconds",
+            "camera_rest_px",
+            "camera_hurt_shove",
+            "camera_hurt_shove_seconds",
+            "camera_fight_pull",
+            "camera_fight_radius_px",
+            "camera_fight_max_px",
+            "camera_fight_seconds",
+            "camera_fight_bong_weight",
+            "camera_fight_bong_seconds",
         ] {
             assert_eq!(Tuning::meta(name).map(|m| m.group), Some("camera"), "{name}");
         }
@@ -1660,9 +2055,9 @@ mod follow_tests {
         // A teammate's shot is not this screen's, and neither is the shot
         // of a teammate a wrecked seat is watching.
         let mate = tank(1, 2100.0, 1000.0);
-        assert_eq!(run(&led(), Seats { local: vec![0], tanks: vec![me, mate] }, 1), 0.0);
+        assert_eq!(run(&led(), Seats { local: vec![0], tanks: vec![me, mate], ..Seats::default() }, 1), 0.0);
         let watching = FollowRules { spectate_delay_seconds: 0.0, ..led() };
-        let far = run(&watching, Seats { local: vec![0], tanks: vec![SeatTank { live: false, ..me }, mate] }, 1);
+        let far = run(&watching, Seats { local: vec![0], tanks: vec![SeatTank { live: false, ..me }, mate], ..Seats::default() }, 1);
         assert!(far < 1e-3, "{far}");
     }
 
@@ -1984,7 +2379,7 @@ mod follow_tests {
         let mut me = tank(0, 300.0, 300.0);
         let near = tank(2, 600.0, 300.0);
         let far = tank(1, 1400.0, 700.0);
-        let seats = |me: SeatTank| Seats { local: vec![0], tanks: vec![me, far, near] };
+        let seats = |me: SeatTank| Seats { local: vec![0], tanks: vec![me, far, near], ..Seats::default() };
         assert_eq!(f.update(&seats(me), DT, &s, &r).seat, Some(0));
         me.live = false;
         let delay = (r.spectate_delay_seconds / DT).ceil() as usize - 1;
@@ -2019,14 +2414,22 @@ mod follow_tests {
         along(room.0, dir.x).min(along(room.1, dir.y))
     }
 
+    /// `rules()` with no look-ahead: the couch's geometry - the shared
+    /// view, the split's halves and its line - as it stands under the
+    /// shipped camera, which leads nowhere. The look-ahead a couch view
+    /// takes when it is on has its own tests.
+    fn couch_rules() -> FollowRules {
+        FollowRules { lead_max_px: 0.0, ..rules() }
+    }
+
     fn pair(a: SeatTank, b: SeatTank) -> Seats {
-        Seats { local: vec![0, 1], tanks: vec![a, b] }
+        Seats { local: vec![0, 1], tanks: vec![a, b], ..Seats::default() }
     }
 
     #[test]
     fn a_couch_pair_shares_the_view_while_both_boxes_fit_and_splits_when_they_do_not() {
         let s = open_stage();
-        let r = rules();
+        let r = couch_rules();
         let room = s.room();
         let mut f = Follow::default();
         let a = tank(0, 1500.0, 1000.0);
@@ -2064,7 +2467,7 @@ mod follow_tests {
     #[test]
     fn each_half_follows_its_seat_shifted_toward_the_other_and_the_line_is_their_bisector() {
         let s = open_stage();
-        let r = rules();
+        let r = couch_rules();
         let room = s.room();
         let middle = Vec2::new(s.visible.0 / 2.0, s.visible.1 / 2.0);
         for (dx, dy) in [(1000.0, 0.0), (-800.0, 0.0), (0.0, 600.0), (0.0, -500.0), (-900.0, -500.0), (700.0, 450.0)] {
@@ -2104,7 +2507,7 @@ mod follow_tests {
         // speed can - a split that jumped would move a half by half a
         // screen - the split opening and closing included.
         let s = open_stage();
-        let r = rules();
+        let r = couch_rules();
         let speed = 210.0;
         let mut f = Follow::default();
         let a = tank(0, 2000.0, 1000.0);
@@ -2153,7 +2556,7 @@ mod follow_tests {
         // screen as far as the field reaches, and closes again on the way
         // back.
         let s = Stage { field: (4000.0, 1400.0), ..stage() };
-        let r = rules();
+        let r = couch_rules();
         let speed = 210.0;
         let a = tank(0, 2000.0, 1300.0);
         let mut b = tank(1, 2000.0, 1000.0);
@@ -2201,7 +2604,7 @@ mod follow_tests {
         // rather than the second half resting where the edge's ease would
         // set a view of its own seat alone, a few pixels off the first.
         let s = Stage { visible: (1280.0, 720.0), field: (2560.0, 1440.0), sight: SightBox::from_cells(11.5, 7.5) };
-        let r = FollowRules { spring_seconds: MEASURED_SPRING, ..rules() };
+        let r = FollowRules { spring_seconds: MEASURED_SPRING, pan_seconds: MEASURED_SPRING, ..couch_rules() };
         let mut a = tank(0, 240.0, 768.0);
         let mut b = tank(1, 647.0, 1072.0);
         let mut f = Follow::default();
@@ -2313,6 +2716,502 @@ mod follow_tests {
             assert!(t.live && t.top_speed > 0.0);
         }
     }
+    /// The settle (C-6): the spring carries its speed through a stop, and
+    /// at 0.16 s it runs a few pixels past where it rests where 0.5 s ran
+    /// nearly twenty; the rest rule then puts it on its goal, so a view
+    /// that has stopped holds one position exactly.
+    #[test]
+    fn a_stop_settles_in_a_few_pixels_and_then_rests_exactly() {
+        let travel_after = |r: &FollowRules| {
+            let path = scripted_drive(r, false);
+            // The seat stands from frame 125 (index 126) to 185.
+            let rest = path[185];
+            let travel: f32 = path[126..=185].windows(2).map(|w| (w[1] - w[0]).length()).sum();
+            let still_from = (126..=185).find(|&i| path[i..=185].iter().all(|c| *c == rest));
+            (travel, still_from.map(|i| i - 126))
+        };
+        let (before, _) = travel_after(&before_the_settle());
+        let (now, still) = travel_after(&defaults());
+        assert!(before > 15.0, "0.5 s ran {before} px past");
+        assert!(now < 5.0, "0.16 s runs {now} px past");
+        let still = still.expect("at rest before the seat moves again");
+        assert!(still <= 30, "exactly still {still} frames after the stop");
+        // With no rest rule the spring never quite arrives.
+        let (_, never) = travel_after(&FollowRules { rest_px: 0.0, ..defaults() });
+        assert!(never.is_none_or(|n| n > still), "{never:?}");
+        // The rule never snaps further than it says: a quarter of a device
+        // pixel, on the screen's own scale.
+        assert_eq!(at_rest(10.1, 0.0, 10.0, 0.0, DT, 0.25), (10.0, 0.0, true));
+        assert_eq!(at_rest(10.3, 0.0, 10.0, 0.0, DT, 0.25), (10.3, 0.0, false));
+        assert_eq!(at_rest(10.1, 30.0, 10.0, 0.0, DT, 0.25), (10.1, 30.0, false), "still moving");
+        assert_eq!(at_rest(10.1, 0.0, 10.0, 0.0, DT, 0.0), (10.1, 0.0, false), "0 never snaps");
+    }
+
+    /// A hand-over to a teammate near enough not to cut pans at the pan's
+    /// pace (`camera_pan_seconds`), not the follow's: as gently as before
+    /// the follow's spring was shortened.
+    #[test]
+    fn a_hand_over_pans_at_the_pans_pace() {
+        let s = open_stage();
+        let peak = |r: &FollowRules| {
+            let r = FollowRules { spectate_delay_seconds: 0.0, ..*r };
+            let me = tank(0, 2000.0, 1000.0);
+            // Near enough that its sight box holds nothing: the spring
+            // alone carries the pan.
+            let mate = tank(1, 2230.0, 1070.0);
+            let mut f = Follow::default();
+            let mut last = f.update(&Seats { local: vec![0], tanks: vec![me, mate], ..Seats::default() }, DT, &s, &r).center;
+            let down = Seats { local: vec![0], tanks: vec![SeatTank { live: false, ..me }, mate], ..Seats::default() };
+            let mut most: f32 = 0.0;
+            let mut shot = None;
+            for _ in 0..240 {
+                let now = f.update(&down, DT, &s, &r);
+                most = most.max((now.center - last).length());
+                last = now.center;
+                shot = Some(now);
+            }
+            let shot = shot.expect("frames ran");
+            assert_eq!((shot.kind, shot.seat), (ShotKind::Spectating, Some(1)));
+            (most, shot.center)
+        };
+        let (pan, end) = peak(&defaults());
+        let (before, before_end) = peak(&before_the_settle());
+        let (whip, _) = peak(&FollowRules { pan_seconds: 0.16, ..defaults() });
+        assert!((pan - before).abs() < 0.05, "{pan} against {before}");
+        assert!(whip > pan * 2.0, "a pan at the follow's pace would whip: {whip} against {pan}");
+        assert!((end - before_end).length() < 1.0, "and lands where it did");
+    }
+
+    /// A blow's shove (C-11): the view moves the shove's way on the frame
+    /// of the blow and comes back as it fades, through the kick's layer -
+    /// the spring never feels it - and lands to the bit where it stood;
+    /// none under reduced motion; never longer than the shake's cap; inside
+    /// the field.
+    #[test]
+    fn a_blow_shoves_the_view_and_the_spring_never_feels_it() {
+        let (s, r) = (open_stage(), defaults());
+        let run = |r: &FollowRules, shove_at: Option<usize>, by: Vec2, at: Vec2| {
+            let mut f = Follow::default();
+            let t = tank(0, at.x, at.y);
+            let stage = Stage { field: if at.x < 640.0 { (2000.0, 2000.0) } else { s.field }, ..s };
+            let mut shots = vec![f.update(&one(t), 0.0, &stage, r)];
+            for i in 0..60 {
+                let mut seats = one(t);
+                if let Some(from) = shove_at.filter(|&from| i >= from) {
+                    seats.shove(0, by * (-((i - from) as f32) * DT / 0.12).exp());
+                }
+                shots.push(f.update(&seats, DT, &stage, r));
+            }
+            shots
+        };
+        let by = Vec2::new(-2.7, 0.0);
+        let (quiet, shoved) = (run(&r, None, by, Vec2::new(2000.0, 1000.0)), run(&r, Some(10), by, Vec2::new(2000.0, 1000.0)));
+        assert_eq!(shoved[10].center, quiet[10].center);
+        assert!(((shoved[11].center - quiet[11].center) - by).length() < 1e-4, "{:?}", shoved[11].center - quiet[11].center);
+        assert_eq!(shoved[11].trace.shove, by);
+        for i in 12..=60 {
+            let (now, was) = (shoved[i].center.x - quiet[i].center.x, shoved[i - 1].center.x - quiet[i - 1].center.x);
+            assert!(now <= 0.0 && now >= was, "frame {i}: {now} after {was}");
+        }
+        assert_eq!(shoved[60], quiet[60], "gone, to the bit");
+        // Reduced motion shoves nothing; a shove past the cap is the cap.
+        assert_eq!(run(&r.reduced(), Some(10), by, Vec2::new(2000.0, 1000.0)), quiet);
+        let hard = run(&r, Some(10), Vec2::new(0.0, 40.0), Vec2::new(2000.0, 1000.0));
+        assert!(((hard[11].center - quiet[11].center).length() - r.shove_max_px).abs() < 1e-4);
+        // Against the field's left edge, a shove out of it moves nothing.
+        let (quiet, shoved) = (run(&r, None, by, Vec2::new(300.0, 1000.0)), run(&r, Some(10), by, Vec2::new(300.0, 1000.0)));
+        assert_eq!(shoved[11].center.x, quiet[11].center.x);
+        assert!(shoved[11].corner.x >= 0.0);
+    }
+
+    /// The fight's pull (C-7), with a strength chosen: the goal leans
+    /// toward the enemies near the seat, slowly - a tenth of the way in
+    /// the first sixth of a second - never past `fight_max_px`, keeping the
+    /// sight box; an enemy at the radius's edge counts for nothing; the
+    /// bitten bong pulls and lets go; reduced motion pulls nothing.
+    #[test]
+    fn the_fights_pull_leans_toward_the_enemies_when_it_has_a_strength() {
+        let s = open_stage();
+        let r = FollowRules { fight_pull: 0.5, ..defaults() };
+        let at = Vec2::new(2000.0, 1000.0);
+        // The fight starts after the view has cut onto the seat.
+        let run = |r: &FollowRules, fight: &Fight, bitten: bool, frames: usize| {
+            let mut f = Follow::default();
+            let mut seats = one(tank(0, at.x, at.y));
+            let mut shots = vec![f.update(&seats, 0.0, &s, r)];
+            seats.fight = fight.clone();
+            for i in 0..frames {
+                if bitten && i == 0 {
+                    let hit = Event::Hit { target: crate::simulation::HitTarget::Bong { side: crate::bong::Side::Player }, damage: 6.0, killed: false, x: 0.0, y: 0.0, cause: crate::simulation::HitCause::Shell };
+                    f.note(i as u64 + 1, &[hit], 1);
+                }
+                shots.push(f.update(&seats, DT, &s, r));
+            }
+            shots
+        };
+        let fight = Fight { enemies: vec![at + Vec2::new(240.0, 0.0), at + Vec2::new(200.0, 40.0)], bong: None };
+        let shots = run(&r, &fight, false, 600);
+        let lean = |i: usize| shots[i].center - at;
+        assert!(lean(10).x > 0.0 && lean(10).x < 6.4, "slow: {:?}", lean(10));
+        assert!(lean(600).x > 50.0 && lean(600).x <= r.fight_max_px + 1e-3, "capped: {:?}", lean(600));
+        assert!(lean(600).y.abs() < 32.0);
+        let rect = |shot: &Shot| Rectangle::new(shot.corner.x, shot.corner.y, s.visible.0, s.visible.1);
+        assert!(shots.iter().all(|shot| shot.boxes_in(rect(shot), s.field, s.sight, 1e-3)));
+        // Feathered: at the radius's edge an enemy pulls nothing.
+        let edge = Fight { enemies: vec![at + Vec2::new(r.fight_radius_px, 0.0)], bong: None };
+        assert!(run(&r, &edge, false, 120).iter().all(|shot| shot.center == at));
+        // The bong pulls while bitten, and lets go once its bite is old.
+        let bong = Fight { enemies: Vec::new(), bong: Some(at + Vec2::new(0.0, 400.0)) };
+        assert!(run(&r, &bong, false, 120).iter().all(|shot| shot.center == at), "unbitten, it pulls nothing");
+        let bitten = run(&r, &bong, true, 900);
+        assert!(bitten[120].center.y - at.y > 10.0, "{:?}", bitten[120].center);
+        assert_eq!(bitten[900].center, at, "and lets go");
+        // Reduced motion, and strength 0, pull nothing.
+        assert!(run(&r.reduced(), &fight, true, 120).iter().all(|shot| shot.center == at));
+        assert!(run(&defaults(), &fight, true, 120).iter().all(|shot| shot.center == at));
+    }
+
+    /// The couch's look-ahead (C-8), with look-ahead on: a shared view
+    /// leads along the pair's common heading and nowhere when they face
+    /// apart; each half of a split leads along its own seat's heading; the
+    /// split still opens and closes without a jump.
+    #[test]
+    fn a_couch_view_looks_ahead_along_the_pairs_heading_when_look_ahead_is_on() {
+        let s = open_stage();
+        let r = led();
+        let right = Vec2::new(1.0, 0.0);
+        let (mut a, mut b) = (tank(0, 2000.0, 1000.0), tank(1, 2100.0, 1000.0));
+        a.facing = right;
+        b.facing = right;
+        let settle = |a: SeatTank, b: SeatTank| {
+            let mut f = Follow::default();
+            let mut shot = f.update(&pair(a, b), DT, &s, &r);
+            for _ in 0..240 {
+                shot = f.update(&pair(a, b), DT, &s, &r);
+            }
+            shot
+        };
+        let shared = settle(a, b);
+        assert_eq!(shared.kind, ShotKind::Shared);
+        assert!(shared.lead.x > 50.0 && shared.lead.y == 0.0, "{:?}", shared.lead);
+        let apart = settle(a, SeatTank { facing: Vec2::new(0.0, 1.0), ..b });
+        assert_eq!(apart.lead, Vec2::new(0.0, 0.0), "no common heading, no lead");
+        let mut calm = Follow::default();
+        let mut shot = calm.update(&pair(a, b), DT, &s, &r.reduced());
+        for _ in 0..240 {
+            shot = calm.update(&pair(a, b), DT, &s, &r.reduced());
+        }
+        assert_eq!(shot.lead, Vec2::new(0.0, 0.0), "none under reduced motion");
+        // Split: seat 0 faces up, seat 1 right; each half leads its own way.
+        let split = settle(SeatTank { facing: Vec2::new(0.0, -1.0), ..a }, SeatTank { position: Vec2::new(3400.0, 1000.0), ..b });
+        let second = split.split.expect("split");
+        assert!(split.trace.lead.y < 0.0 && split.trace.lead.x == 0.0, "{:?}", split.trace);
+        assert!(second.trace.lead.x > 0.0 && second.trace.lead.y == 0.0, "{:?}", second.trace);
+        // Seat 1 drives away and back: no frame jumps either half.
+        let mut f = Follow::default();
+        let mut last = f.update(&pair(a, b), DT, &s, &r);
+        for _ in 0..60 {
+            last = f.update(&pair(a, b), DT, &s, &r);
+        }
+        let (mut opened, mut closed) = (false, false);
+        for frame in 0..900 {
+            let v = if frame < 320 { 210.0 } else if frame < 640 { -210.0 } else { 0.0 };
+            b.position.x += v * DT;
+            b.velocity = Vec2::new(v, 0.0);
+            b.facing = if v < 0.0 { Vec2::new(-1.0, 0.0) } else { right };
+            let shot = f.update(&pair(a, b), DT, &s, &r);
+            let second = |s: &Shot| s.split.map_or(s.center, |sp| sp.center);
+            assert!((shot.center - last.center).length() <= 2.0 * 210.0 * DT, "frame {frame}: {last:?} -> {shot:?}");
+            assert!((second(&shot) - second(&last)).length() <= 2.0 * 210.0 * DT, "frame {frame}: {last:?} -> {shot:?}");
+            assert!(!shot.cut, "frame {frame}");
+            opened |= shot.split.is_some();
+            closed |= opened && shot.split.is_none();
+            last = shot;
+        }
+        assert!(opened && closed, "{opened} {closed}");
+    }
+
+    /// The trace (C-10) says how the view came to stand where it does: on
+    /// a stop under the defaults its anchor, its dead zone, no lead or
+    /// pull, its goal and a spring resting on it.
+    #[test]
+    fn the_trace_says_how_the_view_came_to_stand() {
+        let s = open_stage();
+        let r = defaults();
+        let mut f = Follow::default();
+        let mut t = tank(0, 2000.0, 1000.0);
+        t.facing = Vec2::new(1.0, 0.0);
+        let shot = drive(&mut f, &mut t, 210.0, 60, DT, &s, &r);
+        let tr = shot.trace;
+        assert_eq!((tr.anchor, tr.dead_zone, tr.lead, tr.pull), (t.position, 32.0, Vec2::new(0.0, 0.0), Vec2::new(0.0, 0.0)));
+        assert!((tr.anchor.x - tr.base.x - 32.0).abs() < 1e-3, "dragging the dead zone: {tr:?}");
+        assert_eq!(tr.heading, Vec2::new(1.0, 0.0));
+        let shot = drive(&mut f, &mut t, 0.0, 60, DT, &s, &r);
+        assert!(shot.trace.resting && shot.trace.spring == shot.trace.goal && shot.center == shot.trace.spring, "{:?}", shot.trace);
+        assert_eq!(shot.overlay(s.sight).first.keeps, [Some(t.position), None]);
+    }
+
+    /// One frame of the scripted drive: seat 0 picks up speed to the
+    /// right, drives, stops, turns on the spot, drives up, reverses down
+    /// and stops, firing now and then; whether it fires this frame.
+    fn scripted_step(i: usize, t: &mut SeatTank) -> bool {
+        let (right, up, down) = (Vec2::new(1.0, 0.0), Vec2::new(0.0, -1.0), Vec2::new(0.0, 1.0));
+        let top = 210.0;
+        let (speed, facing) = match i {
+            0..=19 => (top * (i as f32 + 1.0) / 20.0, right),
+            20..=109 => (top, right),
+            110..=124 => (top * (124 - i) as f32 / 15.0, right),
+            125..=184 => (0.0, right),
+            185..=194 => (0.0, up),
+            195..=254 => (top, up),
+            255..=294 => (top, down),
+            295..=304 => (top * (304 - i) as f32 / 10.0, down),
+            _ => (0.0, down),
+        };
+        t.facing = facing;
+        t.velocity = facing * speed;
+        t.position = t.position + facing * (speed * DT);
+        matches!(i, 60 | 130 | 200 | 201 | 202 | 300)
+    }
+
+    /// What a busy fight gives the camera to read on frame `i`: three
+    /// enemies circling the seat inside the pull's radius, one rolling in
+    /// from past it, and the players' bong bitten every 20 frames.
+    fn busy_fight(i: usize, at: Vec2) -> (Fight, Vec<Event>) {
+        let a = i as f32 * 0.05;
+        let enemies = vec![
+            at + Vec2::new(crate::math::cos(a) * 200.0, crate::math::sin(a) * 150.0),
+            at + Vec2::new(-260.0, 90.0 + (i % 50) as f32),
+            at + Vec2::new(120.0, -220.0),
+            at + Vec2::new(900.0 - i as f32 * 1.5, 40.0),
+        ];
+        let bong = at + Vec2::new(-300.0, 200.0);
+        let events = if i % 20 == 0 {
+            vec![Event::Hit { target: crate::simulation::HitTarget::Bong { side: crate::bong::Side::Player }, damage: 6.0, killed: false, x: bong.x, y: bong.y, cause: crate::simulation::HitCause::Shell }]
+        } else {
+            Vec::new()
+        };
+        (Fight { enemies, bong: Some(bong) }, events)
+    }
+
+    /// The view's centre every frame of the scripted drive under `r`, with
+    /// a busy fight round the seat when `busy`.
+    fn scripted_drive(r: &FollowRules, busy: bool) -> Vec<Vec2> {
+        let s = Stage { visible: (1280.0, 688.0), field: (2560.0, 1440.0), sight: SightBox::from_cells(11.5, 7.5) };
+        let mut f = Follow::default();
+        let mut t = tank(0, 700.0, 500.0);
+        let mut out = vec![f.update(&one(t), 0.0, &s, r).center];
+        for i in 0..460 {
+            let mut events = Vec::new();
+            if scripted_step(i, &mut t) {
+                events.push(Event::Fired { slot: 0, weapon: "shell" });
+            }
+            let mut seats = one(t);
+            if busy {
+                let (fight, bitten) = busy_fight(i, t.position);
+                seats.fight = fight;
+                events.extend(bitten);
+            }
+            f.note(i as u64 + 1, &events, 1);
+            out.push(f.update(&seats, DT, &s, r).center);
+        }
+        out
+    }
+
+    /// The couch's scripted drive: a pair side by side drives right
+    /// together, facing the same way; then seat 1 drives on alone until
+    /// the screen splits and back until it closes, and the pair stands. The
+    /// centre of each half every frame, the second half's the first's
+    /// while the view is one.
+    fn scripted_couch(r: &FollowRules, busy: bool) -> Vec<(Vec2, Vec2)> {
+        let s = Stage { visible: (1280.0, 688.0), field: (4000.0, 2000.0), sight: SightBox::from_cells(11.5, 7.5) };
+        let mut f = Follow::default();
+        let (mut a, mut b) = (tank(0, 1500.0, 1000.0), tank(1, 1600.0, 1010.0));
+        a.facing = Vec2::new(1.0, 0.0);
+        b.facing = Vec2::new(1.0, 0.0);
+        let mut out = Vec::new();
+        for i in 0..700 {
+            let (va, vb) = match i {
+                0..=89 => (210.0, 210.0),
+                90..=399 => (0.0, 210.0),
+                400..=640 => (0.0, -210.0),
+                _ => (0.0, 0.0),
+            };
+            a.velocity = Vec2::new(va, 0.0);
+            b.velocity = Vec2::new(vb, 0.0);
+            b.facing = Vec2::new(if vb < 0.0 { -1.0 } else { 1.0 }, 0.0);
+            a.position.x += va * DT;
+            b.position.x += vb * DT;
+            let mut seats = pair(a, b);
+            if busy {
+                let (fight, bitten) = busy_fight(i, a.position);
+                seats.fight = fight;
+                f.note(i as u64 + 1, &bitten, 2);
+            }
+            let shot = f.update(&seats, DT, &s, r);
+            out.push((shot.center, shot.split.map_or(shot.center, |split| split.center)));
+        }
+        out
+    }
+
+    /// The rules the shipped camera ran under before the settle (C-6): the
+    /// table's, with its spring back at 0.5 s and no rest rule.
+    fn before_the_settle() -> FollowRules {
+        FollowRules { spring_seconds: 0.5, pan_seconds: 0.5, rest_px: 0.0, ..defaults() }
+    }
+
+    /// The default view's path on the scripted drives does not move for
+    /// the fight's pull (C-7) or the couch's look-ahead (C-8) being built:
+    /// with a busy fight round the seat and the bong bitten, and with a
+    /// couch pair sharing a heading, every frame is bit for bit the path
+    /// with no fight at all - and the path the camera took before either
+    /// was built (`MASTER_DRIVE`, `MASTER_COUCH`: recorded on master,
+    /// 6d0ff43, under its own table, which `before_the_settle` restores).
+    #[test]
+    fn the_default_path_is_unchanged_by_the_fights_pull_and_the_couchs_look_ahead() {
+        for r in [defaults(), before_the_settle()] {
+            assert_eq!(scripted_drive(&r, true), scripted_drive(&r, false), "a fight moves nothing under {r:?}");
+            assert_eq!(scripted_couch(&r, true), scripted_couch(&r, false), "nor a couch's view");
+        }
+        let drive = scripted_drive(&before_the_settle(), true);
+        for &(i, x, y) in MASTER_DRIVE {
+            assert_eq!((drive[i].x, drive[i].y), (x, y), "frame {i} of the drive");
+        }
+        let couch = scripted_couch(&before_the_settle(), true);
+        for &(i, ax, ay, bx, by) in MASTER_COUCH {
+            assert_eq!((couch[i].0.x, couch[i].0.y, couch[i].1.x, couch[i].1.y), (ax, ay, bx, by), "frame {i} of the couch");
+        }
+        // The settle is the one change to the default path: the spring's
+        // run past a stop, a few pixels at most, and never anywhere the
+        // view was not going.
+        let settled = scripted_drive(&defaults(), true);
+        let most = settled.iter().zip(&drive).map(|(a, b)| (*a - *b).length()).fold(0.0f32, f32::max);
+        assert!(most > 0.0 && most < 24.0, "{most}");
+    }
+
+    /// Recorded on master (6d0ff43): every 20th frame of `scripted_drive`.
+    const MASTER_DRIVE: &[(usize, f32, f32)] = &[
+        (0, 700.0, 500.0),
+        (20, 700.8245, 500.0),
+        (40, 758.14935, 500.0),
+        (60, 836.271, 500.0),
+        (80, 911.4334, 500.0),
+        (100, 983.59076, 500.0),
+        (120, 1049.6948, 500.0),
+        (140, 1061.269, 500.0),
+        (160, 1052.8804, 500.0),
+        (180, 1047.6173, 500.0),
+        (200, 1045.4254, 500.0),
+        (220, 1044.6357, 463.41705),
+        (240, 1044.3718, 386.50464),
+        (260, 1044.2872, 344.0),
+        (280, 1044.2611, 350.8795),
+        (300, 1044.2533, 395.12494),
+        (320, 1044.2507, 420.42886),
+        (340, 1044.2507, 418.61966),
+        (360, 1044.2507, 415.85315),
+        (380, 1044.2507, 414.52036),
+        (400, 1044.2507, 414.00998),
+        (420, 1044.2507, 413.8336),
+        (440, 1044.2507, 413.776),
+        (460, 1044.2507, 413.75787),
+    ];
+
+    /// Recorded on master (6d0ff43): every 25th frame of `scripted_couch`.
+    const MASTER_COUCH: &[(usize, f32, f32, f32, f32)] = &[
+        (0, 1553.5, 1005.0, 1553.5, 1005.0),
+        (25, 1606.6097, 1005.0, 1606.6097, 1005.0),
+        (50, 1693.5365, 1005.0, 1693.5365, 1005.0),
+        (75, 1782.966, 1005.0, 1782.966, 1005.0),
+        (100, 1861.2107, 1005.0, 1861.2107, 1005.0),
+        (125, 1901.6444, 1005.0, 1901.6444, 1005.0),
+        (150, 1941.5624, 1005.0, 1941.5624, 1005.0),
+        (175, 1983.9833, 1005.0, 1983.9833, 1005.0),
+        (200, 2031.5, 1005.0, 2031.5, 1005.0),
+        (225, 2083.7847, 1005.0, 2119.0, 1005.0),
+        (250, 2066.3467, 1005.0, 2206.5, 1005.0),
+        (275, 2058.2593, 1005.0, 2294.0, 1005.0),
+        (300, 2055.8264, 1005.0, 2381.5, 1005.0),
+        (325, 2055.1963, 1005.0, 2469.0, 1005.0),
+        (350, 2055.045, 1005.0, 2556.5, 1005.0),
+        (375, 2055.01, 1005.0, 2644.0, 1005.0),
+        (400, 2055.0017, 1005.0, 2731.2063, 1005.0),
+        (425, 2055.0015, 1005.0, 2716.0605, 1005.0),
+        (450, 2055.0015, 1005.0, 2604.5989, 1005.0),
+        (475, 2055.0015, 1005.0, 2501.047, 1005.0),
+        (500, 2055.0015, 1005.0, 2408.3381, 1005.0),
+        (525, 2055.0015, 1005.0, 2319.4429, 1005.0),
+        (550, 2055.0015, 1005.0, 2231.602, 1005.0),
+        (575, 2055.0015, 1005.0, 2144.023, 1005.0),
+        (600, 2044.0472, 1005.00336, 2067.458, 1004.99664),
+        (625, 2009.269, 1005.00183, 2014.7322, 1004.99817),
+        (650, 1976.151, 1005.0004, 1977.3796, 1004.9996),
+        (675, 1979.6759, 1005.0004, 1979.9452, 1004.9996),
+    ];
+
+    /// The settle on a real round (C-6): longwater, a drive to the right
+    /// from a standstill for two seconds and a stop, followed at 60 Hz
+    /// under each spring and rest rule, measured on screens of 1, 1.5 and 2
+    /// device pixels to the world pixel. `cargo test --lib --no-default-features
+    /// settle_measurements -- --ignored --nocapture` prints the table
+    /// docs/large-maps-follow-camera.md quotes.
+    #[test]
+    #[ignore]
+    fn settle_measurements() {
+        use crate::ai::Intent;
+        use crate::simulation::Input;
+        use crate::tank::Dir;
+        let mut game = Game::default();
+        game.map = crate::map::MapFile::from_toml_str(include_str!("../maps/longwater.toml")).unwrap();
+        game.enemy_count_override = Some(0);
+        game.seed_override = Some(7);
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        // The seat's drawn position every frame: two seconds standing, two
+        // driving right, six standing.
+        let mut tanks = Vec::new();
+        for i in 0..600 {
+            let intent = if (120..240).contains(&i) { Intent { move_dir: Some(Dir::Right), ..Intent::default() } } else { Intent::default() };
+            game.update(Input::single(intent), crate::PHYSICS_FIXED_DT, w, h);
+            tanks.push(Seats::of(&game, &[0]));
+        }
+        let moved = |i: usize| tanks[i].tanks[0].position != tanks[i - 1].tanks[0].position;
+        let start = (1..600).find(|&i| moved(i)).unwrap();
+        let stop = (start..600).find(|&i| i >= 240 && !moved(i)).unwrap();
+        let s = Stage { visible: (1280.0, 688.0), field: (w, h), sight: SightBox::from_cells(11.5, 7.5) };
+        for spring in [0.5f32, 0.35, 0.25, 0.2, 0.16, 0.12] {
+            for rest in [0.0f32, 0.25] {
+                for scale in [1.0f32, 1.5, 2.0] {
+                    let r = FollowRules { spring_seconds: spring, rest_px: rest, ..defaults() }.on_device(scale);
+                    let mut f = Follow::default();
+                    let views: Vec<Vec2> = tanks.iter().map(|seats| f.update(seats, crate::PHYSICS_FIXED_DT, &s, &r).center).collect();
+                    let end = views[599];
+                    let dev = |c: Vec2| (c.x * scale).round();
+                    let mut travel = 0.0f32;
+                    let mut last_step = stop;
+                    for i in stop + 1..600 {
+                        travel += (views[i] - views[i - 1]).length();
+                        if dev(views[i]) != dev(views[i - 1]) {
+                            last_step = i;
+                        }
+                    }
+                    let exact = (stop..600).find(|&i| views[i..].iter().all(|v| *v == end)).map_or("never".to_string(), |i| format!("+{}", i - stop));
+                    let past = views[stop..].iter().map(|v| v.x - end.x).fold(0.0f32, f32::max);
+                    // The start: the furthest the tank gets from the view's
+                    // centre and the fastest the view moves against the
+                    // tank's top step.
+                    let lead_most = (start..stop).map(|i| tanks[i].tanks[0].position.x - views[i].x).fold(0.0f32, f32::max);
+                    let fastest = (start..stop).map(|i| views[i].x - views[i - 1].x).fold(0.0f32, f32::max);
+                    let tank_fastest = (start..stop).map(|i| tanks[i].tanks[0].position.x - tanks[i - 1].tanks[0].position.x).fold(0.0f32, f32::max);
+                    println!(
+                        "SETTLE spring {spring:.2} rest {rest:.2} dpx scale {scale}: after the stop the view travels {travel:.2} px, runs {past:.2} px past its rest, its last device-pixel step +{} frames, exactly at rest {exact}; on the start the tank leads the view by up to {lead_most:.1} px, the view's fastest step {fastest:.2} px against the tank's {tank_fastest:.2}",
+                        last_step - stop
+                    );
+                }
+            }
+        }
+    }
+
     fn lock_stage() -> Stage {
         Stage { visible: (400.0, 240.0), field: (2000.0, 1200.0), sight: SightBox::new(100.0, 60.0) }
     }
