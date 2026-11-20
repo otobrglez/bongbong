@@ -965,6 +965,11 @@ fn destroying_a_tile_re_exposes_its_neighbours() {
 /// 73 of 900 frames while claiming to be hiding, and even a 5x5 patch only
 /// got that to 132. Pinning isolates the AI's decision, which is the thing
 /// this change is about.
+///
+/// **The round has no bong, for the same reason.** Any hurt that lands
+/// alerts an enemy (`Game::hurt_tank`), a bong's bite included, and an
+/// alerted enemy fights a seat it cannot see: with the players' bong on
+/// the field the test measures whether a bong happened to bite one.
 #[test]
 fn tall_grass_hides_the_player_from_the_ai() {
     let mut cells = String::new();
@@ -981,6 +986,7 @@ fn tall_grass_hides_the_player_from_the_ai() {
         game.enemy_count_override = Some(3);
         game.seed_override = Some(3);
         game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(crate::level::Mission::Destroy);
         game.map = MapFile::from_toml_str(map).expect("test map parses");
         game.init(W, H);
         let cell = cell_to_world(20, 11);
@@ -1029,6 +1035,12 @@ fn shooting_from_cover_gives_the_player_away() {
     let (mut landed, mut shot_back) = (false, false);
     for frame in 0..1200 {
         game.debug_teleport(0, cell, Some(0.0)).unwrap();
+        // The enemy holds its spot until the first shell lands: where a
+        // patrol would have wandered off to by then is not what this
+        // measures.
+        if !landed {
+            game.debug_teleport(1, cell_to_world(20, 6), Some(180.0)).unwrap();
+        }
         // Tap the trigger periodically; shells are edge-triggered.
         let firing = frame % 40 == 0;
         step(&mut game, if firing { fire() } else { Input::default() });

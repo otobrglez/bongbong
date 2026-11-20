@@ -155,6 +155,14 @@ pub const TANK_NAMES: [&str; 12] = [
 /// declaration order - index with `material as usize`.
 pub const MATERIAL_NAMES: [&str; 5] = ["brick", "iron", "wood", "glass", "concrete"];
 
+/// The guns the tree's generic tiers fire, in the order of the per-gun
+/// rows (`ai::gun_index`).
+pub const GUN_NAMES: [&str; 7] = ["shell", "laser", "plasma", "minigun", "missiles", "flamethrower", "grenades"];
+
+/// The chassis tiers in `level::Tier` declaration order - index with
+/// `Tier::index`.
+pub const TIER_NAMES: [&str; 4] = ["light", "medium", "heavy", "super"];
+
 /// The table macro. Grammar, one row per knob:
 ///
 /// ```text
@@ -2123,8 +2131,84 @@ tunables! {
         enemy_aim_settle: f32 = 0.25 in 0.0 ..= 5.0;
         /// Retreat toward the map edge once this hurt.
         enemy_flee_damage: f32 = 70.0 in 0.0 ..= 100.0;
-        /// How often patrol picks a new wander point (seconds).
+        /// Whether an enemy heads only for a crate it has a way to
+        /// (`Brain::crate_in_reach`), and measures its run at one by the
+        /// route it steers by. Off, it heads for the nearest whatever
+        /// stands between, gives up `enemy_crate_give_up_seconds` later,
+        /// and measures the run with a search of its own each frame.
+        enemy_crate_reachable_only: bool = true in 0 ..= 1;
+        /// How long a hurt enemy runs before it turns back to the fight
+        /// (seconds in the flee tier since it was last under
+        /// `enemy_flee_damage`). 0 has it run for as long as the round
+        /// lasts.
+        enemy_flee_seconds: f32 = 20.0 in 0.0 ..= 600.0;
+        /// How near its seat a hurt enemy stops running and fights (px): a
+        /// seat that close is on top of it, and backing away only loses
+        /// slower. It runs again once the seat is half as far again off. 0
+        /// has it back away whatever the distance.
+        enemy_cornered_px: f32 = 140.0 in 0.0 ..= 1000.0;
+        /// Whether a hurt enemy holding at its refuge fires at its seat
+        /// when the seat lines up on it there, in range and in sight. Off,
+        /// it only faces the seat.
+        enemy_refuge_fires: bool = true in 0 ..= 1;
+        /// How much farther from the seat a refuge behind cover counts when
+        /// a tank picks where to back away to (px): cover is something the
+        /// nav grid holds solid on the straight line from the seat. 0 picks
+        /// by distance alone.
+        enemy_refuge_cover: f32 = 160.0 in 0.0 ..= 2000.0;
+        /// How long an enemy that gave way (`enemy_yield_seconds`) and found
+        /// the hull still in its way prices the cells under that hull on
+        /// its routes (seconds, `enemy_yield_reroute_cost` each): it takes
+        /// a way round where there is one, and behind an ally parked there
+        /// by choice it waits rather than push, asking again each time
+        /// this runs out. 0 drives on into the hull once the hold is over.
+        enemy_yield_reroute_seconds: f32 = 2.0 in 0.0 ..= 20.0;
+        /// What a cell under the hull an enemy is routing round costs on
+        /// its routes, in cells of open ground: how long a way round it
+        /// takes before it would rather go through.
+        enemy_yield_reroute_cost: f32 = 12.0 in 0.0 ..= 200.0;
+        /// How long an enemy queues behind a parked ally before it takes
+        /// the ally to be standing where it is headed (seconds): past it,
+        /// the ring hands it a slot no hull stands on (`engage_squat_px`).
+        /// 0 leaves it queued for as long as the ally stands there.
+        enemy_queue_patience_seconds: f32 = 1.5 in 0.0 ..= 30.0;
+        /// How far off the hull it waits for a queued enemy stands (px,
+        /// surface to surface): it backs up to that where the way back is
+        /// open, so a queue is not one target. 0 leaves it where the yield
+        /// stopped it, `enemy_separation_px` off.
+        enemy_queue_gap_px: f32 = 64.0 in 0.0 ..= 200.0;
+        /// How close to a standing hull - a wreck, an ally parked by
+        /// choice - an engagement slot is no slot for a tank that has
+        /// queued behind that hull past `enemy_queue_patience_seconds` (px
+        /// past the hull's radius, `EngageRing::assign`): it takes another
+        /// slot instead of waiting on one it cannot reach. 0 hands out a
+        /// slot whatever stands on it.
+        engage_squat_px: f32 = 8.0 in 0.0 ..= 64.0;
+        /// How much of a moving seat's travel during the shot's flight an
+        /// enemy aims ahead by, per chassis tier (`Brain::lead`): 1 puts the
+        /// shot where the seat will be if it holds its course, 0 aims at
+        /// where it stands, as every tier does at a seat at rest. A tank
+        /// that leads also faces the line a seat is about to cross and
+        /// settles its aim there, so it fires as the lead lines up.
+        enemy_lead_by_tier: [f32; 4] = [0.0, 0.5, 0.8, 1.0] in 0.0 ..= 1.5 labels TIER_NAMES;
+        /// How often patrol picks a new wander point (seconds) while
+        /// `enemy_wander_patience_seconds` is 0, and how often a wanderer
+        /// with no reachable point rolls again either way.
         enemy_retarget_seconds: f32 = 3.0 in 0.1 ..= 30.0;
+        /// How long a wanderer keeps a waypoint it has not reached
+        /// (seconds): it drives to the point and rolls the next on arrival,
+        /// and this is only the patience it has for one it never gets to.
+        /// 0 rolls a new point every `enemy_retarget_seconds` wherever it
+        /// is, which turns a patrol mid-leg every few seconds.
+        enemy_wander_patience_seconds: f32 = 12.0 in 0.0 ..= 60.0;
+        /// How far a wander candidate straight ahead of the heading held is
+        /// favoured over one abeam, and one straight behind disfavoured
+        /// (px, added to its distance from the other tanks scaled by the
+        /// cosine of its bearing off the heading): a patrol carries on
+        /// round the field rather than doubling back. 0 ranks candidates
+        /// by distance from the others alone, as a tank leashed to a home
+        /// on a field map always does.
+        enemy_wander_ahead_px: f32 = 160.0 in 0.0 ..= 1000.0;
         /// How many candidate waypoints `Ai::wander` rolls per resample,
         /// keeping whichever is both reachable and farthest from every other
         /// live tank - plain uniform sampling kept landing wanderers in the
@@ -2149,6 +2233,41 @@ tunables! {
         /// closer than the player, the chance the enemy holds fire - not a
         /// hard block, so stray friendly fire still happens.
         enemy_friendly_fire_hold_chance: f32 = 0.6 in 0.0 ..= 1.0;
+        /// Whether the tree's generic tiers fire each gun by its own
+        /// profile (`ai::fire_profile`): its range and interval
+        /// (`enemy_gun_range`, `enemy_gun_interval`), missiles without
+        /// lining up, a blast weapon held inside its own blast's reach, and
+        /// the friendly-fire hold measured against hulls, blasts and the
+        /// enemies' own bong (`Brain::friendly_hold`). Off, every gun fires
+        /// by `enemy_attack_range` and `enemy_fire_interval`, lined up, and
+        /// the hold is a `enemy_fire_align_px` line against tank centres.
+        enemy_fire_profiles: bool = true in 0 ..= 1;
+        /// How far from what it fights an enemy fires each gun (px), in
+        /// place of `enemy_attack_range`, never past what it sees.
+        enemy_gun_range: [f32; 7] = [340.0, 340.0, 340.0, 340.0, 420.0, 150.0, 300.0] in 50.0 ..= 2000.0 labels GUN_NAMES;
+        /// Each gun's share of the fire interval (`enemy_fire_interval`
+        /// down to `enemy_fire_interval_aggressive`): 1 fires it at the
+        /// shell's pace.
+        enemy_gun_interval: [f32; 7] = [1.0, 1.0, 1.0, 1.0, 1.5, 0.25, 1.5] in 0.05 ..= 10.0 labels GUN_NAMES;
+        /// Whether an enemy lines up on an axis with its target before it
+        /// launches missiles, as it does for every other gun. Off, it
+        /// launches from any spot in range with the target in sight: a
+        /// missile finds its own way there.
+        enemy_missiles_need_alignment: bool = false in 0 ..= 1;
+        /// How much clear ground an enemy keeps between its hull and its
+        /// own weapon's blast (px): nearer its target than the blast radius,
+        /// its hull radius and this, it holds the shot and backs off, and a
+        /// friend that much outside the blast is still held for.
+        enemy_splash_safe_margin_px: f32 = 16.0 in 0.0 ..= 200.0;
+        /// How long an enemy lined up on its target holds its shot outright
+        /// for a friend parked on the line (seconds). Past it the friend is
+        /// not moving, and each shot is held on the roll
+        /// (`enemy_friendly_fire_hold_chance`) as it is for a friend
+        /// passing; 0 rolls from the start.
+        enemy_parked_hold_seconds: f32 = 8.0 in 0.0 ..= 600.0;
+        /// How far outside a friend's hull a shot's line still counts as
+        /// through it (px, `Brain::friendly_hold`).
+        enemy_fire_hold_margin_px: f32 = 8.0 in 0.0 ..= 100.0;
         /// Point-blank misfires: within this distance of the player an
         /// enemy's shot may be thrown off its aim so it sails wide.
         enemy_misfire_range: f32 = 180.0 in 0.0 ..= 1000.0;
@@ -2199,6 +2318,15 @@ tunables! {
         /// the rest, and everything on an arena. Off, every switch is the
         /// margin's.
         ai_lane_turns: bool = true in 0 ..= 1;
+        /// An arena's enemy keeps to the heading it holds wherever a route
+        /// along it is as cheap as any (`Ai::straightens`,
+        /// `Grid::route_ahead_straight`): bound diagonally for its target it
+        /// drives one leg, turns once at the far corner and drives the
+        /// other. Off, an arena's routes break their ties on the cell index
+        /// and the order a search met its cells in, and the hull turns on
+        /// every cell or two - a staircase. A field map reads its routes as
+        /// lanes either way (`ai_lane_turns`).
+        ai_arena_straight_routes: bool = true in 0 ..= 1;
         /// A committed heading about to walk into a known-blocked grid cell
         /// can be overridden, but only after this much dwell time - much
         /// shorter than `ai_dir_hold_seconds`, yet without some floor a

@@ -3990,6 +3990,9 @@ impl Game {
             /// How far an enemy sees this seat (`Game::sight_on`): the
             /// sky's range, or the full one where it stands in the light.
             sight: f32,
+            /// What its body is doing (`Physics::velocity`), which a shot
+            /// at it is led by (`Ai::seat_velocity`).
+            velocity: Vec2,
         }
         // Built from `players()`, not `seats_on_field()`: the index is the
         // seat number that `Ai::target_player`, the engagement rings and
@@ -4000,8 +4003,9 @@ impl Game {
             .into_iter()
             .flatten()
             .map(|entity| {
-                let (pos, wreck) = with_tank(&self.world, entity, |t| (t.position, t.is_wreck()));
-                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos), entering: entering(entity), sight: self.sight_on(pos) }
+                let (pos, wreck, body) = with_tank(&self.world, entity, |t| (t.position, t.is_wreck(), t.body));
+                let velocity = body.filter(|_| !wreck).map_or(Vec2::new(0.0, 0.0), |b| self.physics.velocity(b));
+                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos), entering: entering(entity), sight: self.sight_on(pos), velocity }
             })
             .collect();
 
@@ -4172,6 +4176,22 @@ impl Game {
                 },
             }
         };
+        // The hulls no slot is handed out under (`EngageCtx::standing`): a
+        // wreck, and an enemy the tree stood where it is at its last think
+        // - not one queued behind another, which stands wherever the queue
+        // left it and would take the slot of the tank it waits on.
+        let standing: Vec<(Entity, Position, f32)> = ordered(self.world.query::<(Entity, &Tank, &Ai)>().iter(), |(_, t, _)| t.owner_slot())
+            .into_iter()
+            .filter(|(_, t, ai)| t.is_wreck() || ai.stood())
+            .map(|(e, t, _)| (e, t.position, t.avoidance_radius()))
+            .collect();
+        // The tanks that have queued behind one of them for too long
+        // (`EngageCtx::displaced`), by slot.
+        let displaced: Vec<Entity> = ordered(self.world.query::<(Entity, &Tank, &Ai)>().iter(), |(_, t, _)| t.owner_slot())
+            .into_iter()
+            .filter(|(_, t, ai)| !t.is_wreck() && ai.displaced())
+            .map(|(e, _, _)| e)
+            .collect();
         if engaged[0].len() >= 2 {
             let (target_pos, herd) = herd_of(players[0].pos);
             self.engage[0].assign(
@@ -4185,6 +4205,8 @@ impl Game {
                     herd,
                     reachable: &reachable,
                     line_of_sight: &line_of_sight,
+                    standing: &standing,
+                    displaced: &displaced,
                 },
                 &mut report,
             );
@@ -4212,6 +4234,8 @@ impl Game {
                     herd,
                     reachable: &reachable,
                     line_of_sight: &line_of_sight,
+                    standing: &standing,
+                    displaced: &displaced,
                 },
                 &mut seat_report,
             );
@@ -4253,6 +4277,8 @@ impl Game {
                     herd: None,
                     reachable: &reachable,
                     line_of_sight: &line_of_sight,
+                    standing: &standing,
+                    displaced: &displaced,
                 },
                 &mut bong_report,
             );
@@ -4531,6 +4557,8 @@ impl Game {
             // the player than standing in the open.
             let fighting = &players[(ai.target_player() as usize).min(players.len() - 1)];
             let fighting_sight = fighting.sight;
+            ai.seat_velocity = fighting.velocity;
+            ai.own_bong = home;
             let player_hidden = fighting.concealed && !ai.is_hit_alerted();
             let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, fighting.pos);
             // A hunter's fire gate is line of *fire* to the bong: only iron
@@ -5622,20 +5650,21 @@ impl Game {
     /// included at zero velocity so tanks steer around them as fixed
     /// obstacles.
     fn motion_snapshot(&self) -> (Vec<Mover>, HashMap<Entity, usize>) {
-        let to_mover = |t: &Tank| Mover {
+        let to_mover = |t: &Tank, parked: bool| Mover {
             position: t.position,
             velocity: if t.is_wreck() { Position::new(0.0, 0.0) } else { t.velocity },
             radius: t.avoidance_radius(),
             is_player: t.is_player(),
+            parked,
         };
         let mut movers = Vec::new();
         for player in self.players().into_iter().flatten() {
-            with_tank(&self.world, player, |t| movers.push(to_mover(t)));
+            with_tank(&self.world, player, |t| movers.push(to_mover(t, false)));
         }
         let mut enemy_indices = HashMap::new();
-        for (entity, tank) in ordered(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter(), |(_, t)| t.owner_slot()) {
+        for (entity, tank, ai) in ordered(self.world.query::<(Entity, &Tank, &Ai)>().iter(), |(_, t, _)| t.owner_slot()) {
             enemy_indices.insert(entity, movers.len());
-            movers.push(to_mover(tank));
+            movers.push(to_mover(tank, !tank.is_wreck() && ai.parked()));
         }
         (movers, enemy_indices)
     }
@@ -6018,6 +6047,8 @@ impl Game {
                     charging: tank.charge.is_some(),
                     disabled: tank.is_disabled(),
                     kept_out: ai.is_some_and(Ai::kept_out),
+                    queued: ai.is_some_and(Ai::queued),
+                    held_fire: ai.is_some_and(Ai::held_fire),
                     sheltering: ai.is_some_and(Ai::sheltering),
                     air_hold: ai.is_some_and(Ai::air_hold),
                     rod_hold: ai.is_some_and(Ai::rod_hold),
@@ -6129,6 +6160,12 @@ pub struct TankSnapshot {
     /// Waiting outside a danger it is kept out of (`Ai::kept_out`):
     /// holding still on purpose.
     pub kept_out: bool,
+    /// Waiting behind a parked ally it cannot get round (`Ai::queued`):
+    /// holding still on purpose.
+    pub queued: bool,
+    /// Lined up with its shot held for a friend it would hurt
+    /// (`Ai::held_fire`): holding still on purpose.
+    pub held_fire: bool,
     /// Holding at the refuge it backed away to (`Ai::sheltering`):
     /// holding still on purpose.
     pub sheltering: bool,
@@ -7678,8 +7715,15 @@ mod determinism_tests {
         // (`bong_hull_clearance_px` 0) and every touch a prop's ram
         // (`prop_ram_min_speed` 0) it is (11_732_861_727_457_925_354,
         // 18_125_339_335_117_055_137).
+        // Enemies hold fire on a line a friend or their own bong stands on,
+        // wait behind a parked friend and route round it, and lead a moving
+        // seat (docs/gameplay-verification-design.md, the BB-179
+        // re-baseline). With `enemy_fire_profiles` and
+        // `enemy_yield_reroute_seconds` at 0 and `enemy_lead_by_tier` all 0
+        // the pair is (9_140_234_918_546_171_875,
+        // 15_604_372_050_397_659_249).
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (9_140_234_918_546_171_875, 15_604_372_050_397_659_249), "(one seat, two seats)");
+        assert_eq!((one, two), (9_140_234_918_546_171_875, 2_367_344_100_585_956_785), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -7777,6 +7821,10 @@ mod mechanics_tests {
     // (`tuning::in_force`), which only the dev-tools build has.
     #[cfg(feature = "dev-tools")]
     mod drive;
+
+    // As `drive`: its cases put a knob table in force on their thread.
+    #[cfg(feature = "dev-tools")]
+    mod enemies;
 
     const W: f32 = 1280.0;
     const H: f32 = 720.0;
@@ -10305,47 +10353,6 @@ cells."30,2" = { kind = "bong" }
             }
         }
         panic!("the near enemy never took the laser crate");
-    }
-
-    /// An enemy that wants a crate it cannot get to - ringed by iron, so no
-    /// route reaches it - heads for it, gives it up after
-    /// `enemy_crate_give_up_seconds` without a route step of headway and
-    /// carries on, passing it over until `enemy_crate_forget_seconds` are
-    /// out (BB-98).
-    #[test]
-    fn an_enemy_gives_up_a_crate_it_cannot_get_to() {
-        let mut map = String::from(
-            "version = 1\ntanks = 1\ncells.\"38,20\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"pickup\", pickup = \"laser\" }\ncells.\"30,2\" = { kind = \"bong\" }\n",
-        );
-        for c in 8..=12 {
-            for r in 8..=12 {
-                if c == 8 || c == 12 || r == 8 || r == 12 {
-                    map.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
-                }
-            }
-        }
-        let mut game = game_on(&map, 1, None);
-        let (slot, _) = enemy_actions(&game)[0];
-        let entity = game.tank_entity_by_slot(slot).expect("the enemy exists");
-        with_tank_mut(&game.world, entity, |t| t.disarm());
-        game.debug_teleport(slot, map::cell_to_world(4, 4), None).expect("the enemy exists");
-        assert!(map::cell_to_world(4, 4).distance_to(player_pos(&game)) > tuning().enemy_view_range, "nothing to fight in sight");
-        let patience = (tuning().enemy_crate_give_up_seconds * 60.0) as usize;
-        let forget = (tuning().enemy_crate_forget_seconds * 60.0) as usize;
-        let mut sought = Vec::new();
-        for frame in 0..patience + forget + 120 {
-            step(&mut game, Input::default());
-            if enemy_actions(&game)[0].1 == Some("seek_laser") {
-                sought.push(frame);
-            }
-        }
-        assert_eq!(sought.first(), Some(&0), "it heads for the crate at once");
-        let gave_up = sought.iter().position(|&f| f > patience + 10).map_or(sought.len(), |i| i);
-        assert!(sought[..gave_up].windows(2).all(|w| w[1] == w[0] + 1), "it heads for the crate without a break until it gives up: {sought:?}");
-        assert!(sought[gave_up - 1] >= patience - 2, "and does not give up before its patience is out: {sought:?}");
-        let back = sought.get(gave_up).copied().expect("forgotten, it heads for the crate again");
-        assert!(back >= patience + forget - 2, "it passes the crate over while it remembers giving up: back on frame {back}");
-        assert_eq!(with_tank(&game.world, entity, |t| t.active_weapon()), ActiveWeapon::Shell, "and never got it");
     }
 
     // --- The bong health pack (docs/bong-health-pack-prd.md) ---

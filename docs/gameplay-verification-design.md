@@ -1051,6 +1051,63 @@ kind to its cross-fixture maximum exactly — deterministic, so an
 exceedance is a real behavior change; the justfile comment carries the
 re-baselining policy.
 
+### Re-baseline: enemies (BB-179)
+
+2026-11-20. Straight routes in an arena, a wander that resamples on
+arrival, the lead on a moving seat, the yield that re-routes with the
+queue behind a parked friend, a fire profile per gun with the wider
+friendly-fire hold, a flight with an exit and crates sought only where
+there is a way to them, one at a time on the same tree. The probe's
+stall check takes two more deliberate holds (`queued`, `held fire`).
+
+| step | the pinned pair (one seat, two seats) | probe readings (fixtures, survive, fields) |
+|---|---|---|
+| before | 9140234918546171875, 15604372050397659249 | 61, 352, 212 |
+| straight routes (`ai_arena_straight_routes`) | unchanged | 35, 263, 212 |
+| the wander (`enemy_wander_patience_seconds`, `enemy_wander_ahead_px`) | unchanged | 35, 267, 206 |
+| the lead (`enemy_lead_by_tier`) | unchanged, 3655186468727196895 | 36, 268, 207 |
+| the yield and the queue (`enemy_yield_reroute_seconds`, `enemy_queue_gap_px`, `engage_squat_px`) | unchanged, 4127681563686596698 | 45, 309, 204 |
+| fire profiles (`enemy_fire_profiles`) | unchanged, 2367344100585956785 | 45, 315, 205 |
+| the flight (`enemy_flee_seconds`, `enemy_cornered_px`, `enemy_refuge_fires`, `enemy_refuge_cover`) | unchanged | 46, 319, 205 |
+| reachable crates (`enemy_crate_reachable_only`) | unchanged | 46, 319, 198 |
+
+The one-seat round never moved. With `enemy_fire_profiles` and
+`enemy_yield_reroute_seconds` at 0 and `enemy_lead_by_tier` all 0 the pair
+is the one before; the other rows of the stage do not move it.
+
+What the queue bought: survive's enemy-on-enemy rams fell from 432 to 72
+(21 before the fire profiles, which keep more tanks alive to meet), its
+pile-ups from 7 to 0 and its tank-grind from 1 to 0, so maze's two
+ceilings the drive raised came down past where they stood (pile-up 5 to
+0, tank-grind 1 to 0: BB-178). The profiles' hold cut the enemies' hits
+on each other from 929 to 615 in survive, 185 to 90 in the fixtures and
+56 to 18 on the field maps. A tank parked on a held line holds its fire
+for `enemy_parked_hold_seconds` and then rolls as it did: held for good,
+the hits read 403 and hunters lined up on the bong behind a parked
+friend never fired.
+
+The ceilings re-recorded, all downward: `fixtures` jitter 4 to 3;
+`survive` staircase 17 to 14, clustering 7 to 3, tank-grind 1 to 0,
+pile-up 5 to 0; `fields` jitter 7 to 6.
+
+Three readings are over ceilings that were not raised, so
+`probe-fixtures` and `probe-survive` fail as recorded:
+
+- `fixtures` never-arrived, maze 1 over 0 (seed 0x3ea): a tank queued
+  behind two parked at their slots in a lane, 22.8 s against a budget of
+  21.3. It came with the flight step by a shifted round, not by a flight.
+- `survive` jitter, choke 15 over 14 (12 after the queue, 18 with the
+  profiles, 15 with the flight): mostly shuffles of 1 to 4 px about a
+  queue's gap.
+- `survive` spin, maze 3 over 2 (2 after the queue, 3 with the
+  profiles).
+
+The stall the drive's re-baseline left open (maze, seed 0x7d4) does not
+reproduce: on the tree before this stage and on this one, no scenario
+(afk, survive, advance, brake, circle, defend) of 1800 or 3600 frames on
+that seed raises a stall, at any `tank_park_hold_force` tried (0, 800,
+1500, 3000).
+
 ### Re-baseline 2026-11-19: the drive (BB-167)
 
 The turn that fits, the turn buffer and the lane assist, weight in the

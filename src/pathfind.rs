@@ -222,39 +222,52 @@ const KEEP_OFF_LOOK: usize = 12;
 
 /// Cells one query prices above the grid's own costs, `extra` each, for
 /// the one tank asking: the crates it would leave lying
-/// (`Grid::route_ahead_keeping_off`). The grid's prices are every tank's,
-/// so what only one tank would rather not cross rides on its query
-/// instead. Sorted, so membership is a binary search; with no cells or a
-/// zero `extra` a query routes exactly as it would without one.
+/// (`Grid::route_ahead_keeping_off`), and with them a second set at a
+/// price of its own - the cells under the hull that stands in its way
+/// (`KeepOff::and`). The grid's prices are every tank's, so what only one
+/// tank would rather not cross rides on its query instead. Sorted, so
+/// membership is a binary search; with no cells or a zero `extra` a query
+/// routes exactly as it would without one.
 #[derive(Clone, Copy, Debug)]
 pub struct KeepOff<'a> {
     cells: &'a [(usize, usize)],
     extra: u32,
+    also: &'a [(usize, usize)],
+    also_extra: u32,
 }
 
 impl<'a> KeepOff<'a> {
     /// Nothing kept off.
-    pub const NONE: KeepOff<'static> = KeepOff { cells: &[], extra: 0 };
+    pub const NONE: KeepOff<'static> = KeepOff { cells: &[], extra: 0, also: &[], also_extra: 0 };
 
     /// `cells` (sorted, as `Grid::cells_under` and a sort leave them)
     /// priced `extra` each.
     pub fn new(cells: &'a [(usize, usize)], extra: u32) -> Self {
         debug_assert!(cells.is_sorted(), "a binary search needs the cells sorted");
-        Self { cells, extra }
+        Self { cells, extra, also: &[], also_extra: 0 }
+    }
+
+    /// This with `cells` (sorted) kept off too, at `extra` each: a cell in
+    /// both sets costs both prices.
+    pub fn and(self, cells: &'a [(usize, usize)], extra: u32) -> Self {
+        debug_assert!(cells.is_sorted(), "a binary search needs the cells sorted");
+        Self { also: cells, also_extra: extra, ..self }
     }
 
     /// Whether this changes no route.
     pub fn is_empty(&self) -> bool {
-        self.cells.is_empty() || self.extra == 0
+        (self.cells.is_empty() || self.extra == 0) && (self.also.is_empty() || self.also_extra == 0)
     }
 
     fn holds(&self, cell: (usize, usize)) -> bool {
-        self.cells.binary_search(&cell).is_ok()
+        self.extra_at(cell) > 0
     }
 
     /// What a step into `cell` costs on top of the grid's price.
     fn extra_at(&self, cell: (usize, usize)) -> u32 {
-        if self.extra > 0 && self.holds(cell) { self.extra } else { 0 }
+        let first = if self.extra > 0 && self.cells.binary_search(&cell).is_ok() { self.extra } else { 0 };
+        let second = if self.also_extra > 0 && self.also.binary_search(&cell).is_ok() { self.also_extra } else { 0 };
+        first + second
     }
 }
 
@@ -271,9 +284,17 @@ pub struct RouteAhead {
     len: usize,
     cell_size: f32,
     shared: bool,
+    left: u32,
 }
 
 impl RouteAhead {
+    /// What the whole route costs from its start, in the router's steps,
+    /// the prices of any kept-off cells on it included (`KeepOff`) - the
+    /// figure `Grid::path_cost` gives for a route nothing is kept off.
+    pub fn left(&self) -> u32 {
+        self.left
+    }
+
     /// What `next_step` hands out for the same query: the first cell's
     /// centre, or the centre of the portal it belongs to.
     pub fn first(&self) -> Position {
@@ -1329,6 +1350,23 @@ impl Grid {
     /// back onto the shared route. With nothing kept off this is exactly
     /// `route_ahead`.
     pub fn route_ahead_keeping_off(&self, from: Position, to: Position, heading: Option<Position>, keep: KeepOff) -> Option<RouteAhead> {
+        self.route_ahead_with(from, to, heading, keep, false)
+    }
+
+    /// `route_ahead_keeping_off` with a searched route straightened as a
+    /// field's is: its first step is the one along `heading` wherever that
+    /// is as cheap as any, and a turn off it before a step straight back
+    /// (`search_straight`). What an arena's hull routes by
+    /// (`ai_arena_straight_routes`): a search hands back whichever of the
+    /// equally cheap paths it met first, and a hull that follows one first
+    /// step after another drives a diagonal as a staircase.
+    pub fn route_ahead_straight(&self, from: Position, to: Position, heading: Option<Position>, keep: KeepOff) -> Option<RouteAhead> {
+        self.route_ahead_with(from, to, heading, keep, true)
+    }
+
+    /// The one read behind `route_ahead_keeping_off` and
+    /// `route_ahead_straight`: `straight` has a search honour `heading`.
+    fn route_ahead_with(&self, from: Position, to: Position, heading: Option<Position>, keep: KeepOff, straight: bool) -> Option<RouteAhead> {
         let start = self.cell_of(from);
         let goal = self.cell_of(to);
         if start == goal {
@@ -1347,9 +1385,10 @@ impl Grid {
                 });
                 let mut ahead = ahead?;
                 ahead.shared = true;
+                ahead.left = self.descend(field, start, prefer).map_or(0, |hit| hit.cost);
                 if !keep.is_empty() && ahead.cells().iter().any(|&c| keep.holds(c)) {
                     if let Some(round) = self.round_kept(field, start, goal, prefer, keep) {
-                        ahead = self.ahead_of(start, round.first_step);
+                        ahead = self.ahead_of_hit(start, round);
                     }
                 }
                 ahead
@@ -1357,7 +1396,10 @@ impl Grid {
             // A search's path is one of many as cheap, its shape
             // whatever order the search met the cells in - a staircase as
             // often as not - so only its first step is read.
-            None => self.ahead_of(start, self.search(start, goal, true, keep)?.first_step),
+            None => match prefer.filter(|_| straight) {
+                Some(prefer) => self.ahead_of_hit(start, self.search_straight(start, goal, keep, prefer)?),
+                None => self.ahead_of_hit(start, self.search(start, goal, true, keep)?),
+            },
         };
         // Past a portal cell the route may be the far side's.
         if let Some(i) = ahead.cells().iter().position(|&c| self.is_portal_cell(c)) {
@@ -1424,7 +1466,7 @@ impl Grid {
         if start == goal {
             return None;
         }
-        self.search(start, goal, false, keep).map(|hit| self.ahead_of(start, hit.first_step))
+        self.search(start, goal, false, keep).map(|hit| self.ahead_of_hit(start, hit))
     }
 
     /// The cells a square of half-side `half` centred on `center` covers,
@@ -1452,9 +1494,15 @@ impl Grid {
             len: 0,
             cell_size: self.cell_size,
             shared: false,
+            left: 0,
         };
         ahead.push(first);
         ahead
+    }
+
+    /// `ahead_of` a search's hit, with the cost it found.
+    fn ahead_of_hit(&self, start: (usize, usize), hit: SearchHit) -> RouteAhead {
+        RouteAhead { left: hit.cost, ..self.ahead_of(start, hit.first_step) }
     }
 
     /// `next_step` on foot: the same route with the portal hub left out,
@@ -1497,6 +1545,49 @@ impl Grid {
     /// included.
     fn search(&self, start: (usize, usize), goal: (usize, usize), hub: bool, keep: KeepOff) -> Option<SearchHit> {
         SEARCH_TABLES.with_borrow_mut(|tables| self.search_in(tables, start, goal, hub, keep))
+    }
+
+    /// `search` through the hub, its first step straightened along `prefer`
+    /// as `descend` straightens a field's: the step along `prefer` where a
+    /// route through it costs what the cheapest does, else - when the
+    /// search's own first step is straight back - a turn off `prefer` that
+    /// does. A step is tried with a search of its own from the cell it
+    /// leads to, and only where its price and the cells it cannot do
+    /// without leave it as cheap as the route found; on a grid with a
+    /// portal that bound does not hold and every step is searched.
+    fn search_straight(&self, start: (usize, usize), goal: (usize, usize), keep: KeepOff, prefer: Step) -> Option<SearchHit> {
+        let hit = self.search(start, goal, true, keep)?;
+        let found = step_of(start, hit.first_step);
+        if found == Some(prefer) {
+            return Some(hit);
+        }
+        let as_cheap = |step: Step| -> Option<SearchHit> {
+            let (col, row) = (start.0 as isize + step.0 as isize, start.1 as isize + step.1 as isize);
+            if col < 0 || row < 0 || col as usize >= self.cols || row as usize >= self.rows {
+                return None;
+            }
+            let next = (col as usize, row as usize);
+            if next != goal && self.blocked_at(next) {
+                return None;
+            }
+            let price = self.cost[next.1 * self.cols + next.0] as u32 + keep.extra_at(next);
+            if self.portal_cells.is_empty() && price + heuristic(next, goal) as u32 > hit.cost {
+                return None;
+            }
+            let rest = if next == goal { 0 } else { self.search(next, goal, true, keep)?.cost };
+            (price + rest == hit.cost).then_some(SearchHit { first_step: next, cost: hit.cost })
+        };
+        if let Some(along) = as_cheap(prefer) {
+            return Some(along);
+        }
+        if found == Some((-prefer.0, -prefer.1)) {
+            // The turns in index order: up before down, left before right.
+            let turns: [Step; 2] = if prefer.0 != 0 { [(0, -1), (0, 1)] } else { [(-1, 0), (1, 0)] };
+            if let Some(turn) = turns.into_iter().find_map(as_cheap) {
+                return Some(turn);
+            }
+        }
+        Some(hit)
     }
 
     /// `search` on the thread's kept tables (`SearchTables`), begun here.
@@ -2753,6 +2844,42 @@ mod route_ahead_tests {
         grid.add_field(goal);
         assert_eq!(grid.route_ahead(at(5, 3), goal, None).unwrap().cells()[0], (4, 3), "the lowest index steps back west");
         assert_eq!(grid.route_ahead(at(5, 3), goal, Some(RIGHT)).unwrap().cells()[0], (5, 4));
+    }
+
+    /// A straightened search takes the step along the heading while a
+    /// route through it is as cheap as any, turns once where it is not,
+    /// and takes a turn before a step straight back.
+    #[test]
+    fn a_heading_straightens_a_searched_route() {
+        let grid = grid(20, 12, &[]);
+        let goal = at(9, 9);
+        let first = |from: Position, heading: Position| grid.route_ahead_straight(from, goal, Some(heading), KeepOff::NONE).unwrap().cells()[0];
+        // Down and right are as cheap from here: each heading keeps its own.
+        assert_eq!(first(at(2, 2), DOWN), (2, 3));
+        assert_eq!(first(at(2, 2), RIGHT), (3, 2));
+        // On the goal's row the step down is dearer: the route turns.
+        assert_eq!(first(at(2, 9), DOWN), (3, 9));
+        // Past the goal's column heading right, the turn down comes
+        // before the step straight back.
+        assert_eq!(first(at(10, 5), RIGHT), (10, 6));
+        // With no heading it is the search.
+        let plain = grid.route_ahead(at(2, 2), goal, None).unwrap().cells()[0];
+        assert_eq!(grid.route_ahead_straight(at(2, 2), goal, None, KeepOff::NONE).unwrap().cells()[0], plain);
+    }
+
+    /// A straightened search never takes a dearer step for the heading's
+    /// sake: round a wall it goes a way as cheap as the search's.
+    #[test]
+    fn a_straightened_search_stays_a_cheapest_route() {
+        // A wall across columns 3..=8 on row 5, the goal straight below it.
+        let walls: Vec<(usize, usize)> = (3..=8).map(|c| (c, 5)).collect();
+        let grid = grid(20, 12, &walls);
+        let (from, goal) = (at(4, 4), at(4, 8));
+        let cost = grid.path_cost(from, goal).unwrap();
+        for heading in [DOWN, RIGHT, Position::new(-1.0, 0.0), Position::new(0.0, -1.0)] {
+            let step = grid.route_ahead_straight(from, goal, Some(heading), KeepOff::NONE).unwrap().first();
+            assert_eq!(grid.path_cost(step, goal).unwrap() + 1, cost, "heading {heading:?}");
+        }
     }
 
     /// A search's path is one of many as cheap, its shape whatever order
