@@ -11,6 +11,7 @@
 //! picked - a decision, not a picture; its `MissileBlast` does travel),
 //! `Rerolled` (a straggler taken off out of every seat's sight - the
 //! replica sees the hull leave and come back through its gate by itself),
+//! `StragglersCalled` (the round's last tanks sent at a seat - a decision),
 //! `PhysicsQuarantine` (logged server-side) and a training round's
 //! `BeatDone`, `DoorOpened`, `FlagTaken` and `BongRevived` (a training map
 //! is never hosted) never travel.
@@ -33,13 +34,14 @@ use crate::simulation::{Event, HitCause, HitTarget};
 
 /// The serde tags (`Event`'s `event` field) of the variants
 /// `WireEvent::from_event` never sends.
-pub const NOT_SENT: [&str; 19] = [
+pub const NOT_SENT: [&str; 20] = [
     "physics_quarantine",
     "beat_done",
     "door_opened",
     "flag_taken",
     "bong_revived",
     "rerolled",
+    "stragglers_called",
     "ai_action",
     "engage_slot",
     "stuck_escape",
@@ -582,6 +584,8 @@ impl WireEvent {
             // Never sent: the hull's leaving and its roll-in through the
             // new gate are in the snapshots.
             Event::Rerolled { .. } => return None,
+            // Never sent: the tanks it calls come in the snapshots.
+            Event::StragglersCalled { .. } => return None,
             // Never sent: the AI's trace.
             Event::AiAction { .. }
             | Event::EngageSlot { .. }
@@ -844,6 +848,7 @@ mod tests {
             Event::WaveStarted { wave: 3, size: 6, tier: Tier::Heavy },
             Event::TankEntered { slot: 9 },
             Event::Rerolled { slot: 9, x: 96.0, y: 64.0 },
+            Event::StragglersCalled { count: 2 },
             Event::WreckRemoved { slot: 9 },
             Event::ObstacleDestroyed { material: Material::Pine, x: 96.0, y: 96.0 },
             Event::ChunksBroken { material: Material::Brick, variant: 2, x: 96.0, y: 64.0, broken: 0b1011, dx: 1.0, dy: 0.0, collapsed: false },
@@ -940,7 +945,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 84, "one sample per Event variant");
+        assert_eq!(seen.len(), 85, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

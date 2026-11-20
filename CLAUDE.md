@@ -84,7 +84,7 @@ One line per module: what it owns, the rule to keep, its design doc. **Before ch
 
 ## Seats (docs/two-players.md, docs/online-coop-prd.md §4.11)
 
-`Game::players` is `1..=MAX_SEATS` (8) seats, a pre-init setting kept across restarts; `Game::seats` holds one tank per owner slot, seats first and enemies from `first_enemy_slot`. **Every walk goes seats in index order, then enemies**, so a one- or two-seat round's RNG stream is unchanged (`determinism_tests::the_one_and_two_seat_streams_are_pinned` - re-baseline consciously, never to go green). The couch is two seats (arrows + Space, WASD + Left Shift; none on iOS/Android); more are a room's. A wrecked seat waits for the round's end, except in a wave round of two or more, where it rolls back in with the next wave; `seats_on_field()` masks seats still in a gate lane. Detail: `docs/codebase.md`, Seats.
+`Game::players` is `1..=MAX_SEATS` (8) seats, a pre-init setting kept across restarts; `Game::seats` holds one tank per owner slot, seats first and enemies from `first_enemy_slot`. **Every walk goes seats in index order, then enemies**, so a one- or two-seat round's RNG stream is unchanged (`determinism_tests::the_one_and_two_seat_streams_are_pinned` - re-baseline consciously, never to go green). The couch is two seats (arrows + Space, WASD + Left Shift; none on iOS/Android); more are a room's. A wrecked seat waits for the round's end, except in a wave round of two or more, where it rolls back in with the next wave (on the final wave after `wave_final_return_seconds`; dropped in where no lane takes it); `seats_on_field()` masks seats still in a gate lane. Detail: `docs/codebase.md`, Seats.
 
 ## Room server (`server/`; detail in docs/platforms.md, k8s/README.md)
 

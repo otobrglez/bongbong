@@ -44,6 +44,7 @@ mod trample;
 mod nav;
 mod oil;
 mod smoulder;
+mod stragglers;
 pub mod portals;
 pub mod present;
 mod props;
@@ -670,6 +671,10 @@ pub enum Event {
     /// follows when it is through. Not sent: a replica sees the hull
     /// leave and come back through the gate by itself.
     Rerolled { slot: usize, x: f32, y: f32 },
+    /// The round's last `count` enemies, out of touch with the fight for
+    /// `straggler_call_after_seconds`, were called to the nearest live
+    /// seat (`Game::straggler_phase`). Not sent: a replica sees them come.
+    StragglersCalled { count: usize },
     /// A wave round removed the wreck in `slot` after
     /// `wave_wreck_despawn_seconds`.
     WreckRemoved { slot: usize },
@@ -1156,6 +1161,9 @@ pub struct Game {
     /// and from that the breather before a field map's next wave. Read
     /// and written by `wave_phase` on a field map's wave round only.
     director: director::Director,
+    /// The straggler rule's lull (`stragglers`): how long the round's
+    /// last enemies have been out of touch with the fight.
+    stragglers: stragglers::Stragglers,
     /// Seconds the round stays frozen behind the opening mission banner.
     /// `update` ticks nothing else while it is positive; a move or fire
     /// input ends it early.
@@ -2030,6 +2038,7 @@ impl Game {
         self.band_enemy_count = enemy_count;
         self.wave = WaveState::new(self.first_enemy_slot() + enemy_count);
         self.director = director::Director::default();
+        self.stragglers = stragglers::Stragglers::default();
 
         // Terrain legality is the nav grid's `usable` test (see
         // `battlefield::enemy_spawn_legal`); the bong is not down yet, so
@@ -2385,6 +2394,7 @@ impl Game {
             self.tick_seat_still(f.dt);
             drop(stage);
             let stage = crate::frame_stages::stage("sim.enemies");
+            self.straggler_phase(&mut f);
             self.enemy_phase(&mut f, &grid);
             drop(stage);
             let stage = crate::frame_stages::stage("sim.weapons");
@@ -4085,6 +4095,10 @@ impl Game {
         let field = self.field_map;
         let live_seats: Vec<Position> =
             if field { players.iter().filter(|p| !p.wreck && !p.entering).map(|p| p.pos).collect() } else { Vec::new() };
+        // Where an arena's called tank heads (`stragglers`): the nearest of
+        // these.
+        let arena_seats: Vec<Position> =
+            if field { Vec::new() } else { players.iter().filter(|p| !p.wreck && !p.entering).map(|p| p.pos).collect() };
         let alert = if field {
             // A field map has no shared alert: each enemy keeps its own,
             // passed only down a chain of neighbours (`field_alerts`).
@@ -4518,6 +4532,10 @@ impl Game {
             let alert = if field {
                 let call = if ai.field.called { field::call_target(&live_seats, tank.position) } else { None };
                 call.or(ai.field.alert)
+            } else if ai.field.called {
+                // The round's last tanks, called on an arena
+                // (`straggler_phase`).
+                field::call_target(&arena_seats, tank.position).or(alert)
             } else {
                 alert
             };
@@ -7874,6 +7892,10 @@ mod mechanics_tests {
     // As `drive`: its cases put a knob table in force on their thread.
     #[cfg(feature = "dev-tools")]
     mod enemies;
+
+    // As `drive`: its cases put a knob table in force on their thread.
+    #[cfg(feature = "dev-tools")]
+    mod round_flow;
 
     const W: f32 = 1280.0;
     const H: f32 = 720.0;

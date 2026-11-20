@@ -911,6 +911,14 @@ pub fn revision_text(revision: u64) -> String {
     format!("{revision:016x}")
 }
 
+/// The revision of the shipped map called `name` as it ships
+/// (`MapFile::revision`), `None` for a name `SHIPPED_MAPS` does not have:
+/// what a level's win is held to (`mode::Session::counts_for_level`).
+pub fn shipped_revision(name: &str) -> Option<u64> {
+    let (_, text) = SHIPPED_MAPS.iter().find(|(n, _)| *n == name)?;
+    MapFile::from_toml_str(text).ok().map(|map| map.revision())
+}
+
 /// The revisions of `SHIPPED_MAPS` as they ship, worked out once.
 fn shipped_revisions() -> &'static [u64] {
     static REVISIONS: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();

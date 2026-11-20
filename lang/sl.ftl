@@ -72,6 +72,7 @@ result-friendly-both = IZGUBE V PRIJATELJSKEM OGNJU: { $n ->
    *[other] { $n } TANKOV
 } IN BONG
 result-all-clear = VSE STOPNJE SO OPRAVLJENE!
+result-uncounted = S SPREMEMBAMI SE NE ŠTEJE
 result-again = ŠE ENKRAT
 result-next = NASLEDNJA STOPNJA
 result-first = NAZAJ NA ZAČETEK

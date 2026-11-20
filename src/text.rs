@@ -110,6 +110,7 @@ keys! {
     RESULT_FRIENDLY_BONG = "result-friendly-bong";
     RESULT_FRIENDLY_BOTH = "result-friendly-both";
     RESULT_ALL_CLEAR = "result-all-clear";
+    RESULT_UNCOUNTED = "result-uncounted";
     RESULT_AGAIN = "result-again";
     RESULT_NEXT = "result-next";
     RESULT_FIRST = "result-first";
@@ -1042,6 +1043,7 @@ mod text_tests {
             (keys::ROUND_TRAINED, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::ROUND_LOST, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_ALL_CLEAR, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("count", 14.into())]),
+            (keys::RESULT_UNCOUNTED, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),
             (keys::RESULT_WRECKS, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("n", 99.into()), ("total", 99.into())]),
             // What friendly fire cost, on a line of its own under them.

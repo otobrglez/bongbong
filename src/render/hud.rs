@@ -717,9 +717,9 @@ pub fn draw_banner(d: &mut impl RaylibDraw, area: Rect, text: &str, size: i32, y
 const FRIENDLY_FIRE_COLOR: Color = Color::new(0xE4, 0x42, 0x19, 255);
 
 /// Draw the end screen under its outcome (docs/levels.md): every level
-/// complete after the last one's win, the round's time and wrecks, the
-/// wrecks by seat from two seats, what friendly fire cost when it cost
-/// anything, then a level's buttons - the way it is
+/// complete after the last one's win, or that a win opens no level, the
+/// round's time and wrecks, the wrecks by seat from two seats, what
+/// friendly fire cost when it cost anything, then a level's buttons - the way it is
 /// counting down to carrying the count - or free play's `countdown` in
 /// their place. In UI points over the dim, centred in the chrome's
 /// `area`, at the rows `hud::result_layout` gives, which is what the hit
@@ -733,8 +733,14 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
     let middle = (area.x + area.w / 2.0).round() as i32;
     let t = text();
     let rows = result_layout(area, view);
-    if let (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }), .. })) = (rows.all_clear_y, view.buttons) {
-        centred(d, middle, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, faded(BUILD_COLOR, a));
+    match (rows.all_clear_y, view.buttons) {
+        (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }), .. })) => {
+            centred(d, middle, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, faded(BUILD_COLOR, a));
+        }
+        (Some(y), Some(ResultButtons { uncounted: true, .. })) => {
+            centred(d, middle, &t.get(keys::RESULT_UNCOUNTED), y, RESULT_LINE_SIZE, faded(TEXT, a));
+        }
+        _ => {}
     }
     let time = t.fmt(keys::RESULT_TIME, &[("time", clock_text(view.stats.seconds).into())]);
     let wrecks = t.fmt(keys::RESULT_WRECKS, &[("n", view.stats.destroyed.into()), ("total", view.stats.enemies.into())]);

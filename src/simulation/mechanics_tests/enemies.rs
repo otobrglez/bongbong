@@ -85,8 +85,9 @@ fn waypoint_of(game: &Game) -> Position {
 /// still more than three cells from the one it had, and how many times
 /// its new waypoint lay behind the heading it held.
 fn wander_legs(table: Tuning) -> (usize, usize) {
-    // Slow, so a leg outlasts the patrol's clock.
-    under(Tuning { enemy_view_range: 100.0, enemy_speed: 60.0, enemy_speed_variance: 0.0, ..table }, || {
+    // Slow, so a leg outlasts the patrol's clock; and never called to the
+    // seat (`stragglers`), so it patrols the whole two minutes.
+    under(Tuning { enemy_view_range: 100.0, enemy_speed: 60.0, enemy_speed_variance: 0.0, straggler_call_alive: 0, ..table }, || {
         let mut game = game_on("version = 1\ntanks = 1\ncells.\"1,1\" = { kind = \"start\" }\n", 1, Some(0));
         set_role_of(&mut game, 1, Role::Player);
         game.debug_teleport(1, Position::new(W / 2.0, H / 2.0), Some(0.0)).expect("slot 1");
