@@ -372,11 +372,40 @@ ground passes under it in whole texels.
   through a swing leaves the view where it is, and the swing goes on
   when the tank does. No frame of camera motion comes after the player's
   hands are still, bar the spring settling the last few pixels.
-- **Smooth with a critically damped spring** (`SmoothDamp`, about 0.5 s),
-  frame-rate independent. A spring trails a target moving at constant
-  speed by about `v * halflife / ln 2` (30 px at 210 px/s and 0.1 s);
-  feeding the tank's velocity forward as the spring's goal velocity
-  removes most of it.
+- **Smooth with a critically damped spring** (`SmoothDamp`,
+  `camera_spring_seconds` 0.16 s), frame-rate independent. A spring trails
+  a target moving at constant speed by about `v * halflife / ln 2` (30 px
+  at 210 px/s and 0.1 s); feeding the tank's velocity forward as the
+  spring's goal velocity removes most of it. What it cannot remove is the
+  speed it carries through a stop: it runs past where it rests and comes
+  back. Measured on longwater (BB-190, `follow_tests::settle_measurements`:
+  two seconds' drive from a standstill, then the key let go; 60 Hz; screens
+  of 1, 1.5 and 2 device pixels to the world pixel):
+
+  | spring | runs past its rest | last device-pixel step after the stop | exactly still after | tank ahead of the view on the start |
+  |---|---|---|---|---|
+  | 0.5 s (before) | 18.7 px | 84 to 113 frames | 179 frames (100 to 112 with the rest rule) | 50.7 px |
+  | 0.35 s | 12.8 px | 51 to 72 frames | 123 (62 to 71) | 45.0 px |
+  | 0.25 s | 8.3 px | 31 to 45 frames | 84 (39 to 45) | 41.1 px |
+  | 0.2 s | 5.7 px | 21 to 33 frames | 67 (28 to 33) | 39.2 px |
+  | **0.16 s** | **3.7 px** | **14 to 23 frames** | **51 (19 to 23)** | **37.6 px** |
+  | 0.12 s | 1.8 px | 7 to 14 frames | 36 (11 to 14) | 36.1 px |
+
+  The view's fastest step on the start is 3.9 px a frame against the
+  tank's 3.5 at every spring, so a shorter one does not make a start
+  sharper; it only takes away the catching-up and the drift back. The rest
+  rule (`camera_rest_px`, a quarter of a device pixel: the spring is put on
+  its goal once it is nearer than that and moving less than that in a
+  sixtieth of a second) moves no visible step - the last device-pixel step
+  is the same or a few frames sooner - so on its own it could not answer
+  the drift; it ends the invisible tail, so a view that has stopped holds
+  one position exactly. Both ship: 0.16 s, the spring the older tests were
+  measured under, and the rule.
+- **A pan has its own pace.** Coming onto a new target near enough not to
+  cut - a hand-over to a teammate, a couch pair's view joining or parting -
+  the spring takes `camera_pan_seconds` (0.5 s) until it is within the dead
+  zone of its goal, and so do a split's halves closing; at the follow's
+  0.16 s a pan of a few hundred pixels would whip across.
 - **Clamp to the field.** The view never shows past the boundary walls on
   an axis where the map is larger than the view; where it is smaller (a
   short, wide field map on a tall tablet) that axis centres.
@@ -396,6 +425,27 @@ ground passes under it in whole texels.
   only for the seat the view is on, scaled by `screen_fx_intensity`,
   and off under reduced motion. An arena's view does not move, so it has
   none.
+- **A blow shoves the view** away from where it came from (C-11,
+  `feedback.rs`, docs/effects.md "Being hit"): in place of the hurt seat's
+  shake, on the same layer as the kick, in device pixels rather than whole
+  blocks - `camera_hurt_shove` (1.5) times the shake's length, about 1 to
+  3 world px, never past the shake's cap (4.5 px), gone in about a quarter
+  of a second. An arena's picture is shifted by it with the shake, inside
+  the same cap and overscan. A hurt with no direction shakes as before.
+  None under reduced motion.
+- **Framing the fight** (C-7, built, off: `camera_fight_pull` 0). With a
+  strength, the goal leans that share of the way toward the weighted
+  middle of the enemies within `camera_fight_radius_px` (15 cells) - each
+  weighted by how near it is, smoothstepped to nothing at the radius, so
+  one crossing the line moves nothing at once - and toward the players'
+  bong for `camera_fight_bong_seconds` after it is bitten, as
+  `camera_fight_bong_weight` enemies; at most `camera_fight_max_px` (2
+  cells) on an axis and only in the room the sight box and the look-ahead
+  leave, which up and down is almost none; eased over
+  `camera_fight_seconds` (1.5 s), slower than the look-ahead swings. It
+  moves the view for something the player did not do, so it waits for a
+  side-by-side on a real fight before it gets a strength. None under
+  reduced motion.
 - **Shake after the follow**, still snapped to blocks, scaled by
   `screen_fx_intensity`, attenuated by distance from the camera (surviv.io
   shakes fully within 10 units and not at all past 40) so a blast across
@@ -450,7 +500,21 @@ ground passes under it in whole texels.
   zooming breaks the block grid, and a shared screen that holds players
   at its edge pins a tank there under fire (the complaint about
   Gauntlet's and Smash's cameras). The LEGO games and Godot's
-  split-screen demo do the split.
+  split-screen demo do the split. Where the look-ahead is on
+  (`camera_lead_max_px` above 0; C-8) the shared view leads along the
+  pair's common heading, when they face the same way, and each half of a
+  split along its own seat's; a couch view the pair's boxes hold short of
+  its lead keeps only the lead it shows, so a split that frees a half does
+  not send it rushing ahead. With the shipped limit of 0 none of it moves
+  anything (`follow_tests::the_default_path_is_unchanged_by_the_fights_pull_and_the_couchs_look_ahead`
+  pins the default path to master's, bit for bit). None under reduced
+  motion.
+- **Seeing its reasoning** (C-10, dev builds): `overlays {camera: true}`
+  draws over each followed view the sight box round each seat it keeps,
+  the dead zone round its base, the look-ahead and its cap, the fight's
+  pull, the committed heading and one being turned to, the spring's goal
+  and the spring, and the kick and shove; `status.camera.trace` (and each
+  split half's `trace`) carries the same numbers (`follow::Trace`).
 
 ## 7. What is off screen
 

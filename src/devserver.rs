@@ -344,6 +344,10 @@ pub struct DevServer {
     /// An `input {cycle_overlays}` request waiting to press the I key on
     /// the next frame's input.
     cycle_overlays_pending: bool,
+    /// The `overlays` tool's `camera` flag: the follow camera's reasoning
+    /// over a followed view (`follow::CameraOverlay`). The dev server's,
+    /// not the round's, so the I key's presets never touch it.
+    camera_overlay: bool,
     pending_shot: Option<PendingShot>,
     events: VecDeque<EventRecord>,
     next_seq: u64,
@@ -443,6 +447,7 @@ impl DevServer {
             injected: None,
             injected2: None,
             cycle_overlays_pending: false,
+            camera_overlay: false,
             pending_shot: None,
             events: VecDeque::with_capacity(EVENT_RING),
             next_seq: 1,
@@ -702,6 +707,11 @@ impl DevServer {
 
     pub fn lockstep(&self) -> bool {
         self.lockstep
+    }
+
+    /// Whether the `overlays` tool's `camera` flag is on.
+    pub fn camera_overlay(&self) -> bool {
+        self.camera_overlay
     }
 
     /// Frame boundary, before input is read: answer every queued request
@@ -1077,7 +1087,7 @@ impl DevServer {
                 "weather" => weather_json(game),
                 "stats" => to_value(game.round_stats()),
                 "turns" => self.turns_summary(),
-                "overlays" => overlays_json(game),
+                "overlays" => overlays_json(game, self.camera_overlay),
                 _ => unreachable!("every STATUS_SECTIONS name has an arm"),
             };
         }
@@ -1243,7 +1253,7 @@ impl DevServer {
                             other => return Err(format!("unknown source {other:?} (screen|scene)")),
                         };
                         if let Some(flags) = &p.overlays {
-                            flags.apply(&mut game.debug_overlays);
+                            flags.apply(&mut game.debug_overlays, &mut self.camera_overlay);
                         }
                         Ok(PendingShot { scale: (p.scale.unwrap_or(0.5) as f32).clamp(0.1, 1.0), source, presented: false, reply: reply.clone() })
                     });
@@ -1257,8 +1267,8 @@ impl DevServer {
                 }
             }
             "overlays" => parse::<tools::OverlayFlags>(&params).map(|flags| {
-                flags.apply(&mut game.debug_overlays);
-                overlays_json(game)
+                flags.apply(&mut game.debug_overlays, &mut self.camera_overlay);
+                overlays_json(game, self.camera_overlay)
             }),
             "nav_grid" => Ok(json!({ "grid": game.nav_grid_ascii(width, height) })),
             "field" => parse::<tools::FieldParams>(&params).and_then(|p| {
@@ -2762,6 +2772,7 @@ fn follow_json(f: &FollowReport, camera: &Camera, view: &View, layout: &Layout) 
         "glide": shot.glide.map(|q| (q * 100.0).round() / 100.0),
         "lead": { "x": r1(shot.lead.x), "y": r1(shot.lead.y) },
         "offset": { "x": camera.offset.x, "y": camera.offset.y },
+        "trace": trace_json(&shot.trace),
         "seating": match f.seating { Seating::Room => "room", Seating::Local => "local" },
         "framing": {
             "visible_cells": [cols, rows],
@@ -2797,6 +2808,7 @@ fn follow_json(f: &FollowReport, camera: &Camera, view: &View, layout: &Layout) 
                             "offset": { "x": camera.offset.x, "y": camera.offset.y },
                             "cut": shot.cut,
                             "in_view": shot.boxes_in(camera.rect(), camera.field, f.sight, 1.0),
+                            "trace": trace_json(&shot.trace),
                         },
                         {
                             "seat": split.seat,
@@ -2804,12 +2816,44 @@ fn follow_json(f: &FollowReport, camera: &Camera, view: &View, layout: &Layout) 
                             "offset": { "x": second.offset.x, "y": second.offset.y },
                             "cut": split.cut,
                             "in_view": split.boxes_in(second.rect(), second.field, f.sight, 1.0),
+                            "trace": trace_json(&split.trace),
                         },
                     ],
                 })
             }
             _ => Value::Null,
         },
+    })
+}
+
+/// `status.camera.trace` (and each split half's): how the follow camera
+/// came to stand where it does this frame (`follow::Trace`), the numbers
+/// the `overlays {camera}` layer draws - world px, to two places: the
+/// `anchor` it is on, the dead zone's `base` and `dead_zone`, the `lead`
+/// in force and its `lead_cap` per axis, the committed `heading` and the
+/// one it is `turning` to with `turned_px` driven along it, the fight's
+/// `pull` in force and what the fight asks (`pull_want`), the spring's
+/// `goal` and where the `spring` stands, whether it is `resting` on its
+/// goal (`camera_rest_px`), and the `kick` and blow's `shove` over it.
+fn trace_json(t: &crate::follow::Trace) -> Value {
+    let r2 = |v: f32| (v * 100.0).round() / 100.0;
+    let p = |v: Vec2| json!({ "x": r2(v.x), "y": r2(v.y) });
+    json!({
+        "anchor": p(t.anchor),
+        "base": p(t.base),
+        "dead_zone": r2(t.dead_zone),
+        "lead": p(t.lead),
+        "lead_cap": [r2(t.lead_cap.0), r2(t.lead_cap.1)],
+        "heading": p(t.heading),
+        "turning": p(t.turning),
+        "turned_px": r2(t.turned_px),
+        "pull": p(t.pull),
+        "pull_want": p(t.pull_want),
+        "goal": p(t.goal),
+        "spring": p(t.spring),
+        "resting": t.resting,
+        "kick": p(t.kick),
+        "shove": p(t.shove),
     })
 }
 
@@ -2875,13 +2919,19 @@ fn skies_value(key: &str, value: &Value) -> Result<crate::map::Skies, String> {
     }
 }
 
-fn overlays_json(game: &Game) -> Value {
-    to_value(game.debug_overlays)
+/// The overlay flags: the round's (`Overlays`) and the dev server's own
+/// `camera`.
+fn overlays_json(game: &Game, camera: bool) -> Value {
+    let mut flags = to_value(game.debug_overlays);
+    if let Some(map) = flags.as_object_mut() {
+        map.insert("camera".to_string(), Value::Bool(camera));
+    }
+    flags
 }
 
 impl tools::OverlayFlags {
     /// Set the flags this patch names; one it leaves out keeps its value.
-    fn apply(&self, o: &mut Overlays) {
+    fn apply(&self, o: &mut Overlays, camera: &mut bool) {
         let set = |to: &mut bool, flag: Option<bool>| {
             if let Some(on) = flag {
                 *to = on;
@@ -2894,6 +2944,7 @@ impl tools::OverlayFlags {
         set(&mut o.pickups, self.pickups);
         set(&mut o.hitboxes, self.hitboxes);
         set(&mut o.stats, self.stats);
+        set(camera, self.camera);
     }
 }
 
@@ -3018,10 +3069,12 @@ mod tests {
 
     /// The `overlays` schema, the `screenshot` schema's `overlays` object
     /// and `apply_overlays`'s accepted names are exactly the `Overlays`
-    /// fields, so a new layer cannot land in the struct without the tools.
+    /// fields and the dev server's `camera`, so a new layer cannot land in
+    /// the struct without the tools.
     #[test]
     fn overlay_schemas_match_the_struct() {
-        let fields: std::collections::BTreeSet<String> = to_value(Overlays::ALL).as_object().unwrap().keys().cloned().collect();
+        let mut fields: std::collections::BTreeSet<String> = to_value(Overlays::ALL).as_object().unwrap().keys().cloned().collect();
+        fields.insert("camera".to_string());
         let keys = |schema: &Value| -> std::collections::BTreeSet<String> { schema["properties"].as_object().unwrap().keys().cloned().collect() };
         let spec = |name: &str| find(TOOLS, name).unwrap().schema();
         assert_eq!(keys(&spec("overlays")), fields);
@@ -3164,6 +3217,7 @@ mod tests {
             cut: false,
             glide: None,
             split: None,
+            trace: crate::follow::Trace { anchor: seat, base: seat, dead_zone: 32.0, goal: seat, spring: seat, resting: true, ..Default::default() },
         };
         server.publish_camera(CameraReport {
             mode: CameraMode::Follow,
@@ -3186,6 +3240,10 @@ mod tests {
         assert!(c["framing"]["tank_mm"].as_f64().is_some_and(|mm| (mm - 26.5).abs() < 0.1), "{c}");
         assert_eq!(c["sight_box"]["in_view"], true);
         assert_eq!(c["target"], json!([1282, 722]));
+        // How the view came to stand there: the trace's numbers.
+        for key in ["anchor", "base", "dead_zone", "lead", "lead_cap", "heading", "turning", "turned_px", "pull", "pull_want", "goal", "spring", "resting", "kick", "shove"] {
+            assert!(c["trace"].get(key).is_some(), "{key}: {c}");
+        }
         // The corners' buttons are hit on the window, where `status.ui`
         // says they are: BUILD at the window's top-right.
         let b = &status["ui"]["buttons"]["build"];
@@ -3241,6 +3299,7 @@ mod tests {
             seat: 1,
             keeps: [Some(seat_b), None],
             cut: false,
+            trace: Default::default(),
             at: Vec2::new(640.0, 360.0),
             normal: Vec2::new(1.0, 0.0),
             apart: 1780.0,
@@ -3255,6 +3314,7 @@ mod tests {
             cut: false,
             glide: None,
             split: Some(split),
+            trace: Default::default(),
         };
         server.publish_camera(CameraReport {
             mode: CameraMode::Follow,
@@ -3567,6 +3627,17 @@ mod tests {
         let status = rx.recv().unwrap().unwrap();
         assert_eq!(status["overlays"]["hitboxes"], false, "{status}");
         assert_eq!(status["overlays"]["stats"], true, "{status}");
+        // The camera's layer is the dev server's own: off by default, set
+        // and cleared on its own, and the round's flags never carry it.
+        assert_eq!(status["overlays"]["camera"], false, "{status}");
+        assert!(!server.camera_overlay());
+        let flags = set(&mut server, &mut game, json!({ "camera": true }));
+        assert_eq!((flags["camera"].clone(), flags["stats"].clone()), (json!(true), json!(true)), "{flags}");
+        assert!(server.camera_overlay());
+        assert_eq!(game.game.debug_overlays, Overlays { stats: true, ai: true, ..Overlays::NONE });
+        let flags = set(&mut server, &mut game, json!({ "camera": false }));
+        assert_eq!(flags["camera"], false, "{flags}");
+        assert!(!server.camera_overlay());
     }
 
     /// A flag name the struct does not have is refused, naming the real

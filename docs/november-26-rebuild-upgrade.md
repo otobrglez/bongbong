@@ -547,7 +547,7 @@ Three rules shaped the cut:
 | 13 | **Enemies.** Straight routes, wander on arrival, leading on the axis, a yield that re-routes, per-weapon fire profiles with safe distances, flee with an exit and cover, reachable crates | D-9, D-10, D-11, D-12, P5-12, P5-14, P5-15 | L | full re-baseline |
 | 14 | **Friendly fire.** Every source hurts everyone, with the radius tell, the aircraft's hold, the bong's hop from a blast, credit, the rewritten tests and docs | P5-8 with FF-1 to FF-8 | L | full re-baseline; `coop` label (the room plays the same rule) |
 | 15 | **Round flow.** Stragglers, blocked lanes, the final-wave return, honest level locks | P5-18, P5-19 | M | field-map streams and `probe-fields` |
-| 16 | **Camera.** A look-ahead that is the same at any speed, has a limit of its own, turns only once the tank has driven the new way and swings only while it drives; a shot's kick on the picture. Then the settle, the fight's pull, the couch's look-ahead, the overlay and a directional blow | C-1, C-2, C-3, C-4, C-5 (built, BB-165); C-6, C-7, C-8, C-10, C-11 | M | none |
+| 16 | **Camera.** A look-ahead that is the same at any speed, has a limit of its own, turns only once the tank has driven the new way and swings only while it drives; a shot's kick on the picture. Then the settle, the fight's pull, the couch's look-ahead, the overlay and a directional blow | C-1, C-2, C-3, C-4, C-5 (built, BB-165); C-6, C-10, C-11, and C-7 and C-8 off by default (built, BB-190) | M | none |
 
 ### Why this order
 

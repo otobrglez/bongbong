@@ -488,8 +488,9 @@ mod establish_tests {
             velocity: Vec2::new(0.0, 0.0),
             top_speed: 210.0,
             live: true,
+            shove: Vec2::new(0.0, 0.0),
         };
-        let seats = Seats { local: vec![0, 1], tanks: vec![tank(0, 300.0, 300.0), tank(1, 2200.0, 1100.0)] };
+        let seats = Seats { local: vec![0, 1], tanks: vec![tank(0, 300.0, 300.0), tank(1, 2200.0, 1100.0)], ..Seats::default() };
         let shot = Follow::default().update(&seats, 1.0 / 60.0, &stage, &FollowRules::of(&Tuning::DEFAULT));
         let split = shot.split.expect("too far apart for one view");
         let view = View::fill(visible, window);

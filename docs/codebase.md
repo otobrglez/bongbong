@@ -1958,12 +1958,16 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`preview`, ignored, writes `target/fish-preview.png`).
 - `feedback.rs` (docs/effects.md, "Being hit, ramming, a kill") — what the seats this screen plays
   feel, headless and owned by `app.rs`: `Feedback::observe_events` reads a `Reading` of the round
-  once a simulated frame (each local seat's hull damage and kill count) and keeps the blows
-  (`Hurt`) and the hold; `shakes`/`pulse`/`tick_of` are what a view draws, picked by `ViewOf`
+  once a simulated frame (each local seat's hull damage and kill count, and the way the frame's
+  `Event::Hit`s drove each hull, `blow_of`) and keeps the blows (`Hurt`) and the hold; a blow with a
+  way shoves its seat's view (`Hurt::push`, `shove_length`, `shove_left`; `camera_hurt_shove*`)
+  instead of shaking it; `shakes`/`shove`/`pulse`/`tick_of` are what a view draws, picked by `ViewOf`
   (`Every`, or one half of the couch's split), and `time_scale` is the hold on a local seat's kill,
   which only an offline round at full motion and off lockstep ever starts. It never writes `Game`,
-  sends nothing and draws no RNG. `render/game.rs` adds its shakes and `Fx::jolts` to the round's
-  (`shockwave::camera_shake_of`) and paints the pulse (`draw_edge_pulse`) over the screen flash;
+  sends nothing and draws no RNG. `render/game.rs` adds its shakes and `Fx::jolts` to the round's,
+  and on a view the follow camera does not move its shove too (`shockwave::camera_shake_with`,
+  under the one cap); the follow camera takes a followed view's shove (`follow.rs`); it paints the
+  pulse (`draw_edge_pulse`) over the screen flash;
   `hud.rs` carries the tick as `PlayerHud::hurt`. Knobs: `hurt_*`, `kill_hitstop_*`. Tests:
   `feedback::tests`.
 - `shockwave.rs` — `Game::shocks` is a list capped at `SHOCK_MAX` (the shader's uniform-array
@@ -2276,15 +2280,33 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   drifts nowhere) and all of it at top speed, swinging at the pace of
   `camera_lead_ease_seconds` under a tank at top speed and `camera_lead_idle_pace` of that under one
   standing (0: only a driving tank swings it), a reversal also held `camera_lead_reverse_hold_seconds` -, an exact
-  critically damped `spring` (`camera_spring_seconds`) with velocity feed-forward toward a goal
-  eased into the field over `camera_edge_ease_px`, then hard rules: the sight box stays on screen
-  (`Shot::boxes_in`), then the field, a short axis centred. **The kick**: `observe_events` notes
+  critically damped `spring` (`camera_spring_seconds`, 0.16 s; `camera_pan_seconds`, 0.5 s, while
+  `Tracker::panning` - coming onto a new key without a cut, until within the dead zone of the goal -
+  and while a split's halves close) with velocity feed-forward toward a goal eased into the field
+  over `camera_edge_ease_px`, put on its goal by the rest rule (`at_rest`, `camera_rest_px`: a
+  quarter of a device pixel, `FollowRules::on_device(device_scale)` in world px), then hard rules:
+  the sight box stays on screen (`Shot::boxes_in`), then the field, a short axis centred. **The
+  fight's pull** (`fight_pull`, `Seats::fight`: the enemies on the field in slot order and the
+  players' bong; `Follow` notes the bong's `Event::Hit`s): built and off, `camera_fight_pull` 0 -
+  with a strength the goal leans toward the feathered, weighted middle of the enemies within
+  `camera_fight_radius_px` and the bitten bong, at most `camera_fight_max_px` inside the room the
+  look-ahead leaves, eased over `camera_fight_seconds`. **The couch's look-ahead**: the shared view
+  leads along the pair's common heading, each open half along its own seat's, while
+  `FollowRules::couch_lead` (not under reduced motion) and only as far as `camera_lead_max_px`
+  allows (0 by default); a couch view held short of its lead by the pair's boxes keeps only what
+  it shows. **The kick**: `observe_events` notes
   each seat's `Event::Fired`; the view on that seat (`ShotKind::Seat` or its half of a split, never
   a shared or spectating view) is knocked `camera_fire_kick_px * screen_fx_intensity` back against
   the gun, decaying over `camera_fire_kick_seconds`, never longer than one kick however fast the
   gun - `Tracker::kick`, added to the centre `step` returns after the spring and put through the
   same two rules, never written into `Tracker::center`; `FollowRules::reduced` (reduced motion)
-  has none. It cuts on a followed seat's
+  has none. **The shove**: `SeatTank::shove`, which `app.rs` sets from `Feedback::shove` for each
+  local seat (`Seats::shove`), rides the same layer, capped at `FollowRules::shove_max_px` (the
+  shake's cap); none under reduced motion. **The trace**: every `step` leaves a `Trace` (anchor,
+  dead zone, lead and its cap, committed and turning heading, pull, goal, spring, rest, kick,
+  shove) on `Shot::trace`/`Split::trace`; `Shot::overlay` is the `CameraOverlay` the dev
+  `overlays {camera}` layer draws (`render::game`'s `draw_camera_overlay`) and `status.camera.trace`
+  reports. It cuts on a followed seat's
   `Teleported`/`TankEntered` (`observe_events`, after every step), on a jump, on a far hand-over and
   on `Follow::cut` (`app.rs`: another round on screen - another map, a room's replica or back). A
   restart - `RoundStarted` or a frame counter going back - cuts the tracker to the new start while
@@ -2306,12 +2328,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   along, none in the dead zone or against the field's edge, eased over `TEXEL_LOCK_SECONDS`), so
   the tank holds its place and the ground passes in whole texels. One per view (`app.rs` keeps the
   first half's and the split's second); a shared, spectating or cut view gets its exact corner.
-  Tests: 34 in `follow::follow_tests` (dead zone, lead cap, the box under a slow spring, the spring
+  Tests: 41 in `follow::follow_tests` (dead zone, lead cap, the box under a slow spring, the spring
   at 30/60/144 Hz, reversal hold, clamps, edge ease, cuts, the restart glide, spectating, the couch,
   the texel lock; a stop and a start, the pixel cap, the commit, a dodge, the kick at 30/60/120 Hz,
-  under a burst, under reduced motion and at the field's edge). Their `rules()` are the table's
-  with the look-ahead by speed, uncapped and uncommitted and no kick - what the older cases
-  measure; `defaults()` are the table's own.
+  under a burst, under reduced motion and at the field's edge; the settle and the rest rule, a
+  hand-over's pan, a blow's shove, the fight's pull, the couch's look-ahead, the trace; and
+  `the_default_path_is_unchanged_by_the_fights_pull_and_the_couchs_look_ahead`, the scripted
+  drives under a busy fight pinned bit for bit to master's path, `MASTER_DRIVE`/`MASTER_COUCH`).
+  `settle_measurements` (ignored) prints the settle table of docs/large-maps-follow-camera.md §6.
+  Their `rules()` are the table's with the look-ahead by speed, uncapped and uncommitted and no
+  kick - what the older cases measure; `couch_rules()` is that with no look-ahead, the couch's
+  geometry; `defaults()` are the table's own and `before_the_settle()` the table before C-6.
 - `establish.rs` (docs/large-maps-follow-camera.md §6) — the establishing shot: a local round on a
   field map whose view shows part of it, opening behind its mission banner, on a field no more than
   `MAX_TEXELS` (4096) a side (and on a phone or a tablet no more than `EMBEDDED_MAX_AREA`, 2048 x
@@ -2328,9 +2355,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the platform's answer, which `app::run` reads once at startup (`set_platform`): iOS's
   `UIAccessibilityIsReduceMotionEnabled` (`app::ios::reduce_motion`) and the page's
   `window.bbMotion` (`page_string`, `from_page`); Android, macOS, Linux and Windows give none, which
-  is full motion. Reduced motion means no camera shake, nothing bending the picture (no ripple, muzzle
-  puff or impact punch), an establishing shot that cuts instead of zooming and a restart that cuts
-  instead of gliding; the follow camera, the split, the arrows and every effect of the round stay.
+  is full motion. Reduced motion means no camera shake, no blow's shove, no fight's pull and no couch
+  look-ahead (`FollowRules::reduced`), nothing bending the picture (no ripple, muzzle puff or impact
+  punch), an establishing shot that cuts instead of zooming and a restart that cuts instead of
+  gliding; the follow camera, the split, the arrows and every effect of the round stay.
   It calms what flashes too: `flash` keeps `reduced_flash_scale` of a whole-screen flash (a kill's,
   a lightning strike's - `weather::lightning_shown`, one stepped flash with no second flicker) and
   `beat` turns a strobe (a lit fuse's glow and its light at night) into one beat a second between

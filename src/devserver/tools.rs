@@ -493,8 +493,8 @@ pub struct HistoryParams {
     pub every: Option<u64>,
 }
 
-/// The debug overlay flags, one per `simulation::Overlays` field; a flag
-/// left out keeps its value.
+/// The debug overlay flags, one per `simulation::Overlays` field and the
+/// dev server's own `camera`; a flag left out keeps its value.
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OverlayFlags {
@@ -505,6 +505,11 @@ pub struct OverlayFlags {
     pub pickups: Option<bool>,
     pub hitboxes: Option<bool>,
     pub stats: Option<bool>,
+    /// The follow camera's reasoning over a followed view: the dead zone,
+    /// the sight boxes, the look-ahead, the committed heading, the fight's
+    /// pull and the spring's goal (`follow::CameraOverlay`). Kept by the
+    /// dev server, not the round, so the I key's presets leave it alone.
+    pub camera: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -1087,7 +1092,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "overlays",
         description: "Read or set the debug overlay flags drawn over the round.",
-        help: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), hitboxes (each tank's hull and turret damage boxes and its rounded movement collider), stats (each tank's readout card: ammo, weapon, hp, speed, velocity, collider size, an enemy's retreat/fire state). Omitted flags keep their value, an unknown flag is an error; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect = hitboxes + stats -> all); `input {cycle_overlays: true}` presses it.",
+        help: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), hitboxes (each tank's hull and turret damage boxes and its rounded movement collider), stats (each tank's readout card: ammo, weapon, hp, speed, velocity, collider size, an enemy's retreat/fire state), camera (a followed view's camera reasoning: the sight box round each seat it keeps in orange, the dead zone round its base in yellow, the look-ahead in cyan and its cap, the fight's pull in magenta, the committed heading in green and one being turned to in pale green, the spring's goal as a yellow cross and the spring as a white ring, a shot's kick and a blow's shove as a red line four times its length, and the numbers along the view's bottom edge; the same numbers are `status.camera.trace`). Omitted flags keep their value, an unknown flag is an error; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect = hitboxes + stats -> all; never `camera`); `input {cycle_overlays: true}` presses it.",
         params: Params::of::<OverlayFlags>(),
         read_only: false,
         destructive: false,
