@@ -786,7 +786,8 @@ impl Game {
         // move a replay.
         let mut rethrown = 0;
         let cap = t.blast_rethrow_max.max(0);
-        for decal in self.decals.iter_mut() {
+        for index in 0..self.decals.len() {
+            let decal = &mut self.decals[index];
             if rethrown >= cap {
                 break;
             }
@@ -807,6 +808,7 @@ impl Game {
                 (center.y + math::sin(angle) * (dist + throw)).clamp(0.0, height),
             );
             decal.rethrow(to);
+            self.decals.moved(index);
         }
     }
 

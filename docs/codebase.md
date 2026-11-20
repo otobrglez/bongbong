@@ -1401,9 +1401,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   snow, ice, wet earth, puddles, rings, over the bare ground and under the marks), light
   (`weather_light.fs`: the field times the light map, banded on the 2 px grid with dithered step
   edges) and sky (`weather_sky.fs`: haze, fog, sand, rain, snow, lightning's white) - ping-ponging
-  with `scene_target` and always ending in it. Each pass draws a `PassView` (its target's world
+  with `scene_target` and always ending in it. **`run_stages` is the one place that orders them**,
+  with the shaders and without: a round (`Game::draw_world`, `RoundStages`) and the builder's
+  canvas (`editor::render`'s `draw_under_sky`, `CanvasStages`) each hand it a `StagePainter` -
+  the bare ground, the field under the light, what shines by itself - and it runs the stages
+  between them. Each pass draws a `PassView` (its target's world
   rect, its light map and the parts it draws, none for the whole target), which is how
-  `render::margin` runs them over the margins (`WeatherFx::shader_passes`). Shaders compiled from
+  `render::margin` runs them over the margins (`WeatherFx::shader_passes`): its stages are its
+  own - a floor with no field on it, lit by the ambient alone, its ground pass reading a bare
+  ground it draws itself, ending in either of its two targets - and are not `run_stages`'. Shaders compiled from
   sources in the binary (ES 100 twins in `static/web/`); a driver that will not compile them draws
   the sky without them (docs/weather.md "Without shaders"): `weather/plain.rs` composes the snow on
   the ground and the fog, sand, rain and snow in the air as plain blocks from the shaders' own noise
@@ -1567,6 +1573,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (a wall or a prop, not a tree, tower, lamp, volcano or door), `paint_tile_run` (each tile's
   shadow, the tile and its cap, in the order given), `sort_trees` (back to front by crown) and
   `paint_tree` (shadow, crown at a lean and an alpha, flames).
+  A canvas over part of the field (`Canvas::cull`) is painted from what stands in it, not by a
+  walk of the map: the tiles, doors, range boards, burning timber and trees through
+  `Game::with_obstacles_in(cull, ..)` (`tile_index.rs`, below), the burn marks and landed rubble through
+  `Marks::shown(cull)` (`marks.rs`), and the grass as the one run of the root-sorted tufts between
+  the view's top and bottom edges (`partition_point`) - each the same things in the same order
+  the full walk draws, which a canvas with no rectangle (an arena, a thumbnail) still is.
   `PaintOptions::locate_cue` is the one thing a thumbnail leaves out. `Game::plain_canvas` (flat
   white instead of the ground tileset; the builder has the same flag) and `Game::hide_players` (no
   player sprite/ring/label) exist for the demos. `render/game.rs` is `Game::render` with
@@ -1697,6 +1709,35 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   their one light, which `render/game.rs` draws with the ground's fire glows). A hulk then smoulders
   (`smoulder`: glowing breaches, flare-ups, from its `smoulder::Hot`) and weathers (`weathering`:
   rust from `wreck_rust_after_seconds`, snow on a cold deck) - docs/aftermath.md.
+- `tile_index.rs` — the tiles by where they stand, for the painters: `TileIndex` (`Game::tile_index`,
+  a `RefCell` nothing that plays reads) lists every `Obstacle` as `(entity, position, material)` in
+  the order `World::query::<&Obstacle>` yields them, files each one's place in that list under its
+  256 px block (`marks::BLOCK_PX`) and keeps every fence's cell (`obstacle::fence_axis` reads a
+  fence's neighbours, in view or not). `gather(rect, out)` is the entities standing inside a
+  rectangle, in the walk's order - the order tiles lie over one another in, so it must not change.
+  `Game::with_obstacles_in(cull, paint)` hands a painter those obstacles as a slice (with no
+  rectangle it is the plain walk, and the index is read only for the fences); a view's list is
+  gathered once and handed again to the frame's other painters of the same view (`picked_in`,
+  keyed by the rectangle and `TileIndex::built`). `Game::obstacles_in(cull, keep)` is the few of
+  them a predicate keeps, each a `hecs::Ref`, for a painter that cannot draw inside the closure
+  (the fuse and burning-timber glows of `render/game.rs`).
+  It is a copy of the world held to it two ways: `Game::refresh_pictures` compares it tile by tile
+  once a frame (`matches`: the one walk of the map a window's frame makes) and builds it again on a
+  difference, and every reader first checks that the world's tables still hold the same ids in the
+  same rows (`stands`, a compare of ids that reads no tile) and builds it again if not - so a
+  painter with no window behind it (a thumbnail, a test) is right too. What `stands` cannot see - a
+  tile moved in place, or one despawned and another spawned under its id in its row - is what the
+  frame's own check is for. The walks that still visit every tile each frame are the weather's
+  (`Occluders::of`, the light list) and a hit flash's search for the tile it struck.
+- `marks.rs` — `Marks<T>`, the list `Game::scorches` and `Game::decals` are: oldest first, read as
+  the slice it holds, with every mark also filed under the 256 px block its anchor (`Anchored`:
+  the centre) is in. `push`/`extend` file a mark, `hold(cap)` drops the oldest (`Game::show`),
+  `shown(cull)` is the marks anchored inside a rectangle in the list's order (every one with no
+  rectangle). A mark has a number - how many came before it this round - so dropping the oldest
+  renumbers nothing; the dropped numbers are swept out of the blocks once they outnumber the marks
+  kept. **A mark whose centre is changed in place must be filed again with `moved(index)`**
+  (`props.rs`'s rethrown rubble is the one place). Rubble still in the air is culled by where it is
+  drawn (`draw_pos`), not by its anchor, and is walked whole.
 - `blast.rs`, `decal.rs` — blast presentation state (`BlastFx::shaped` hashes the form,
   mirror, turn, pace and size, the cause overrides; `fireball.rs` composes it), scorches (a blast's,
   and `Scorch::burn`, the scar a burnt-out ground fire leaves - an ember bed while it cools,
@@ -1751,6 +1792,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   limiter keeps one carry per source and `end_sample` drops those nobody asked about, and the
   continuous emitters emit only where a view sees (`set_views`, `sees`; no views is the whole
   field). `app::fx_runs` stops its clock with the round.
+- `particles.rs` — the particle layer's store, `Particles<T>` (`Fx::particles`): the live
+  particles oldest first in one run of memory - the slice `render/fx.rs` draws in order - with the
+  oldest dropped by moving the run's start, not the run, and the buffer moved back to the front
+  once half of it is behind the start. At the cap (`fx_max_particles`) a push drops the oldest
+  particle that may go: each counts against a `Budget` (its kind's, or `Budget::Damage` for the
+  smoke off a damaged hull, which `Fx::sample_world` marks with `count_newest_as`), and a budget's
+  floor (`Floors`; `fx_damage_smoke_reserve` for the damage smoke, none for a kind's own) is how
+  many of its particles the others cannot take - so a flamethrower and a missile volley flooding
+  the cap leave a hurt hull's smoke standing. Under the cap nothing is dropped, and with no damage
+  smoke live it is oldest first, as a plain list would be. `Budget::index` is an exhaustive match:
+  a new `ParticleKind` fails to compile until it has a budget.
 - `fx.rs` — particles, owned by `app.rs` and passed through `Effects::fx`; `render/fx.rs` draws them
   in the effects language (docs/effects.md). **Deliberately not a field of `Game`**, which is why it
   may use `rand::rng()` while `decal.rs` may not: anything whose position matters later belongs in
