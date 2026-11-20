@@ -91,7 +91,10 @@ the cell (Blip's beam and Oggle's flight go to the top edge). The collider
 (`BONG_COLLIDER_HALF_EXTENT`) is the same for every kind.
 
 **The hop is a real animated leap, not a teleport**: once
-`simulation.rs`'s `bong_hop_target` finds a valid landing spot,
+`simulation.rs`'s `bong_hop_target` finds a valid landing spot - one the
+bong's box fits clear of every tile and of every hull, standing or wrecked,
+by `bong_hull_clearance_px` (`Terrain::bong_fits`; the hulls as they stood
+when the hop began) -
 `Bong::start_hop` only records where the hop is headed (`hop_start`/
 `hop_end`) - `Bong::tick` then linearly interpolates `position` from one to
 the other over BONG_HOP_SECONDS, exactly as long as `hop.png` plays, and

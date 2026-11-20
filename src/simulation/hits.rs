@@ -134,6 +134,11 @@ impl TerrainBox {
 pub(crate) struct Terrain {
     obstacles: Vec<TerrainBox>,
     bongs: Vec<(Entity, Position)>,
+    /// Every hull on the field, standing or wrecked, as the centre and
+    /// half-extents of its movement box grown by `bong_hull_clearance_px`:
+    /// where a bong may not come to rest (`bong_fits`, `bong_slides`). No
+    /// shot and no sight line reads them.
+    hulls: Vec<(Position, Position)>,
     walls: [(Position, Position); 4],
     /// Centres of the map's tall-grass cells (`grass.rs`). Not obstacles:
     /// they block nothing and are not in the nav grid - they only answer
@@ -265,6 +270,12 @@ fn bong_half() -> Position {
     Position::new(BONG_COLLIDER_HALF_EXTENT.0, BONG_COLLIDER_HALF_EXTENT.1)
 }
 
+/// Whether a bong-sized box centred on `p` overlaps the box `(centre, half)`.
+fn bong_meets(p: Position, (centre, half): (Position, Position)) -> bool {
+    let bong = bong_half();
+    (p.x - centre.x).abs() < half.x + bong.x && (p.y - centre.y).abs() < half.y + bong.y
+}
+
 impl Terrain {
     /// Snapshot the world's static terrain. Tiles already flagged
     /// `destroyed` (removed at the end of this frame) are left out.
@@ -301,9 +312,20 @@ impl Terrain {
         // the same instant are told apart by where they stand.
         obstacles.sort_by_key(|b| super::cell_order(b.center));
         let bongs = super::ordered(world.query::<(Entity, &Bong)>().iter(), |(_, b)| super::bong_order(b)).into_iter().map(|(e, f)| (e, f.position)).collect();
+        let clearance = tuning().bong_hull_clearance_px;
+        let hulls = world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| t.body.is_some())
+            .map(|t| {
+                let (hx, hy) = t.move_half_extents(t.facing_along_x());
+                (t.position, Position::new(hx + clearance, hy + clearance))
+            })
+            .collect();
         Terrain {
             obstacles,
             bongs,
+            hulls,
             walls: battlefield::wall_rects(width, height),
             grass: grass.to_vec(),
             water: water.clone(),
@@ -437,8 +459,11 @@ impl Terrain {
         self.obstacles.iter().find(|b| b.entity == entity)
     }
 
-    /// Whether a bong-sized box centred on `p` clears every obstacle tile -
-    /// the landing test for the evasive hop (`combat::bong_hop_target`).
+    /// Whether a bong-sized box centred on `p` clears every obstacle tile
+    /// and every hull, standing or wrecked - the landing test for the
+    /// evasive hop (`combat::bong_hop_target`). The hulls are where they
+    /// stood when the snapshot was taken: one that drives under a hop
+    /// already in the air is not seen.
     ///
     /// A box-vs-box test against the tiles' own hulls, not a radius from
     /// their centres: a tile is 32 px across and the bong 44 x 32, so the
@@ -447,10 +472,27 @@ impl Terrain {
     /// amount of terrain on it, leaves a crowded bong with nowhere at all
     /// to land - which reads as the hop being broken rather than tight.
     pub fn bong_fits(&self, p: Position) -> bool {
+        self.bong_clears_tiles(p) && !self.hulls.iter().any(|&hull| bong_meets(p, hull))
+    }
+
+    /// `bong_fits` against the tiles alone.
+    fn bong_clears_tiles(&self, p: Position) -> bool {
         let half = bong_half();
         !self.obstacles.iter().any(|b| {
             (p.x - b.center.x).abs() < b.half.x + half.x && (p.y - b.center.y).abs() < b.half.y + half.y
         })
+    }
+
+    /// Whether a bong may be slid from `from` to `to` - a gravity well's
+    /// pull (`well::pull_bongs`): `to` clears every tile, and every hull
+    /// too, except one the bong already stands against at `from`, which it
+    /// may slide along or away from but never further into.
+    pub fn bong_slides(&self, from: Position, to: Position) -> bool {
+        self.bong_clears_tiles(to)
+            && self.hulls.iter().all(|&hull| {
+                let (centre, _) = hull;
+                !bong_meets(to, hull) || (bong_meets(from, hull) && to.distance_to(centre) >= from.distance_to(centre))
+            })
     }
 
     /// Whether a zero-width line from `from` to `to` clears every obstacle

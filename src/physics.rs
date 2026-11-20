@@ -71,6 +71,17 @@ fn tank_move_shape(half_extents: (f32, f32)) -> SharedShape {
     SharedShape::round_cuboid(half_extents.0 - r, half_extents.1 - r, r)
 }
 
+/// How far inside a hull's footprint the shape `Physics::hull_fits` and
+/// `Physics::hull_path_clear` ask with stands, px: a hull stopped flush
+/// against a face (within 0.3 px of it, docs/physics-engine-design.md
+/// "Scale") is clear of it.
+const PROBE_SKIN: f32 = 0.5;
+
+/// `tank_move_shape`, `PROBE_SKIN` smaller on every side.
+fn probe_shape(half_extents: (f32, f32)) -> SharedShape {
+    tank_move_shape(((half_extents.0 - PROBE_SKIN).max(1.0), (half_extents.1 - PROBE_SKIN).max(1.0)))
+}
+
 impl Physics {
     pub fn new() -> Self {
         let mut world = PhysicsWorld {
@@ -215,6 +226,52 @@ impl Physics {
         collider.set_shape(tank_move_shape(half_extents));
     }
 
+    /// Whether a hull of overall `half_extents` centred on `at` stands
+    /// clear of every fixed body: a tile, the field's edge, deep water,
+    /// the bong. Other hulls are not asked - a turn is fitted to the
+    /// ground, and two hulls settle between themselves in the solver.
+    ///
+    /// The shape tested stands `PROBE_SKIN` inside the footprint, so a
+    /// hull at rest against a face reads as clear of it. It asks the
+    /// broad phase as the last `step` left it: a collider spawned or
+    /// moved since is seen from the next step on.
+    pub fn hull_fits(&self, at: Position, half_extents: (f32, f32)) -> bool {
+        let shape = probe_shape(half_extents);
+        self.world
+            .query_pipeline_with_filter(QueryFilter::only_fixed())
+            .intersect_shape(Pose::translation(at.x, at.y), shape.as_ref())
+            .next()
+            .is_none()
+    }
+
+    /// Whether that hull could travel `distance` from `at` along the unit
+    /// vector `dir` without meeting a fixed body: `hull_fits` at `at` and
+    /// all the way there.
+    pub fn hull_path_clear(&self, at: Position, half_extents: (f32, f32), dir: Position, distance: f32) -> bool {
+        let shape = probe_shape(half_extents);
+        let options = rapier2d::parry::query::ShapeCastOptions {
+            max_time_of_impact: distance,
+            target_distance: 0.0,
+            stop_at_penetration: true,
+            compute_impact_geometry_on_penetration: false,
+        };
+        self.world
+            .cast_shape(&Pose::translation(at.x, at.y), to_vector(dir), shape.as_ref(), options, QueryFilter::only_fixed())
+            .is_none()
+    }
+
+    /// Move a body by `by`, keeping its velocity: the nudge that fits a
+    /// turning hull beside a wall (`simulation::drive_tank`).
+    pub fn shift(&mut self, handle: RigidBodyHandle, by: Position) {
+        let body = self
+            .world
+            .bodies
+            .get_mut(handle)
+            .expect("tank physics body handle should always be valid");
+        let at = body.translation();
+        body.set_translation(Vector::new(at.x + by.x, at.y + by.y), true);
+    }
+
     /// Teleport a dynamic body (a tank) straight to `position`, bypassing
     /// normal velocity-driven movement entirely - used once, at round init,
     /// to relocate a tank whose rolled spawn point turned out to be
@@ -345,6 +402,20 @@ impl Physics {
         self.world
             .contact_pair(collider_a, collider_b)
             .is_some_and(|pair| pair.has_any_active_contact())
+    }
+
+    /// The direction body `a` presses on body `b` along - the unit normal
+    /// of their deepest active contact, pointing from `a` into `b` - or
+    /// `None` while they do not touch (`touching`).
+    pub fn contact_normal(&self, a: RigidBodyHandle, b: RigidBodyHandle) -> Option<Position> {
+        let (collider_a, collider_b) = (self.collider_of(a), self.collider_of(b));
+        let pair = self.world.contact_pair(collider_a, collider_b)?;
+        let (manifold, _) = pair.find_deepest_contact()?;
+        if !pair.has_any_active_contact() {
+            return None;
+        }
+        let n = from_vector(manifold.data.normal);
+        Some(if pair.collider1 == collider_a { n } else { Position::new(-n.x, -n.y) })
     }
 
     /// What a tank body's solid hull is pressing against *right now*, read

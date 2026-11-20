@@ -596,7 +596,8 @@ impl Game {
 
     /// The bongs in a pull, either side's, alive: pinned (no hop) and slid
     /// toward the core at `well_bong_speed` times the field's pull, wherever
-    /// a bong fits; its collider moved with it. Only a well still standing
+    /// a bong fits and never into a hull (`Terrain::bong_slides`); its
+    /// collider moved with it. Only a well still standing
     /// pulls: one that collapsed this tick, an EMP's included, is out of the
     /// field here, so every bong it held is let go on the tick it goes.
     fn pull_bongs(&mut self, f: &mut Frame, t: &Tuning) {
@@ -618,7 +619,7 @@ impl Game {
             }
             bong.pulled = true;
             let to = bong.position + pull * (t.well_bong_speed * f.dt);
-            if terrain.bong_fits(to) {
+            if terrain.bong_slides(bong.position, to) {
                 bong.position = to;
                 moved.push((bong.body, to));
             }

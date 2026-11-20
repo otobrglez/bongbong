@@ -1051,6 +1051,55 @@ kind to its cross-fixture maximum exactly — deterministic, so an
 exceedance is a real behavior change; the justfile comment carries the
 re-baselining policy.
 
+### Re-baseline 2026-11-19: the drive (BB-167)
+
+The turn that fits, the turn buffer and the lane assist, weight in the
+drive and the brake with a parked hull's hold, wrecks damped by their
+mass, bongs clear of hulls and the prop ram on the body's velocity
+(docs/physics-engine-design.md "Driving", "The turn", "Wrecks"), one at a
+time on the same binary:
+
+| step | the pinned pair (one seat, two seats) | probe readings (fixtures, survive, fields) |
+|---|---|---|
+| before | 11732861727457925354, 18125339335117055137 | 63, 360, 200 |
+| the turn fit | 12388467798789819577, unchanged | 63, 359, 223 |
+| the buffer and the assist | 1943777947950664923, 1567447643681093526 | 66, 366, 177 |
+| weight and the hold | 9140234918546171875, 15604372050397659249 | 61, 351, 212 |
+| wrecks damped by mass | unchanged | maze and towers by one or two |
+| bongs clear of hulls | unchanged | 61, 352, 212 |
+| the prop ram | unchanged | unchanged |
+
+With every knob of the drive at 0 the pinned pair is the one before it
+(the test's comment lists them), so the knobs are the whole change to
+those rounds. The lane group and the weight move every round the way
+chaos does: a kind up on one map and down on the next, the totals level.
+Swept over three seed bases (30 rounds a map, the knobs set by
+`--tuning`), survive's totals with the drive off and on: jitter 174 and
+165, churn 451 and 431, spin 13 and 8, never-arrived 37 and 37,
+border-stuck 34 and 37; the fields' the same within a few.
+
+One reading is worse, and the cause is known. **A parked hull holds its
+ground** (`tank_park_hold_force`), so a tank that drives into a friend
+parked at its firing slot no longer shoves it clear: the queue creeps
+along in contact (maze, seed 0x3eb: three hulls in one corridor at 9 px/s
+for 80 frames, until the last one's own stuck escape turns it away).
+Survive's pile-ups over the three bases read 14 with the drive off, 15
+with the hold alone at 0, 18 with it at 800, 21 at 1500 and 27 at its
+3000; the fixtures' read 1 and 5, where the weight does as much (a light
+hull pushes with less force than it did). At 1500 a hull still shoves a
+parked one of its own weight sideways at its own top speed (192 px/s,
+against 18 at 3000), which is what the hold is there to stop, so the
+force was left and the worse reading accepted for it: maze's `survive`
+ceilings went from pile-up 2 to 5 and tank-grind 0 to 1, to come back
+down when enemies stop driving into a parked queue (BB-178).
+One stall (maze, seed 0x7d4: a hull at rest in a lane, facing down it,
+for the rest of the round) appears in every sweep with the weight on and
+in none with it off; it was not traced to its cause.
+
+The ceilings re-recorded: `fixtures` jitter 3 to 4 (choke; the nine maps'
+jitter fell 10 to 9); `survive` spin 1 to 2 (maze; 13 to 8 over the three
+bases). `probe-fields` passes as it was.
+
 ### Re-baseline 2026-11-19: one of each (BB-166)
 
 One damage funnel, one knock, one blast, one "is it solid", one target

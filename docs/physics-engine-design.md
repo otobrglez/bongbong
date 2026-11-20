@@ -115,12 +115,13 @@ collider:
   weight with no formula of its own.
 - **Orientation**: the body never rotates. A hull that is not square has its
   collider reshaped (`Physics::resize_collider`) whenever its facing swaps
-  between the x and the y axis; `drive_tank` does it on the turn and
-  `Game::place_tank` on a jump.
+  between the x and the y axis; `drive_tank` does it on the turn, standing
+  the hull where its new shape fits first (`fit_turn`, "The turn" below),
+  and `Game::place_tank` on a jump.
 - **Friction and damping**: rapier's defaults (friction 0.5, no damping)
   while it lives. The one place either changes is `Physics::settle_wreck`,
-  on the frame a tank becomes a wreck: `wreck_linear_damping` and
-  `wreck_friction`, so a hulk shoved by a blast comes to rest.
+  on the frame a tank becomes a wreck: `wreck_linear_damping` times the
+  chassis's mass factor, and `wreck_friction` ("Wrecks" below).
 
 ### Driving
 
@@ -137,6 +138,22 @@ locomotion model, one impulse a step on the body's real velocity
   `tank_decel_snap_px`, so letting go stops a hull in a short, heavy slide.
 - **Across the tracks** it kills the sideways slide, capped by
   `tank_turn_grip_force` over mass: a turn at speed drifts a little.
+- **Weight**: the drive's force is multiplied by the chassis's mass factor
+  to the power `tank_drive_mass_exponent`, the brake's rate by the factor to
+  `tank_brake_mass_exponent` (both 0.5; both exactly 1 on the standard
+  chassis and at 0). A heavy hull still gathers speed and stops slower
+  than a light one - the force grows slower than the mass - but it pushes
+  harder: nose to nose the heavy one wins, and it shoves a light hull out
+  of its way.
+- **A parked hull holds its ground** (`tank_park_hold_force`): with no
+  drive commanded and another hull against it
+  (`ContactStats::touching_tank`), its tracks take that much more force
+  off its motion, times its mass factor, along them on top of the brake
+  and across them on top of the grip. A hull of its own weight then creeps
+  it a step's shove at a time (about 18 px/s), a lighter one hardly moves
+  it and a heavier one shoves it aside; a hull nothing touches stops and
+  slides exactly as without it. At 0 any hull pushes any parked hull
+  sideways at its own top speed.
 - **Footing** scales all of it (`Footing`): a ford's pace, drive and grip
   and its current, ice, rubble, ooze, and a gravity well's pull - the model
   runs in the frame of whatever carries the hull.
@@ -149,6 +166,60 @@ locomotion model, one impulse a step on the body's real velocity
 A seat whose client owns its hull online is not driven here at all: the
 room accepts the pose the client sends, inside limits
 (`Game::accept_seat_pose`, docs/online-coop-prd.md section 4.14).
+
+### The turn
+
+A hull is longer than it is wide, and a turn swaps the two under it. Three
+things make a turn land where the player meant it. All three read the hull,
+its body's velocity and the *fixed* bodies around it (tiles, the field's
+edge, deep water, the bong; `Physics::hull_fits`, `hull_path_clear`) and
+keep no state, so a client's prediction replays them from the same pose;
+other hulls are never asked. Seats and enemies go through the same code.
+
+- **The fit** (`fit_turn`, `tank_turn_fit_px` 10): before the collider is
+  reshaped, where the new shape would reach into a fixed body the hull is
+  moved to the nearest spot it fits, velocity kept - along its new length
+  first (ahead, then back), then along the heading it turned from as well
+  (back before on), a px at a time out to the knob. Where nothing in reach
+  fits it turns where it stands and the solver pushes it out, as it does
+  for every turn at 0. The move is at most the knob in each axis, inside
+  what `accept_seat_pose` lets a client's hull move in a tick.
+- **The buffer** (`buffer_turn`, `turn_buffer_px` 16): a turn across the
+  heading pressed just short of an opening is held - the hull told to drive
+  on - while the new heading is walled off within `lane_look_px` both where
+  the hull stands and where its slide would end, and is clear from some
+  point within the buffer's distance ahead. It runs before `Tank::control`:
+  the seats' in `drive_tank`, the enemies' in `enemy_phase`'s collect pass.
+  A stopped hull, one in a skid or a spin, and one in a well's pull turn at
+  once.
+- **The assist** (`lane_guide`, `lane_assist_px` 12): a driving hull whose
+  way ahead is walled off within `lane_look_px`, with the way clear a
+  little to one side, is slid across to it by its tracks - at up to
+  `lane_assist_grip` times their grip, no faster than the hull drives and
+  no faster than that grip can stop in what is left to go. It looks from
+  where the hull's sideways slide would end, so a hull that will come to
+  rest in the clear is left to; the side against the slide is tried first
+  and reaches further, by what the guided grip needs to stop the slide.
+  That is what brings a turn pressed late back to its lane, and what
+  guides a hull a few px off a lane's centre into it instead of stopping
+  it on the lane's corner.
+
+An enemy times its own turns one slide short of a lane's centre
+(`Ai::lane_turn`), so its way is clear where its slide ends and the buffer
+and the assist leave it alone; they act on it where it would have caught a
+corner. Each costs a driving hull a handful of shape casts a step, and only
+while its way is walled off.
+
+### Wrecks
+
+A wreck is no longer driven: what holds it is the damping
+`Physics::settle_wreck` puts on its body, `wreck_linear_damping` (30) times
+its chassis's mass factor. Damping takes a share of the hulk's speed off
+every second, so the speed a pusher's drive holds it at falls with the
+hulk's weight twice over: an assault hull shoves a scout's wreck at about
+70 px/s, its like's at about 50 and a titan's at about 20, where at a
+damping of 4 any of them went at the pusher's own pace. A blast still
+throws a wreck (`knock::Knock`), a few px.
 
 ### Knocks
 
@@ -207,6 +278,12 @@ The dead tile's own body is removed at the end of the frame
 (`cleanup_done`).
 
 ### The bong
+
+A bong comes to rest clear of every hull, standing or wrecked: a hop's
+landing (`Terrain::bong_fits`) and a gravity well's slide
+(`Terrain::bong_slides`) both test the hulls' movement boxes, grown by
+`bong_hull_clearance_px`, as they stood at the start of the step. A hull
+that drives under a hop already in the air is not seen.
 
 A bong is a fixed body relocated with `set_position` every frame, not a
 kinematic one. A bong *hops*: a kinematic body asked to be far away by the

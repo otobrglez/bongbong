@@ -532,6 +532,16 @@ tunables! {
         /// speed instead of bottoming out. Reaches `tank_speed` in well
         /// under a second.
         tank_accel_force: f32 = 4200.0 in 100.0 ..= 30000.0;
+        /// Weight in the drive: `tank_accel_force` is multiplied by the
+        /// chassis's mass factor (`tank_mass_factor`) to this power, so a
+        /// heavy hull pushes harder than a light one - nose to nose the
+        /// heavy one wins, and it shoves a light hull out of its way -
+        /// while still taking longer to reach its speed for any power
+        /// under 1. At 0.5 a titan drives with 1.37 times the standard
+        /// force and gathers speed 0.73 times as fast (0.53 at 0); a
+        /// scout with 0.88 times the force, 1.14 times as fast (1.30 at
+        /// 0). 0 gives every chassis the same force.
+        tank_drive_mass_exponent: f32 = 0.5 in 0.0 ..= 1.5;
         /// Braking curve (releasing a direction, reversing, or coasting off
         /// a knockback): `1 - exp(-rate * dt)` is the fraction of the
         /// remaining speed gap closed this frame, frame-rate independent. A
@@ -541,6 +551,30 @@ tunables! {
         /// way stopped" in ~150ms at 80. Higher = snappier stop. Verify
         /// headlessly with `cargo run --bin probe -- --scenario brake`.
         tank_decel_curve_rate: f32 = 80.0 in 1.0 ..= 500.0;
+        /// Weight in the brake: the brake's force grows with the
+        /// chassis's mass factor to this power (the rate above is
+        /// multiplied by it before the division by mass), so a heavy hull
+        /// is held back by more than a light one. 1 stops every chassis
+        /// in the same time; 0 is one brake force for all, which leaves
+        /// the heaviest hulls the easiest to push along their tracks.
+        tank_brake_mass_exponent: f32 = 0.5 in 0.0 ..= 1.5;
+        /// A parked hull holds its ground: with no drive commanded and
+        /// another hull against it, its tracks resist with this much more
+        /// force (times its chassis's mass factor), along them on top of
+        /// the brake and across them on top of the grip. Set against
+        /// `tank_accel_force`: a hull of the same weight then only creeps
+        /// it along a step's shove at a time, a lighter one hardly moves
+        /// it, and a heavy one (whose drive `tank_drive_mass_exponent`
+        /// makes stronger) shoves it aside. Nothing changes for a hull
+        /// that nothing touches - a stop slides as far, a hit nudges as
+        /// far. 0 leaves a parked hull to its brake and grip alone, which
+        /// any hull pushes sideways at its own top speed - as a hull of
+        /// the same weight still does at half the default. It holds an
+        /// enemy parked at its firing slot against its own side too: one
+        /// that drives into it creeps the queue along instead of shoving
+        /// it clear (docs/gameplay-verification-design.md, the BB-167
+        /// re-baseline).
+        tank_park_hold_force: f32 = 3000.0 in 0.0 ..= 30000.0;
         /// The exponential brake only approaches zero asymptotically, so
         /// this is the remaining speed-gap (px/s) below which
         /// `Game::drive_tank` snaps straight to the target instead of
@@ -557,6 +591,46 @@ tunables! {
         /// whether or not a direction is held, so sideways knockback gets
         /// scrubbed by this too.
         tank_turn_grip_force: f32 = 2000.0 in 0.0 ..= 30000.0;
+        /// How far (px) a hull that turns is moved along its new length
+        /// to stand clear of the ground: a hull longer than it is wide
+        /// grows along the axis it turns onto (a longbow by 9 px a side),
+        /// and beside a wall that would leave it sunk in the wall until
+        /// the solver pushed it out. It goes the way it now faces if that
+        /// fits, back if not, the shortest way that fits; where nothing
+        /// within reach does, it turns where it stands. Every hull that
+        /// drives goes through `Game::drive_tank`, the enemies' too. 0
+        /// turns every hull where it stands.
+        tank_turn_fit_px: f32 = 10.0 in 0.0 ..= 32.0;
+        /// The turn buffer: how far (px) a hull drives on along its old
+        /// heading when a turn is pressed just short of an opening. A
+        /// turn onto a heading that is walled off where the hull stands
+        /// (and where its slide would end) waits while an opening lies
+        /// within this distance ahead, and is taken when the hull reaches
+        /// it; with none that near the hull turns at once and faces the
+        /// wall. Only a wall within `lane_look_px` of the hull counts, so
+        /// a turn in the open is never held. The enemies drive through
+        /// the same rule, and their own turns - made a slide short of a
+        /// lane's centre line (`Ai::lane_turn`) - pass it untouched. 0
+        /// takes every turn the step it is pressed.
+        turn_buffer_px: f32 = 16.0 in 0.0 ..= 64.0;
+        /// Lane assist: how far (px) to either side a driving hull is
+        /// guided onto an opening. A hull whose way ahead is walled off
+        /// within `lane_look_px` - where it stands, or where its slide
+        /// would end - while the way is clear this near to one side is
+        /// slid across to it at up to its own pace: a turn pressed a
+        /// little late comes back to its lane, a hull a few px off a
+        /// gap's centre line goes through, a corner clipped by a few px
+        /// is rounded. Tiles, the field's edge, deep water and the bong
+        /// count; hulls do not. Enemies are guided as seats are. 0 guides
+        /// nothing.
+        lane_assist_px: f32 = 12.0 in 0.0 ..= 32.0;
+        /// How far ahead (px) the turn buffer and the lane assist look
+        /// for a wall and for the clear way past it.
+        lane_look_px: f32 = 32.0 in 4.0 ..= 96.0;
+        /// The tracks' grip while the lane assist guides a hull, as a
+        /// multiple of `tank_turn_grip_force`: what stops the slide a
+        /// late turn carries past its lane.
+        lane_assist_grip: f32 = 8.0 in 1.0 ..= 100.0;
         /// Purely cosmetic hull-turn animation: `Tank::rotation` itself
         /// still snaps instantly (physics/aim/track heading all key off it);
         /// `Tank::visual_rotation` chases it at this many degrees per second
@@ -1929,12 +2003,17 @@ tunables! {
         /// A wreck burns for this long, then settles into a static charred
         /// hulk.
         wreck_burn_seconds: f32 = 4.0 in 0.0 ..= 30.0;
-        /// Linear and angular damping applied to a tank's body the frame it
-        /// becomes a wreck. Nothing else in the world sets damping (rapier
-        /// defaults to none) and a wreck stops being driven, so a shoved
-        /// hulk used to slide until something stopped it. This is what
-        /// makes a shove move it a little and then let it rest.
-        wreck_linear_damping: f32 = 4.0 in 0.0 ..= 30.0;
+        /// Linear and angular damping put on a tank's body the frame it
+        /// becomes a wreck, times its chassis's mass factor: a wreck is no
+        /// longer driven, and this is the drag of dead metal on the
+        /// ground. It takes this share of the hulk's speed off every
+        /// second, so what a pushing hull's drive can hold it at falls
+        /// with the hulk's weight twice over - a standard hull shoves a
+        /// standard wreck at about 50 px/s, a titan's at about 20 - and a
+        /// blast's shove moves it a few px. Nothing else in the world
+        /// sets damping. At 4 a wreck was pushed at the pusher's own top
+        /// speed.
+        wreck_linear_damping: f32 = 30.0 in 0.0 ..= 200.0;
         /// Surface friction on a wreck, against rapier's 0.5 default: a
         /// live tank shunting one should bleed energy rather than skid off
         /// it.
@@ -2539,6 +2618,10 @@ tunables! {
         /// Hop landing spots must stay this far (px) inside the battlefield
         /// edge.
         bong_hop_bounds_margin: f32 = 40.0 in 0.0 ..= 200.0;
+        /// The gap (px) a bong keeps from a tank's hull, standing or
+        /// wrecked, where it lands a hop and where a gravity well slides
+        /// it. 0 lets it come to rest flush against one.
+        bong_hull_clearance_px: f32 = 4.0 in 0.0 ..= 32.0;
         /// Bite a tank of the *other* side within this factor of the
         /// bong's size (`bong::Side::bites`: a bong never bites the side
         /// whose objective it is).
@@ -2684,6 +2767,14 @@ tunables! {
         palm_pass_over_chance: f64 = 0.6 in 0.0 ..= 1.0;
         /// Odds a projectile passes between a snag's bare limbs.
         snag_pass_over_chance: f64 = 0.5 in 0.0 ..= 1.0;
+        /// How fast (px/s) a live hull's body has to be going into a prop,
+        /// along the contact between them, for the touch to count as a
+        /// ram: what runs a sandbag's, a fence's or a tree's ram clock and
+        /// what hurts a barrel. It is the body's own velocity going into
+        /// the step, so a hull knocked or skidding into a prop rams it
+        /// with no drive commanded, and one grazing along a prop's face
+        /// does not. 0 counts every touch by a hull that is moving at all.
+        prop_ram_min_speed: f32 = 2.0 in 0.0 ..= 100.0;
         /// Seconds a tank has to keep pushing into a sandbag before it
         /// collapses. Kept under `enemy_breach_after_seconds` so an AI that
         /// drives into one pushes through instead of stopping to shoot it.
