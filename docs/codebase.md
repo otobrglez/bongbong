@@ -34,7 +34,26 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 
 ## App, session and data
 
-- `app.rs` — owns the raylib handle, the loop and the `mode::Session`. Play: gathers a
+- `app.rs` — owns the raylib handle, the loop and the `mode::Session`. `run` opens the window, loads
+  the art and builds an `App` - what the window keeps from frame to frame: the session, the sheets
+  (`SheetSet`, whose `textures(theme, blocks)` is the one `Textures` the round and the builder draw
+  from), the shaders, the render targets, the layers beside the round (particles, feedback,
+  indicators, the bong's voice), the cameras and the clocks - and `game_loop::run` calls
+  `App::frame` on it, a blocking loop natively and the browser's own on the web. A frame is
+  `frame_input` (the dev tools' requests, the window laid out as a `Presentation`, staged tuning
+  applied, the buttons and dialogs hit-tested, then the round's `Input` gathered: the one place
+  raylib's input is read; its `Frame` is what the later phases take), then in Build `frame_build`
+  (the canvas drawn), else `frame_sim` (a room's seat sent or the local round stepped and posed, the
+  level's outcome and countdown), `frame_camera` (the whole field, a pinned view or the follow
+  camera with its split and establishing shot: a `Shot`) and `frame_draw` (the layers beside the
+  round brought up to the frame, then `Game::render`). `app/dev.rs` is `DevHooks`, the dev tools'
+  side of the frame: the dev server on a native window, the page's `capi` feeds on the web, a
+  phone's `FrameStats` line. The frame calls every hook in every build - `before_frame`,
+  `pinned_camera`, `take_hints`, `publish_ui`, `hold_touches`, `lockstep`, `shape_input`, `advance`
+  (`false` where no dev server runs the steps, and the frame runs them itself through the same
+  `after_step` readers), `publish_camera`, `after_draw` - and each does its work only where its
+  tool is built, so the `cfg(feature = "dev-tools")` attributes live there and not in the frame.
+  Play: gathers a
   `simulation::Input` (`Input::two` from the keyboard and touch) and runs `Game::update` in whole
   steps of `PHYSICS_FIXED_DT` - `pacing::StepClock` pays frame time out as zero or more steps per
   rendered frame, at most `SIM_MAX_STEPS_PER_FRAME` (4, the rest dropped, so a stall never spirals;
@@ -1949,8 +1968,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   GPU's lands in the swap. The state is a thread-local, so the window's is the main thread's and a
   test's its own. docs/tooling.md, Performance instruments, has the recipes and the baseline.
   `render/batch.rs` is `RenderBatch`: rlgl's batch raised to the desktop's 8192 quads on the GLES
-  builds (the web, iOS, Android; ES 2's own is 2048), loaded after the window opens and held by the
-  frame closure. `render/shapes.rs` is the walls sheet's texture with the white block raylib draws
+  builds (the web, iOS, Android; ES 2's own is 2048), loaded after the window opens and held by
+  `app.rs`'s `App`. `render/shapes.rs` is the walls sheet's texture with the white block raylib draws
   its shapes from (`SetShapesTexture`), so a rectangle and a wall sprite share a batch - a wall
   piece is a shadow rectangle then its sprite. The texture is the sheet at the origin of one twice
   as tall and no wider: halving a texture coordinate loses no bit, so every sample lands on the

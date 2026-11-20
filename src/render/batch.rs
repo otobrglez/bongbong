@@ -6,7 +6,7 @@
 //! blocks flushes four times as often there. [`RenderBatch::load`] gives
 //! the window the desktop's size, which still fits ES 2's 16-bit indices
 //! (four vertices a quad, 32768 in all), and costs under a megabyte.
-//! The window holds it in its frame closure for as long as it draws.
+//! The window holds it (`app.rs`'s `App`) for as long as it draws.
 
 use sola_raylib::ffi;
 
