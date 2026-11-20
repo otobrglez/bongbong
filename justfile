@@ -112,11 +112,19 @@ probe-waves:
 # gated nothing. border-stuck=1 (props, u-trap) and spin=1 (maze,
 # tight-corridors) sit at their readings; churn=10 stands over a 7
 # (props).
+# jitter=4 is choke, re-read 2026-11-19 (BB-167) with the drive's turn
+# fit, turn buffer, lane assist and weight in (docs/physics-engine-design.md
+# "The turn"): every chassis but the standard one gathers speed and brakes
+# at another rate, so every round replays differently. Two of choke's four
+# are the hulls flagged before, one dithers 3 px and one drives a loop; the
+# nine maps' jitter went 10 to 9 and their total 63 to 61, and over three
+# seed bases (30 rounds a map) jitter reads 19 with the drive's knobs at 0
+# and 22 with them on.
 # Extra arguments go to every run - a weapon's `--crate <kind>` or an armed
 # `--tuning <file>` (docs/sonic-hammer.md "Probe") - under the same
 # ceilings. How the maps are run is `_probe-maps`; CI runs this recipe
 # (.github/workflows/ci.yml), so these are the only copy of the ceilings.
-fixture_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=3 --budget staircase=8 --budget spin=1 --budget churn=10 --budget clustering=1 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=1 --budget offbox-fire=0"
+fixture_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=4 --budget staircase=8 --budget spin=1 --budget churn=10 --budget clustering=1 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=1 --budget offbox-fire=0"
 
 probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames 1800 --rounds 10 --seed 1000 " + fixture_ceilings + " " + args)
 
@@ -140,9 +148,21 @@ probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames
 # rounds a map) the same kinds do not move: maze clustering 42 to 43 and
 # never-arrived 22 to 20, choke jitter 79 to 69, pockets border-stuck 24
 # to 24 and churn 131 to 128.
+# spin=2 is maze, re-read 2026-11-19 (BB-167) with the drive in (see
+# `fixture_ceilings`): over three seed bases the nine maps' spins read 13
+# with the drive's knobs at 0 and 8 with them on. pile-up=5 (2 before) and
+# tank-grind=1 (0 before) are maze, re-recorded with the same change: a
+# parked hull holds its ground (`tank_park_hold_force`), so a tank that
+# drives into a friend parked at its firing slot creeps the queue along in
+# contact where it used to shove it clear. Over three seed bases the nine
+# maps' pile-ups read 14 with the drive's knobs at 0, 15 with the hold
+# alone at 0, 18 with it at 800, 21 at 1500 and 27 at its 3000
+# (docs/gameplay-verification-design.md, the BB-167 re-baseline). The
+# worse reading is accepted for the hold (Oto, 2026-11-20); the enemies'
+# queueing is BB-178's to fix, and these two come back down with it.
 # Re-baseline as `probe-fixtures` is: on purpose, never to go green. CI
 # runs this recipe too.
-survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=14 --budget staircase=17 --budget spin=1 --budget churn=25 --budget clustering=7 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0"
+survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=14 --budget staircase=17 --budget spin=2 --budget churn=25 --budget clustering=7 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=1 --budget pile-up=5 --budget offbox-fire=0"
 
 probe-survive *args: (_probe-maps "probe-survive" "maps/test/*.toml" "--scenario survive --frames 1800 --rounds 10 --seed 1000 " + survive_ceilings + " " + args)
 

@@ -947,7 +947,9 @@ step from where the room has the hull is bounded by the chassis's top
 speed over the ticks the mailbox read vouches for
 (`Mailbox::pose_reach_ticks`: the driving since the last pose, held to the
 room's own ticks since it, never fewer than `POSE_REACH_TICKS`) plus
-`POSE_REACH_SLACK_PX`; the pose must lie inside the field, off a solid
+`POSE_REACH_SLACK_PX`, and by a turn fit more (`tank_turn_fit_px` each
+way, docs/physics-engine-design.md "The turn") on the tick the pose turns
+the hull across its tracks; the pose must lie inside the field, off a solid
 tile and out of deep water; a wreck and a seat still rolling in through a
 gate own nothing. **The one correction path is `Placed`**: a refused pose
 holds the hull where it was and answers with `Placed { seat, x, y, dir }`,

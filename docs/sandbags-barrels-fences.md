@@ -48,7 +48,11 @@ knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
 - **Sandbags**: a shot passes over at `sandbag_pass_over_chance` (0.35) odds,
   rolled per projectile per tile, else hits (`sandbag_max_health` 45 over
   three stages). A tank pushing into one collapses it after
-  `sandbag_ram_seconds` (0.4). Don't block line of sight.
+  `sandbag_ram_seconds` (0.4). Don't block line of sight. Pushing is the
+  hull's body going into the prop: at `prop_ram_min_speed` (2 px/s) or more
+  along the contact between them as the step began, whether driven, knocked
+  or skidding - a hull grazing along a prop's face does not ram it. The
+  same test runs a fence's and a tree's clock and a barrel's ram damage.
 - **Barrels**: `barrel_max_health` 18; a lethal hit or a ram
   (`barrel_ram_damage_per_second` 40) detonates it at once. The blast
   (`barrel_blast_radius` 96, `barrel_blast_damage_min/max` 15/30 with

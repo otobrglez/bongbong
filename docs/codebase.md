@@ -725,7 +725,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `tick_burns` (wood that finishes charring dies through `obstacle_died`, the funnel every tile
     death passes; a burning plank's chunks char through one by one, and burning wood and trees throw
     hashed embers downwind, `Game::embers`, that `land_embers` lets light the wood they fall on -
-    docs/WALLS_SPEC.md §12); `ram_props`; `barrels`/`debug_detonate` (a tool's click: queued like
+    docs/WALLS_SPEC.md §12); `ram_props` (a live hull rams a prop it touches while its body went
+    into the step at `prop_ram_min_speed` or more along the contact - `Tank::ram_velocity`, taken
+    in `step_world` before the solver - so a knocked or skidding hull rams and a grazing one does
+    not); `barrels`/`debug_detonate` (a tool's click: queued like
     `debug_kill`, applied as a fatal direct hit at the top of the next frame). Pass-over and
     deflection rolls live in `resolve_projectiles`. Every cosmetic choice is hashed; only damage
     rolls and chance knobs strictly between 0 and 1 draw RNG, so prop-free maps replay unchanged.
@@ -939,7 +942,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `maps/default.toml`) is the only terrain source.
 - `physics.rs` (docs/physics-engine-design.md) — the rapier wrapper: solid bodies only, no sensors
   or collision groups. `settle_wreck` is the one place damping is set, on the frame a tank becomes a
-  wreck. Rapier's lengths are pixels (`length_unit` 1, so its own look-ahead is 0.02 px and it
+  wreck (`wreck_linear_damping` times the chassis's mass factor: a heavy hulk is the harder to
+  shove). `hull_fits` and `hull_path_clear` ask whether a hull's shape stands or travels clear of the
+  *fixed* bodies - what the turn fit, the turn buffer and the lane assist read (`fit_turn`,
+  `buffer_turn`, `lane_guide` in `simulation/mod.rs`; the design doc's "The turn"), stateless so a
+  client's prediction replays them; `shift` moves a body keeping its velocity; `contact_normal` is
+  the direction one body presses on another along. The drive gives each chassis its weight
+  (`tank_drive_mass_exponent`, `tank_brake_mass_exponent`) and a parked hull its hold
+  (`tank_park_hold_force`, only with another hull against it). Rapier's lengths are pixels (`length_unit` 1, so its own look-ahead is 0.02 px and it
   pushes an overlap out at 3 px/s); the two limits that matter in a pixel world are set here: the
   speed cap (`PHYSICS_MAX_SPEED`, one cell a step, above every knock and pull) and every hull's
   one-step look-ahead (`HULL_LOOK_AHEAD`, rapier's soft CCD, set at spawn for the body's whole
@@ -1110,7 +1120,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   every seed's stream is unchanged. `Bong::at_rest` is one as a round sets it down, the round's and
   the builder's canvas's alike. Art (generated, `tools/spritegen/bongs/`) faces right and is
   mirrored. **A bong only bites the other side**; the
-  evasive hop shies from any tank (`combat::bong_hop_target`, a box test via `Terrain::bong_fits`).
+  evasive hop shies from any tank (`combat::bong_hop_target`, a box test via `Terrain::bong_fits`,
+  which clears every tile and every hull, standing or wrecked, by `bong_hull_clearance_px`; a well's
+  slide asks `Terrain::bong_slides`, which never takes a bong further into a hull).
   `damage`/`heal` are the only health paths and no-op once dead; healing comes only from the bong
   health pack, which a tank delivers or a hurt bong fetches itself: below `bong_pack_seek_below`
   it hops straight at the nearest pack within `bong_pack_seek_range` with no tile on the line
