@@ -647,10 +647,9 @@ tunables! {
         /// the sprite's own design-pixel grid, each whole block the pixel
         /// under its centre (`turn_corner`). 2: sheared on that grid,
         /// every pixel of the sprite kept and moved whole. A quarter turn
-        /// is the plain blit in every mode. Plain is the default: clean
-        /// reads better on small hulls and tower tops and worse on a
-        /// large detailed hull mid-turn. Live.
-        turn_mode: i32 = 0 in 0 ..= 2;
+        /// is the plain blit in every mode. Clean is the default, chosen
+        /// by play. Live.
+        turn_mode: i32 = 1 in 0 ..= 2;
         /// In `turn_mode` 1, how far a design pixel is cut at a corner
         /// whose two neighbours are one colour, along its two edges: 0
         /// never, 0.5 the diagonal between the edges' middles, 1 the whole
