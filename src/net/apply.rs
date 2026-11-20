@@ -56,7 +56,7 @@ use crate::net::events::WireEvent;
 use crate::net::events::WireHitTarget;
 use crate::net::wire::{
     AirState,
-    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, bong_flags, tank_flags, tile_flags,
+    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_bank, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, bong_flags, tank_flags, tile_flags,
 };
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Fuse, Obstacle};
@@ -255,9 +255,6 @@ fn apply_lamps(game: &mut Game, s: &Snapshot) {
     game.lanterns = lanterns;
 }
 
-/// The zones the snapshot lists (docs/rod-from-god.md): the room's,
-/// replaced whole; a client's own provisional ones
-/// (`Zone::provisional`) are its prediction's to keep or drop.
 /// Air support as the snapshot has it: the calls on `Game::air_calls`, the
 /// aircraft put where the room has them. A replica's aircraft is never
 /// flown, so it is placed fresh each snapshot.
@@ -265,7 +262,10 @@ fn apply_air(game: &mut Game, s: &Snapshot) {
     apply_air_states(game, &s.air);
 }
 
-/// `apply_air` off the family alone.
+/// `apply_air` off the family alone. An aircraft gets what travels - its
+/// stage, where it is, how high, which way, its bank and its ammunition;
+/// its velocity does not travel, so it holds `Aircraft::arrive`'s: its
+/// heading at the sortie's full speed.
 pub(crate) fn apply_air_states(game: &mut Game, air: &[AirState]) {
     use crate::air_support::{AIR_COUNTING, AirCall, AirStage, Aircraft, Sortie};
     game.air_calls = air
@@ -287,14 +287,19 @@ pub(crate) fn apply_air_states(game: &mut Game, air: &[AirState]) {
         let Some(stage) = AirStage::from_code(a.stage) else { continue };
         let ground = Position::new(dequantise_pos(a.x), dequantise_pos(a.y));
         let heading = crate::fpv::Drone::heading_of(dequantise_heading(a.heading));
-        let mut craft = Aircraft::arrive(a.id as u32, a.seat, Sortie::from_code(a.sortie), ground, ground + heading, true, &t);
+        let mut craft = Aircraft::arrive(a.id as u32, a.seat, Sortie::from_code(a.sortie), ground, ground + heading, &t);
         craft.stage = stage;
         craft.height = dequantise_pos(a.height);
         craft.heading = heading;
+        craft.bank = dequantise_bank(a.bank);
+        craft.ammo = a.ammo;
         game.world.spawn((craft,));
     }
 }
 
+/// The zones the snapshot lists (docs/rod-from-god.md): the room's,
+/// replaced whole; a client's own provisional ones
+/// (`Zone::provisional`) are its prediction's to keep or drop.
 fn apply_zones(game: &mut Game, s: &Snapshot, cols: u16) {
     let seats = game.players.count();
     let mut zones: Vec<crate::zone::Zone> = game.zones.iter().copied().filter(|z| z.provisional()).collect();
@@ -2141,6 +2146,40 @@ mod tests {
         assert!(seen.seat_drones > 0, "{seen:?}: no seat's drone was ever in the air");
         assert!(seen.enemy_drones > 0, "{seen:?}: no enemy's drone was ever in the air");
         assert!(seen.drone_stages[..3].iter().all(|&n| n > 0), "{seen:?}: a stage never reached the replica");
+    }
+
+    /// An aircraft reaches the replica in every stage it flies, with its
+    /// bank and its ammunition, beside a call still waiting: the digest
+    /// the room's, each field within its wire step.
+    #[test]
+    fn an_aircraft_reaches_the_replica_in_every_stage_with_its_bank_and_ammunition() {
+        use crate::air_support::{AirCall, AirStage, Aircraft, Sortie};
+        let mut game = authoritative(DEFAULT_MAP, 0xA1B, 2);
+        let mut replica = welcome_through_the_codec(&game);
+        let t = crate::tuning::tuning();
+        for (i, stage) in AirStage::ALL.into_iter().enumerate() {
+            let sortie = if i % 2 == 0 { Sortie::Heli } else { Sortie::Jet };
+            let entry = Position::new(100.0 + 60.0 * i as f32, 200.0);
+            let mut craft = Aircraft::arrive(40 + i as u32, (i % 2) as u8, sortie, entry, Position::new(500.0, 260.0 - 40.0 * i as f32), &t);
+            craft.stage = stage;
+            craft.bank = -1.0 + 0.45 * i as f32;
+            craft.ammo = i as u8;
+            game.world.spawn((craft,));
+        }
+        game.air_calls.push(AirCall { id: 60, seat: 0, sortie: Sortie::Jet, arrive_at: None });
+        let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap))).expect("decodes") else { panic!("kind") };
+        snapshot(&mut replica, &snap);
+        assert_eq!(replica.drawable_state().air, game.drawable_state().air);
+        assert_eq!(replica.air_calls(), game.air_calls());
+        let (room, copy) = (game.aircraft(), replica.aircraft());
+        assert_eq!(copy.len(), AirStage::ALL.len());
+        for (r, c) in room.iter().zip(&copy) {
+            assert_eq!((c.id, c.seat, c.sortie, c.stage, c.ammo), (r.id, r.seat, r.sortie, r.stage, r.ammo));
+            assert!((c.bank - r.bank).abs() <= 0.5 / crate::net::wire::BANK_STEPS + 1e-6, "{:?}: a bank of {} for {}", r.stage, c.bank, r.bank);
+            assert!((c.ground - r.ground).length() < 0.5 && (c.height - r.height).abs() < 0.5, "{:?}: {c:?} for {r:?}", r.stage);
+            assert!((c.heading - r.heading).length() < 0.02, "{:?}: facing {:?} for {:?}", r.stage, c.heading, r.heading);
+        }
     }
 
     /// A drone's burst leans down its dive on a replica as it does in the

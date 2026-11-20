@@ -1048,14 +1048,37 @@ impl Game {
         air
     }
 
-    /// The static field as a fresh round shows it: `paint_floor`,
-    /// `paint_tiles`, `paint_standing`, in that order, onto a canvas the
-    /// caller has cleared. What `mapshot` renders (docs/mapshot-prd.md);
-    /// `render` runs the same three stages with its live-round layers in
-    /// between.
+    /// The shadows of what flies - the FPV drones (docs/fpv-swarm.md
+    /// "Drawing") and air support's aircraft (docs/air-support.md
+    /// "Drawing") - on the ground under them: after the floor, under the
+    /// tiles and the tanks. Nothing while shadows are off.
+    pub fn paint_air_shadows(&self, c: &mut impl Canvas) {
+        if !self.shadows_enabled {
+            return;
+        }
+        paint_drone_shadows(c, &self.drones());
+        crate::air_support::paint_shadows(c, &self.aircraft(), self.time);
+    }
+
+    /// What flies, over everything that stands: the FPV drones' bodies
+    /// (their lamps are the glowing pass's), then air support's aircraft
+    /// over them - it flies highest.
+    pub fn paint_air(&self, c: &mut impl Canvas) {
+        paint_drones(c, &self.drones(), self.time);
+        crate::air_support::paint_aircraft(c, &self.aircraft(), self.time);
+    }
+
+    /// The field on a canvas the caller has cleared: `paint_floor`,
+    /// `paint_air_shadows`, `paint_tiles`, `paint_standing`, `paint_air`, in
+    /// that order. What `mapshot` renders (docs/mapshot-prd.md) - a fresh
+    /// round, where nothing flies yet - and a headless round's
+    /// `screenshot`; `render` runs the same stages with its live-round
+    /// layers in between.
     pub fn paint_field(&self, c: &mut impl Canvas, opts: PaintOptions) {
         self.paint_floor(c);
+        self.paint_air_shadows(c);
         self.paint_tiles(c);
         self.paint_standing(c, opts);
+        self.paint_air(c);
     }
 }

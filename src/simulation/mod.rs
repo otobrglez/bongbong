@@ -78,6 +78,10 @@ mod rod_tests;
 #[cfg(test)]
 mod air_support_tests;
 #[cfg(test)]
+mod air_heli_tests;
+#[cfg(test)]
+mod air_jet_tests;
+#[cfg(test)]
 mod well_tests;
 #[cfg(test)]
 mod sonic_tests;

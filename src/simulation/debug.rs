@@ -88,6 +88,14 @@ pub struct DebugSnapshot {
     /// left out while there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub zones: Vec<ZoneDebug>,
+    /// Air support's aircraft on the field, by id (docs/air-support.md);
+    /// left out while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub aircraft: Vec<AircraftDebug>,
+    /// Air support's calls still to arrive, by id; left out while there are
+    /// none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub air_calls: Vec<AirCallDebug>,
     /// The cells the rods struck and left a crater round; left out while
     /// there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -153,6 +161,45 @@ pub struct DroneDebug {
     /// Where it is going.
     pub aim_x: f32,
     pub aim_y: f32,
+}
+
+/// An air support aircraft in `DebugSnapshot::aircraft`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AircraftDebug {
+    /// Its call's id.
+    pub id: u32,
+    pub seat: u8,
+    /// `Sortie::name`: `heli` or `jet`.
+    pub sortie: &'static str,
+    /// `AirStage::name`: `inbound`, `attack`, `egress`, `escort` or
+    /// `loiter`.
+    pub stage: &'static str,
+    /// Its ground point and its height over it.
+    pub x: f32,
+    pub y: f32,
+    pub height: f32,
+    /// The way it faces in degrees, 0 = up and clockwise, in `0..360`.
+    pub heading_deg: f32,
+    /// Its speed over the ground, px/s (`Aircraft::velocity`). A replica
+    /// holds no velocity off the wire: there it is the sortie's full speed.
+    pub speed: f32,
+    /// How hard it is turning, -1 full left to 1 full right, to two
+    /// decimals.
+    pub bank: f32,
+    /// Ammunition left: the helicopter's salvos, the jet's passes.
+    pub ammo: u8,
+}
+
+/// An air support call in `DebugSnapshot::air_calls`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AirCallDebug {
+    pub id: u32,
+    pub seat: u8,
+    /// `Sortie::name`: `heli` or `jet`.
+    pub sortie: &'static str,
+    /// Seconds before its aircraft arrives; null while it waits behind the
+    /// seat's sortie before it.
+    pub seconds_left: Option<f32>,
 }
 
 /// A standing tower in `DebugSnapshot::towers`.
@@ -950,6 +997,28 @@ impl Game {
                     cell: z.rod().map(|c| c.cell),
                     left: r1(z.left(self.time)),
                 })
+                .collect(),
+            aircraft: self
+                .aircraft()
+                .iter()
+                .map(|a| AircraftDebug {
+                    id: a.id,
+                    seat: a.seat,
+                    sortie: a.sortie.name(),
+                    stage: a.stage.name(),
+                    x: r1(a.ground.x),
+                    y: r1(a.ground.y),
+                    height: r1(a.height),
+                    heading_deg: r1(a.rotation().rem_euclid(360.0)) % 360.0,
+                    speed: r1(a.velocity.length()),
+                    bank: (a.bank * 100.0).round() / 100.0,
+                    ammo: a.ammo,
+                })
+                .collect(),
+            air_calls: self
+                .air_calls
+                .iter()
+                .map(|c| AirCallDebug { id: c.id, seat: c.seat, sortie: c.sortie.name(), seconds_left: c.left(self.time).map(r1) })
                 .collect(),
             craters: self.craters.list().iter().map(|c| c.cell).collect(),
             orbs: self.orbs.iter().map(|o| (o.id, o.owner.slot(), r1(o.position.x), r1(o.position.y), r1(o.flown))).collect(),

@@ -514,12 +514,14 @@ mod tests {
             id,
             seat: rng.random_range(0..8),
             sortie: rng.random_range(0..2),
-            stage: rng.random_range(0..5),
+            stage: rng.random_range(0..7),
             arrive: rng.random_range(0..200_000),
             x: rng.random(),
             y: rng.random(),
             height: rng.random_range(0..400),
             heading: rng.random(),
+            bank: rng.random_range(-127..=127),
+            ammo: rng.random_range(0..9),
         }
     }
 
@@ -771,15 +773,22 @@ mod tests {
             }
         }
         // Air support: a call starting its count, an aircraft moving a
-        // little or a lot, one gone, one new.
+        // little or a lot, rolling into a bank, spending its ammunition,
+        // one gone, one new.
         next.air.retain(|_| !rng.random_ratio(1, 4));
         for a in next.air.iter_mut() {
             if rng.random_ratio(1, 2) {
                 a.x = a.x.wrapping_add(rng.random_range(-40..40));
                 a.y = a.y.wrapping_add(rng.random_range(-40..40));
             } else if rng.random_ratio(1, 3) {
-                a.stage = rng.random_range(0..5);
+                a.stage = rng.random_range(0..7);
                 a.arrive = rng.random_range(0..200_000);
+            }
+            if rng.random_ratio(1, 3) {
+                a.bank = rng.random_range(-127..=127);
+            }
+            if rng.random_ratio(1, 4) {
+                a.ammo = a.ammo.saturating_sub(1);
             }
         }
         for id in random_keys(rng, 1, 400) {
@@ -884,6 +893,31 @@ mod tests {
         let d = delta(&a, &e);
         assert!(d.tanks_moved.is_empty(), "a moved tank that also changed goes in full");
         assert_eq!(apply_delta(&a, &d), e);
+    }
+
+    /// An aircraft flying level and straight costs a move; one that rolled
+    /// into a bank or spent ammunition on the way goes in full, and either
+    /// way the next snapshot is rebuilt whole.
+    #[test]
+    fn an_aircraft_that_banks_or_spends_ammunition_travels_in_full() {
+        let craft = AirState { id: 12, seat: 1, sortie: 1, stage: 6, arrive: 0, x: 400, y: 900, height: 380, heading: 64, bank: 0, ammo: 3 };
+        let a = Snapshot { air: vec![craft], ..Default::default() };
+        let mut b = a.clone();
+        b.air[0].x += 20;
+        let d = delta(&a, &b);
+        assert_eq!(d.air_moved, vec![Moved { key: 12, dx: 20, dy: 0 }]);
+        assert!(d.air.is_empty());
+        assert_eq!(apply_delta(&a, &d), b);
+        for change in [AirState { bank: -90, ..b.air[0] }, AirState { ammo: 2, ..b.air[0] }] {
+            let mut c = b.clone();
+            c.air[0] = change;
+            let d = delta(&a, &c);
+            assert!(d.air_moved.is_empty(), "{change:?}");
+            assert_eq!(d.air, c.air);
+            assert_eq!(apply_delta(&a, &d), c);
+            let back: SnapshotDelta = postcard::from_bytes(&postcard::to_stdvec(&d).unwrap()).unwrap();
+            assert_eq!(apply_delta(&a, &back), c);
+        }
     }
 
     /// The snapshot the PRD sizes: eight tanks and twenty-four shots on

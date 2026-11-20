@@ -1,17 +1,19 @@
 //! Air support's world half (docs/air-support.md; `air_support.rs` is the
-//! call, the aircraft and their geometry). A crate calls a sortie
-//! (`call_air_support`, from `pickup_phase`); `air_support_phase` brings the
-//! aircraft in when its count runs out, flies it, fires it and takes it away
-//! once it is off the field. The helicopter fires seeker missiles off its
-//! pods (`missile.rs`, every rule of theirs kept); the jet's cannon and bombs
-//! are blasts of their own (`air_strike`). No RNG but the blasts' damage
-//! rolls, which only a round with an air crate taken ever draws.
+//! call and the aircraft, `air_support/heli.rs` and `jet.rs` how each one
+//! flies). A crate calls a sortie (`call_air_support`, from `pickup_phase`);
+//! `air_support_phase` brings the aircraft in when its count runs out, shows
+//! it the world (`AirView`), steps it (`Aircraft::step`), carries out what
+//! it does (`AirAct`) and takes it away once it is off the field. The
+//! helicopter fires seeker missiles off its pods (`missile.rs`, every rule
+//! of theirs kept); the jet's cannon and bombs are blasts of their own
+//! (`air_strike`). No RNG but the blasts' damage rolls, which only a round
+//! with an air crate taken ever draws.
 
 use hecs::Entity;
 
 use crate::ai::{Ai, in_sight_box};
 use crate::air::AirStrike;
-use crate::air_support::{self, AirCall, AirStage, Aircraft, Sortie};
+use crate::air_support::{self, AirAct, AirCall, AirMark, AirView, Aircraft, MarkKey, Sortie};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
 use crate::bong::Side;
 use crate::math::Vec2;
@@ -21,19 +23,10 @@ use crate::shell::Owner;
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::tuning::tuning;
-use crate::{OBSTACLE_GRID_SIZE, Position};
+use crate::Position;
 
 use super::combat::BlastParams;
 use super::{Event, Frame, Game, RollIn, Spectacle};
-
-/// What an aircraft does this step, decided while the world is read and
-/// done once it is free.
-enum Act {
-    /// The heli's salvo: rockets from its pods at `at`.
-    Salvo { from: Position, at: Position },
-    /// One of the jet's cannon bursts, or (`bomb`) one of its bombs.
-    Strike { at: Position, dir: Vec2, bomb: bool },
-}
 
 impl BlastParams {
     /// One burst of the jet's cannon: fixed damage, no roll.
@@ -78,42 +71,59 @@ impl Game {
         }
     }
 
-    /// Where `seat` stands for its aircraft: its tank, a wreck included;
-    /// `None` once the seat has no tank at all.
-    fn air_anchor(&self, seat: u8) -> Option<Position> {
+    /// Where `seat` stands for its aircraft, and whether it is a wreck: its
+    /// tank, a wreck included; `None` once the seat has no tank at all.
+    fn air_anchor(&self, seat: u8) -> Option<(Position, bool)> {
         let entity = self.seat(seat as usize)?;
-        self.world.get::<&Tank>(entity).ok().map(|t| t.position)
+        self.world.get::<&Tank>(entity).ok().map(|t| (t.position, t.is_wreck()))
     }
 
-    /// What an aircraft of the seat standing at `anchor` may attack, inside
-    /// the seat's sight box: the enemy tanks live on the field and the enemy
-    /// towers still standing. Nearest first; at the same distance a tank
-    /// before a tower, tanks by slot and towers by cell.
-    fn air_targets_near(&self, anchor: Position) -> Vec<Position> {
-        let mut out: Vec<(f32, u8, usize, (i32, i32), Position)> = self
+    /// How fast `seat`'s tank moves over the ground (`AirView::seat_velocity`):
+    /// what its body does, zero for a wreck or no tank.
+    fn air_anchor_velocity(&self, seat: u8) -> Vec2 {
+        let Some(entity) = self.seat(seat as usize) else { return Vec2::zero() };
+        let Ok(tank) = self.world.get::<&Tank>(entity) else { return Vec2::zero() };
+        match tank.body {
+            Some(body) if !tank.is_wreck() => self.physics.velocity(body),
+            _ => Vec2::zero(),
+        }
+    }
+
+    /// What an aircraft of the seat standing at `anchor` may attack
+    /// (`AirView::marks`), inside the seat's sight box: the enemy tanks live
+    /// on the field and the enemy towers still standing. Nearest first; at
+    /// the same distance a tank before a tower, tanks by slot and towers by
+    /// cell.
+    fn air_marks(&self, anchor: Position) -> Vec<AirMark> {
+        let mut out: Vec<(f32, AirMark)> = self
             .world
             .query::<&Tank>()
             .with::<&Ai>()
             .without::<&RollIn>()
             .iter()
             .filter(|t| !t.is_wreck() && t.body.is_some() && in_sight_box(anchor, t.position))
-            .map(|t| (t.position.distance_to(anchor), 0, t.owner_slot(), (0, 0), t.position))
+            .map(|t| {
+                let velocity = t.body.map_or(Vec2::zero(), |body| self.physics.velocity(body));
+                (t.position.distance_to(anchor), AirMark { key: MarkKey::Tank(t.owner_slot()), at: t.position, velocity })
+            })
             .collect();
         out.extend(
             self.towers
                 .iter()
                 .filter(|(_, t)| t.side == Side::Enemy && in_sight_box(anchor, t.position))
                 .filter(|(_, t)| self.world.get::<&Obstacle>(t.entity).is_ok_and(|o| !o.destroyed))
-                .map(|(&cell, t)| (t.position.distance_to(anchor), 1, 0, cell, t.position)),
+                .map(|(&cell, t)| (t.position.distance_to(anchor), AirMark { key: MarkKey::Tower(cell), at: t.position, velocity: Vec2::zero() })),
         );
-        out.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
-        out.into_iter().map(|(.., p)| p).collect()
+        // `MarkKey` orders a tank before a tower, tanks by slot, towers by cell.
+        out.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.key.cmp(&b.1.key)));
+        out.into_iter().map(|(_, mark)| mark).collect()
     }
 
     /// Air support's frame: bring in every aircraft whose count ran out,
-    /// fly them all a step, let them fire, and take away the ones gone off
-    /// the field. `live` is false on the end screen: no call arrives and an
-    /// aircraft in its attack breaks off and leaves, firing nothing.
+    /// step them all (`Aircraft::step` on what `AirView` shows each), carry
+    /// out what they do, and take away the ones gone off the field. `live`
+    /// is false on the end screen: no call arrives, an aircraft is shown no
+    /// target and whatever it would do is dropped.
     pub(super) fn air_support_phase(&mut self, f: &mut Frame, live: bool) {
         if self.air_calls.is_empty() && self.world.query::<&Aircraft>().iter().next().is_none() {
             return;
@@ -126,24 +136,35 @@ impl Game {
         let mut flying: Vec<(u32, Entity)> = self.world.query::<(Entity, &Aircraft)>().iter().map(|(e, a)| (a.id, e)).collect();
         flying.sort_by_key(|&(id, _)| id);
         let mut gone = Vec::new();
+        let mut acts = Vec::new();
         for (id, entity) in flying {
             let Ok(mut a) = self.world.get::<&mut Aircraft>(entity).map(|a| *a) else { continue };
-            a.advance(f.dt, &t);
-            if !live && a.stage == AirStage::Attack && a.sortie == Sortie::Heli {
-                a.stage = AirStage::Egress;
-            }
-            let acts = if live { self.air_acts(&mut a, &t) } else { Vec::new() };
-            if a.sortie == Sortie::Jet && a.stage != AirStage::Egress && a.flown >= (a.mark - a.entry).length() {
-                a.stage = AirStage::Egress;
+            let anchor = self.air_anchor(a.seat);
+            let marks = match anchor {
+                Some((at, _)) if live => self.air_marks(at),
+                _ => Vec::new(),
+            };
+            let view = AirView {
+                seat: anchor.map(|(at, _)| at),
+                seat_velocity: self.air_anchor_velocity(a.seat),
+                seat_wrecked: anchor.is_some_and(|(_, wreck)| wreck),
+                marks: &marks,
+                field,
+                live,
+            };
+            acts.clear();
+            a.step(&view, f.dt, &t, &mut acts);
+            if !live {
+                acts.clear();
             }
             let leaving = a.gone(field, &t);
             if let Ok(mut slot) = self.world.get::<&mut Aircraft>(entity) {
                 *slot = a;
             }
-            for act in acts {
+            for act in acts.drain(..) {
                 match act {
-                    Act::Salvo { from, at } => self.air_salvo(f, &a, from, at),
-                    Act::Strike { at, dir, bomb } => self.air_strike(f, id, a.owner(), at, dir, bomb, true),
+                    AirAct::Salvo { from, at } => self.air_salvo(f, &a, from, at),
+                    AirAct::Strike { at, dir, bomb } => self.air_strike(f, id, a.owner(), at, dir, bomb, true),
                 }
             }
             if leaving {
@@ -157,7 +178,11 @@ impl Game {
         }
     }
 
-    /// Every call whose count ran out, by id: its aircraft comes in.
+    /// Every call whose count ran out, by id: its aircraft comes in - the
+    /// helicopter from the edge its id hashes to, in line with its seat; the
+    /// jet from the far side of the nearest target (of its seat, with none),
+    /// in line with it. `Event::AirSupportArrived::armed` is whether it
+    /// found a target in the seat's sight box as it came.
     fn air_arrivals(&mut self, f: &mut Frame) {
         let now = self.time;
         let due: Vec<AirCall> = self.air_calls.iter().filter(|c| c.arrive_at.is_some_and(|at| at <= now)).copied().collect();
@@ -168,93 +193,25 @@ impl Game {
         let t = tuning();
         let field = (f.width, f.height);
         for call in due {
-            let anchor = self.air_anchor(call.seat);
-            let targets = anchor.map(|p| self.air_targets_near(p)).unwrap_or_default();
-            let Some(anchor) = anchor else {
+            let Some((anchor, _)) = self.air_anchor(call.seat) else {
                 // The seat is gone from the round: the call is spent.
                 f.events.push(Event::AirSupportLeft { id: call.id });
                 continue;
             };
-            let armed = !targets.is_empty();
-            let edge = air_support::entry_edge(call.id);
-            let (entry, mark) = match call.sortie {
-                Sortie::Heli => {
-                    let first = targets.first().copied().unwrap_or(anchor);
-                    let entry = air_support::entry_point(edge, first, field, t.air_edge_margin_px);
-                    let standoff = if armed { t.air_heli_standoff_px } else { 0.0 };
-                    (entry, air_support::hover_point(entry, first, standoff, field, OBSTACLE_GRID_SIZE))
-                }
+            let marks = self.air_marks(anchor);
+            let armed = !marks.is_empty();
+            let (edge, toward) = match call.sortie {
+                Sortie::Heli => (air_support::entry_edge(call.id), anchor),
                 Sortie::Jet => {
-                    let mark = air_support::run_mark(&targets, t.air_jet_targets.max(1) as usize).unwrap_or(anchor);
-                    (air_support::entry_point(air_support::jet_edge(call.id, mark, field), mark, field, t.air_edge_margin_px), mark)
+                    let toward = marks.first().map_or(anchor, |m| m.at);
+                    (air_support::jet_edge(call.id, toward, field), toward)
                 }
             };
-            let aircraft = Aircraft::arrive(call.id, call.seat, call.sortie, entry, mark, armed, &t);
+            let entry = air_support::entry_point(edge, toward, field, t.air_edge_margin_px);
+            let aircraft = Aircraft::arrive(call.id, call.seat, call.sortie, entry, toward, &t);
             f.events.push(Event::AirSupportArrived { id: call.id, seat: call.seat, sortie: call.sortie, x: entry.x, y: entry.y, armed });
             self.world.spawn((aircraft,));
         }
-    }
-
-    /// What aircraft `a` fires this step, its stage moved on as it does.
-    fn air_acts(&self, a: &mut Aircraft, t: &crate::tuning::Tuning) -> Vec<Act> {
-        let mut acts = Vec::new();
-        match a.sortie {
-            Sortie::Heli => {
-                if a.stage != AirStage::Attack {
-                    return acts;
-                }
-                if !a.armed {
-                    if a.stage_time >= t.air_heli_linger_seconds {
-                        a.stage = AirStage::Egress;
-                    }
-                    return acts;
-                }
-                let next = t.air_heli_salvo_seconds * (a.fired as f32 + 1.0);
-                if a.stage_time < next {
-                    return acts;
-                }
-                let anchor = self.air_anchor(a.seat).unwrap_or(a.mark);
-                match self.air_targets_near(anchor).first().copied() {
-                    Some(at) => {
-                        if let Some(dir) = air_support::unit(at - a.ground) {
-                            a.heading = dir;
-                        }
-                        acts.push(Act::Salvo { from: a.drawn(), at });
-                        a.fired = a.fired.saturating_add(1);
-                        if a.fired as i32 >= t.air_heli_salvos {
-                            a.stage = AirStage::Egress;
-                        }
-                    }
-                    None => a.stage = AirStage::Egress,
-                }
-            }
-            Sortie::Jet => {
-                if !a.armed {
-                    return acts;
-                }
-                let n = t.air_jet_gun_bursts.clamp(1, 255) as u8;
-                let run = a.run();
-                while a.fired < n {
-                    let (at, when) = air_support::gun_burst(a.entry, a.mark, a.fired, n, t.air_jet_gun_len_px, t.air_jet_gun_ahead_px, t.air_edge_margin_px);
-                    if a.flown < when {
-                        break;
-                    }
-                    acts.push(Act::Strike { at, dir: run, bomb: false });
-                    a.fired += 1;
-                    a.stage = AirStage::Attack;
-                }
-                if a.fired == n {
-                    let (drops, when) = air_support::bombs(a.entry, a.mark, t.air_jet_bomb_spacing_px, t.air_jet_bomb_lead_px, t.air_edge_margin_px);
-                    if a.flown >= when {
-                        for at in drops {
-                            acts.push(Act::Strike { at, dir: run, bomb: true });
-                        }
-                        a.fired += 1;
-                    }
-                }
-            }
-        }
-        acts
     }
 
     /// The heli's salvo: `air_heli_salvo_rockets` seeker missiles off its
