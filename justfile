@@ -123,14 +123,15 @@ probe-waves:
 # jitter=3 (4 before) is choke, re-read 2026-11-20 (BB-179) with the
 # enemies' straight routes, queue, fire profiles, timed flight and
 # reachable crates in (docs/gameplay-verification-design.md, the BB-179
-# re-baseline): the nine maps' total fell from 61 to 46. never-arrived
-# stays 0 and maze reads 1 over it (seed 0x3ea, a tank queued behind two
-# parked at their slots for 22 s): left failing, a decision to take.
+# re-baseline): the nine maps' total fell from 61 to 46. never-arrived=1
+# (0 before) is maze, seed 0x3ea: a tank queued behind two friends parked
+# at their slots for 22.8 s against a 21.3 s budget - the queue working,
+# not a stuck tank; raised on Oto's decision of 2026-11-20.
 # Extra arguments go to every run - a weapon's `--crate <kind>` or an armed
 # `--tuning <file>` (docs/sonic-hammer.md "Probe") - under the same
 # ceilings. How the maps are run is `_probe-maps`; CI runs this recipe
 # (.github/workflows/ci.yml), so these are the only copy of the ceilings.
-fixture_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=3 --budget staircase=8 --budget spin=1 --budget churn=10 --budget clustering=1 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=1 --budget offbox-fire=0"
+fixture_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=3 --budget staircase=8 --budget spin=1 --budget churn=10 --budget clustering=1 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=1 --budget invariant=0 --budget tank-grind=0 --budget pile-up=1 --budget offbox-fire=0"
 
 probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames 1800 --rounds 10 --seed 1000 " + fixture_ceilings + " " + args)
 
@@ -172,12 +173,14 @@ probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames
 # before) and tank-grind=0 (1 before), both maze, staircase=14 (17
 # before, pockets) and clustering=3 (7 before, maze); the nine maps'
 # total fell from 352 to 319 and their enemy-on-enemy rams from 432 to
-# 72. Two kinds read over ceilings that were not raised: choke jitter 15
-# over 14 and maze spin 3 over 2 - left failing, a decision to take
+# 72. Two kinds read one higher and their ceilings were raised on
+# Oto's decision of 2026-11-20, the cause of neither pinned down:
+# jitter=15 (14 before, choke; 1-4 px shuffles) and spin=3 (2 before,
+# maze; it came with the fire profiles)
 # (docs/gameplay-verification-design.md, the BB-179 re-baseline).
 # Re-baseline as `probe-fixtures` is: on purpose, never to go green. CI
 # runs this recipe too.
-survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=14 --budget staircase=14 --budget spin=2 --budget churn=25 --budget clustering=3 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 --budget offbox-fire=0"
+survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=15 --budget staircase=14 --budget spin=3 --budget churn=25 --budget clustering=3 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 --budget offbox-fire=0"
 
 probe-survive *args: (_probe-maps "probe-survive" "maps/test/*.toml" "--scenario survive --frames 1800 --rounds 10 --seed 1000 " + survive_ceilings + " " + args)
 

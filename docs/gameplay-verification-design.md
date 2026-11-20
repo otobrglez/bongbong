@@ -1090,8 +1090,9 @@ The ceilings re-recorded, all downward: `fixtures` jitter 4 to 3;
 `survive` staircase 17 to 14, clustering 7 to 3, tank-grind 1 to 0,
 pile-up 5 to 0; `fields` jitter 7 to 6.
 
-Three readings are over ceilings that were not raised, so
-`probe-fixtures` and `probe-survive` fail as recorded:
+Three readings came out one higher and their ceilings were raised by
+one on Oto's decision of 2026-11-20 (`fixtures` never-arrived 0 to 1,
+`survive` jitter 14 to 15 and spin 2 to 3):
 
 - `fixtures` never-arrived, maze 1 over 0 (seed 0x3ea): a tank queued
   behind two parked at their slots in a lane, 22.8 s against a budget of
