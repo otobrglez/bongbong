@@ -235,8 +235,9 @@ pub struct DrawableState {
     /// Air support (docs/air-support.md), by id: its id's low sixteen bits,
     /// its seat, its sortie and stage codes (`AirState`), a counting call's
     /// arrival in ticks, and an aircraft's ground point and height in
-    /// quarter pixels.
-    pub air: Vec<(u16, u8, u8, u8, u32, i32, i32, i32)>,
+    /// quarter pixels, its bank in the wire's steps (`quantise_bank`) and
+    /// its ammunition left.
+    pub air: Vec<(u16, u8, u8, u8, u32, i32, i32, i32, i8, u8)>,
     /// Every crater cell, sorted.
     pub craters: Vec<(i32, i32)>,
     /// Every trampled grass cell (`Game::grass_trampled`), sorted.
@@ -618,17 +619,28 @@ impl Game {
                 .collect(),
             air: {
                 use crate::air_support::{AIR_COUNTING, AIR_WAITING};
-                let mut air: Vec<(u16, u8, u8, u8, u32, i32, i32, i32)> = self
+                let mut air: Vec<(u16, u8, u8, u8, u32, i32, i32, i32, i8, u8)> = self
                     .air_calls
                     .iter()
                     .map(|c| {
                         let stage = if c.arrive_at.is_some() { AIR_COUNTING } else { AIR_WAITING };
                         let arrive = c.arrive_at.map_or(0, |at| (at / crate::PHYSICS_FIXED_DT).round() as u32);
-                        ((c.id & 0xFFFF) as u16, c.seat, c.sortie.code(), stage, arrive, 0, 0, 0)
+                        ((c.id & 0xFFFF) as u16, c.seat, c.sortie.code(), stage, arrive, 0, 0, 0, 0, 0)
                     })
                     .collect();
                 air.extend(self.aircraft().iter().map(|a| {
-                    ((a.id & 0xFFFF) as u16, a.seat, a.sortie.code(), a.stage.code(), 0, quarter_px(a.ground.x), quarter_px(a.ground.y), quarter_px(a.height))
+                    (
+                        (a.id & 0xFFFF) as u16,
+                        a.seat,
+                        a.sortie.code(),
+                        a.stage.code(),
+                        0,
+                        quarter_px(a.ground.x),
+                        quarter_px(a.ground.y),
+                        quarter_px(a.height),
+                        crate::net::wire::quantise_bank(a.bank),
+                        a.ammo,
+                    )
                 }));
                 air.sort();
                 air

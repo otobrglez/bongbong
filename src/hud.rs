@@ -218,6 +218,10 @@ pub struct AirHud {
     /// Whole seconds before it arrives (`ceil`, never under 1); `None` once
     /// it is in the air.
     pub seconds: Option<u32>,
+    /// In the air: the ammunition it has left and the load it came with
+    /// (`Aircraft::ammo`, `Sortie::ammo` - the helicopter's salvos, the
+    /// jet's passes), a pip each; `None` for a call.
+    pub ammo: Option<(u8, u8)>,
     /// Sorties queued behind it.
     pub queued: u8,
 }
@@ -234,13 +238,22 @@ impl AirHud {
         let waiting = calls.iter().filter(|c| c.arrive_at.is_none()).count();
         let queued = waiting.min(u8::MAX as usize) as u8;
         match (flying, counting) {
-            (Some(a), _) => Some(AirHud { sortie: a.sortie, seconds: None, queued }),
+            (Some(a), _) => {
+                let load = a.sortie.ammo(&tuning()).max(a.ammo);
+                Some(AirHud { sortie: a.sortie, seconds: None, ammo: Some((a.ammo, load)), queued })
+            }
             (None, Some(c)) => {
                 let left = c.left(now).unwrap_or(0.0);
-                Some(AirHud { sortie: c.sortie, seconds: Some((left.ceil() as u32).max(1)), queued })
+                Some(AirHud { sortie: c.sortie, seconds: Some((left.ceil() as u32).max(1)), ammo: None, queued })
             }
-            (None, None) => calls.first().map(|c| AirHud { sortie: c.sortie, seconds: None, queued: queued.saturating_sub(1) }),
+            (None, None) => calls.first().map(|c| AirHud { sortie: c.sortie, seconds: None, ammo: None, queued: queued.saturating_sub(1) }),
         }
+    }
+
+    /// Whether its symbol is lit: always for a call, and for an aircraft
+    /// while it has ammunition left.
+    pub fn lit(&self) -> bool {
+        self.ammo.is_none_or(|(left, _)| left > 0)
     }
 }
 
@@ -255,6 +268,78 @@ pub fn air_box(row: Rectangle) -> Rectangle {
 /// Where the air support box starts in a lamp row: under the weapon's
 /// symbol (`render::hud`'s `V_WEAPON`).
 pub const AIR_BOX_X: f32 = 108.0;
+
+/// Where the air support box's readout starts, from the box's left edge:
+/// past the sortie's symbol and its gap (`render::hud`'s `SYMBOL` and
+/// `SYMBOL_GAP`), under the weapon's count.
+pub const AIR_READOUT_X: f32 = 28.0;
+
+/// The gap between the box's readout and the queued `+N` after it.
+pub const AIR_READOUT_GAP: f32 = 4.0;
+
+/// An ammunition pip's width.
+pub const AIR_PIP_W: f32 = 4.0;
+
+/// The gap between two pips, across and down.
+pub const AIR_PIP_GAP: f32 = 2.0;
+
+/// The most pips in a row: a bigger load wraps into a second row of
+/// shorter pips, so the largest one the knobs allow (`air_heli_salvos`'s
+/// 12) still fits the box.
+pub const AIR_PIPS_PER_ROW: usize = 6;
+
+/// The most rows of pips: a load past them shows its first two rows.
+pub const AIR_PIP_ROWS: usize = 2;
+
+/// A pip's height in a load of one row.
+pub const AIR_PIP_H: f32 = 12.0;
+
+/// A pip's height in a load of two rows.
+pub const AIR_PIP_H_SHORT: f32 = 6.0;
+
+/// How far past the box's left edge the lamp row stays free for the queued
+/// `+N`: up to the heat shield's gauge (`render::hud`'s `V_SHIELD`).
+pub const AIR_ROW_FREE_W: f32 = 136.0;
+
+/// What the air support box `b` (`air_box`) holds for `air` and where, in
+/// UI points: the one geometry its painter draws and its tests pin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AirBoxLayout {
+    /// The left edge of the readout: the seconds of a counting call.
+    pub readout_x: f32,
+    /// An aircraft's load, a pip a round: one row up to
+    /// `AIR_PIPS_PER_ROW`, past that `AIR_PIP_ROWS` rows it is split evenly
+    /// between (eight is four over four). The first `left` of
+    /// `AirHud::ammo` are lit, the rest spent. Empty for a call.
+    pub pips: Vec<Rectangle>,
+    /// The left edge of the queued `+N`, past the readout.
+    pub queued_x: f32,
+}
+
+/// `air`'s layout in the box `b` (`air_box`).
+pub fn air_box_layout(b: Rectangle, air: &AirHud) -> AirBoxLayout {
+    let readout_x = b.x + AIR_READOUT_X;
+    let mut pips = Vec::new();
+    let mut readout_w = 0.0;
+    if let Some(seconds) = air.seconds {
+        readout_w = crate::text::width(&seconds.to_string(), HUD_TEXT_SIZE) as f32;
+    } else if let Some((_, load)) = air.ammo {
+        let load = (load as usize).min(AIR_PIPS_PER_ROW * AIR_PIP_ROWS);
+        let rows = load.div_ceil(AIR_PIPS_PER_ROW).max(1);
+        let pip_h = if rows == 1 { AIR_PIP_H } else { AIR_PIP_H_SHORT };
+        let stack_h = rows as f32 * pip_h + (rows - 1) as f32 * AIR_PIP_GAP;
+        let top = b.y + ((b.height - stack_h) / 2.0).floor();
+        let pitch = AIR_PIP_W + AIR_PIP_GAP;
+        let cols = load.div_ceil(rows);
+        for i in 0..load {
+            let (row, col) = (i / cols, i % cols);
+            pips.push(Rectangle::new(readout_x + col as f32 * pitch, top + row as f32 * (pip_h + AIR_PIP_GAP), AIR_PIP_W, pip_h));
+        }
+        readout_w = (cols as f32 * pitch - AIR_PIP_GAP).max(0.0);
+    }
+    let queued_x = if readout_w > 0.0 { readout_x + readout_w + AIR_READOUT_GAP } else { readout_x };
+    AirBoxLayout { readout_x, pips, queued_x }
+}
 
 impl PlayerHud {
     /// A wreck's readouts: everything at zero, nothing live.
@@ -2026,7 +2111,7 @@ mod hud_tests {
         game.air_calls.push(AirCall { id: 9, seat: 0, sortie: Sortie::Heli, arrive_at: Some(at) });
         game.air_calls.push(AirCall { id: 10, seat: 0, sortie: Sortie::Jet, arrive_at: None });
         assert!(air_support_up(&game, None), "the box needs the row");
-        assert_eq!(AirHud::of(&game, 0), Some(AirHud { sortie: Sortie::Heli, seconds: Some(15), queued: 1 }));
+        assert_eq!(AirHud::of(&game, 0), Some(AirHud { sortie: Sortie::Heli, seconds: Some(15), ammo: None, queued: 1 }));
         let chrome = PlayChrome { hud: true, air_support: air_support_up(&game, None), ..PlayChrome::default() };
         let shape = CornerShape::of(&chrome, 1).expect("play draws the corners");
         let c = corners(&UiFrame::plain((1600.0, 900.0)), &shape);
@@ -2043,6 +2128,87 @@ mod hud_tests {
         room.air_calls.push(AirCall { id: 3, seat: 2, sortie: Sortie::Jet, arrive_at: Some(room.time + 5.0) });
         assert!(!air_support_up(&room, Some(0)));
         assert!(air_support_up(&room, Some(2)));
+    }
+
+    /// While a seat's aircraft flies its box shows the ammunition it has
+    /// left out of the load it came with - the helicopter's salvos, the
+    /// jet's passes - in every stage, the calls behind it still queued, and
+    /// the symbol goes dark with the last round.
+    #[test]
+    fn the_air_box_shows_a_flying_aircrafts_ammunition() {
+        use crate::air_support::{AirCall, AirStage, Aircraft, Sortie};
+        let t = tuning();
+        for sortie in [Sortie::Heli, Sortie::Jet] {
+            let load = sortie.ammo(&t);
+            for stage in AirStage::ALL {
+                let mut game = round(2);
+                let mut craft = Aircraft::arrive(7, 1, sortie, crate::Position::new(-40.0, 200.0), crate::Position::new(300.0, 200.0), &t);
+                craft.stage = stage;
+                craft.ammo = load - 1;
+                let entity = game.world.spawn((craft,));
+                game.air_calls.push(AirCall { id: 8, seat: 1, sortie: Sortie::Jet, arrive_at: None });
+                assert_eq!(AirHud::of(&game, 0), None, "{stage:?}: another seat's aircraft");
+                let hud = AirHud::of(&game, 1).expect("the seat's box");
+                assert_eq!(hud, AirHud { sortie, seconds: None, ammo: Some((load - 1, load)), queued: 1 }, "{stage:?}");
+                assert_eq!(hud.lit(), load > 1);
+                game.world.get::<&mut Aircraft>(entity).expect("the aircraft").ammo = 0;
+                let spent = AirHud::of(&game, 1).expect("the seat's box");
+                assert_eq!(spent.ammo, Some((0, load)));
+                assert!(!spent.lit(), "nothing left: the symbol goes dark");
+            }
+        }
+        // A call's symbol is lit while it counts.
+        assert!(AirHud { sortie: Sortie::Heli, seconds: Some(4), ammo: None, queued: 0 }.lit());
+    }
+
+    /// The box's layout: a call's seconds and an aircraft's pips start
+    /// under the weapon's count, every load the knobs allow keeps its pips
+    /// inside the box - one row up to six, two rows past - and the queued
+    /// `+N` follows the readout, clear of the heat shield's gauge.
+    #[test]
+    fn the_air_box_lays_its_pips_out_inside_the_box() {
+        use crate::air_support::Sortie;
+        let b = air_box(Rectangle::new(40.0, 500.0, VITALS_W, ROW_H));
+        let inside = |r: &Rectangle| r.x >= b.x && r.y >= b.y && r.x + r.width <= b.x + b.width && r.y + r.height <= b.y + b.height;
+        let widest_queue = crate::text::width("+9", HUD_TEXT_SIZE) as f32;
+        for load in 1..=12u8 {
+            let air = AirHud { sortie: Sortie::Heli, seconds: None, ammo: Some((load / 2, load)), queued: 0 };
+            let l = air_box_layout(b, &air);
+            assert_eq!(l.pips.len(), load as usize);
+            assert!(l.pips.iter().all(inside), "a load of {load}: {:?}", l.pips);
+            assert_eq!(l.pips[0].x, b.x + AIR_READOUT_X);
+            for pair in l.pips.windows(2) {
+                let same_row = pair[0].y == pair[1].y;
+                assert!(if same_row { pair[1].x >= pair[0].x + pair[0].width + AIR_PIP_GAP } else { pair[1].y >= pair[0].y + pair[0].height + AIR_PIP_GAP }, "a load of {load}: pips touch");
+            }
+            let rows: std::collections::BTreeSet<i32> = l.pips.iter().map(|p| p.y as i32).collect();
+            assert_eq!(rows.len(), if load as usize <= AIR_PIPS_PER_ROW { 1 } else { 2 }, "a load of {load}");
+            let right = l.pips.iter().map(|p| p.x + p.width).fold(0.0, f32::max);
+            assert_eq!(l.queued_x, right + AIR_READOUT_GAP, "a load of {load}: the +N follows the pips");
+            assert!(l.queued_x + widest_queue <= b.x + AIR_ROW_FREE_W, "a load of {load}: the +N runs into the heat shield's gauge");
+        }
+        // The shipped loads show every round, and two rows are even: the
+        // helicopter's eight salvos are four over four.
+        let t = tuning();
+        for sortie in [Sortie::Heli, Sortie::Jet] {
+            assert!(sortie.ammo(&t) as usize <= AIR_PIPS_PER_ROW * AIR_PIP_ROWS, "{sortie:?}");
+        }
+        let eight = air_box_layout(b, &AirHud { sortie: Sortie::Heli, seconds: None, ammo: Some((8, 8)), queued: 0 });
+        assert_eq!(eight.pips.iter().filter(|p| p.y == eight.pips[0].y).count(), 4);
+        // A load past the knobs' range shows two rows and no more.
+        let over = air_box_layout(b, &AirHud { sortie: Sortie::Heli, seconds: None, ammo: Some((200, 200)), queued: 0 });
+        assert_eq!(over.pips.len(), AIR_PIPS_PER_ROW * AIR_PIP_ROWS);
+        assert!(over.pips.iter().all(inside));
+        // A counting call: no pips, the +N past its seconds.
+        let counting = AirHud { sortie: Sortie::Jet, seconds: Some(88), ammo: None, queued: 9 };
+        let l = air_box_layout(b, &counting);
+        assert!(l.pips.is_empty());
+        assert_eq!(l.readout_x, b.x + AIR_READOUT_X);
+        assert_eq!(l.queued_x, l.readout_x + crate::text::width("88", HUD_TEXT_SIZE) as f32 + AIR_READOUT_GAP);
+        assert!(l.queued_x + widest_queue <= b.x + AIR_ROW_FREE_W);
+        // Calls waiting with none counting: the +N where the readout would be.
+        let waiting = AirHud { sortie: Sortie::Jet, seconds: None, ammo: None, queued: 1 };
+        assert_eq!(air_box_layout(b, &waiting).queued_x, b.x + AIR_READOUT_X);
     }
 
     /// A seat dying takes nothing away: the same chips in the same order,

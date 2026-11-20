@@ -47,6 +47,10 @@ pub const VELOCITY_MAX_PX_PER_S: f32 = i8::MAX as f32 * VELOCITY_STEP_PX_PER_S;
 /// so a round trip lands within 0.703°.
 pub const HEADING_STEPS: f32 = 256.0;
 
+/// An aircraft's bank travels as an `i8`: this many steps from level to a
+/// full bank either way, so a round trip lands within 0.4 per cent.
+pub const BANK_STEPS: f32 = 127.0;
+
 /// Timers travel in tenths of a second and saturate at `TIMER_MAX_SECONDS`.
 pub const TIMER_STEPS_PER_SECOND: f32 = 10.0;
 
@@ -91,6 +95,19 @@ pub fn quantise_heading(degrees: f32) -> u8 {
 /// A heading step back to degrees in `0.0..360.0`.
 pub fn dequantise_heading(q: u8) -> f32 {
     q as f32 * 360.0 / HEADING_STEPS
+}
+
+/// An aircraft's bank (`Aircraft::bank`, -1 full left to 1 full right) to
+/// one of `BANK_STEPS` steps a side, rounded to the nearest and saturated.
+/// NaN becomes 0.
+pub fn quantise_bank(bank: f32) -> i8 {
+    let v = (bank * BANK_STEPS).round();
+    if v.is_nan() { 0 } else { v.clamp(-BANK_STEPS, BANK_STEPS) as i8 }
+}
+
+/// Bank steps back to -1..=1.
+pub fn dequantise_bank(q: i8) -> f32 {
+    (q as f32 / BANK_STEPS).clamp(-1.0, 1.0)
 }
 
 /// Health in whole points, rounded to the nearest and saturated at 0 and
@@ -867,6 +884,12 @@ pub struct AirState {
     pub height: i16,
     /// `quantise_heading` of its heading over the ground.
     pub heading: u8,
+    /// `quantise_bank` of how hard it is turning (`Aircraft::bank`); 0 for
+    /// a call.
+    pub bank: i8,
+    /// The aircraft's ammunition left (`Aircraft::ammo`): the helicopter's
+    /// salvos, the jet's passes; 0 for a call.
+    pub ammo: u8,
 }
 
 /// A drum a gravity well holds (`well::HeldDrum`), by its id. Never moves:
@@ -1434,6 +1457,29 @@ mod tests {
         assert_eq!(quantise_heading(359.9), 0);
         assert_eq!(quantise_heading(f32::NAN), 0);
         assert_eq!(quantise_heading(f32::INFINITY), 0);
+    }
+
+    #[test]
+    fn bank_round_trip_within_half_a_step_and_a_step_is_itself() {
+        let half_step = 0.5 / BANK_STEPS;
+        let mut bank = -1.0;
+        while bank <= 1.0 {
+            let back = dequantise_bank(quantise_bank(bank));
+            assert!((back - bank).abs() <= half_step + 1e-6, "{bank} -> {back}");
+            bank += 0.013;
+        }
+        assert_eq!(quantise_bank(0.0), 0);
+        assert_eq!(quantise_bank(1.0), 127);
+        assert_eq!(quantise_bank(-1.0), -127);
+        assert_eq!(quantise_bank(7.0), 127);
+        assert_eq!(quantise_bank(f32::NEG_INFINITY), -127);
+        assert_eq!(quantise_bank(f32::NAN), 0);
+        // What a replica holds quantises back to the step it came from, so
+        // the two sides' digests agree.
+        for q in -127..=127i8 {
+            assert_eq!(quantise_bank(dequantise_bank(q)), q);
+        }
+        assert_eq!(dequantise_bank(i8::MIN), -1.0);
     }
 
     #[test]
