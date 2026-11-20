@@ -23,7 +23,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::canvas::BlockImage;
-use crate::ground::FloorPx;
+use crate::ground::{Deck, FloorPx};
 use crate::math::Color;
 use crate::tuning::Tuning;
 
@@ -50,6 +50,15 @@ impl Biome {
 
     pub fn parse(s: &str) -> Option<Biome> {
         Biome::ALL.iter().copied().find(|b| b.name() == s)
+    }
+
+    /// The biome's own ground tileset (`tools/retint_ground.py`), drawn in
+    /// place of the theme's: the same tiles, its water and banks in the
+    /// biome's colours.
+    pub fn ground_texture_path(self) -> &'static str {
+        match self {
+            Biome::Valley => "static/punyworld/punyworld-overworld-tileset-valley.png",
+        }
     }
 
     /// What this biome looks like.
@@ -85,6 +94,8 @@ pub struct WaterRamp {
     pub glint: Color,
     pub deep: Color,
     pub deep_dark: Color,
+    /// A pebble on a ford's bed, seen through the water.
+    pub bed: Color,
 }
 
 /// Everything a biome draws in, and where.
@@ -107,6 +118,9 @@ pub struct BiomeLook {
     pub gravel_reach: (f32, f32),
     /// How far packed earth reaches from a road's dirt, px, the same way.
     pub shoulder_reach: (f32, f32),
+    /// A plank deck over water (`ground::Deck`): its rails, the seams
+    /// between planks, and the planks' two tones.
+    pub deck: [Color; 4],
 }
 
 /// The Soča gravel valley, in the steps chosen on the palette card
@@ -121,6 +135,7 @@ pub const VALLEY: BiomeLook = BiomeLook {
         glint: Color::new(0xB4, 0xE6, 0xDE, 255),
         deep: Color::new(0x16, 0x5A, 0x6A, 255),
         deep_dark: Color::new(0x11, 0x4B, 0x59, 255),
+        bed: Color::new(0x5E, 0x9C, 0x92, 255),
     },
     gravel: [Color::new(0xE2, 0xD4, 0xB0, 255), Color::new(0xC9, 0xB9, 0x93, 255), Color::new(0xA9, 0x9A, 0x78, 255)],
     silt: [Color::new(0x6E, 0x5A, 0x44, 255), Color::new(0x55, 0x45, 0x36, 255)],
@@ -131,6 +146,8 @@ pub const VALLEY: BiomeLook = BiomeLook {
     meadow_light: Color::new(0x7F, 0xB1, 0x5A, 38),
     gravel_reach: (8.0, 22.0),
     shoulder_reach: (3.0, 7.0),
+    // Weathered timber, greyer than the orange of a timber wall.
+    deck: [Color::new(0x3A, 0x2A, 0x1C, 255), Color::new(0x4E, 0x3A, 0x28, 255), Color::new(0x8A, 0x6A, 0x48, 255), Color::new(0x7A, 0x5C, 0x3D, 255)],
 };
 
 /// A 32-bit hash of a lattice point and a salt (SplitMix64's finaliser):
@@ -200,9 +217,10 @@ fn distance(w: usize, h: usize, near: impl Fn(usize) -> bool) -> Vec<u16> {
 /// texel a block, clear where the tiles show through. `class` says what
 /// the tiles lay on each block, row by row (`GroundGrid::floor_blocks`).
 /// See the module comment for what goes where.
-pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], stamp: u64) -> BlockImage {
+pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[Deck], stamp: u64) -> BlockImage {
     assert_eq!(class.len(), w * h, "a class a block");
-    let to_water = distance(w, h, |i| class[i] == FloorPx::Water);
+    let to_water = distance(w, h, |i| class[i].is_water());
+    let to_deep = distance(w, h, |i| class[i] == FloorPx::Deep);
     let to_road = distance(w, h, |i| class[i] == FloorPx::Road);
     let clear = Color::new(0, 0, 0, 0);
     let mut texels = vec![clear; w * h];
@@ -213,7 +231,19 @@ pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], stamp: u64)
         let wet = to_water[i] as f32 * 2.0;
         let dirt = to_road[i] as f32 * 2.0;
         *texel = match class[i] {
-            FloorPx::Water | FloorPx::Road => continue,
+            FloorPx::Deep | FloorPx::Road => continue,
+            // A ford darkens into the open water over its last 12 px, and
+            // shows a pebble of its bed here and there.
+            FloorPx::Water => {
+                let near_deep = to_deep[i] as f32 * 2.0;
+                if near_deep <= 12.0 && (12.0 - near_deep) / 12.0 >= threshold {
+                    look.water.deep
+                } else if near_deep > 12.0 && hash(bx, by, 13) % 23 == 0 {
+                    look.water.bed
+                } else {
+                    continue;
+                }
+            }
             // The tileset's shore outline, in silt: darker beside the water.
             FloorPx::Bank => look.silt[if to_water[i] <= 1 { 1 } else { 0 }],
             FloorPx::Land => {
@@ -237,7 +267,42 @@ pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], stamp: u64)
             }
         };
     }
+    for deck in decks {
+        lay_deck(look, deck, w, h, class, &mut texels);
+    }
     BlockImage { width: w, height: h, block: 2, texels, stamp, patches: Vec::new() }
+}
+
+/// The planks of `deck` over its cell: a band 24 px across the road's
+/// way, railed on both edges, its planks running across the water - 4 px
+/// each, a seam between, their tone hashed - and a strip of the water's
+/// shadow along each rail.
+fn lay_deck(look: &BiomeLook, deck: &Deck, w: usize, h: usize, class: &[FloorPx], texels: &mut [Color]) {
+    let [rail, seam, plank_a, plank_b] = look.deck;
+    // The cell's corner in blocks: a cell spans 16 px either side of its
+    // centre (`ground` lays its cells centred).
+    let (bx0, by0) = (deck.cell.0 * 16 - 8, deck.cell.1 * 16 - 8);
+    for ly in 0..16 {
+        for lx in 0..16 {
+            let (bx, by) = (bx0 + lx, by0 + ly);
+            if bx < 0 || by < 0 || bx as usize >= w || by as usize >= h {
+                continue;
+            }
+            let i = by as usize * w + bx as usize;
+            // Along the road and across it, in blocks.
+            let (along, across) = if deck.across { (lx, ly) } else { (ly, lx) };
+            let texel = match across {
+                2 | 13 => rail,
+                3..=12 if along % 3 == 2 => seam,
+                3..=12 => {
+                    if hash(deck.cell.0 * 7 + along / 3, deck.cell.1, 17) % 2 == 0 { plank_a } else { plank_b }
+                }
+                1 | 14 if class[i].is_water() => look.water.edge,
+                _ => continue,
+            };
+            texels[i] = texel;
+        }
+    }
 }
 
 /// The stone of a gravel shelf at field px (`x`, `y`), `wet` px from the
@@ -320,6 +385,7 @@ mod tests {
             materials.extend(look.gravel.iter().map(|c| ("gravel", *c)));
             materials.extend(look.silt.iter().map(|c| ("silt", *c)));
             materials.extend(look.shoulder.iter().map(|c| ("shoulder", *c)));
+            materials.extend(look.deck[2..].iter().map(|c| ("deck plank", *c)));
             materials.push(("dark meadow", over_grass(look.meadow_dark)));
             materials.push(("light meadow", over_grass(look.meadow_light)));
             for (name, material) in &materials {
@@ -328,6 +394,31 @@ mod tests {
                     assert!(d >= MIN_DELTA_E, "{}: {name} {material:?} is only {d:.1} from the {thing}", biome.name());
                 }
             }
+        }
+    }
+
+    /// Seat 8's deep teal sits on the valley's water (ΔE 5 from a ford;
+    /// 12 from today's cyan). Its colour is to change (BB-202); held here
+    /// so the test says when it no longer needs the exception.
+    const SEAT_ON_ITS_WATER: usize = 7;
+
+    #[test]
+    fn every_seat_the_teal_hull_and_glass_stand_apart_from_the_water() {
+        let teal_hull = Color::new(0x00, 0xA6, 0x7F, 255);
+        let glass = Color::new(0x86, 0xC7, 0xD9, 255);
+        for biome in Biome::ALL {
+            let w = biome.look().water;
+            let mut things: Vec<(String, Color)> = crate::tank::TEAM_COLORS.iter().enumerate().filter(|(i, _)| *i != SEAT_ON_ITS_WATER).map(|(i, c)| (format!("seat {}", i + 1), *c)).collect();
+            things.push(("teal hull".to_string(), teal_hull));
+            things.push(("glass".to_string(), glass));
+            for (role, water) in [("ford", w.fill), ("open water", w.deep)] {
+                for (thing, colour) in &things {
+                    let d = delta_e(water, *colour);
+                    assert!(d >= MIN_DELTA_E, "{}: the {thing} is only {d:.1} from the {role}", biome.name());
+                }
+            }
+            let seat8 = delta_e(w.fill, crate::tank::TEAM_COLORS[SEAT_ON_ITS_WATER]);
+            assert!(seat8 < MIN_DELTA_E, "seat 8 now stands {seat8:.1} from the ford: drop SEAT_ON_ITS_WATER");
         }
     }
 
@@ -384,7 +475,7 @@ mod tests {
 
     #[test]
     fn the_layer_leaves_water_and_road_alone_and_lines_every_bank() {
-        let image = bake(&VALLEY, 128, 128, &tiny_blocks(), 1);
+        let image = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], 1);
         let at = |x: i32, y: i32| image.texels[(y / 2) as usize * image.width + (x / 2) as usize];
         assert_eq!(at(120, 40).a, 0, "water is the tiles'");
         assert_eq!(at(200, 166).a, 0, "a road's dirt is the tiles'");
@@ -396,8 +487,8 @@ mod tests {
 
     #[test]
     fn the_layer_is_the_same_every_time_it_is_baked() {
-        let a = bake(&VALLEY, 128, 128, &tiny_blocks(), 1);
-        let b = bake(&VALLEY, 128, 128, &tiny_blocks(), 2);
+        let a = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], 1);
+        let b = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], 2);
         assert_eq!(a.texels, b.texels);
     }
 

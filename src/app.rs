@@ -1383,6 +1383,12 @@ pub fn run(args: Args) {
             crate::render::target::sheet(&mut rl, &thread, t.ground_texture_path())
         })
         .collect();
+    // And one per biome, in `Biome::ALL` order: a field with a biome draws
+    // its tileset in place of the theme's.
+    let biome_ground_textures: Vec<sola_raylib::prelude::Texture2D> = crate::biome::Biome::ALL
+        .iter()
+        .map(|b| crate::render::target::sheet(&mut rl, &thread, b.ground_texture_path()))
+        .collect();
     let grass_textures: Vec<sola_raylib::prelude::Texture2D> = crate::map::Theme::ALL
         .iter()
         .map(|t| {
@@ -1761,6 +1767,7 @@ pub fn run(args: Args) {
             props: props_texture,
             barrel_explosion: barrel_explosion_texture,
             ground: ground_textures,
+            biome_ground: biome_ground_textures,
             bongs: bong_textures,
             grass: grass_textures,
             trees: trees_texture,
@@ -1833,6 +1840,8 @@ struct SheetSet {
     props: sola_raylib::prelude::Texture2D,
     barrel_explosion: sola_raylib::prelude::Texture2D,
     ground: Vec<sola_raylib::prelude::Texture2D>,
+    /// One ground tileset per biome, in `Biome::ALL` order.
+    biome_ground: Vec<sola_raylib::prelude::Texture2D>,
     bongs: Vec<crate::render::bong::BongTextures>,
     grass: Vec<sola_raylib::prelude::Texture2D>,
     trees: sola_raylib::prelude::Texture2D,
@@ -1847,11 +1856,16 @@ struct SheetSet {
 }
 
 impl SheetSet {
-    /// What a frame on a map of `theme` draws from: that theme's ground
-    /// and tall grass with every other sheet, and the baked images as the
-    /// frame uploaded them (`blocks`).
-    fn textures<'a>(&'a self, theme: crate::map::Theme, blocks: Vec<(u64, &'a sola_raylib::prelude::Texture2D)>) -> Textures<'a> {
+    /// What a frame on a map of `theme` draws from: that theme's ground -
+    /// or `biome`'s, which takes its place - and tall grass with every
+    /// other sheet, and the baked images as the frame uploaded them
+    /// (`blocks`).
+    fn textures<'a>(&'a self, theme: crate::map::Theme, biome: Option<crate::biome::Biome>, blocks: Vec<(u64, &'a sola_raylib::prelude::Texture2D)>) -> Textures<'a> {
         let themed = crate::map::Theme::ALL.iter().position(|x| *x == theme).expect("every theme is in ALL");
+        let ground = match biome {
+            Some(b) => &self.biome_ground[crate::biome::Biome::ALL.iter().position(|x| *x == b).expect("every biome is in ALL")],
+            None => &self.ground[themed],
+        };
         Textures {
             tanks: &self.tanks,
             tank_glow: &self.tank_glow,
@@ -1864,7 +1878,7 @@ impl SheetSet {
             obstacles: &self.obstacles,
             props: &self.props,
             barrel_explosion: &self.barrel_explosion,
-            ground: &self.ground[themed],
+            ground,
             bongs: &self.bongs,
             grass: &self.grass[themed],
             trees: &self.trees,
@@ -2425,7 +2439,7 @@ impl App {
             &plan.builder_frame(&ui),
             BAR_FILL,
             &EditorTextures {
-                sheets: self.sheets.textures(theme, blocks),
+                sheets: self.sheets.textures(theme, self.session.builder.biome(), blocks),
                 theme,
                 // The bongs the canvas map picks, for their tools' icons.
                 bong_idle: &self.sheets.bongs[self.session.builder.map().bong_kind(crate::bong::Side::Player).index()].idle,
@@ -2970,7 +2984,7 @@ impl App {
                 camera_overlay: overlay.as_ref(),
                 swap: self.session.swap().filter(|swap| swap.from == Driver::Build).zip(self.swap_picture.as_ref()).map(|(swap, (picture, _))| (picture, 1.0 - swap.progress())),
             },
-            &self.sheets.textures(game.map.theme, blocks),
+            &self.sheets.textures(game.map.theme, game.ground.biome(), blocks),
             &layout,
             &chrome,
             &ui,

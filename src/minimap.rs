@@ -257,8 +257,21 @@ impl Class {
     /// RED_DEEP, a volcano's cone STONE_DARKEST, a lamp post FIRE_PALE and a
     /// rod's crater RUST_DK.
     pub fn color(self, theme: Theme) -> Color {
+        self.color_in(theme, None)
+    }
+
+    /// `color` on a field drawn in `biome`, whose fords and open water
+    /// take its water's tones (docs/biomes.md).
+    pub fn color_in(self, theme: Theme, biome: Option<crate::biome::Biome>) -> Color {
         let rgb = |r, g, b| Color::new(r, g, b, 255);
         let desert = theme == Theme::Desert;
+        if let Some(water) = biome.map(|b| b.look().water) {
+            match self {
+                Class::Shallow => return water.light,
+                Class::Deep => return water.deep,
+                _ => {}
+            }
+        }
         match self {
             Class::Ground if desert => rgb(0xB7, 0xA2, 0x48),
             Class::Ground => rgb(0x5F, 0x91, 0x4B),
@@ -318,6 +331,8 @@ pub struct Minimap {
     cols: usize,
     rows: usize,
     theme: Theme,
+    /// The biome its water is drawn in.
+    biome: Option<crate::biome::Biome>,
     /// Per cell, what lies on the floor and what stands on it.
     floor: Vec<Class>,
     solid: Vec<Option<Class>>,
@@ -331,7 +346,7 @@ impl Minimap {
     pub fn of_map(map: &MapFile, depth: impl Fn(i32, i32) -> Depth) -> Minimap {
         let field = map.field_size();
         let (floor, solid) = classes_of_map(map, field, &depth);
-        Minimap::of_classes(field, map.theme, floor, solid)
+        Minimap::of_classes(field, map.theme, crate::biome::in_force(map.biome, &crate::tuning::tuning()), floor, solid)
     }
 
     /// The minimap of the round `game` holds: its map's floor under its
@@ -348,14 +363,14 @@ impl Minimap {
             }
         }
         let solid = solids_of_world(game, cells_of(field));
-        Minimap::of_classes(field, game.map.theme, floor, solid)
+        Minimap::of_classes(field, game.map.theme, game.ground.biome(), floor, solid)
     }
 
-    fn of_classes(field: (f32, f32), theme: Theme, floor: Vec<Class>, solid: Vec<Option<Class>>) -> Minimap {
+    fn of_classes(field: (f32, f32), theme: Theme, biome: Option<crate::biome::Biome>, floor: Vec<Class>, solid: Vec<Option<Class>>) -> Minimap {
         let (cols, rows) = cells_of(field);
-        let texels = floor.iter().zip(&solid).map(|(f, s)| s.unwrap_or(*f).color(theme)).collect();
+        let texels = floor.iter().zip(&solid).map(|(f, s)| s.unwrap_or(*f).color_in(theme, biome)).collect();
         let image = BlockImage { width: cols, height: rows, block: 1, texels, stamp: next_stamp(), patches: Vec::new() };
-        Minimap { field, cols, rows, theme, floor, solid, image }
+        Minimap { field, cols, rows, theme, biome, floor, solid, image }
     }
 
     /// The image: a texel per cell, row by row.
@@ -416,7 +431,7 @@ impl Minimap {
     fn repaint_texels(&mut self, cells: Vec<usize>) -> bool {
         let mut bounds: Option<(usize, usize, usize, usize)> = None;
         for i in cells {
-            let color = self.solid[i].unwrap_or(self.floor[i]).color(self.theme);
+            let color = self.solid[i].unwrap_or(self.floor[i]).color_in(self.theme, self.biome);
             if self.image.texels[i] == color {
                 continue;
             }
@@ -482,6 +497,7 @@ pub struct RoundKey {
     seed: u64,
     field: (u32, u32),
     theme: Theme,
+    biome: Option<crate::biome::Biome>,
     cells: usize,
     frozen: bool,
     name: Option<String>,
@@ -493,7 +509,8 @@ impl RoundKey {
     /// water or roads is another key.
     pub fn of_canvas(map: &crate::map::MapFile, cells: u64, frozen: bool) -> RoundKey {
         let (w, h) = map.field_size();
-        RoundKey { seed: cells, field: (w.to_bits(), h.to_bits()), theme: map.theme, cells: map.cells.len(), frozen, name: map.name.clone() }
+        let biome = crate::biome::in_force(map.biome, &crate::tuning::tuning());
+        RoundKey { seed: cells, field: (w.to_bits(), h.to_bits()), theme: map.theme, biome, cells: map.cells.len(), frozen, name: map.name.clone() }
     }
 
     /// The round `game` holds.
@@ -503,6 +520,7 @@ impl RoundKey {
             seed: game.round_seed(),
             field: (w.to_bits(), h.to_bits()),
             theme: game.map.theme,
+            biome: game.ground.biome(),
             cells: game.map.cells.len(),
             frozen: game.water.is_frozen(),
             name: game.map.name.clone(),

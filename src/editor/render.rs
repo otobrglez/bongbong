@@ -484,7 +484,7 @@ impl MapEditor {
             lights: Box::new(move |part| self.canvas_lights(&look, time, part)),
             depth: Box::new(|at| {
                 let (col, row) = map::world_to_cell(at);
-                self.ground.depth(col, row)
+                self.ground.drawn_depth(col, row, self.ground.depth(col, row))
             }),
             roads: Box::new(|| self.cell_index().cells().iter().filter(|(_, _, o)| *o == CellObject::Road).map(|&(c, r, _)| (c, r)).collect()),
             made: crate::minimap::RoundKey::of_canvas(&self.map, self.cell_index().digest(), frozen),
