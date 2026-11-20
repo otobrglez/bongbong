@@ -730,6 +730,22 @@ impl Session {
         self.driver == Driver::Play && !self.players_dialog && self.level_select.is_none() && self.question.is_none()
     }
 
+    /// Whether something stands between a tap and the round on screen:
+    /// a mode that is not a round's own (the lobby, the builder), a pause,
+    /// a question (the players dialog, the level select, one about a kept
+    /// map), the opening banner or the end screen. The touch scheme's hint
+    /// says what a tap on the field does, so it waits while this holds
+    /// (`TouchScheme::set_covered`).
+    pub fn round_covered(&self) -> bool {
+        let round = self.shown();
+        let banner = round.intro_showing() || round.outcome() != crate::simulation::Outcome::Playing;
+        match self.driver {
+            Driver::Play => !self.playing() || self.game.paused || banner,
+            Driver::Online => banner,
+            Driver::Build | Driver::Lobby => true,
+        }
+    }
+
     /// The `BUILD` button (or `Tab` in play mode): into the builder at
     /// once, the round paused behind it for BACK to come back to - mid-round
     /// and on the end screen alike. The level select or the players
@@ -1473,6 +1489,35 @@ mod session_tests {
         s.builder.open(map);
         s.builder.use_store(Some(store));
         (s, store)
+    }
+
+    /// The touch hint says what a tap on the field does, so it waits
+    /// while anything stands between a tap and the round.
+    #[test]
+    fn the_opening_banner_a_pause_a_question_and_the_builder_cover_the_round() {
+        let mut s = session();
+        // A round opens under its mission banner.
+        s.game.show_intro = true;
+        s.game.init(W, H);
+        assert!(s.game.intro_showing());
+        assert!(s.round_covered(), "the opening banner");
+        // The banner gone: the round is clear.
+        s.game.show_intro = false;
+        s.game.init(W, H);
+        assert!(!s.game.intro_showing());
+        assert!(!s.round_covered(), "a round with nothing over it");
+
+        s.game.paused = true;
+        assert!(s.round_covered(), "a pause");
+        s.game.paused = false;
+
+        s.players_dialog = true;
+        assert!(s.round_covered(), "the players question");
+        s.players_dialog = false;
+        assert!(!s.round_covered());
+
+        assert_eq!(s.press_build(), Driver::Build);
+        assert!(s.round_covered(), "the builder");
     }
 
     /// A modified copy made from the original this build ships asks

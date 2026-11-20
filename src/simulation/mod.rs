@@ -5716,6 +5716,13 @@ impl Game {
         &self.looks
     }
 
+    /// Whether the opening mission banner is on screen: solid while the
+    /// round is frozen behind it, then fading over `INTRO_FADE_SECONDS`,
+    /// and gone once the round is decided.
+    pub fn intro_showing(&self) -> bool {
+        (self.intro_timer > 0.0 || self.intro_fade > 0.0) && self.outcome == Outcome::Playing
+    }
+
     pub fn outcome(&self) -> Outcome {
         self.outcome
     }

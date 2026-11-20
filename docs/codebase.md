@@ -1655,8 +1655,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   bending shader - ripples, muzzle puffs and impact punches in one pass -, the kill flash stepping
   out in eighths, the debug overlays) then `draw_chrome` on the
   window in UI points (the indicators, then the end screen, banners and PAUSED under the corner
-  clusters - still pressable -, then the dialogs, lobby and level select over them, their dims over
-  the whole window, and the stick - over the canvas the builder last showed, which a swap out of
+  clusters - still pressable; the banners share one row, so a frame writes one of them,
+  `hud::MiddleRow`: a paused round writes PAUSED in place of the opening and the wave lines, and
+  only its dim over an end screen -, then the dialogs, lobby and level select over them, their dims
+  over the whole window, and the stick, with the touch hint once nothing covers the round,
+  `Session::round_covered` - over the canvas the builder last showed, which a swap out of
   the builder draws over the presented world at `Effects::swap`'s share): an arena runs both into
   the bitmap, while a followed view draws its world into `composite` at one pixel per texel,
   `render::view::present_world` puts it on the window shifted by `Camera::offset`, and `draw_chrome`
@@ -2196,7 +2199,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`StickDrawing`) is the base at the origin the rule measures from, at least `BASE_MIN_RADIUS_PT`,
   and the knob, `KNOB_RADIUS_PT` (both at least 44 pt across), which `TouchScheme::draw`, the one
   `render`-gated item, paints under the UI camera with the hint at `HINT_TEXT_PT` at the area's
-  quarters). Both unit-tested headless.
+  quarters). The hint is the round's: `app.rs` tells the scheme each frame whether anything stands
+  between a tap and the round (`set_covered`, from `Session::round_covered`: another mode, a
+  pause, a question, the opening banner, the end screen; or the bong's speech bubble up, which
+  may stand on the hint's row), and while it does the hint is not written and its seconds do not
+  run (`hint_left`). Both unit-tested headless.
 - `framing.rs` (docs/large-maps-follow-camera.md §3, §4, §15) — how much world a screen shows,
   headless and pure, the reference for the rules a follow camera frames a field map by. `MapClass`
   (`Arena` up to `ARENA_MAX_CELLS`, 36 x 18, shown whole by `view::View`; `Field` past it;

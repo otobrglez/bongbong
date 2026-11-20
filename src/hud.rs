@@ -1700,6 +1700,29 @@ pub struct PlayChrome {
     pub dissolve: Option<f32>,
 }
 
+/// Which of the banners that share the chrome's middle row are written
+/// this frame. They are all centred on one line - the end screen's title
+/// and rows, the opening mission line with a level's number and title, a
+/// wave's line and PAUSED - so only one of them is: a paused round writes
+/// PAUSED in place of the opening and the wave lines, and over an end
+/// screen it writes nothing, its dim and the pause button's triangle
+/// saying it, so the result under it stays readable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MiddleRow {
+    pub intro: bool,
+    pub wave: bool,
+    pub paused: bool,
+}
+
+impl MiddleRow {
+    /// The row for a round that is `paused` or not, whose end screen is up
+    /// (`ended`) or not, with an opening line (`intro`) and a wave's line
+    /// (`wave`) to write or not.
+    pub fn of(paused: bool, ended: bool, intro: bool, wave: bool) -> MiddleRow {
+        MiddleRow { intro: intro && !paused, wave: wave && !paused, paused: paused && !ended }
+    }
+}
+
 /// A special's prompt (`PlayChrome::prompt`) for the first of `seats` -
 /// this window's - that has one: a rod's reticle up (letting go calls the
 /// rod, or, with the reticle on its own tank's cell, cancels it), or a
@@ -2159,6 +2182,20 @@ mod hud_tests {
         }
         // A call's symbol is lit while it counts.
         assert!(AirHud { sortie: Sortie::Heli, seconds: Some(4), ammo: None, queued: 0 }.lit());
+    }
+
+    /// PAUSED, the opening line, a wave's line and the end screen are
+    /// centred on one row, so a frame writes one of them.
+    #[test]
+    fn a_paused_round_writes_one_banner_on_the_middle_row() {
+        // Running: the opening and the wave lines as they come.
+        assert_eq!(MiddleRow::of(false, false, true, false), MiddleRow { intro: true, wave: false, paused: false });
+        assert_eq!(MiddleRow::of(false, false, false, true), MiddleRow { intro: false, wave: true, paused: false });
+        // Paused under either: PAUSED alone.
+        assert_eq!(MiddleRow::of(true, false, true, true), MiddleRow { intro: false, wave: false, paused: true });
+        assert_eq!(MiddleRow::of(true, false, false, false), MiddleRow { intro: false, wave: false, paused: true });
+        // Paused on the end screen: the result keeps the row.
+        assert_eq!(MiddleRow::of(true, true, false, false), MiddleRow { intro: false, wave: false, paused: false });
     }
 
     /// The box's layout: a call's seconds and an aircraft's pips start

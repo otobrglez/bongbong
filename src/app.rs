@@ -2348,6 +2348,12 @@ impl App {
         // closes - or the builder is left - lets their textures go.
         self.builder_thumbnails.sync(rl, thread, &self.session.builder);
 
+        // The touch hint waits while anything covers the round, and
+        // while the bong speaks: its bubble stands wherever the bong
+        // does, the hint's row included, and a training line teaches the
+        // same thing (the line up as the last frame left it).
+        self.touch.set_covered(self.session.round_covered() || self.voice.showing().is_some());
+
         let input = if self.session.mode() == Driver::Build {
             // Nothing is steering while the builder is up - every touch is
             // its own, so the scheme's area is empty -, but the scheme
