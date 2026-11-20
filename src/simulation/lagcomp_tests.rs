@@ -432,16 +432,23 @@ fn a_seat_nobody_owns_is_shoved_in_the_world_and_told_nothing() {
     assert!(shoves(&game).is_empty());
 }
 
-/// Seat 0 armed by `patch`, owned by its client, pulling the trigger
-/// once: the round after that update.
-fn owned_seat_fires(patch: debug::TankPatch) -> Game {
+/// Seat 0 armed by `patch`, owned by its client, pulling the trigger and
+/// holding it until its first round leaves - a minigun's barrels spin up
+/// first: the round after the update that fired it, and whether the pull
+/// logged `weapon`'s `Fired`.
+fn owned_seat_fires(patch: debug::TankPatch, weapon: crate::tank::ActiveWeapon) -> (Game, bool) {
     let mut game = game();
     park_enemy_far(&mut game);
+    let spinup = if patch.minigun_ammo.is_some() { tuning().minigun_spinup_ticks(0.0) } else { 0 };
     game.debug_set_tank(0, &patch).expect("seat 0");
     step(&mut game, Input::default());
-    own_seat(&mut game);
-    step(&mut game, fire());
-    game
+    let mut fired = false;
+    for _ in 0..=spinup {
+        own_seat(&mut game);
+        step(&mut game, fire());
+        fired |= seat_fired(&game, weapon);
+    }
+    (game, fired)
 }
 
 fn seat_fired(game: &Game, weapon: crate::tank::ActiveWeapon) -> bool {
@@ -460,8 +467,8 @@ fn an_owned_seat_is_not_told_the_recoil_its_client_applies() {
         (ActiveWeapon::Minigun, debug::TankPatch { minigun_ammo: Some(20), ..Default::default() }),
     ];
     for (weapon, patch) in arms {
-        let game = owned_seat_fires(patch);
-        assert!(seat_fired(&game, weapon), "{weapon:?}: the seat fired: {:?}", game.events());
+        let (game, fired) = owned_seat_fires(patch, weapon);
+        assert!(fired, "{weapon:?}: the seat fired: {:?}", game.events());
         assert!(shoves(&game).is_empty(), "{weapon:?}: {:?}", shoves(&game));
         let (_, _, v) = game.seat_motion(0).expect("seat 0");
         assert!(v.x < 0.0, "{weapon:?}: the room's hull is kicked back along the barrel, which points east: {v:?}");
@@ -495,8 +502,8 @@ fn an_owned_seat_is_not_told_its_rail_recoil_but_is_allowed_it() {
 fn an_owned_seat_is_told_its_missile_recoil() {
     // The client draws no missile and so kicks nothing for one: the room
     // tells it.
-    let game = owned_seat_fires(debug::TankPatch { missile_ammo: Some(4), ..Default::default() });
-    assert!(seat_fired(&game, crate::tank::ActiveWeapon::Missiles), "the pod fired: {:?}", game.events());
+    let (game, fired) = owned_seat_fires(debug::TankPatch { missile_ammo: Some(4), ..Default::default() }, crate::tank::ActiveWeapon::Missiles);
+    assert!(fired, "the pod fired: {:?}", game.events());
     let shoves = shoves(&game);
     assert_eq!(shoves.len(), 1, "one kick, for the one missile out of the pod: {shoves:?}");
     let (seat, dv) = shoves[0];

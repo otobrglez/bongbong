@@ -1411,6 +1411,8 @@ impl Game {
         // Wall pieces lying where they fell (`pieces.rs`): on the floor,
         // under everything that stands.
         fx.pieces().draw(&mut GpuCanvas::culled(d, textures, cull), false);
+        // Spent cases lying beside the guns that threw them (`casings.rs`).
+        fx.casings().draw(&mut GpuCanvas::culled(d, textures, cull), false);
         // The fish under the water's surface (`fish.rs`): over its tiles,
         // under everything that burns, stands or flies over it.
         crate::render::fish::draw_fish(d, textures, self, fx.shoal(), cull);
@@ -2179,6 +2181,8 @@ impl Game {
         // Wall pieces in flight, with their shadows, over the tiles and
         // the tanks.
         fx.pieces().draw(&mut GpuCanvas::culled(d, textures, cull), true);
+        // Spent cases still in the air, over their shadows.
+        fx.casings().draw(&mut GpuCanvas::culled(d, textures, cull), true);
         // Sparks and embers over the top of everything in the scene, but
         // still inside pass 1 so an in-flight shockwave warps them and
         // the camera shake carries them along. The layer's smoke, dust

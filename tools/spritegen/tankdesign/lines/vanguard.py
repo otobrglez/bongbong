@@ -203,22 +203,33 @@ DIM_WELL = STONE_MD               # a gravity well's lamps at rest
 
 @LINE.module_fn('minigun')
 def minigun(d, b, st, hp):
-    """A rotary gun on the right cheek: a dark drum housing, the barrel
-    cluster read as two lit barrels either side of a dark bore gap, bound by
-    a bright clamp and a muzzle ring, a brass belt feeding in from the turret
-    side. The barrel that just fired glows at its tip."""
+    """An M134 on the right cheek: six barrels in a long bundle, seen from
+    above as three - a lit one, a shaded one and the dark gap between two -
+    bound by a clamp half way along and a muzzle clamp at the tip, out of a
+    short gunmetal rotor housing with the drive motor's cap behind it. A
+    brass belt feeds in from the turret side; the spent cases leave by the
+    port on the outer side (`port`). At rest (state 0) the gap sits in the
+    middle; turning (states 1-3) it walks across the bundle, and the barrel
+    at the firing position glows at its tip."""
     hx, hy = hp['minigun']
-    b.meta['muzzle'] = (hx + 0.5, hy - 5.0)
+    b.meta['muzzle'] = (hx + 0.5, hy - 7.0)
+    b.meta['port'] = (hx + 2.0, hy + 1.5)
     b.part(chamfer(hx - 1, hy, hx + 1, hy + 3, bl=1, br=1), GUNMETAL, 'plate', 3, step=-1, corner=False,
            name='mg_housing')
-    b.part(rect(hx - 1, hy - 5, hx - 1, hy - 1), STEEL, 'flat', 3.2, step=1, name='mg_barrel_l')
-    b.part(rect(hx, hy - 5, hx, hy - 1), DARK, 'flat', 3.2, step=1, name='mg_gap')
-    b.part(rect(hx + 1, hy - 5, hx + 1, hy - 1), STEEL, 'flat', 3.2, step=-1, name='mg_barrel_r')
-    b.part(rect(hx - 1, hy - 3, hx + 1, hy - 3), STEEL, 'flat', 3.3, step=2, name='mg_clamp')
-    b.part(rect(hx - 1, hy - 5, hx + 1, hy - 5), STEEL, 'flat', 3.3, step=0, name='mg_muzzle')
+    b.part({(hx, hy + 3)}, STEEL, 'flat', 3.1, step=1, name='mg_motor')
+    b.part({(hx + 1, hy + 1)}, DARK, 'flat', 3.1, step=-1, name='mg_port')
+    # The bundle's three columns, left to right, as the gap passes: a lit
+    # barrel, a shaded one, the bore gap.
+    gap = 1 if st == 0 else st - 1
+    lit = [(STEEL, 0), (STEEL, -2)]
+    for i, x in enumerate((hx - 1, hx, hx + 1)):
+        mat, step = (DARK, 0) if i == gap else lit[(i - gap) % 3 - 1]
+        b.part(rect(x, hy - 7, x, hy - 1), mat, 'flat', 3.2, step=step, name='mg_barrel%d' % i)
+    b.part(rect(hx - 1, hy - 4, hx + 1, hy - 4), STEEL, 'flat', 3.3, step=2, name='mg_clamp')
+    b.part(rect(hx - 1, hy - 7, hx + 1, hy - 7), STEEL, 'flat', 3.3, step=2, name='mg_muzzle')
     b.part(rect(hx - 2, hy + 1, hx - 2, hy + 2), BRASS, 'flat', 2.9, step=0, name='mg_belt')
     if st > 0:
-        b.lamp({(hx - 1 + (st - 1), hy - 6)}, 'hot', z=3.5, name='mg_flash')
+        b.lamp({(hx, hy - 8)}, 'hot', z=3.5, name='mg_flash')
 
 
 @LINE.module_fn('missiles')

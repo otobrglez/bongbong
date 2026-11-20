@@ -1518,7 +1518,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   projectile carries a per-round `id` from one counter (`Game::spawn_pending`), and each state enum
   maps to its sheet column (`col`/`from_col`), the wire's spelling. Bullets have a 3-state machine
   and leave the minigun module, boresighted onto the gun line `minigun_boresight_px` ahead
-  (`Bullet::spawn`); plasma rows are keyed by variant not chassis, never ricochet, and fly as a
+  (`Bullet::spawn`), once the gun's barrels have spun up (`Tank::minigun_spin`; the fire model is
+  docs/BULLETS_SPEC.md §8, held by `minigun_tests`); plasma rows are keyed by variant not chassis, never ricochet, and fly as a
   shader orb (`static/plasma_orb.fs`: a lit sphere with 3D-noise energy spun about a per-bolt axis,
   teal electric with lightning, purple arcane with spiral arms, a comet tail, worked out per 2 px
   block of the field in the bolt's own ramp steps; `plasma_orb_*`, per-bolt variety in `OrbLook`)
@@ -1963,6 +1964,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `fx_max_scars`); a burning plank's charred chunks fall as ash (`Event::ChunksCharred`) and an
   ember arcs downwind (`Event::EmberFlew`); `render/game.rs` draws the scars and lying pieces on the
   floor and the flying ones and embers over everything (`Pieces::draw`), capped at `fx_max_pieces`.
+  And the **spent cases** (`casings.rs`, docs/BULLETS_SPEC.md §9): one out of the minigun's port
+  (`tank_art::MINIGUN_PORT`) for each tank bullet `Fx::watch_casings` first sees at its muzzle, by
+  projectile id, so a replica's and a client's provisional bullets throw them too; they fly, bounce,
+  lie for `casing_linger_seconds` and dissolve, drawn beside the pieces, capped at `fx_max_casings`.
 - `fish.rs` (docs/water.md "Presentation") — fish in the water, cosmetic and reactive: `Shoal` (kept
   in `fx::Fx`, so `app.rs` owns it; `Fx::shoal`) holds a school per `fish_school_cells` of each
   lake's deep cells, rebuilt on a new round, and is stepped on the round's clock (`Game::time`,
@@ -2869,8 +2874,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     ammo of presses not yet accounted for is subtracted, shells and plasma fire on the press edge
     and the minigun while held (`drive_player`'s rule) - and draws its shots from the sandbox's
     muzzle as each falls due (`Game::seat_shot`: the shell or bolt at once, a twin barrel's second
-    `tank_twin_shot_delay_seconds` on, a burst's bullets `minigun_bullet_delay_seconds` apart with a
-    hashed spread), handed to the replica every frame (`Game::add_provisional_shot`). A press is
+    `tank_twin_shot_delay_seconds` on, a burst's bullets `minigun_round_ticks` apart after what is
+    left of the barrels' spin-up - the sandbox turns them as the room does - with a hashed spread), handed to the replica every frame (`Game::add_provisional_shot`). A press is
     `note_fired` when its `Fired` *arrives* (its ammo is in the sandbox now) and `confirm_fired`
     when the interpolator *hands that `Fired` over*, by the input tick it names; a `Fired` with no
     press waiting seeds the local gate from its input tick; a press nobody claims within the refusal

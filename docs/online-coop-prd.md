@@ -812,8 +812,9 @@ what is deliberately not.
 **Predicted.** The own hull's position, rotation and velocity; the own shot
 leaving the muzzle - the shell or plasma bolt on the frame of the press, a
 twin-barrel chassis's second shell `tank_twin_shot_delay_seconds` later, and
-the minigun's whole burst, one bullet every `minigun_bullet_delay_seconds`,
-burst after burst while the key is held; collisions with static terrain,
+the minigun's whole burst, its first bullet after what is left of the
+barrels' spin-up and the rest one every `minigun_round_ticks`, burst after
+burst while the key is held; collisions with static terrain,
 water and every other hull (exact for the statics, the server's answer wins
 for the hulls). **Not predicted:** damage, knockback, ram, pickups, buffs, the
 laser's beam (an instant hit, so its length is a hit test the client does not

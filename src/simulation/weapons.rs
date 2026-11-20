@@ -192,10 +192,10 @@ fn fire_plasma(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, 
 
 /// Fire one minigun bullet from `tank`'s minigun module (`Bullet::spawn`)
 /// with a fresh `minigun_bullet_spread_deg` jitter on top of `aim_offset`.
-/// No muzzle-flash ripple per bullet (a whole burst would stack into
-/// mush) - the caller pushes one for the burst's first bullet; recoil is
-/// per bullet at the minigun's much smaller kick. Returns the bullet's
-/// spawn position.
+/// No muzzle-flash ripple per bullet (a stream of them would stack into
+/// mush) - the caller pushes one for a burst's first; recoil is per
+/// bullet at the minigun's much smaller kick. Returns the bullet's spawn
+/// position.
 fn fire_bullet(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32) -> Position {
     let spread = f.rng.random_range(-tuning().minigun_bullet_spread_deg..tuning().minigun_bullet_spread_deg);
     let mut bullet = Bullet::spawn(tank, owner, aim_offset + spread);
@@ -257,10 +257,11 @@ fn fire_grenade(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner,
 }
 
 /// Tick a tank's queued shots: a twin-barrel chassis's second shell or
-/// plasma bolt (`Tank::pending_shot`/`pending_plasma_shot`) and the rest of
-/// a minigun burst (`Tank::minigun_burst`). Runs every frame whether or not
-/// the trigger is still held, so a volley/burst always completes - unless
-/// the tank is a wreck by then, which cancels it. Runs *before* this
+/// plasma bolt (`Tank::pending_shot`/`pending_plasma_shot`) and a running
+/// minigun burst (`Tank::minigun_burst`: its spin-up, its rounds, its last
+/// round's beat). Runs every frame whether or not the trigger is still
+/// held, so a volley/burst always completes - unless the tank is a wreck
+/// by then, which cancels it. Runs *before* this
 /// frame's new fire input is handled.
 pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner) {
     let dt = f.dt;
@@ -293,19 +294,21 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
     if let Some(mut burst) = tank.minigun_burst {
         burst.timer -= dt;
         if burst.timer <= 0.0 {
-            if wreck || tank.minigun_ammo == 0 {
-                // Destroyed or dry mid-burst: stop short, no fallback to shells.
+            if wreck || tank.minigun_ammo == 0 || burst.bullets_remaining == 0 {
+                // Destroyed or dry mid-burst: stop short, no fallback to
+                // shells. With no round left to fire, the last one's beat
+                // is out and the burst is over.
                 tank.minigun_burst = None;
             } else {
                 tank.minigun_ammo -= 1;
-                fire_bullet(physics, f, tank, owner, burst.aim_offset);
+                let muzzle = fire_bullet(physics, f, tank, owner, burst.aim_offset);
+                if burst.opening {
+                    f.muzzle_flashes.push(Shockwave::new(muzzle));
+                    burst.opening = false;
+                }
                 burst.bullets_remaining -= 1;
-                tank.minigun_burst = if burst.bullets_remaining == 0 {
-                    None
-                } else {
-                    burst.timer = tuning().minigun_bullet_delay_seconds;
-                    Some(burst)
-                };
+                burst.timer = crate::tuning::tick_timer(tuning().minigun_round_ticks());
+                tank.minigun_burst = Some(burst);
             }
         } else {
             tank.minigun_burst = Some(burst);
@@ -349,7 +352,8 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
 /// Fire `tank`'s active weapon once. The caller has already decided the
 /// trigger is pulled and `fire_cooldown` has expired; this spends ammo,
 /// sets the next cooldown and launches the shot - a laser beam, a minigun
-/// burst (first bullet now, the rest via `tick_queued_shots`), or one
+/// burst (its first bullet now if the barrels are at speed, the rest via
+/// `tick_queued_shots`), or one
 /// plasma bolt / shell per barrel: a twin-barrel chassis (nonzero
 /// TANK_BARREL_LATERAL_OFFSET_BY_ROW) fires the left barrel now and queues
 /// the right one TANK_TWIN_SHOT_DELAY_SECONDS later, costing 2 ammo. A
@@ -398,19 +402,25 @@ pub(super) fn dispatch_fire_from(
             tank.kick_laser();
         }
         ActiveWeapon::Minigun => {
+            // A burst of `minigun_burst_size` rounds, the least a pull
+            // fires. Barrels at rest spin up first (`Tank::minigun_spin`):
+            // the first round waits for them. Barrels at speed - a held
+            // trigger, whose cooldown runs out on the tick the last burst
+            // ends - fire it on the pull, so the stream never breaks.
             if tank.minigun_ammo > 0 {
+                let t = tuning();
                 f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Minigun.name() });
-                tank.minigun_ammo -= 1;
-                let muzzle = fire_bullet(physics, f, tank, owner, aim_offset);
-                f.muzzle_flashes.push(Shockwave::new(muzzle));
-                if tuning().minigun_burst_size > 1 {
-                    tank.minigun_burst = Some(MinigunBurst {
-                        bullets_remaining: tuning().minigun_burst_size - 1,
-                        timer: tuning().minigun_bullet_delay_seconds,
-                        aim_offset,
-                    });
+                let spinup = t.minigun_spinup_ticks(tank.minigun_spin);
+                let rounds = t.minigun_burst_size.max(1);
+                let mut burst = MinigunBurst { bullets_remaining: rounds, timer: crate::tuning::tick_timer(spinup), aim_offset, opening: true };
+                if spinup == 0 {
+                    tank.minigun_ammo -= 1;
+                    let muzzle = fire_bullet(physics, f, tank, owner, aim_offset);
+                    f.muzzle_flashes.push(Shockwave::new(muzzle));
+                    burst = MinigunBurst { bullets_remaining: rounds - 1, timer: crate::tuning::tick_timer(t.minigun_round_ticks()), opening: false, ..burst };
                 }
-                tank.fire_cooldown = tuning().minigun_burst_cooldown_seconds();
+                tank.minigun_burst = Some(burst);
+                tank.fire_cooldown = t.minigun_burst_cooldown_seconds(spinup, rounds);
             }
         }
         ActiveWeapon::Missiles => {
@@ -555,6 +565,16 @@ pub(super) trait Projectile: hecs::Component {
     /// its own rules (shells off iron, on a roll of `rng`). A barrel's
     /// chance deflection goes through `can_bounce`/`reflect_off` instead.
     fn try_ricochet(&mut self, _hit: &TerrainBox, _rng: &mut RoundRng) -> bool {
+        false
+    }
+    /// Glance off whatever it struck - a tank, a bong, a tile - instead of
+    /// hitting it, on its own roll of `rng`: a tank's bullet, once in its
+    /// flight, on `minigun_ricochet_chance`. It turns away by a random
+    /// sharp angle at its own speed and rewinds to the pre-motion position,
+    /// so next frame starts clear of what it glanced off, and it is spent:
+    /// whatever it meets after takes nothing. Every other kind never
+    /// glances and draws no RNG.
+    fn try_glance(&mut self, _rng: &mut RoundRng) -> bool {
         false
     }
     /// Whether this kind can ricochet off a barrel at all - plasma never
@@ -727,8 +747,13 @@ impl Projectile for Bullet {
     fn detonate(&mut self) { Bullet::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().minigun_bullet_hit_half_extent }
     /// One shared range for player and enemy, chassis-scaled only; a
-    /// tower's bullets carry the gun tower's own range.
+    /// tower's bullets carry the gun tower's own range. A round that has
+    /// glanced is spent: what it meets after takes nothing (and the range
+    /// of nothing rolls no RNG).
     fn damage_range(&self) -> (f32, f32) {
+        if self.glanced {
+            return (0.0, 0.0);
+        }
         if self.owner.is_tower() {
             return side_damage(self.owner, self.shooter_row);
         }
@@ -742,6 +767,24 @@ impl Projectile for Bullet {
     fn bong_hops() -> bool { false }
     fn hit_cause() -> super::HitCause { super::HitCause::Bullet }
     fn strikes_air() -> bool { true }
+    /// A gun tower's bullets never glance: the roll is the minigun's.
+    fn try_glance(&mut self, rng: &mut RoundRng) -> bool {
+        let t = tuning();
+        let chance = t.minigun_ricochet_chance;
+        if self.glanced || self.owner.is_tower() || !(chance > 0.0 && rng.random_bool(chance.min(1.0) as f64)) {
+            return false;
+        }
+        let (low, high) = (t.minigun_ricochet_min_deg, t.minigun_ricochet_max_deg.max(t.minigun_ricochet_min_deg));
+        let side = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+        let turn = (low + (high - low) * rng.random::<f32>()) * side;
+        self.rotation += turn;
+        let rot = self.rotation.to_radians();
+        let speed = self.velocity.length();
+        self.velocity = Vec2::new(crate::math::sin(rot) * speed, -crate::math::cos(rot) * speed);
+        self.position = self.prev_position;
+        self.glanced = true;
+        true
+    }
     fn can_bounce() -> bool { true }
     deflect_impl!();
     fn bend(&mut self, accel: Vec2, dt: f32) {

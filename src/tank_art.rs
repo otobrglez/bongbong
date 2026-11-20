@@ -59,18 +59,34 @@ pub const GUN_MUZZLES: [&[(f32, f32)]; 12] = [
 
 /// The minigun module's muzzle, where its bullets leave (turret frame).
 pub const MINIGUN_MUZZLE: [(f32, f32); 12] = [
-    (5.5, -6.0), // scout
-    (6.5, -6.0), // assault
-    (6.5, -7.0), // breaker
-    (5.5, -9.0), // longbow
-    (6.5, -8.0), // flak
-    (5.5, -6.0), // wraith
-    (6.5, -7.0), // warden
-    (6.5, -7.0), // ravager
-    (6.5, -6.0), // glacier
-    (7.5, -7.0), // obelisk
-    (8.5, -6.0), // titan
-    (8.5, -8.0), // leviathan
+    (5.5, -8.0), // scout
+    (6.5, -8.0), // assault
+    (6.5, -9.0), // breaker
+    (5.5, -11.0), // longbow
+    (6.5, -10.0), // flak
+    (5.5, -8.0), // wraith
+    (6.5, -9.0), // warden
+    (6.5, -9.0), // ravager
+    (6.5, -8.0), // glacier
+    (7.5, -9.0), // obelisk
+    (8.5, -8.0), // titan
+    (8.5, -10.0), // leviathan
+];
+
+/// The minigun module's ejection port, where its spent cases leave (turret frame).
+pub const MINIGUN_PORT: [(f32, f32); 12] = [
+    (7.0, 0.5), // scout
+    (8.0, 0.5), // assault
+    (8.0, -0.5), // breaker
+    (7.0, -2.5), // longbow
+    (8.0, -1.5), // flak
+    (7.0, 0.5), // wraith
+    (8.0, -0.5), // warden
+    (8.0, -0.5), // ravager
+    (8.0, 0.5), // glacier
+    (9.0, -0.5), // obelisk
+    (10.0, 0.5), // titan
+    (10.0, -1.5), // leviathan
 ];
 
 /// The laser module's lens, where its beam starts (turret frame).

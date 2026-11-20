@@ -78,7 +78,7 @@ pub const TANK_BROKEN_TURRET_COL: i32 = 32;
 // tank_modules.png (+ tank_modules_glow.png): 49 columns x 12 rows of 40 px
 // cells, a row per chassis, each weapon module drawn where that chassis's
 // turret carries it (same pivot and rotation as the turret), in its states:
-// minigun 0 idle / 1-3 a hot barrel, missiles 0-4 tubes empty, plasma and
+// minigun 0 at rest / 1-3 its barrel bundle turning, missiles 0-4 tubes empty, plasma and
 // laser 0 idle / 1 armed / 2 firing, flamethrower 0-1 the pilot flickering /
 // 2-3 the jet, grenade launcher 0-4 rounds spent from its drum, sonic
 // hammer 0 idle / 1-2 its wind-up / 3 a blast, EMP 0 armed / 1-2 its crackle /
@@ -1027,6 +1027,7 @@ pub mod bubble;
 pub mod bullet;
 pub mod burst;
 pub mod canvas;
+pub mod casings;
 pub mod chunks;
 pub mod crate_fx;
 #[cfg(feature = "dev-tools")]

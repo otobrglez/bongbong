@@ -753,30 +753,33 @@ tunables! {
     }
 
     group minigun {
-        /// Rounds granted per minigun pickup: ten full bursts at
-        /// `minigun_burst_size` 6.
-        minigun_ammo_per_pickup: i32 = 60 in 1 ..= 1000;
+        /// Rounds granted per minigun pickup: eight seconds of the stream.
+        minigun_ammo_per_pickup: i32 = 240 in 1 ..= 2000;
         /// The most minigun rounds a tank carries: a crate of the weapon
         /// carried adds its rounds on top, up to this (`Tank::take_weapon`,
         /// `ActiveWeapon::crate_load`) - seats and enemies alike.
-        minigun_ammo_max: i32 = 200 in 1 ..= 1000;
-        /// Bullets per burst: the first fires on the trigger frame, the rest
-        /// are queued `minigun_bullet_delay_seconds` apart
-        /// (`Tank::minigun_burst`). Each is an individually simulated
-        /// `Bullet`, not one abstract burst object.
-        minigun_burst_size: u32 = 6 in 1 ..= 64;
-        /// Gap between successive bullets of one burst. In
-        /// `tank_twin_shot_delay_seconds`'s neighborhood, a touch tighter so
-        /// the stutter reads busier than a twin-cannon's second shot.
-        minigun_bullet_delay_seconds: f32 = 0.04 in 0.005 ..= 1.0;
-        /// Extra gap held after a burst's last bullet before
-        /// `Tank::fire_cooldown` clears, so a fresh trigger pulse can't
-        /// stack a new burst on an unfinished one.
-        minigun_burst_trailing_gap_seconds: f32 = 0.1 in 0.0 ..= 2.0;
+        minigun_ammo_max: i32 = 600 in 1 ..= 2000;
+        /// The least a pull of the trigger fires. A held trigger starts the
+        /// next burst on the beat the last one ends, so the stream never
+        /// breaks (`Tuning::minigun_burst_cooldown_seconds`); a tap fires
+        /// this many and the barrels run down. Each round is an
+        /// individually simulated `Bullet`.
+        minigun_burst_size: u32 = 9 in 1 ..= 64;
+        /// Time between two rounds of a running gun, taken up to whole
+        /// simulation ticks (`Tuning::minigun_round_ticks`): two at the
+        /// default, thirty rounds a second.
+        minigun_bullet_delay_seconds: f32 = 0.03 in 0.005 ..= 1.0;
+        /// How long the barrels take to come up to speed from rest before
+        /// the first round leaves (`Tank::minigun_spin`): a pull on a gun
+        /// still turning waits only for what is left. 0 fires on the pull.
+        minigun_spinup_seconds: f32 = 0.1 in 0.0 ..= 3.0;
+        /// How long the barrels take to run down from full speed once the
+        /// gun stops.
+        minigun_spindown_seconds: f32 = 0.6 in 0.0 ..= 5.0;
         /// Each bullet's direction is jittered by up to this many degrees
-        /// off the aim line, stacked on top of any point-blank misfire skew
-        /// - the minigun's own "spray" identity.
-        minigun_bullet_spread_deg: f32 = 4.0 in 0.0 ..= 90.0;
+        /// off the aim line, stacked on top of any point-blank misfire
+        /// skew: a tight stream, not a spray.
+        minigun_bullet_spread_deg: f32 = 1.5 in 0.0 ..= 90.0;
         /// Bullet flight speed (px/s) - faster than a shell: a zippy tracer,
         /// not a lobbed shell.
         minigun_bullet_speed: f32 = 595.65 in 50.0 ..= 5000.0;
@@ -790,21 +793,39 @@ tunables! {
         /// lighter caliber.
         minigun_bullet_hit_half_extent: f32 = 2.0 in 0.5 ..= 32.0;
         /// Per-bullet damage, deliberately well below a laser or shell hit -
-        /// a single round is a non-event; a fully-landed burst lands near
-        /// one solid shell hit. One shared range for player and enemy,
+        /// a single round is a non-event; it is the held stream that
+        /// wears a tank down. One shared range for player and enemy,
         /// scaled only by `tank_damage_factor`.
-        minigun_bullet_damage_min: f32 = 3.0 in 0.0 ..= 100.0;
-        minigun_bullet_damage_max: f32 = 6.0 in 0.0 ..= 100.0;
+        minigun_bullet_damage_min: f32 = 1.0 in 0.0 ..= 100.0;
+        minigun_bullet_damage_max: f32 = 2.0 in 0.0 ..= 100.0;
+        /// The share of a tank's bullets that glance off what they strike
+        /// - a tank, a bong, a tile - and fly off at a sharp angle, spent:
+        /// harmless to it and to whatever they meet after
+        /// (`Projectile::try_glance`). A gun tower's never do.
+        minigun_ricochet_chance: f32 = 0.05 in 0.0 ..= 1.0;
+        /// How sharply a glancing round turns away, degrees off its line,
+        /// either way at random between the two.
+        minigun_ricochet_min_deg: f32 = 100.0 in 0.0 ..= 180.0;
+        minigun_ricochet_max_deg: f32 = 160.0 in 0.0 ..= 180.0;
         /// Per-bullet recoil, much lighter than a shell's - a burst should
         /// rattle the tank, not shove it once hard.
-        minigun_bullet_recoil_speed: f32 = 3.0 in 0.0 ..= 200.0;
+        minigun_bullet_recoil_speed: f32 = 2.0 in 0.0 ..= 200.0;
         minigun_bullet_recoil_max_speed: f32 = 10.0 in 0.0 ..= 400.0;
-        /// How long each of the minigun module's 3 "hot barrel" cells is
-        /// shown before advancing, while a burst is active (a discrete cell
-        /// swap, not a rotation - see `tank::draw_tank`). Tuned close to
-        /// `minigun_bullet_delay_seconds` so roughly one barrel swap
-        /// happens per bullet.
+        /// How long each of the minigun module's 3 turning cells is shown
+        /// at full speed before the next (a discrete cell swap, not a
+        /// rotation - see `Tank::minigun_cycle_timer`); slower as the
+        /// barrels spin up and run down.
         minigun_cycle_seconds: f32 = 0.05 in 0.01 ..= 1.0;
+        /// How fast a spent case leaves the gun's port, px/s: sideways off
+        /// the barrel's line, a little back (`casings.rs`) - fast enough
+        /// that it lands clear of the hull, where it can be seen.
+        casing_eject_speed: f32 = 150.0 in 0.0 ..= 400.0;
+        /// How long a spent case lies where it came to rest before it is
+        /// gone, seconds.
+        casing_linger_seconds: f32 = 6.0 in 0.0 ..= 120.0;
+        /// The most spent cases flying and lying at once; the oldest lying
+        /// one makes room. 0 turns them off.
+        fx_max_casings: i32 = 400 in 0 ..= 4000;
     }
 
     group laser {
@@ -1368,7 +1389,8 @@ tunables! {
         /// How long it keeps a cover spot before looking again.
         fpv_ai_cover_seconds: f32 = 4.0 in 0.5 ..= 20.0;
         /// How near a drone diving at an enemy with a minigun has to be
-        /// before it fires at it.
+        /// before it fires at it, judged where the drone will be when the
+        /// barrels are up (`minigun_spinup_seconds`).
         fpv_ai_flak_range_px: f32 = 192.0 in 0.0 ..= 600.0;
         /// How far off its facing's line the drone's column - from its
         /// shadow up to its body, what a bullet strikes - may be.
@@ -2884,7 +2906,7 @@ tunables! {
         wall_chunks: bool = true in 0 ..= 1 @ Spawn;
         /// One brick chunk's health, in the damage shots deal: a player
         /// shell (10-30) breaks the chunk it strikes and most of its ring,
-        /// a minigun round (3-6) takes two or three to break one.
+        /// a minigun round (1-2) takes five to ten to break one.
         brick_chunk_health: f32 = 10.0 in 0.5 ..= 200.0 @ Spawn;
         /// One wood chunk's health: planks splinter at almost any blow.
         wood_chunk_health: f32 = 4.0 in 0.5 ..= 200.0 @ Spawn;
@@ -4980,11 +5002,35 @@ impl Tuning {
         (self.sight_box_half_cols * crate::OBSTACLE_GRID_SIZE, self.sight_box_half_rows * crate::OBSTACLE_GRID_SIZE)
     }
 
-    /// Fire cooldown held for a whole minigun burst: every queued bullet's
-    /// delay plus the trailing gap.
-    pub fn minigun_burst_cooldown_seconds(&self) -> f32 {
-        (self.minigun_burst_size.saturating_sub(1)) as f32 * self.minigun_bullet_delay_seconds
-            + self.minigun_burst_trailing_gap_seconds
+    /// Whole simulation ticks between two rounds of a running minigun:
+    /// `minigun_bullet_delay_seconds` taken up to the tick grid, never
+    /// less than one.
+    pub fn minigun_round_ticks(&self) -> u32 {
+        ((self.minigun_bullet_delay_seconds / crate::PHYSICS_FIXED_DT).ceil() as u32).max(1)
+    }
+
+    /// Whole ticks a pull waits for its first round on barrels turning at
+    /// `spin` (0 at rest, 1 at full speed): what is left of
+    /// `minigun_spinup_seconds`. 0 at full speed - the round leaves on the
+    /// pull.
+    pub fn minigun_spinup_ticks(&self, spin: f32) -> u32 {
+        (self.minigun_spinup_seconds * (1.0 - spin.clamp(0.0, 1.0)) / crate::PHYSICS_FIXED_DT).round().max(0.0) as u32
+    }
+
+    /// Whole ticks a burst of `rounds` runs after a wait of `spinup` ticks
+    /// for its first: every round's beat, the last one's included, so the
+    /// next burst's first round keeps the stream's time.
+    pub fn minigun_burst_ticks(&self, spinup: u32, rounds: u32) -> u32 {
+        spinup + rounds.max(1) * self.minigun_round_ticks()
+    }
+
+    /// Fire cooldown held for a minigun burst of `rounds` whose first
+    /// waits `spinup` ticks: out on the very tick the burst ends
+    /// (`minigun_burst_ticks`), so a held trigger chains the next with no
+    /// gap. Half a tick short of the whole, so no rounding of the
+    /// countdown moves that tick.
+    pub fn minigun_burst_cooldown_seconds(&self, spinup: u32, rounds: u32) -> f32 {
+        tick_timer(self.minigun_burst_ticks(spinup, rounds))
     }
 
     /// Missiles one trigger pull fires: every salvo's tubes.
@@ -5176,6 +5222,13 @@ thread_local! {
     /// The table `in_force` has put in force on this thread, read by
     /// `tuning()` in place of the live one while it is set.
     static IN_FORCE: std::cell::RefCell<Option<Arc<Tuning>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A countdown that a step of `PHYSICS_FIXED_DT` a tick runs out on exactly
+/// its `ticks`-th tick (at once for 0): half a tick short of the whole, so
+/// no rounding of the subtractions moves the tick it ends on.
+pub fn tick_timer(ticks: u32) -> f32 {
+    (ticks as f32 - 0.5).max(0.0) * crate::PHYSICS_FIXED_DT
 }
 
 /// The table in force, as a snapshot: cheap (a read lock held for one
@@ -5441,7 +5494,19 @@ mod tests {
         assert_eq!(t.engage_ring_radius(), 400.0);
         t.sight_box_half_rows = 8.0;
         assert_eq!(t.sight_box_half_px(), (368.0, 256.0));
-        assert_eq!(t.minigun_burst_cooldown_seconds(), 5.0 * 0.04 + 0.1);
+        // Two ticks a round at the default, and a burst's cooldown runs
+        // out on the tick its last round's beat ends.
+        assert_eq!(t.minigun_round_ticks(), 2);
+        assert_eq!(t.minigun_spinup_ticks(0.0), 6);
+        assert_eq!(t.minigun_spinup_ticks(1.0), 0);
+        assert_eq!(t.minigun_burst_ticks(6, 9), 6 + 18);
+        let mut left = t.minigun_burst_cooldown_seconds(0, 9);
+        let mut ticks = 0;
+        while left > 0.0 {
+            left -= crate::PHYSICS_FIXED_DT;
+            ticks += 1;
+        }
+        assert_eq!(ticks, 18);
     }
 
     #[test]

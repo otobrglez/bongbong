@@ -29,8 +29,8 @@ not a chassis-matched recolor.
 | 1 | `Flying` | Tracer in the air |
 | 2 | `Hit` | Small impact spark |
 
-Three states, not `ShellState`'s seven — bullets fire far too rapidly in
-succession (`MINIGUN_BULLET_DELAY_SECONDS`, ~0.04s apart) for an elaborate
+Three states, not `ShellState`'s seven — rounds leave far too close together
+(`minigun_round_ticks`, two ticks apart at 60 Hz) for an elaborate
 multi-frame wind-up/impact sequence to read well at burst cadence. `Muzzle`
 and `Hit` are both short, single-beat flashes (0.025s / 0.08s) rather than
 `Shell`'s three-frame fire sequence and three-frame impact sequence.
@@ -88,6 +88,9 @@ nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
 
 ## 6. Rust constants
 
+The sheet's constants. The gameplay numbers that once sat here are
+`tunables!` rows now (`src/tuning.rs`, `group minigun`); §8 describes them.
+
 ```rust
 pub const MINIGUN_BULLET_TEXTURE_SIZE: f32 = 32.0;
 pub const MINIGUN_BULLET_SCALE: f32 = 2.0;              // matches SHELL_SCALE
@@ -95,16 +98,9 @@ pub const MINIGUN_BULLET_SPEED: f32 = 900.0;            // faster than SHELL_SPE
 pub const MINIGUN_BULLET_HIT_HALF_EXTENT: f32 = 2.0;    // smaller than SHELL_HIT_HALF_EXTENT (3.0)
 pub const MINIGUN_BULLET_DAMAGE_MIN: f32 = 2.0;
 pub const MINIGUN_BULLET_DAMAGE_MAX: f32 = 4.0;
-pub const MINIGUN_BULLET_RECOIL_SPEED: f32 = 3.0;
-pub const MINIGUN_BULLET_RECOIL_MAX_SPEED: f32 = 10.0;
 pub const MINIGUN_BULLET_SHADOW_OFFSET_MIN: f32 = 5.0;
 pub const MINIGUN_BULLET_SHADOW_OFFSET_MAX: f32 = 10.0;
 pub const MINIGUN_BULLET_SHADOW_OPACITY: f32 = 0.30;
-
-pub const MINIGUN_BURST_SIZE: u32 = 8;
-pub const MINIGUN_BULLET_DELAY_SECONDS: f32 = 0.04;
-pub const MINIGUN_BULLET_SPREAD_DEG: f32 = 4.0;
-pub const MINIGUN_AMMO_PER_PICKUP: i32 = 60;
 ```
 
 ---
@@ -115,3 +111,54 @@ pub const MINIGUN_AMMO_PER_PICKUP: i32 = 60;
 - The minigun on the turret is a weapon module of the tank art
   (`static/tank_modules.png`, docs/SPRITESHEET_SPEC.md §7), not part of this
   sheet; bullets leave its muzzle (`tank_art::MINIGUN_MUZZLE`).
+
+---
+
+## 8. The fire model
+
+The minigun is an M134-style rotary gun: a bundle of three barrels that turns
+before it fires.
+
+- **Spin-up.** A pull on barrels at rest logs its `Fired` at once and fires
+  its first round `minigun_spinup_seconds` (0.1 s) later; the barrels'
+  speed is `Tank::minigun_spin`, 0..1. A pull while they still turn waits
+  only for what is left of the way up (`Tuning::minigun_spinup_ticks`).
+  After the last round they run down over `minigun_spindown_seconds`.
+- **The stream.** A pull fires `minigun_burst_size` (9) rounds, one every
+  `minigun_round_ticks` (2 ticks, 30 a second). The burst's cooldown is
+  tick-exact (`tuning::tick_timer`), so a held trigger chains one burst into
+  the next with no gap and the barrels stay at full speed: one unbroken
+  stream. A tap fires the nine.
+- **Spread.** Each round leaves within `minigun_bullet_spread_deg` (±1.5°)
+  of the boresight.
+- **Glances.** `minigun_ricochet_chance` (5%) of a tank's rounds glance off
+  what they strike - a tank, a bong, a tile - instead of hitting it, and fly
+  off 100-160° off their line (`minigun_ricochet_min_deg`/`_max_deg`), spent:
+  harmless to it and to whatever they meet after (`Projectile::try_glance`,
+  a roll of the round's RNG; `Event::Ricochet`, so a replica draws the
+  spark). Once in a round's flight; a gun tower's never glance.
+- **Balance.** 1-2 damage a round at 30 a second, about half the old gun's
+  rate (3-6 at 20), and less again for the glances; a crate is 240 rounds,
+  eight seconds of fire, and a tank carries up to 600.
+- **The tell.** The spin-up is what an enemy reads a gun turning toward it
+  by; an enemy turning its own gun on a diving drone judges the shot where
+  the drone will be when the barrels are up (`ai.rs`, the `air` tier).
+- **Online.** The client's predictor runs the same spin and the same tick
+  grid (`net/predict.rs`), and a replica's barrels turn for each `Fired`
+  the room reports (`Tank::kick_minigun`). The wire is unchanged.
+
+The module's art (`tools/spritegen/tankdesign/lines/vanguard.py`): cell 0 is
+the bundle at rest, cells 1-3 its three turning steps (the dark gap between
+barrels walks across them), shown faster as the barrels come up to speed.
+
+## 9. Spent cases
+
+Every round throws a brass case out of the module's ejection port
+(`tank_art::MINIGUN_PORT`, exported by the art pipeline beside the muzzle):
+sideways off the barrel's line and a little back, on a low tumbling arc over
+its shadow, a bounce, then it lies where it stopped for
+`casing_linger_seconds` and dissolves on the Bayer grid over its last second.
+A case is two 2 px blocks in the palette's brass. They are presentation only
+(`src/casings.rs`, owned by `fx.rs`): `rand::rng()`, no snapshot, nothing that
+plays reads them; `fx_max_casings` caps the field, the oldest lying case
+making room.

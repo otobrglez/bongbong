@@ -144,7 +144,7 @@ one survives at tier 3 as a blinking red warning lamp.
 
 Set `b.meta['muzzles'] = [(x, y_tip), ...]` in `turret()`. Module functions
 (`@LINE.module_fn('minigun')` etc.) draw a module at `hp[...]` for a given
-state (minigun 0 idle / 1-3 hot barrel; missiles 0-4 tubes empty; plasma,
+state (minigun 0 at rest / 1-3 its barrel bundle turning; missiles 0-4 tubes empty; plasma,
 laser 0 idle / 1 charged / 2 firing; flame 0-1 pilot / 2-3 firing). A module
 must sit well on every turret of the line - adjust each design's hardpoints.
 

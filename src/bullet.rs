@@ -1,17 +1,20 @@
-//! Minigun bullets: individually-simulated physical projectiles fired in
-//! rapid bursts by a tank holding `pickup::PickupKind::Minigun` ammo (see
-//! `tank::Tank::minigun_ammo`/`minigun_burst`, `simulation.rs`'s
-//! `fire_bullet`/burst-ticking). Mirrors `shell::Shell`'s shape (position,
-//! velocity, rotation, owner, state, timer, shadow_offset, physics body) -
-//! same "individually-simulated moving projectile" concept, just a
-//! different weapon and a much shorter state machine (see `BulletState`):
-//! bullets fire far too rapidly in succession (MINIGUN_BULLET_DELAY_SECONDS)
-//! for an elaborate multi-frame wind-up/impact sequence to read well at
-//! burst cadence. No `variant`/chassis-colour row unlike `Shell` - every
+//! Minigun bullets: individually-simulated projectiles fired in one stream
+//! by a tank holding `pickup::PickupKind::Minigun` ammo, once its barrels
+//! have spun up (see `tank::Tank::minigun_ammo`/`minigun_spin`/
+//! `minigun_burst`, `simulation::weapons`'s `fire_bullet` and burst
+//! ticking). Mirrors `shell::Shell`'s shape (position, velocity, rotation,
+//! owner, state, timer, shadow_offset) - the same "individually-simulated
+//! moving projectile", a different weapon and a much shorter state machine
+//! (see `BulletState`): rounds leave every `minigun_round_ticks`, far too
+//! close for a multi-frame wind-up/impact sequence to read. The brass each
+//! round throws out of the port is presentation only (`casings.rs`). No
+//! `variant`/chassis-colour row unlike `Shell` - every
 //! bullet shares one small piece of art regardless of shooter chassis (see
-//! tools/spritegen/gen_bullets.py). No `bounces_left` either - bullets never
-//! ricochet (see `simulation.rs`'s bullet hit-resolution, which skips the
-//! shell loop's ricochet branch entirely).
+//! tools/spritegen/gen_bullets.py). No `bounces_left` either: a tank's
+//! bullet glances off whatever it strikes on a roll of
+//! `minigun_ricochet_chance` instead, once in its flight (`glanced`,
+//! `Projectile::try_glance`), and a barrel deflects it as it deflects a
+//! shell.
 
 use crate::math;
 use crate::tuning::tuning;
@@ -94,6 +97,10 @@ pub struct Bullet {
     /// The round's projectile number, same counter as `Shell::id`. 0 until
     /// spawned into the world.
     pub id: u32,
+    /// It has glanced off something already (`Projectile::try_glance`): a
+    /// round glances at most once, and it is spent - what it meets after
+    /// takes nothing from it.
+    pub glanced: bool,
 }
 
 impl Bullet {
@@ -122,6 +129,7 @@ impl Bullet {
             shooter_row,
             shadow_offset: 0.0,
             passed_over: Vec::new(),
+            glanced: false,
         }
     }
 
@@ -156,6 +164,7 @@ impl Bullet {
             prev_position: position,
             passed_over: Vec::new(),
             id: 0,
+            glanced: false,
         }
     }
 

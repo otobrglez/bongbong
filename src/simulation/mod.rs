@@ -65,6 +65,8 @@ mod flame_tests;
 #[cfg(test)]
 mod lagcomp_tests;
 #[cfg(test)]
+mod minigun_tests;
+#[cfg(test)]
 mod props_tests;
 #[cfg(test)]
 mod seat_tests;
@@ -5303,6 +5305,10 @@ impl Game {
                 let mut q = self.world.query_one::<&mut P>(entity);
                 let p = q.get().expect("projectile collected this frame still exists");
                 let bounced = match target {
+                    // A round glancing off what it struck, on its own roll
+                    // (`Projectile::try_glance`; the minigun's): not off the
+                    // field's edge. A kind that never glances draws no RNG.
+                    ShellTarget::Tank(_) | ShellTarget::Bong(_) | ShellTarget::Obstacle(_) if p.try_glance(&mut f.rng) => true,
                     ShellTarget::Obstacle(e) => f.terrain.obstacle(e).is_some_and(|b| {
                         // The projectile's own rule (shells off iron, on a
                         // roll), or a barrel's chance deflection. Zero
@@ -7789,8 +7795,13 @@ mod determinism_tests {
         // the well hurt their own, spall a teammate, air support holds)
         // moved neither: no blast in these rounds reaches a hull or a bong
         // it used to spare.
+        // In the two-seat round an enemy picks up a minigun and fires it
+        // from frame 386 (the one-seat round never does), so the minigun's
+        // fire model - its spin-up, round spacing, spread, damage and the
+        // rounds that glance (`minigun_ricochet_chance`) - moves the second
+        // pin alone (the BB-187 re-baseline).
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (9_140_234_918_546_171_875, 2_367_344_100_585_956_785), "(one seat, two seats)");
+        assert_eq!((one, two), (9_140_234_918_546_171_875, 10_710_207_252_993_327_427), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
