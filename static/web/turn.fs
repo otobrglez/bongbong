@@ -20,6 +20,7 @@ uniform vec2 texel;           // one design pixel in texture coordinates
 uniform vec2 cell;            // the cell's size, design pixels
 uniform vec2 pivot;           // the pivot from the cell's corner, design pixels
 uniform float corner;         // how far a corner is cut along its two edges, 0 (never) to 1 (the whole quarter)
+uniform float solid;          // 1: the cell's shape in the tint's colour, not its paint
 uniform float shear;          // 1: every design pixel moved whole (three shears); 0: the pixel under the block's centre
 
 // The cell's design pixel `i`, clear outside the cell: a neighbouring
@@ -52,6 +53,13 @@ bool same(vec4 a, vec4 b) {
 // turn is undone; where the centre falls in a corner of a pixel whose two
 // neighbours there are one colour, that colour takes the corner (Scale2x's
 // rule, the enlargement RotSprite turns).
+// What a design pixel `colour` is drawn as: its paint in the tint, or -
+// solid - the tint's own colour as opaque as the paint, a silhouette.
+vec4 inked(vec4 colour) {
+    if (solid > 0.5) return vec4(fragColor.rgb, colour.a * fragColor.a);
+    return colour * fragColor;
+}
+
 void main() {
     vec2 lead = fract(pivot);
     vec2 block = floor(fragTexCoord + lead) + 0.5 - lead;
@@ -59,7 +67,7 @@ void main() {
         float across = block.x + floor(fragShear.x * block.y + 0.5);
         float down = block.y - floor(fragShear.y * across + 0.5);
         across += floor(fragShear.x * down + 0.5);
-        gl_FragColor = at(floor(pivot + vec2(fragShear.z * across + fragShear.w * down, fragShear.z * down - fragShear.w * across))) * fragColor;
+        gl_FragColor = inked(at(floor(pivot + vec2(fragShear.z * across + fragShear.w * down, fragShear.z * down - fragShear.w * across))));
         return;
     }
     vec2 p = pivot + vec2(fragTurn.x * block.x + fragTurn.y * block.y, fragTurn.x * block.y - fragTurn.y * block.x);
@@ -73,5 +81,5 @@ void main() {
     vec4 ho = at(i - vec2(side.x, 0.0));
     vec4 vo = at(i - vec2(0.0, side.y));
     if (edge.x + edge.y < corner && same(h, v) && !same(h, vo) && !same(v, ho)) colour = h;
-    gl_FragColor = colour * fragColor;
+    gl_FragColor = inked(colour);
 }

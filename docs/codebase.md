@@ -34,7 +34,26 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 
 ## App, session and data
 
-- `app.rs` — owns the raylib handle, the loop and the `mode::Session`. Play: gathers a
+- `app.rs` — owns the raylib handle, the loop and the `mode::Session`. `run` opens the window, loads
+  the art and builds an `App` - what the window keeps from frame to frame: the session, the sheets
+  (`SheetSet`, whose `textures(theme, blocks)` is the one `Textures` the round and the builder draw
+  from), the shaders, the render targets, the layers beside the round (particles, feedback,
+  indicators, the bong's voice), the cameras and the clocks - and `game_loop::run` calls
+  `App::frame` on it, a blocking loop natively and the browser's own on the web. A frame is
+  `frame_input` (the dev tools' requests, the window laid out as a `Presentation`, staged tuning
+  applied, the buttons and dialogs hit-tested, then the round's `Input` gathered: the one place
+  raylib's input is read; its `Frame` is what the later phases take), then in Build `frame_build`
+  (the canvas drawn), else `frame_sim` (a room's seat sent or the local round stepped and posed, the
+  level's outcome and countdown), `frame_camera` (the whole field, a pinned view or the follow
+  camera with its split and establishing shot: a `Shot`) and `frame_draw` (the layers beside the
+  round brought up to the frame, then `Game::render`). `app/dev.rs` is `DevHooks`, the dev tools'
+  side of the frame: the dev server on a native window, the page's `capi` feeds on the web, a
+  phone's `FrameStats` line. The frame calls every hook in every build - `before_frame`,
+  `pinned_camera`, `take_hints`, `publish_ui`, `hold_touches`, `lockstep`, `shape_input`, `advance`
+  (`false` where no dev server runs the steps, and the frame runs them itself through the same
+  `after_step` readers), `publish_camera`, `after_draw` - and each does its work only where its
+  tool is built, so the `cfg(feature = "dev-tools")` attributes live there and not in the frame.
+  Play: gathers a
   `simulation::Input` (`Input::two` from the keyboard and touch) and runs `Game::update` in whole
   steps of `PHYSICS_FIXED_DT` - `pacing::StepClock` pays frame time out as zero or more steps per
   rendered frame, at most `SIM_MAX_STEPS_PER_FRAME` (4, the rest dropped, so a stall never spirals;
@@ -634,20 +653,26 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     dragging more allies than seats; `ai::PullSense`: brace or drive across). No RNG of its own.
     Tests: `well_tests.rs`.
   - `air_support.rs` (docs/air-support.md) — air support's world half (`air_support.rs` at the
-    top is the call, the aircraft, their flight and drawing): `call_air_support` from
+    top is the call, the aircraft and their drawing; `air_support/heli.rs` and `jet.rs` how each
+    flies): `call_air_support` from
     `pickup_phase` puts an `AirCall` on `Game::air_calls` (`Event::AirSupportCalled`; one sortie of
     a seat at a time, a call made while another counts or flies waits with no arrival and
     `start_next_call` starts it once that one is gone); `air_support_phase` (before
     `spawn_pending`, and with `live` false on the end screen) brings in each due call's `Aircraft`
-    - a hecs component, no body, no nav - from the edge `entry_edge` hashes off its id, aimed at the
-    enemy tanks and standing enemy towers inside the seat's sight box (`air_targets_near`: nearest,
-    a tank before a tower at the same distance, then slot or cell), flies it,
-    and lets it fire: the heli's salvos are seeker missiles (`f.pending_missiles`, every missile
+    - a hecs component, no body, no nav - from the edge `entry_edge` hashes off its id
+    (`air_arrivals`), then for each aircraft by id builds its `AirView` - its seat's position,
+    velocity and wreck (`air_anchor`), and what it may attack this step, the enemy tanks and
+    standing enemy towers inside the seat's sight box (`air_marks`: nearest, a tank before a tower
+    at the same distance, then slot or cell, each with a `MarkKey` and its velocity) -, steps it
+    (`Aircraft::step`) and carries out its `AirAct`s, dropped on the end screen: the heli's salvos
+    are seeker missiles (`air_salvo`, `f.pending_missiles`, every missile
     rule kept), the jet's cannon bursts and bombs `air_strike` (a `Game::blast`, then
-    `air_strike_show`, which a replica plays off `Event::AirStrike`). The heli is an air target
+    `air_strike_show`, which a replica plays off `Event::AirStrike`). An aircraft `gone` off the
+    field is despawned (`Event::AirSupportLeft`). The heli is an air target
     (`AirKey::Aircraft`; `strike_aircraft` via `strike_air`, `air_heli_hits` bullets or any other
     strike, `Event::AircraftDowned`). No RNG but the blasts' damage rolls. Tests:
-    `air_support_tests.rs`.
+    `air_support_tests.rs` (the call, the queue, the shoot-down), `air_heli_tests.rs`,
+    `air_jet_tests.rs`.
   - `hits.rs` — **the only projectile hit test**: `Terrain` (per-frame snapshot of seam-closed
     boxes, bongs, walls) and `Terrain::sweep_rewound`, a nearest-entry segment-vs-box sweep over the
     whole frame's movement (wrecks skipped). A player's shot is tested against an enemy's hull and
@@ -1571,15 +1596,32 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   or within three seconds of one `/pull`. The `well` tuning group.
 
 - `air_support.rs` (docs/air-support.md, docs/AIRCRAFT_SPEC.md) — air support, headless: `Sortie`
-  (Heli, Jet; `of` a crate, `pickup`, `code`), `AirCall` (`left`), `Aircraft` (`AirStage` Inbound,
-  Attack, Egress; `advance` - the heli to its hover and out the way it came, the jet straight along
-  its run counting `flown` -, `gone`, `as_target`, `drawn`), the geometry (`entry_edge`,
-  `entry_point`, `hover_point`, `run_mark`, `gun_burst`, `bombs`) and the drawing on any canvas off
-  `Sheet::Aircraft` (`paint_shadows` after the floor, `paint_aircraft` over everything standing,
-  the rotor a blur over the mast). The `air_support` tuning group. Online the calls and the aircraft
+  (Heli, Jet; `of` a crate, `pickup`, `code`, `ammo`), `AirCall` (`left`), `Aircraft` (`AirStage`
+  Inbound, Attack, Egress, Escort, Loiter; ground point, height, heading, velocity, `bank`, `ammo`
+  - the heli's salvos, the jet's passes -, and each flight's own `HeliState`/`JetState`; `arrive`,
+  `enter`, `step`, `gone`, `as_target`, `drawn`), the door between an aircraft and the world -
+  `AirView` in (its seat, the `AirMark`s it may attack, the field, `live`), `AirAct` out (`Salvo`,
+  `Strike`): **an aircraft reads the world only through its view and changes it only through its
+  acts** -, the geometry (`entry_edge`, `entry_point`, `jet_edge`, `unit`, `turn_toward`) and the
+  drawing on any canvas off `Sheet::Aircraft` (`paint_shadows` after the floor, `paint_aircraft`
+  over everything standing, the rotor a blur over the mast; the jet's cell foreshortened across
+  its wings by its bank, `banked_span`, in whole 2 px steps, no bank drawing the cell as it is).
+  - `air_support/heli.rs` — the companion: to its seat's tank, then on station
+    `air_heli_escort_px` from it as it drives (its velocity the tank's plus what closes the gap,
+    held to a speed and an acceleration), on the nearest target's side with one in view, no nearer
+    any target than `air_heli_standoff_px`; a salvo every `air_heli_salvo_seconds` while it has
+    ammunition, and home when that is spent - never on a clock.
+  - `air_support/jet.rs` — a plane: constant speed, heading only through a turn rate, banked. It
+    locks one mark by key and follows it, runs in (the cannon's stripe, then two bombs astride
+    where the target is at release), extends and turns back while it has passes, goes round a run
+    it cannot make, and with nothing in view circles its seat once; `air_jet_sortie_seconds` is
+    the cap that means it always leaves.
+
+  The `air_support` tuning group. Online the calls and the aircraft
   are one family, `wire::AirState` (a call's arrival tick, an aircraft's ground point, height,
-  heading and stage), applied whole by `apply::apply_air_states`; the HUD's box
-  (`hud::AirHud`, `air_box` under the ammo slot in the lamp row), the minimap's mark
+  heading, bank, ammunition and stage), applied whole by `apply::apply_air_states`; the HUD's box
+  (`hud::AirHud`, `air_box` and `air_box_layout` under the ammo slot in the lamp row: the count,
+  then the ammunition as pips), the minimap's mark
   (`Marks::aircraft`) and the off-screen arrow (`ArrowKind::Aircraft`) read it.
 
 ## Drawing and effects
@@ -1589,8 +1631,18 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   portals - `paint_ground` then `paint_floor_marks`, the seam the weather's ground pass draws in),
   `paint_tiles` (walls/props with shadows and caps, then the flames on burning timber,
   `tile_flames`), `paint_standing(PaintOptions)` (pickups, the y-sorted tanks/bongs/grass walk - a
-  tank's layers (`tank::draw_tank`) and then its flames, `damage_stage.rs` - trees, a burning one
-  with its flames), `paint_field` = all three; reads state, never mutates it. The tile and tree
+  tank's layers (`tank::draw_tank`) and then its flames, `damage_stage.rs`; each burning ground
+  cell's flames at their foot, `ground_fire` and `GROUND_FIRE_FOOT`, so a hull further up the field
+  is behind them and one driving through nearer is in front - trees, a burning one with its
+  flames), and what flies as two more - `paint_air_shadows` after the floor (the drones' and the
+  aircraft's) and `paint_air` over everything standing; `paint_field` = all five, which a fresh
+  round (a thumbnail) and a headless `screenshot` both are; reads state, never mutates it.
+  `paint_standing_hit` is the
+  same walk with the particle layer's hit flashes (`fx::Flash`): a hull or a bong a shot landed on
+  is covered by its own silhouette in white straight after it is drawn (`Canvas::solid`,
+  `tank::draw_tank_silhouette`, `bong::draw_bong_silhouette`, `hit_flash_alpha`), so the flash is
+  as bright on a dark chassis as on a pale one and lies under the grass in front and under every
+  crown. The tile and tree
   painters are free functions the builder's canvas (`editor::still`) draws with too: `is_tile`
   (a wall or a prop, not a tree, tower, lamp, volcano or door), `paint_tile_run` (each tile's
   shadow, the tile and its cap, in the order given), `sort_trees` (back to front by crown) and
@@ -1607,16 +1659,24 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `Textures`/`Effects`: pass 1 runs the three stages through a `GpuCanvas` into `scene_target` (the
   camera's view at a texel per world pixel, drawn inside `Camera::in_target`; `Canvas::cull` lets
   the ground loops, tiles, grass, trees and floor marks skip what lies outside it, and the effect
-  lists are culled the same way) with the live-round layers between them (fire, glows, the `P1`
-  label, hit flashes, projectiles, hits, muzzle flashes, blasts, airborne debris, particles) drawn
-  with raylib directly, as two halves - `paint_field_lit` (the floor, tiles and everything standing)
-  and `paint_field_glowing` (what shines by itself, the tanks' light layer included -
-  `draw_tank_glow` at `1 - day pools`) - so a weathered frame can multiply the first by the light
+  lists are culled the same way) with the live-round layers between them (glows, the `P1`
+  label, tile flashes, projectiles, hits, muzzle flashes, blasts, airborne debris, particles) drawn
+  with raylib directly, as two halves - `paint_field_lit` (the floor, tiles, everything standing
+  and, last, the particle layer's smoke, dust and chips, `render::fx::draw_air`: what only reflects
+  light) and `paint_field_glowing` (what shines by itself, the tanks' light layer included -
+  `draw_tank_glow` at `1 - day pools` -, and the particle layer's sparks and embers,
+  `render::fx::draw_light`). Burning ground cells that touch are one fire with one glow
+  (`blast::fire_groups`, `render::blast::draw_fire_glow`), and the daylight's glow pools take their
+  colours from `pyro::LIGHT`, the table the night's lights read too - so a weathered frame can multiply the first by the light
   map before the second (`render/weather.rs`); pass 2 is `draw_world_layer` (the scene through the
-  shockwave, the ripples' quads, the kill flash, the debug overlays) then `draw_chrome` on the
+  bending shader - ripples, muzzle puffs and impact punches in one pass -, the kill flash stepping
+  out in eighths, the debug overlays) then `draw_chrome` on the
   window in UI points (the indicators, then the end screen, banners and PAUSED under the corner
-  clusters - still pressable -, then the dialogs, lobby and level select over them, their dims over
-  the whole window, and the stick - over the canvas the builder last showed, which a swap out of
+  clusters - still pressable; the banners share one row, so a frame writes one of them,
+  `hud::MiddleRow`: a paused round writes PAUSED in place of the opening and the wave lines, and
+  only its dim over an end screen -, then the dialogs, lobby and level select over them, their dims
+  over the whole window, and the stick, with the touch hint once nothing covers the round,
+  `Session::round_covered` - over the canvas the builder last showed, which a swap out of
   the builder draws over the presented world at `Effects::swap`'s share): an arena runs both into
   the bitmap, while a followed view draws its world into `composite` at one pixel per texel,
   `render::view::present_world` puts it on the window shifted by `Camera::offset`, and `draw_chrome`
@@ -1664,7 +1724,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`Sheet::path` is the one asset-path table every loader reads; `Ground`/`Grass` carry the map's
   `Theme`, so `Sheet::all` holds both themes' files and `ground::draw`/`grass::draw_tuft` name the
   live one; `obstacle::Sheet` is a re-export), `Canvas` is
-  `blit`/`fill_rect`/`gradient_v|h`/`disc`/`ring` with `DrawTexturePro`/`DrawRing` semantics, plus
+  `blit`/`fill_rect`/`gradient_v|h`/`disc`/`ring` with `DrawTexturePro`/`DrawRing` semantics,
+  `solid` (a blit's sprite as its shape in one flat colour - a hit's silhouette; the CPU takes each
+  texel's alpha, the GPU a shader, `render::solid` or the turn shader's `solid` uniform), plus
   `blocks` (a baked `BlockImage` - the floor shade - laid over the field at a whole-block scale, one
   draw on the GPU; `BlockImage::patches`/`changed_since` keep its last `BLOCK_PATCHES_KEPT` (64)
   patched rectangles, so `BlockTexture::sync` uploads only those texels and a copy further behind
@@ -1690,8 +1752,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`block_disc`, `dither_disc`, `block_line`, `mark`), colours as ramp steps (`FIRE`, `SMOKE`,
   `DUST`, `CHAR`, and the energy weapons' own; `dust_of` per material;
   `step`/`step_dithered`/`between` never blend), fades through the field's Bayer pattern (`bayer`)
-  down to half then in eighths, light as stepped glows with dithered band edges (`glow`,
-  `glow_bands`), shaded puffs (`Puff`, `shade`, `fire_puff`, `dust_puff`), flames (`tongues`) and
+  down to half then in eighths (`alpha`; `eighths` for a strength that is not yet a colour), light
+  as stepped glows with dithered band edges (`glow`, `glow_bands`) in the colours of `LIGHT` (the
+  one table of what each source's light is, read by the daylight's pools and the night's lights), shaded puffs (`Puff`, `shade`, `fire_puff`, `dust_puff`), flames (`tongues`) and
   the wind smoke leans on (`smoke_lean`, off `grass::wind_at`; `mean_smoke_lean` its average,
   the speed of a drift whose offset is `time` times it). Composers return `Shape`s; `draw`
   paints them and `draw_glows` their light inside an additive blend, on any `Blocks` - every
@@ -1755,8 +1818,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
 - `blast.rs`, `decal.rs` — blast presentation state (`BlastFx::shaped` hashes the form,
   mirror, turn, pace and size, the cause overrides; `fireball.rs` composes it), scorches (a blast's,
   and `Scorch::burn`, the scar a burnt-out ground fire leaves - an ember bed while it cools,
-  `Scorch::ember` - drawn from `barrel_explosion.png`'s scorch row, the one row of it drawn), and in
-  `render/blast.rs` the fuse, burning-cell and nozzle glows; decals are rubble on the walls sheet
+  `Scorch::ember` - drawn from `barrel_explosion.png`'s scorch row, the one row of it drawn, at a
+  whole-texel size, `texel_scale`, stepping in by eighths), `fire_groups` (burning ground cells
+  that touch as one `FireGroup`, one glow by day; at night each cell keeps its light), and in
+  `render/blast.rs` the fuse, fire and nozzle glows; decals are rubble on the walls sheet
   (rows 14-21, the props' rubble too, row 21 the tank's) seeded by `blast::seed_at` (a salted,
   avalanche-mixed position hash - positions are multiples of 32), thrown arcs derived from age so
   nothing integrates them, staged by `obstacle_died`. Charred rubble is `Decal::hot` and smoulders;
@@ -1824,8 +1889,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`damage_stage::smoke`, `hull_smoke_rate`, black once the deck burns: `SOOT_T`, which oil fires
   and wrecks smoke too). Every particle is whole 2 px blocks in ramp steps: light (sparks, embers) a
   hot block cooling down the fire ramp, a fast spark dragging a tail; air (smoke, dust, trail)
-  shaded puffs drifting down-wind (`pyro::smoke_lean`); matter (chips, spray) small squares;
-  non-additive kinds then one additive block (a blend switch breaks the batch). `Fx::drive` throws
+  shaded puffs drifting down-wind (`pyro::smoke_lean`); matter (chips, spray) small squares. A
+  particle's `tint` is a
+  `Tint`: its colour and the `Ramp` it steps along (`Own`, `Fire`, `Soot`, a hull's `Dust`,
+  `Desert` or `Snow`), set where it is thrown, which is all the drawing reads. Drawn in three
+  places: `draw_ground` with the floor, `draw_air` (smoke, trail, plume, dust, chips, spray) at the
+  end of the lit field so the night and the fog take them, `draw_light` (sparks, embers) in the
+  glowing pass inside one additive block (a blend switch breaks the batch). `Fx::drive` throws
   what every moving hull drives through, from `Game::driving()` (docs/ground-memory.md "Driving
   effects"): dust and snow powder as `Kick` puffs, a ford's `Foam`, mud, rut water and silty spray
   as spray, ice chips, exhaust - the `drive_*` knobs; `Kick` and `Foam` lie on the ground and draw in
@@ -1839,7 +1909,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`Dust`) and its cloud when it comes down (`Collapse`, or `Ash` for a tile that burnt out) start
   one, which plays on this layer's clock for its kind's seconds - longer than the projectile's own
   impact frames - and is composed by `burst.rs`; and the **flashes** (`Flash`, `Flashed`): a hull,
-  tile or tower a shot landed on, drawn again in light by `render/game.rs` for `hit_flash_seconds`.
+  a bong, a tile or a tower a shot landed on, for `hit_flash_seconds` - a hull's and a bong's a
+  white silhouette in the y-sorted walk (`Game::paint_standing_hit`), a tile's drawn again in light
+  by `render/game.rs`. A hit bong throws flecks of its own body and dust (`Fx::bong_hit`,
+  `BongKind::body`), never sparks.
   In a dev-server lockstep `app.rs` ages the layer by the simulated time a `step` ran, not wall
   time, so a frozen round's particles freeze with it. It owns the **wall pieces** too
   (`pieces.rs`, from `Event::ChunksBroken`): cuts of a broken chunk's own sheet pixels that fly,
@@ -1872,10 +1945,14 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `feedback::tests`.
 - `shockwave.rs` — `Game::shocks` is a list capped at `SHOCK_MAX` (the shader's uniform-array
   length), resolved in one blit that accumulates every ripple; eviction by `remaining()`.
-  `render/shockwave.rs` is `RippleFx`, the compiled shader and its uniforms, compiled once; every
-  ripple is measured in `RIPPLE_FRAME`, the standard field (the speed, width and strength rows are
-  in its heights, so a ring is the same size in world pixels on every map and a flash stays inside
-  its quad), and `RippleFx::set_view` puts the scene target in that frame (`viewUv`/`viewUvSize`,
+  `render/shockwave.rs` is `RippleFx`, the one compiled shader and its uniforms: the pass the scene
+  leaves its target through whenever a ripple, a muzzle flash or an impact is live. It sums every
+  bend - the ripples, the newest `FLASH_MAX` muzzle puffs and impact punches (`set_bends`, the
+  three kinds' knobs in `Ripples::of`) - samples the scene once and moves it by whole 2 px blocks,
+  a block at a time (`targetSize`), through the source rectangle the camera's shake moves, so a
+  bend shakes with the picture. Every bend is measured in `RIPPLE_FRAME`, the standard field (the
+  speed, width and strength rows are in its heights, so a ring is the same size in world pixels on
+  every map), and `RippleFx::set_view` puts the scene target in that frame (`viewUv`/`viewUvSize`,
   `Camera::ripple_view`) with every centre measured from the target's corner (`ripple_uv`,
   `RippleFx::uv_of`), so the numbers stay small on any map. Camera shake sums the ripples and snaps
   to whole 2 px blocks (`shake_overscan` is its furthest reach, what a followed view's scene target
@@ -1884,9 +1961,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `camera_shake_fade_screens` screens past it (the `fx` group); `None` (an arena) is the plain sum,
   each split half shakes by its own view, and nothing shakes or bends under reduced motion;
   `screen_fx_intensity` scales flash, ripple and shake together. Shaders: `static/*.fs` with
-  hand-ported GLSL ES 100 twins in `static/web/`, all three ripples compiled from sources in the
-  binary (`RippleShader`); one that will not compile is reported (`render::target::trouble`) and
-  the raylib default shader stands in, so the scene is drawn unbent. `render/shot_shaders.rs` holds
+  hand-ported GLSL ES 100 twins in `static/web/`, compiled from the source in the binary; one that
+  will not compile is reported (`render::target::trouble`) and the raylib default shader stands in,
+  so the scene is drawn unbent. `render/solid.rs` is `SolidShader` (`static/solid.fs`): a sprite's
+  shape in one flat colour, what `Canvas::solid` draws an unturned silhouette with; a sprite the
+  turn shader draws takes the same rule from its `solid` uniform, and `TurnShader` loads and holds
+  the solid shader (`TurnShader::solid`), so every canvas that turns sprites draws silhouettes too. `render/shot_shaders.rs` holds
   the twin test for every pair (`the_web_twins_are_the_desktop_shaders`: the bodies equal once
   comments, blank space and the `precision` line are gone).
 - `render/target.rs` — how the frame's textures are made and what happens when one is not: `load`
@@ -1934,8 +2014,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   GPU's lands in the swap. The state is a thread-local, so the window's is the main thread's and a
   test's its own. docs/tooling.md, Performance instruments, has the recipes and the baseline.
   `render/batch.rs` is `RenderBatch`: rlgl's batch raised to the desktop's 8192 quads on the GLES
-  builds (the web, iOS, Android; ES 2's own is 2048), loaded after the window opens and held by the
-  frame closure. `render/shapes.rs` is the walls sheet's texture with the white block raylib draws
+  builds (the web, iOS, Android; ES 2's own is 2048), loaded after the window opens and held by
+  `app.rs`'s `App`. `render/shapes.rs` is the walls sheet's texture with the white block raylib draws
   its shapes from (`SetShapesTexture`), so a rectangle and a wall sprite share a batch - a wall
   piece is a shadow rectangle then its sprite. The texture is the sheet at the origin of one twice
   as tall and no wider: halving a texture coordinate loses no bit, so every sample lands on the
@@ -2136,7 +2216,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`StickDrawing`) is the base at the origin the rule measures from, at least `BASE_MIN_RADIUS_PT`,
   and the knob, `KNOB_RADIUS_PT` (both at least 44 pt across), which `TouchScheme::draw`, the one
   `render`-gated item, paints under the UI camera with the hint at `HINT_TEXT_PT` at the area's
-  quarters). Both unit-tested headless.
+  quarters). The hint is the round's: `app.rs` tells the scheme each frame whether anything stands
+  between a tap and the round (`set_covered`, from `Session::round_covered`: another mode, a
+  pause, a question, the opening banner, the end screen; or the bong's speech bubble up, which
+  may stand on the hint's row), and while it does the hint is not written and its seconds do not
+  run (`hint_left`). Both unit-tested headless.
 - `framing.rs` (docs/large-maps-follow-camera.md §3, §4, §15) — how much world a screen shows,
   headless and pure, the reference for the rules a follow camera frames a field map by. `MapClass`
   (`Arena` up to `ARENA_MAX_CELLS`, 36 x 18, shown whole by `view::View`; `Field` past it;
@@ -2221,9 +2305,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the platform's answer, which `app::run` reads once at startup (`set_platform`): iOS's
   `UIAccessibilityIsReduceMotionEnabled` (`app::ios::reduce_motion`) and the page's
   `window.bbMotion` (`page_string`, `from_page`); Android, macOS, Linux and Windows give none, which
-  is full motion. Reduced motion means no camera shake, no kill ripple bending the whole screen, an
-  establishing shot that cuts instead of zooming and a restart that cuts instead of gliding; the follow camera, the split, the arrows and
-  every effect of the round stay. Tests use `reduced_by`, never the global; `status.camera.motion`
+  is full motion. Reduced motion means no camera shake, nothing bending the picture (no ripple, muzzle
+  puff or impact punch), an establishing shot that cuts instead of zooming and a restart that cuts
+  instead of gliding; the follow camera, the split, the arrows and every effect of the round stay.
+  It calms what flashes too: `flash` keeps `reduced_flash_scale` of a whole-screen flash (a kill's,
+  a lightning strike's - `weather::lightning_shown`, one stepped flash with no second flicker) and
+  `beat` turns a strobe (a lit fuse's glow and its light at night) into one beat a second between
+  two held steps. Tests use `reduced_by`, never the global; `status.camera.motion`
   reports it.
 - `margin.rs` (docs/large-maps-follow-camera.md §13 item 7) — an arena's margins, headless:
   `MarginFrame::of(view, layout)` is the world the window shows round the field (rounded out to the

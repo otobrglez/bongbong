@@ -166,7 +166,7 @@ pub fn draw_decal(c: &mut impl Canvas, decal: &Decal) {
 /// `draw_decal` with `keep` (0 to 1) of its strength, in eighths: what
 /// snow lying over it leaves showing (docs/aftermath.md).
 pub fn draw_decal_kept(c: &mut impl Canvas, decal: &Decal, keep: f32) {
-    let keep = (keep.clamp(0.0, 1.0) * 8.0).round() / 8.0;
+    let keep = crate::pyro::eighths(keep);
     if keep <= 0.0 {
         return;
     }
@@ -183,7 +183,7 @@ pub fn draw_decal_kept(c: &mut impl Canvas, decal: &Decal, keep: f32) {
     // flight, not a mark on the ground, and the fade-in only makes sense
     // for something settling.
     let opacity = if decal.landed() {
-        let fade = (decal.age / tuning().decal_fade_in_seconds.max(1e-3)).clamp(0.0, 1.0);
+        let fade = crate::pyro::eighths(decal.age / tuning().decal_fade_in_seconds.max(1e-3));
         tuning().decal_opacity * fade * keep
     } else {
         1.0
@@ -200,7 +200,7 @@ fn draw_stump(c: &mut impl Canvas, decal: &Decal, keep: f32) {
     let cell = decal.sheet.cell();
     let src = Rectangle::new(decal.col as f32 * cell, decal.row as f32 * cell, cell, cell);
     let size = cell * crate::OBSTACLE_SCALE;
-    let fade = (decal.age / tuning().decal_fade_in_seconds.max(1e-3)).clamp(0.0, 1.0);
+    let fade = crate::pyro::eighths(decal.age / tuning().decal_fade_in_seconds.max(1e-3));
     let tint = Color::new(STUMP_CHAR.r, STUMP_CHAR.g, STUMP_CHAR.b, (255.0 * fade * keep) as u8);
     let at = decal.center;
     c.blit(decal.sheet, src, Rectangle::new(at.x, at.y, size, size), Vec2::new(size / 2.0, size / 2.0), 0.0, tint);

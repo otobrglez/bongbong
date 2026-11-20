@@ -78,6 +78,10 @@ mod rod_tests;
 #[cfg(test)]
 mod air_support_tests;
 #[cfg(test)]
+mod air_heli_tests;
+#[cfg(test)]
+mod air_jet_tests;
+#[cfg(test)]
 mod well_tests;
 #[cfg(test)]
 mod sonic_tests;
@@ -5739,6 +5743,13 @@ impl Game {
     /// to draw the same map as this round shows it (`obstacle::Looks`).
     pub fn looks(&self) -> &crate::obstacle::Looks {
         &self.looks
+    }
+
+    /// Whether the opening mission banner is on screen: solid while the
+    /// round is frozen behind it, then fading over `INTRO_FADE_SECONDS`,
+    /// and gone once the round is decided.
+    pub fn intro_showing(&self) -> bool {
+        (self.intro_timer > 0.0 || self.intro_fade > 0.0) && self.outcome == Outcome::Playing
     }
 
     pub fn outcome(&self) -> Outcome {

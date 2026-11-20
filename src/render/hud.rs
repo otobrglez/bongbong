@@ -347,27 +347,33 @@ fn draw_lamp_row(d: &mut impl RaylibDraw, row: Rectangle, hud: &PlayerHud, textu
     }
 }
 
-/// The air support box (docs/air-support.md) under the ammo slot: the
-/// sortie's crate symbol and the whole seconds before it arrives - amber,
-/// red over the last three - or the symbol alone, lit, while it is in the
-/// air; a sortie queued behind it as `+1`.
+/// The air support box (docs/air-support.md) under the ammo slot, laid
+/// out by `hud::air_box_layout`: the sortie's crate symbol and the whole
+/// seconds before it arrives - amber, red over the last three - or, while
+/// it is in the air, a pip for each salvo or pass of its load, amber while
+/// it has it and dark once spent, the symbol unlit with the last one gone;
+/// a sortie queued behind it as `+1`.
 fn draw_air_box(d: &mut impl RaylibDraw, textures: &Textures, b: Rectangle, air: crate::hud::AirHud, a: f32) {
     let (x, y, h) = (b.x.round() as i32, b.y.round() as i32, b.height.round() as i32);
-    draw_symbol(d, textures, air.sortie.pickup(), x, y, h, true, a);
+    let layout = crate::hud::air_box_layout(b, &air);
+    draw_symbol(d, textures, air.sortie.pickup(), x, y, h, air.lit(), a);
     let text_y = y + (h - HUD_TEXT_SIZE) / 2;
-    let mut text_x = x + SYMBOL + SYMBOL_GAP;
     if let Some(seconds) = air.seconds {
         let color = if seconds <= 3 { OFFLINE_RED } else { AIR_AMBER };
-        let label = seconds.to_string();
-        d.draw_text(&label, text_x, text_y, HUD_TEXT_SIZE, faded(color, a));
-        text_x += crate::text::width(&label, HUD_TEXT_SIZE) + SYMBOL_GAP;
+        d.draw_text(&seconds.to_string(), layout.readout_x.round() as i32, text_y, HUD_TEXT_SIZE, faded(color, a));
+    }
+    let left = air.ammo.map_or(0, |(left, _)| left as usize);
+    for (i, pip) in layout.pips.iter().enumerate() {
+        let color = if i < left { AIR_AMBER } else { SPENT };
+        d.draw_rectangle(pip.x.round() as i32, pip.y.round() as i32, pip.width.round() as i32, pip.height.round() as i32, faded(color, a));
     }
     if air.queued > 0 {
-        d.draw_text(&format!("+{}", air.queued), text_x, text_y, HUD_TEXT_SIZE, faded(DIM, a));
+        d.draw_text(&format!("+{}", air.queued), layout.queued_x.round() as i32, text_y, HUD_TEXT_SIZE, faded(DIM, a));
     }
 }
 
-/// The air support count's colour: the crates' strobe amber.
+/// Air support's colour in its box - the count and the pips: the crates'
+/// strobe amber.
 const AIR_AMBER: Color = Color::new(0xFF, 0xB0, 0x2E, 255);
 
 /// The heat shield gauge's colour: the pickup's molten red.
@@ -803,6 +809,19 @@ mod corner_tests {
         assert!(GAUGE_W >= 4 + 2 * 10, "a bar needs its outline and room to drain in steps");
         // A symbol and a bar, both inside a row.
         assert!(SYMBOL <= ROW_H as i32 && GAUGE_H <= ROW_H as i32);
+    }
+
+    /// The air support box sits under the weapon slot on the painter's own
+    /// columns: its readout under the weapon's count, and the row free for
+    /// a queued `+N` as far as the heat shield's gauge.
+    #[test]
+    fn the_air_box_is_laid_out_on_the_vitals_columns() {
+        use crate::hud::{AIR_BOX_X, AIR_READOUT_GAP, AIR_READOUT_X, AIR_ROW_FREE_W};
+        assert_eq!(AIR_BOX_X as i32, V_WEAPON);
+        assert_eq!(AIR_READOUT_X as i32, SYMBOL + SYMBOL_GAP);
+        assert_eq!(AIR_BOX_X as i32 + AIR_READOUT_X as i32, V_WEAPON_COUNT);
+        assert_eq!(AIR_READOUT_GAP as i32, SYMBOL_GAP);
+        assert_eq!(AIR_BOX_X as i32 + AIR_ROW_FREE_W as i32, V_SHIELD);
     }
 
     /// The right cluster's first row: the widest mission word with its

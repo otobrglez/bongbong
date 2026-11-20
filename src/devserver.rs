@@ -4278,6 +4278,96 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(!s.game.debug_overlays.hitboxes);
     }
 
+    /// A jet loitering in a left bank with a pass left and a helicopter
+    /// escorting its seat, as hand-placed as a test's can be: nothing here
+    /// flies them.
+    fn place_air_support(game: &mut Game) {
+        use crate::air_support::{AirCall, AirStage, Aircraft, Sortie};
+        let t = crate::tuning::tuning();
+        let at = crate::Position::new(300.0, 200.0);
+        let mut jet = Aircraft::arrive(21, 0, Sortie::Jet, at, crate::Position::new(400.0, 200.0), &t);
+        jet.stage = AirStage::Loiter;
+        jet.bank = -0.504;
+        jet.ammo = 1;
+        jet.velocity = crate::math::Vec2::new(180.0, 0.0);
+        game.world.spawn((jet,));
+        let mut heli = Aircraft::arrive(22, 0, Sortie::Heli, crate::Position::new(500.0, 320.0), crate::Position::new(500.0, 200.0), &t);
+        heli.stage = AirStage::Escort;
+        heli.ammo = 3;
+        heli.velocity = crate::math::Vec2::new(0.0, 0.0);
+        game.world.spawn((heli,));
+        game.air_calls.push(AirCall { id: 23, seat: 0, sortie: Sortie::Heli, arrive_at: Some(game.time + 7.5) });
+        game.air_calls.push(AirCall { id: 24, seat: 0, sortie: Sortie::Jet, arrive_at: None });
+    }
+
+    /// `snapshot` lists air support: each aircraft by id with its seat,
+    /// sortie and stage by name, where it is, which way and how fast it
+    /// flies, its bank and its ammunition; each call with its count, null
+    /// while it waits. Both are left out while there are none.
+    #[test]
+    fn a_snapshot_lists_air_support() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(61);
+        let snap = ask(&mut server, &tx, &mut s, "snapshot", json!({})).unwrap();
+        assert!(snap.get("aircraft").is_none() && snap.get("air_calls").is_none(), "left out while there are none: {snap}");
+        place_air_support(&mut s.game);
+        let t = crate::tuning::tuning();
+        let snap = ask(&mut server, &tx, &mut s, "snapshot", json!({})).unwrap();
+        assert_eq!(
+            snap["aircraft"],
+            json!([
+                { "id": 21, "seat": 0, "sortie": "jet", "stage": "loiter", "x": 300.0, "y": 200.0, "height": t.air_jet_height_px, "heading_deg": 90.0, "speed": 180.0, "bank": -0.5, "ammo": 1 },
+                { "id": 22, "seat": 0, "sortie": "heli", "stage": "escort", "x": 500.0, "y": 320.0, "height": t.air_heli_height_px, "heading_deg": 0.0, "speed": 0.0, "bank": 0.0, "ammo": 3 },
+            ]),
+            "{snap}"
+        );
+        assert_eq!(
+            snap["air_calls"],
+            json!([{ "id": 23, "seat": 0, "sortie": "heli", "seconds_left": 7.5 }, { "id": 24, "seat": 0, "sortie": "jet", "seconds_left": null }]),
+            "{snap}"
+        );
+        // A step's snapshot carries them too.
+        let stepped = step(&mut server, &tx, &mut s, json!({ "frames": 1, "snapshot": true }));
+        assert!(stepped["snapshot"]["aircraft"].is_array() || stepped["snapshot"]["air_calls"].is_array(), "{stepped}");
+    }
+
+    /// Online, `snapshot`'s air support is the replica's: what the room's
+    /// snapshot carried - stage, place, heading, bank and ammunition - with
+    /// the sortie's full speed, since no velocity travels.
+    #[test]
+    fn a_snapshot_lists_the_replicas_air_support_online() {
+        let (mut s, mut room) = online(53);
+        let (mut server, tx) = DevServer::headless();
+        online_frame(&mut server, &mut s);
+        place_air_support(&mut room.game);
+        // The room's picture twice over, on the ticks and stamps a running
+        // room would give it, so the replica lands on it with the aircraft
+        // where they were put.
+        for (tick, server_ms) in [(30, 1_500), (60, 4_000)] {
+            let mut snapshot = enc::snapshot(&room.game, [0; MAX_SEATS]);
+            snapshot.tick = tick;
+            snapshot.server_ms = server_ms;
+            room.say(Msg::Snapshot(snapshot));
+        }
+        online_frame(&mut server, &mut s);
+        assert!(s.game.aircraft().is_empty() && s.game.air_calls().is_empty(), "the local round behind it has none");
+        let t = crate::tuning::tuning();
+        let snap = ask(&mut server, &tx, &mut s, "snapshot", json!({})).unwrap();
+        let near = |v: &Value, want: f32, within: f64| (v.as_f64().unwrap_or(f64::NAN) - want as f64).abs() <= within;
+        let jet = &snap["aircraft"][0];
+        assert_eq!((&jet["id"], &jet["seat"], &jet["sortie"], &jet["stage"], &jet["ammo"]), (&json!(21), &json!(0), &json!("jet"), &json!("loiter"), &json!(1)), "{snap}");
+        assert!(near(&jet["x"], 300.0, 0.3) && near(&jet["y"], 200.0, 0.3) && near(&jet["height"], t.air_jet_height_px, 0.3), "{jet}");
+        assert!(near(&jet["heading_deg"], 90.0, 1.0) && near(&jet["bank"], -0.5, 0.011), "{jet}");
+        assert!(near(&jet["speed"], t.air_jet_speed, 0.1), "the sortie's full speed, not the room's 180: {jet}");
+        let heli = &snap["aircraft"][1];
+        assert_eq!((&heli["id"], &heli["sortie"], &heli["stage"], &heli["ammo"]), (&json!(22), &json!("heli"), &json!("escort"), &json!(3)), "{snap}");
+        assert!(near(&heli["bank"], 0.0, 0.0), "{heli}");
+        let calls = snap["air_calls"].as_array().expect("the replica's calls");
+        assert_eq!((&calls[0]["id"], &calls[0]["sortie"]), (&json!(23), &json!("heli")), "{snap}");
+        assert!(calls[0]["seconds_left"].as_f64().is_some_and(|left| left > 0.0 && left <= 7.5), "{snap}");
+        assert_eq!(calls[1], json!({ "id": 24, "seat": 0, "sortie": "jet", "seconds_left": null }), "{snap}");
+    }
+
     /// The other half of the rule: anything that would write refuses, by
     /// name, and says what to do instead. Giving the seat up comes back
     /// to the local round, and every tool works again.

@@ -22,6 +22,7 @@
 //! freezes the rain with the round.
 
 use crate::math;
+use crate::pyro::LIGHT;
 use crate::blast::{seed_for, BlastKind};
 use crate::bullet::{Bullet, BulletState};
 use crate::bong::Side;
@@ -468,6 +469,25 @@ fn unit_hash(n: i64, salt: u64) -> f32 {
 /// later. A pure function of the clock, so a replica strikes when the
 /// room's round would and a frozen round holds its flash.
 pub fn lightning(time: f32, t: &Tuning) -> f32 {
+    strike(time, t, |dt| {
+        let second = if dt >= 0.16 { 0.75 * math::exp(-(dt - 0.16) * 7.0) } else { 0.0 };
+        math::exp(-dt * 20.0).max(second)
+    })
+}
+
+/// `lightning` as the frame shows it: under reduced motion (`motion.rs`) a
+/// strike is one flash stepping down in quarters, with no second flicker,
+/// at `reduced_flash_scale` of its strength.
+pub fn lightning_shown(time: f32, t: &Tuning, reduced: bool) -> f32 {
+    if !reduced {
+        return lightning(time, t);
+    }
+    crate::motion::flash(strike(time, t, |dt| (math::exp(-dt * 7.0) * 4.0).round() / 4.0), true, t.reduced_flash_scale)
+}
+
+/// The brightest of the strikes lighting the field at `time`, each
+/// `envelope` of the seconds since it struck (under one).
+fn strike(time: f32, t: &Tuning, envelope: impl Fn(f32) -> f32) -> f32 {
     let gap = t.lightning_gap_seconds.max(1.0);
     let window = (time / gap).floor() as i64;
     let mut flash = 0.0f32;
@@ -480,10 +500,7 @@ pub fn lightning(time: f32, t: &Tuning) -> f32 {
         if !(0.0..1.0).contains(&dt) {
             continue;
         }
-        flash = flash.max(math::exp(-dt * 20.0));
-        if dt >= 0.16 {
-            flash = flash.max(0.75 * math::exp(-(dt - 0.16) * 7.0));
-        }
+        flash = flash.max(envelope(dt));
     }
     flash.clamp(0.0, 1.0)
 }
@@ -729,10 +746,7 @@ fn plasma_color(variant: PlasmaVariant) -> Rgb {
 }
 
 fn laser_color(variant: LaserVariant) -> Rgb {
-    match variant {
-        LaserVariant::Red => [1.0, 0.35, 0.3],
-        LaserVariant::Blue => [0.45, 0.62, 1.0],
-    }
+    rgb(variant.light())
 }
 
 /// A point on the hull, `local` design pixels from the pivot in the art's
@@ -824,8 +838,9 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
         if obstacle.burning {
             out.push(fire(obstacle.position, t.fire_light_radius_px * 0.9, 1.0));
         } else if obstacle.fuse.is_some() {
-            let pulse = 0.55 + 0.45 * math::sin(time * 12.0).abs();
-            out.push(Light::point(obstacle.position, 72.0, scale([1.0, 0.4, 0.2], k * t.fire_light_strength * pulse)));
+            let reduced = crate::motion::reduced_by(t.reduce_motion, crate::motion::platform());
+            let pulse = 0.55 + 0.45 * crate::motion::beat(time, math::sin(time * 12.0).abs(), reduced);
+            out.push(Light::point(obstacle.position, 72.0, scale(rgb(LIGHT.fuse), k * t.fire_light_strength * pulse)));
         }
     }
     for drum in &game.flying_drums {
@@ -925,12 +940,12 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     // Shots in flight, and the flashes where they leave and land.
     for shell in game.world.query::<&Shell>().iter() {
         if shell.state == ShellState::Flying {
-            out.push(Light::point(shell.position, 52.0, scale([1.0, 0.62, 0.28], s * 0.75)));
+            out.push(Light::point(shell.position, 52.0, scale(rgb(LIGHT.shell), s * 0.75)));
         }
     }
     for bullet in game.world.query::<&Bullet>().iter() {
         if bullet.state == BulletState::Flying {
-            out.push(Light::point(bullet.position, 22.0, scale([1.0, 0.8, 0.42], s * 0.45)).unshadowed());
+            out.push(Light::point(bullet.position, 22.0, scale(rgb(LIGHT.bullet), s * 0.45)).unshadowed());
         }
     }
     for plasma in game.world.query::<&Plasma>().iter() {
@@ -942,7 +957,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
         }
     }
     for missile in game.world.query::<&Missile>().iter().filter(|m| !m.is_dead()) {
-        out.push(Light::point(missile.position, 48.0, scale([1.0, 0.6, 0.3], s * 0.85 * (1.0 - 0.5 * missile.lift()))).unshadowed());
+        out.push(Light::point(missile.position, 48.0, scale(rgb(LIGHT.missile), s * 0.85 * (1.0 - 0.5 * missile.lift()))).unshadowed());
     }
     // An FPV drone in the air, on the frames its lamp is on, in the lamp's
     // colour: an incoming drone reads in the dark (docs/fpv-swarm.md
@@ -958,7 +973,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     // A grenade, on the beat it flashes.
     for grenade in game.world.query::<&crate::grenade::Grenade>().iter() {
         if grenade.lamp_lit() {
-            out.push(Light::point(grenade.draw_pos(), 56.0, scale([1.0, 0.6, 0.3], s * 0.9)).unshadowed());
+            out.push(Light::point(grenade.draw_pos(), 56.0, scale(rgb(LIGHT.missile), s * 0.9)).unshadowed());
         }
     }
     for jet in game.flames() {
@@ -1048,13 +1063,13 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
     for flash in &game.muzzle_flashes {
         let life = 1.0 - (flash.time / t.muzzle_flash_duration.max(0.01)).clamp(0.0, 1.0);
         if life > 0.0 {
-            out.push(Light::point(flash.center, 90.0 * (0.6 + 0.4 * life), scale([1.0, 0.82, 0.55], s * 1.8 * life)));
+            out.push(Light::point(flash.center, 90.0 * (0.6 + 0.4 * life), scale(rgb(LIGHT.muzzle), s * 1.8 * life)));
         }
     }
     for flash in &game.impact_flashes {
         let life = 1.0 - (flash.time / t.impact_flash_duration.max(0.01)).clamp(0.0, 1.0);
         if life > 0.0 {
-            out.push(Light::point(flash.center, 100.0, scale([1.0, 0.66, 0.35], s * 1.6 * life)));
+            out.push(Light::point(flash.center, 100.0, scale(rgb(LIGHT.impact), s * 1.6 * life)));
         }
     }
 
@@ -1064,7 +1079,7 @@ pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view:
             continue;
         }
         out.push(match impact.kind {
-            ImpactKind::Shell => Light::point(impact.pos, 110.0, scale([1.0, 0.66, 0.35], s * 1.8 * life)),
+            ImpactKind::Shell => Light::point(impact.pos, 110.0, scale(rgb(LIGHT.impact), s * 1.8 * life)),
             ImpactKind::Bullet => Light::point(impact.pos, 36.0, scale([1.0, 0.85, 0.5], s * 0.8 * life)).unshadowed(),
             ImpactKind::Plasma(variant) => Light::point(impact.pos, 96.0, scale(plasma_color(variant), s * 1.5 * life)),
             ImpactKind::Laser(blue) => {
@@ -1177,7 +1192,7 @@ pub fn portal_light(i: usize, at: Position, time: f32, k: f32) -> Light {
 
 /// A fire's light at `at`, `radius` px, flickering.
 pub fn fire_light(at: Position, radius: f32, strength: f32, k: f32, t: &Tuning, time: f32) -> Light {
-    Light::point(at, radius, scale([1.0, 0.56, 0.22], k * t.fire_light_strength * strength * flicker(time, at)))
+    Light::point(at, radius, scale(rgb(LIGHT.fire), k * t.fire_light_strength * strength * flicker(time, at)))
 }
 
 /// A lava cell's glow, brighter in the volcanoes' `surge`; a round lights
@@ -1427,6 +1442,26 @@ mod tests {
         let expected = 100.0 / t.lightning_gap_seconds;
         assert!(strikes as f32 >= expected * 0.5 && strikes as f32 <= expected * 2.5, "{strikes} strikes in 100 s");
         assert!(samples.iter().filter(|v| **v > 0.05).count() < samples.len() / 4, "the sky is dark most of the time");
+    }
+
+    /// Reduced motion (`motion.rs`): a strike is one flash stepping down,
+    /// never a second flicker, at the row's share of its strength - and
+    /// full motion shows the strike as it is.
+    #[test]
+    fn reduced_motion_shows_a_strike_as_one_calm_flash() {
+        let t = Tuning::DEFAULT;
+        let at = |i: usize| i as f32 / 240.0;
+        let full: Vec<f32> = (0..24000).map(|i| lightning_shown(at(i), &t, false)).collect();
+        let calm: Vec<f32> = (0..24000).map(|i| lightning_shown(at(i), &t, true)).collect();
+        assert!(full.iter().enumerate().all(|(i, v)| *v == lightning(at(i), &t)));
+        let rises = |v: &[f32]| v.windows(2).filter(|w| w[1] > w[0] + 0.05).count();
+        assert!(rises(&full) > rises(&calm), "the second flicker is gone: {} vs {}", rises(&full), rises(&calm));
+        assert!(rises(&calm) > 0, "it still strikes");
+        let cap = t.reduced_flash_scale;
+        assert!(calm.iter().all(|v| (0.0..=cap + 1e-6).contains(v)), "never over the row's share");
+        let steps: std::collections::BTreeSet<i32> = calm.iter().map(|v| (v / cap * 4.0).round() as i32).collect();
+        assert!(calm.iter().all(|v| ((v / cap * 4.0) - (v / cap * 4.0).round()).abs() < 1e-4), "in quarters");
+        assert!(steps.len() <= 5);
     }
 
     #[test]

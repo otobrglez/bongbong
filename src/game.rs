@@ -53,6 +53,35 @@ enum Standing<'a> {
     /// tufts in front of it cover it, so its flash still shows in a field.
     /// One in the air is over everything that stands.
     Grenade(&'a crate::grenade::Grenade),
+    /// A burning ground cell's flames (its centre, the seconds it has
+    /// left and its whole burn), standing on their foot: whatever is
+    /// further up the field is behind them, whatever drives through nearer
+    /// is in front.
+    Fire(crate::Position, f32, f32),
+}
+
+/// How far below its cell's centre a ground fire's flames stand, px: the
+/// foot they rise from, and their place among what stands.
+pub const GROUND_FIRE_FOOT: f32 = 9.0;
+
+/// The tongues of flame standing on the burning ground cell at `at`
+/// (`pyro::tongues`), leaning with the wind, rising as the cell catches
+/// and sinking over the last of the `left` seconds of its `total` burn.
+pub fn ground_fire(out: &mut Vec<crate::pyro::Shape>, at: crate::Position, left: f32, total: f32, time: f32, t: &crate::tuning::Tuning) {
+    let dying = (left / 0.6).clamp(0.0, 1.0);
+    let catching = ((total - left) / 0.25).clamp(0.0, 1.0);
+    let seed = crate::blast::seed_at(at, 23);
+    let lean = crate::pyro::smoke_lean(t, at, time);
+    let foot = crate::Position::new(at.x, at.y + GROUND_FIRE_FOOT);
+    crate::pyro::tongues(out, foot, t.ground_fire_spread_px, t.ground_fire_height_px, t.ground_fire_tongues.max(0) as u32, seed, time, lean, dying.min(catching));
+}
+
+/// The colour a hit's silhouette is drawn in over what `what` names, if
+/// one of `flashes` is on it: white, in the flash's step of
+/// `hit_flash_alpha`.
+fn flash_ink(flashes: &[crate::fx::Flash], what: crate::fx::Flashed, t: &crate::tuning::Tuning) -> Option<Color> {
+    let k = flashes.iter().filter(|f| f.what() == what).map(|f| f.strength()).fold(0.0, f32::max);
+    (k > 0.0).then(|| crate::pyro::alpha(Color::WHITE, k * t.hit_flash_alpha)).filter(|c| c.a > 0)
 }
 
 /// The lists the stages fill on every frame, kept between frames so that a
@@ -746,6 +775,16 @@ impl Game {
     /// crowns of a grove pop in and out of each other as the query
     /// iterates.
     pub fn paint_standing(&self, c: &mut impl Canvas, opts: PaintOptions) {
+        self.paint_standing_hit(c, opts, &[]);
+    }
+
+    /// `paint_standing` with the hits of the moment on it (`fx::Flash`,
+    /// which the particle layer keeps): a hull or a bong a shot just
+    /// landed on is covered by its own silhouette in white, straight
+    /// after it is drawn - at its place in the walk, so under the grass in
+    /// front of it and under every crown, and as bright on a dark chassis
+    /// as on a pale one.
+    pub fn paint_standing_hit(&self, c: &mut impl Canvas, opts: PaintOptions, flashes: &[crate::fx::Flash]) {
         // What the canvas culls (`Canvas::cull`) stands out of the walk.
         let cull = c.cull();
         let t = crate::tuning::tuning();
@@ -804,8 +843,19 @@ impl Game {
                 standing.push((key, Standing::Grenade(grenade)));
             }
         }
+        // Burning ground: each cell's flames at their foot. A bomb's splash
+        // of lava is molten rock on the floor (`lava::draw_pools`), not
+        // flames.
+        for fire in self.fires.iter().filter(|f| f.left > 0.0 && !f.lava) {
+            let at = fire.position();
+            if !culled(cull, at) {
+                standing.push((at.y + GROUND_FIRE_FOOT, Standing::Fire(at, fire.left, fire.total)));
+            }
+        }
+        // Stable, so things on one line keep the order they were listed in.
         standing.sort_by(|a, b| a.0.total_cmp(&b.0));
 
+        let mut flames = Vec::new();
         // The tufts are sorted by root, so the ones a canvas over part of
         // the field can show are one run of them: from the first rooted at
         // its top edge to the last above its bottom one.
@@ -829,11 +879,19 @@ impl Game {
                 Standing::Tank(tank, role) => {
                     let hulk = HulkLook { hot: self.wreck_hot(tank), snow: self.hulk_snow(tank, &t) };
                     draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts.locate_cue, hulk, &t);
+                    if *role != TankRole::RollIn
+                        && let Some(ink) = flash_ink(flashes, crate::fx::Flashed::Tank(tank.owner_slot()), &t)
+                    {
+                        crate::tank::draw_tank_silhouette(c, tank, self.time, ink);
+                    }
                 }
                 Standing::Bong(entity) => {
                     crate::simulation::with_bong(&self.world, *entity, |bong| {
                         draw_bong_ring(c, bong, self.time);
                         draw_bong(c, bong, self.time);
+                        if let Some(ink) = flash_ink(flashes, crate::fx::Flashed::Bong(bong.side), &t) {
+                            crate::bong::draw_bong_silhouette(c, bong, self.time, ink);
+                        }
                     });
                 }
                 Standing::Tower(view) => {
@@ -852,6 +910,11 @@ impl Game {
                     crate::lamp::draw_post(c, *at, self.time, (t.shadow_dir_x, t.shadow_dir_y), self.shadows_enabled, lit);
                 }
                 Standing::Grenade(grenade) => crate::grenade::draw_grenade(c, grenade),
+                Standing::Fire(at, left, total) => {
+                    flames.clear();
+                    ground_fire(&mut flames, *at, *left, *total, self.time, &t);
+                    crate::pyro::draw(c, &flames);
+                }
             }
         }
         grass_up_to(c, f32::INFINITY, next_tuft);
@@ -985,14 +1048,37 @@ impl Game {
         air
     }
 
-    /// The static field as a fresh round shows it: `paint_floor`,
-    /// `paint_tiles`, `paint_standing`, in that order, onto a canvas the
-    /// caller has cleared. What `mapshot` renders (docs/mapshot-prd.md);
-    /// `render` runs the same three stages with its live-round layers in
-    /// between.
+    /// The shadows of what flies - the FPV drones (docs/fpv-swarm.md
+    /// "Drawing") and air support's aircraft (docs/air-support.md
+    /// "Drawing") - on the ground under them: after the floor, under the
+    /// tiles and the tanks. Nothing while shadows are off.
+    pub fn paint_air_shadows(&self, c: &mut impl Canvas) {
+        if !self.shadows_enabled {
+            return;
+        }
+        paint_drone_shadows(c, &self.drones());
+        crate::air_support::paint_shadows(c, &self.aircraft(), self.time);
+    }
+
+    /// What flies, over everything that stands: the FPV drones' bodies
+    /// (their lamps are the glowing pass's), then air support's aircraft
+    /// over them - it flies highest.
+    pub fn paint_air(&self, c: &mut impl Canvas) {
+        paint_drones(c, &self.drones(), self.time);
+        crate::air_support::paint_aircraft(c, &self.aircraft(), self.time);
+    }
+
+    /// The field on a canvas the caller has cleared: `paint_floor`,
+    /// `paint_air_shadows`, `paint_tiles`, `paint_standing`, `paint_air`, in
+    /// that order. What `mapshot` renders (docs/mapshot-prd.md) - a fresh
+    /// round, where nothing flies yet - and a headless round's
+    /// `screenshot`; `render` runs the same stages with its live-round
+    /// layers in between.
     pub fn paint_field(&self, c: &mut impl Canvas, opts: PaintOptions) {
         self.paint_floor(c);
+        self.paint_air_shadows(c);
         self.paint_tiles(c);
         self.paint_standing(c, opts);
+        self.paint_air(c);
     }
 }

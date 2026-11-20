@@ -171,6 +171,13 @@ pub trait Canvas {
     /// a negative `src.width`/`src.height` mirrors along that axis, `tint`
     /// multiplies the texel, and the result is alpha-blended over.
     fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color);
+    /// `blit`'s sprite as its shape alone: `color` wherever the sheet has
+    /// paint, as opaque as the paint and `color` together, alpha-blended
+    /// over - a silhouette that covers exactly the sprite. A canvas with
+    /// no way to draw one draws the sprite in `color` as a tint.
+    fn solid(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, color: Color) {
+        self.blit(sheet, src, dest, origin, rotation, color);
+    }
     /// `DrawRectangle`: a filled, alpha-blended box.
     fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color);
     /// `DrawRectangleGradientV`: `top` at the first row to `bottom` at the last.
@@ -597,8 +604,11 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     Color::new(l(a.r, b.r), l(a.g, b.g), l(a.b, b.b), l(a.a, b.a))
 }
 
-impl Canvas for CpuCanvas {
-    fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color) {
+impl CpuCanvas {
+    /// `Canvas::blit`, or with `solid` `Canvas::solid`: the same quad and
+    /// the same texels, each tinted or taken for its alpha alone.
+    #[allow(clippy::too_many_arguments)]
+    fn stamp(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color, solid: bool) {
         let Some(px) = self.sheets.get(&sheet) else { return };
         let (flip_x, flip_y) = (src.width < 0.0, src.height < 0.0);
         let (sw, sh) = (src.width.abs(), src.height.abs());
@@ -652,9 +662,20 @@ impl Canvas for CpuCanvas {
                     continue;
                 }
                 let texel = px.at(sx as usize, sy as usize);
-                blend_into(&mut self.pixels, width, pxx as usize, py as usize, tinted(texel, tint));
+                let ink = if solid { Color::new(tint.r, tint.g, tint.b, tinted(texel, tint).a) } else { tinted(texel, tint) };
+                blend_into(&mut self.pixels, width, pxx as usize, py as usize, ink);
             }
         }
+    }
+}
+
+impl Canvas for CpuCanvas {
+    fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color) {
+        self.stamp(sheet, src, dest, origin, rotation, tint, false);
+    }
+
+    fn solid(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, color: Color) {
+        self.stamp(sheet, src, dest, origin, rotation, color, true);
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color) {
@@ -843,6 +864,24 @@ mod tests {
         let mut c = CpuCanvas::blank(16, 16);
         c.insert_sheet(Sheet::Portal, probe_sheet());
         c
+    }
+
+    /// `solid` covers exactly what `blit` paints, in the one colour.
+    #[test]
+    fn a_solid_blit_is_the_sprites_shape_in_one_colour() {
+        let mut c = canvas_with_probe();
+        let (src, dest) = (Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(4.0, 4.0, 4.0, 4.0));
+        c.solid(Sheet::Portal, src, dest, Vec2::zero(), 0.0, Color::BLACK);
+        for at in [(4, 4), (7, 4), (4, 7)] {
+            assert_eq!(c.px(at.0, at.1), rgba(Color::BLACK), "{at:?}: painted texels take the colour");
+        }
+        assert_eq!(c.px(7, 7), rgba(Color::WHITE), "a transparent texel leaves the background");
+        assert_eq!(c.px(5, 5), rgba(Color::WHITE));
+        // Half as opaque as the paint: half way to the colour.
+        let mut c = canvas_with_probe();
+        c.solid(Sheet::Portal, src, dest, Vec2::zero(), 0.0, Color::new(0, 0, 0, 128));
+        let (r, g, b, _) = c.px(4, 4);
+        assert!((120..=135).contains(&r) && r == g && g == b, "{:?}", c.px(4, 4));
     }
 
     #[test]

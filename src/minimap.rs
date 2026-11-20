@@ -1097,6 +1097,41 @@ mod minimap_tests {
         assert_eq!(Marks::gather(&game, &[0], &[], view).seats.len(), 1);
     }
 
+    /// An aircraft's mark holds steady flying in, escorting its seat,
+    /// loitering and leaving, and blinks only while it attacks.
+    #[test]
+    fn an_aircrafts_mark_blinks_only_while_it_attacks() {
+        use crate::air_support::{AirStage, Aircraft, Sortie};
+        let t = Tuning::DEFAULT;
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(3);
+        game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("the default map");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        for (i, stage) in AirStage::ALL.into_iter().enumerate() {
+            let at = Position::new(100.0 + 80.0 * i as f32, 200.0);
+            let mut craft = Aircraft::arrive(10 + i as u32, 0, Sortie::Jet, at, Position::new(at.x, at.y + 50.0), &t);
+            craft.stage = stage;
+            game.world.spawn((craft,));
+        }
+        let marks = Marks::gather(&game, &[0], &[], Rectangle::new(0.0, 0.0, w, h));
+        assert_eq!(marks.aircraft.len(), AirStage::ALL.len());
+        let blinking: Vec<AirStage> = AirStage::ALL.into_iter().zip(&marks.aircraft).filter(|(_, mark)| mark.2).map(|(stage, _)| stage).collect();
+        assert_eq!(blinking, vec![AirStage::Attack]);
+        // In the dark half of the blink the attacking one's mark is gone
+        // and the other four stand.
+        let team = crate::tank::team_color(0);
+        let rect = Rectangle::new(0.0, 0.0, 160.0, 90.0);
+        let fills = |time: f32| {
+            let pic = picture(&Marks { time, seats: Vec::new(), ..marks.clone() }, rect, (w, h), 10, &t);
+            pic.fills.iter().filter(|f| (f.color.r, f.color.g, f.color.b) == (team.r, team.g, team.b)).count()
+        };
+        let (lit, dark) = (fills(0.0), fills(0.5 / (t.indicator_pulse_hz * 2.0) + 0.01));
+        assert!(lit > 0 && lit % AirStage::ALL.len() == 0, "{lit} fills for five marks");
+        assert_eq!(dark, lit / AirStage::ALL.len() * 4, "{dark} of {lit} fills in the dark half");
+    }
+
     /// The phone rule: a phone's short side - in points, or in millimetres
     /// where the platform says - turns the minimap off unless the knob
     /// says always; a tablet and a desktop show it unless the knob says

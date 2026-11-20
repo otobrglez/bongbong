@@ -1,0 +1,100 @@
+# Air range: a field for trying air support out (docs/air-support.md) - the
+# helicopter that escorts the tank that called it and the jet that runs in,
+# comes back and circles. Not shipped: open it with `-m maps/air-range.toml`.
+# Hand-authored: an editor re-save would drop these comments.
+#
+# 60 x 34 cells, a field map (the camera follows the tank), so an aircraft
+# works on what is on the seat's screen and the west is out of the east's
+# sight.
+#
+# - The pad, west: the start with three helicopter crates above it and
+#   three jet crates below. A crate comes back 15 s after it is taken, so
+#   there is always another; a second one taken while a sortie is up
+#   queues (`+1` in the HUD's box).
+# - The waves: ten waves of two tanks roll in through the two gates on the
+#   east edge and come for the tank - moving targets for the jet's lock
+#   and the helicopter's salvos. The first takes a while to cross the
+#   field: a jet called at once arrives with nothing on the screen, circles
+#   the tank once and leaves.
+# - The two blocks mid-field, brick above and iron below: drive round them
+#   and the helicopter comes over the top.
+# - The tower yards, east: north a gun tower, a tesla and a bio slush
+#   mortar well apart; south two teslas a few cells from each other and a
+#   gun tower - the helicopter has to hold off both teslas at once, and a
+#   jet's two bombs land astride the one it locks.
+# - More crates out in the field - a helicopter north, a jet south, one of
+#   each further east - and health along the middle row.
+#
+# For a field with no tanks at all - only the towers, and the west quiet
+# for as long as wanted - add `--spawn band -e 0`. `--wave-size 4` makes
+# the waves a crowd. The dev build (`just run-dev -m maps/air-range.toml`)
+# lists what flies in `snapshot`: `aircraft` and `air_calls`.
+
+version = 1
+size = [60, 34]
+mission.kind = "destroy"
+spawn.kind = "waves"
+spawn.waves = 10
+spawn.size = 2
+spawn.growth = 0
+spawn.tier_start = "light"
+spawn.tier_end = "medium"
+
+cells."8,17" = { kind = "start" }
+cells."59,9" = { kind = "gate" }
+cells."59,24" = { kind = "gate" }
+
+# The pad: helicopters above the start, jets below.
+cells."5,14" = { kind = "pickup", pickup = "air_heli" }
+cells."8,14" = { kind = "pickup", pickup = "air_heli" }
+cells."11,14" = { kind = "pickup", pickup = "air_heli" }
+cells."5,20" = { kind = "pickup", pickup = "air_jet" }
+cells."8,20" = { kind = "pickup", pickup = "air_jet" }
+cells."11,20" = { kind = "pickup", pickup = "air_jet" }
+
+# Out in the field.
+cells."30,5" = { kind = "pickup", pickup = "air_heli" }
+cells."30,29" = { kind = "pickup", pickup = "air_jet" }
+cells."38,17" = { kind = "pickup", pickup = "air_jet" }
+cells."52,17" = { kind = "pickup", pickup = "air_heli" }
+cells."3,17" = { kind = "pickup", pickup = "health" }
+cells."26,17" = { kind = "pickup", pickup = "health" }
+cells."45,17" = { kind = "pickup", pickup = "health" }
+
+# The brick block.
+cells."20,9" = { kind = "wall", material = "brick" }
+cells."21,9" = { kind = "wall", material = "brick" }
+cells."22,9" = { kind = "wall", material = "brick" }
+cells."23,9" = { kind = "wall", material = "brick" }
+cells."20,10" = { kind = "wall", material = "brick" }
+cells."21,10" = { kind = "wall", material = "brick" }
+cells."22,10" = { kind = "wall", material = "brick" }
+cells."23,10" = { kind = "wall", material = "brick" }
+cells."20,11" = { kind = "wall", material = "brick" }
+cells."21,11" = { kind = "wall", material = "brick" }
+cells."22,11" = { kind = "wall", material = "brick" }
+cells."23,11" = { kind = "wall", material = "brick" }
+
+# The iron block.
+cells."20,23" = { kind = "wall", material = "iron" }
+cells."21,23" = { kind = "wall", material = "iron" }
+cells."22,23" = { kind = "wall", material = "iron" }
+cells."23,23" = { kind = "wall", material = "iron" }
+cells."20,24" = { kind = "wall", material = "iron" }
+cells."21,24" = { kind = "wall", material = "iron" }
+cells."22,24" = { kind = "wall", material = "iron" }
+cells."23,24" = { kind = "wall", material = "iron" }
+cells."20,25" = { kind = "wall", material = "iron" }
+cells."21,25" = { kind = "wall", material = "iron" }
+cells."22,25" = { kind = "wall", material = "iron" }
+cells."23,25" = { kind = "wall", material = "iron" }
+
+# The north yard: three towers well apart.
+cells."47,5" = { kind = "gun_tower", side = "enemy" }
+cells."52,12" = { kind = "tesla", side = "enemy" }
+cells."43,13" = { kind = "bio_slush", side = "enemy" }
+
+# The south yard: two teslas close together and a gun tower.
+cells."46,28" = { kind = "tesla", side = "enemy" }
+cells."49,30" = { kind = "tesla", side = "enemy" }
+cells."53,27" = { kind = "gun_tower", side = "enemy" }

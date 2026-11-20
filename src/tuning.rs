@@ -655,10 +655,9 @@ tunables! {
         /// the sprite's own design-pixel grid, each whole block the pixel
         /// under its centre (`turn_corner`). 2: sheared on that grid,
         /// every pixel of the sprite kept and moved whole. A quarter turn
-        /// is the plain blit in every mode. Plain is the default: clean
-        /// reads better on small hulls and tower tops and worse on a
-        /// large detailed hull mid-turn. Live.
-        turn_mode: i32 = 0 in 0 ..= 2;
+        /// is the plain blit in every mode. Clean is the default, chosen
+        /// by play. Live.
+        turn_mode: i32 = 1 in 0 ..= 2;
         /// In `turn_mode` 1, how far a design pixel is cut at a corner
         /// whose two neighbours are one colour, along its two edges: 0
         /// never, 0.5 the diagonal between the edges' middles, 1 the whole
@@ -1604,38 +1603,78 @@ tunables! {
         air_edge_margin_px: f32 = 96.0 in 0.0 ..= 480.0;
         /// The helicopter's flying height: what it is drawn lifted by.
         air_heli_height_px: f32 = 40.0 in 0.0 ..= 160.0;
-        /// The helicopter's speed in and out.
-        air_heli_speed: f32 = 220.0 in 20.0 ..= 1000.0;
-        /// How far short of its first target the helicopter hovers, back
-        /// towards where it came in.
+        /// The helicopter's top speed (px/s): over `tank_speed`, so it
+        /// catches a tank driving flat out.
+        air_heli_speed: f32 = 320.0 in 20.0 ..= 1000.0;
+        /// How fast the helicopter's velocity changes (px/s^2): speeding
+        /// up, swerving, and braking into its station.
+        air_heli_accel: f32 = 700.0 in 20.0 ..= 5000.0;
+        /// How fast the helicopter's nose turns (deg/s).
+        air_heli_turn_rate_deg: f32 = 240.0 in 10.0 ..= 1440.0;
+        /// How far from its seat's tank the helicopter holds station:
+        /// toward the nearest target in view, or on the side of the tank
+        /// it is already on with none.
+        air_heli_escort_px: f32 = 120.0 in 0.0 ..= 480.0;
+        /// The helicopter holds its station no nearer its target than
+        /// this, round the tank's flank when the target is closer: over a
+        /// tesla's `tesla_range`, whose arc downs it at once.
         air_heli_standoff_px: f32 = 160.0 in 0.0 ..= 480.0;
-        /// Salvos the helicopter fires from its hover, each at the nearest
-        /// enemy in the seat's sight box.
-        air_heli_salvos: i32 = 4 in 1 ..= 12;
+        /// How far past `air_heli_escort_px` from its tank the helicopter
+        /// still counts as with it: no further than both together it has
+        /// arrived, and only there does it fire.
+        air_heli_station_slack_px: f32 = 64.0 in 0.0 ..= 480.0;
+        /// With nothing to shoot at the helicopter's nose follows its
+        /// flight only while it flies faster than this (px/s); slower, it
+        /// keeps the way it faces.
+        air_heli_nose_speed: f32 = 60.0 in 0.0 ..= 1000.0;
+        /// How far off its target the helicopter's nose may point when it
+        /// fires (deg).
+        air_heli_aim_deg: f32 = 20.0 in 1.0 ..= 180.0;
+        /// Salvos the helicopter arrives with
+        /// (`air_support::Aircraft::ammo`), each fired at the nearest enemy
+        /// in the seat's sight box: out of them, it goes home.
+        air_heli_salvos: i32 = 8 in 1 ..= 24;
         /// Rockets in a salvo: seeker missiles (`missile.rs`) off its pods.
-        air_heli_salvo_rockets: i32 = 4 in 1 ..= 8;
-        /// Seconds from its arrival at the hover to the first salvo, and
-        /// between salvos.
-        air_heli_salvo_seconds: f32 = 0.9 in 0.1 ..= 5.0;
+        air_heli_salvo_rockets: i32 = 2 in 1 ..= 8;
+        /// Seconds from its arrival to its first salvo, and between
+        /// salvos.
+        air_heli_salvo_seconds: f32 = 1.6 in 0.1 ..= 10.0;
         /// Bullets that bring the helicopter down. Anything else that
         /// strikes the air downs it at once.
         air_heli_hits: i32 = 16 in 1 ..= 200;
         /// Half the helicopter's body (px): its strike box's width.
         air_heli_hit_half_px: f32 = 22.0 in 4.0 ..= 64.0;
-        /// How long an aircraft that found no enemy hovers over the seat
-        /// before it leaves.
+        /// How long the helicopter stays with its tank after its last
+        /// salvo, the rockets on their way, before it turns for home.
         air_heli_linger_seconds: f32 = 1.0 in 0.0 ..= 5.0;
         /// The jet's flying height.
         air_jet_height_px: f32 = 64.0 in 0.0 ..= 200.0;
-        /// The jet's speed: one straight pass, a fifth faster than the
-        /// helicopter's `air_heli_speed`.
+        /// The jet's speed, the whole sortie through: it never slows and
+        /// never hovers.
         air_jet_speed: f32 = 264.0 in 100.0 ..= 2000.0;
-        /// Targets the jet's run is aimed through the middle of, nearest
-        /// first.
-        air_jet_targets: i32 = 3 in 1 ..= 8;
-        /// Cannon bursts in the gun run.
+        /// How fast the jet's heading turns at full bank, the only way it
+        /// ever changes. Its turn circle's radius is its speed over this in
+        /// radians: 151 px at the defaults.
+        air_jet_turn_deg_per_s: f32 = 100.0 in 20.0 ..= 360.0;
+        /// Seconds the jet takes to roll from level to full bank
+        /// (`air_support::Aircraft::bank`): what its sprite shows, never how
+        /// it turns.
+        air_jet_bank_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// Attack passes the jet arrives with (`air_support::Aircraft::ammo`):
+        /// out of them, it goes home.
+        air_jet_passes: i32 = 2 in 1 ..= 6;
+        /// How far ahead of a moving target the jet points its nose: this
+        /// share of the target's velocity over the time left to the bombs'
+        /// release. 0 flies straight at where the target is.
+        air_jet_aim_lead: f32 = 1.0 in 0.0 ..= 2.0;
+        /// The cannon fires with the jet's nose within this of its aim
+        /// point.
+        air_jet_gun_cone_deg: f32 = 8.0 in 1.0 ..= 45.0;
+        /// Cannon bursts in a run, at most.
         air_jet_gun_bursts: i32 = 6 in 1 ..= 16;
-        /// The gun run's stripe on the ground, ending on the aim point.
+        /// The cannon's stripe on the ground, ending on the target: it opens
+        /// fire this far plus `air_jet_gun_ahead_px` out, and from nearer
+        /// the stripe is as long as the run it had.
         air_jet_gun_len_px: f32 = 192.0 in 0.0 ..= 640.0;
         /// How far ahead of the jet a burst lands.
         air_jet_gun_ahead_px: f32 = 160.0 in 0.0 ..= 640.0;
@@ -1645,10 +1684,36 @@ tunables! {
         air_jet_gun_damage: f32 = 9.0 in 0.0 ..= 100.0;
         /// One burst's shove.
         air_jet_gun_knockback: f32 = 60.0 in 0.0 ..= 800.0;
-        /// The two bombs land this far apart, astride the aim point.
+        /// The two bombs land this far apart along the run, astride where
+        /// the target is when they go.
         air_jet_bomb_spacing_px: f32 = 48.0 in 0.0 ..= 256.0;
-        /// How far short of the aim point the jet lets them go.
+        /// How far short of the target the jet lets them go.
         air_jet_bomb_lead_px: f32 = 96.0 in 0.0 ..= 640.0;
+        /// The bombs go only with the target within this of the jet's nose.
+        air_jet_bomb_cone_deg: f32 = 20.0 in 1.0 ..= 90.0;
+        /// After a pass with passes left the jet flies straight on this far
+        /// past its target before it turns back, and this far on a missed
+        /// run: `air_jet_gun_ahead_px` plus `air_jet_gun_len_px` or more
+        /// gives the way back a whole cannon stripe. Off the field it turns
+        /// as soon as the way back is `air_jet_gun_ahead_px` long.
+        air_jet_extend_px: f32 = 360.0 in 0.0 ..= 1200.0;
+        /// A target farther round from the jet's nose than this is astern:
+        /// either way round is about as far, so it turns the way that keeps
+        /// it nearer the field.
+        air_jet_astern_deg: f32 = 135.0 in 90.0 ..= 180.0;
+        /// Runs the jet may break off and fly again, its target inside its
+        /// turn circle. One more and it goes home.
+        air_jet_go_arounds: i32 = 2 in 0 ..= 8;
+        /// The ring the jet circles its seat on with nothing to attack, from
+        /// where the seat stands. Under its turn circle's radius it cannot
+        /// hold the ring and flies its tightest turn instead.
+        air_jet_orbit_px: f32 = 176.0 in 32.0 ..= 640.0;
+        /// How many times its nose comes round on that ring before it
+        /// leaves.
+        air_jet_orbit_turns: f32 = 1.0 in 0.25 ..= 4.0;
+        /// The longest a jet stays: past this it flies straight on off the
+        /// field, whatever it was doing.
+        air_jet_sortie_seconds: f32 = 25.0 in 5.0 ..= 120.0;
         /// One bomb's reach.
         air_jet_bomb_radius_px: f32 = 64.0 in 8.0 ..= 256.0;
         /// One bomb's damage at its centre, rolled between these.
@@ -3163,11 +3228,22 @@ tunables! {
         blast_screen_flash_alpha: f32 = 0.12 in 0.0 ..= 1.0;
         /// How long that screen flash takes to fade.
         blast_screen_flash_seconds: f32 = 0.06 in 0.0 ..= 0.5;
+        /// How opaque a hit's white silhouette over a hull or a bong is at
+        /// its first step (`fx::Flash`, `Game::paint_standing_hit`): 1
+        /// hides the sprite under it for those frames, less lets its art
+        /// read through under sustained fire.
+        hit_flash_alpha: f32 = 0.85 in 0.0 ..= 1.0;
+        /// Flecks of its own body a bong throws when a shot lands on it
+        /// (`fx.rs`), before `fx_density`.
+        bong_hit_flecks: i32 = 6 in 0 ..= 40;
         /// Minimum spacing between two whole-screen flashes, so a barrel
         /// chain or a multi-kill reads as one flash rather than a strobe.
         blast_screen_flash_min_gap_seconds: f32 = 0.35 in 0.0 ..= 2.0;
         /// Opacity of the pulsing glow on a barrel whose fuse is lit.
         barrel_fuse_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
+        /// Opacity, at its brightest flicker, of the one daylight glow a
+        /// fire of burning ground cells throws on the ground around it.
+        fire_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
         /// Opacity of the burn mark a blast leaves on the ground.
         scorch_opacity: f32 = 1.0 in 0.0 ..= 1.0;
         /// Seconds a fresh scorch mark takes to fade in under the fireball.
@@ -3438,6 +3514,12 @@ tunables! {
         /// starts over (the view cuts to the new start); the follow
         /// camera, the arrows and every effect of the fight itself stay.
         reduce_motion: i32 = 0 in 0 ..= 2;
+        /// What reduced motion keeps of a whole-screen flash - a kill's
+        /// (`blast_screen_flash_alpha`), a lightning strike's - as a share
+        /// of its strength (`motion::flash`); 0 is none. A lit fuse's
+        /// strobe is slowed to two held steps whatever this says
+        /// (`motion::beat`).
+        reduced_flash_scale: f32 = 0.4 in 0.0 ..= 1.0;
         /// The follow camera on a field map (`follow.rs`,
         /// docs/large-maps-follow-camera.md section 6): how far the seat
         /// moves inside the view on an axis, in pixels either way, before
@@ -4288,9 +4370,10 @@ tunables! {
         /// is in, so an arena's shake is every ripple's whole. 0 stops the
         /// shake at the margin.
         camera_shake_fade_screens: f32 = 1.0 in 0.0 ..= 20.0;
-        /// Muzzle-flash heat haze (muzzle_flash.fs): a one-sided outward
-        /// puff at the barrel. Hits full strength at the leading edge, so
-        /// tuned lower than the shockwave for similar visual intensity.
+        /// Muzzle-flash heat haze (shockwave.fs, the `puff` terms): a
+        /// one-sided outward puff at the barrel. Hits full strength at the
+        /// leading edge, so tuned lower than the shockwave for similar
+        /// visual intensity.
         muzzle_flash_duration: f32 = 0.12 in 0.01 ..= 2.0;
         /// Front growth, in standard field heights a second
         /// (`shockwave::RIPPLE_FRAME`).
@@ -4299,13 +4382,8 @@ tunables! {
         muzzle_flash_width: f32 = 0.032 in 0.0 ..= 0.5;
         /// How hard the puff shoves the image, in standard field heights.
         muzzle_flash_strength: f32 = 0.015 in 0.0 ..= 0.5;
-        /// Half-extent (world px) of the quad the muzzle flash is drawn
-        /// into - it must hold the puff's whole reach, speed x duration
-        /// plus the band in standard field heights of 544 px (about 76 px
-        /// at the defaults), or the puff visibly clips.
-        muzzle_flash_quad_radius: f32 = 90.0 in 10.0 ..= 500.0;
-        /// Shell-impact flash (impact.fs): a one-sided punch plus a warm
-        /// spark at the hit point - a sharp "thwack".
+        /// Shell-impact flash (shockwave.fs, the `punch` terms): a thin
+        /// ring punched out from the hit point - a sharp "thwack".
         impact_flash_duration: f32 = 0.14 in 0.01 ..= 2.0;
         /// Pulse growth, in standard field heights a second
         /// (`shockwave::RIPPLE_FRAME`).
@@ -4314,11 +4392,6 @@ tunables! {
         impact_flash_width: f32 = 0.02 in 0.0 ..= 0.5;
         /// How hard the pulse bends the image, in standard field heights.
         impact_flash_strength: f32 = 0.018 in 0.0 ..= 0.5;
-        /// Half-extent (world px) of the impact flash's quad - it must hold
-        /// the punch's whole reach, speed x duration plus the band in
-        /// standard field heights of 544 px (about 95 px at the defaults),
-        /// or the punch visibly clips.
-        impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;
 
         // --- what a moving hull throws (fx.rs, `Game::driving`) ---
         /// Dust puffs a second a hull of chassis press 1 raises at its top
