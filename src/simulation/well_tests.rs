@@ -582,12 +582,14 @@ fn the_bong_slides_in_cannot_hop_and_is_flung_out() {
     let (pulled, hop_end, position) = game.world.query::<&Bong>().iter().next().map(|f| (f.pulled, f.hop_end, f.position)).unwrap();
     assert!(!pulled);
     assert!(hop_end.distance_to(centre) > position.distance_to(centre) - 1.0, "hopped out");
+    let (health, max) = game.world.query::<&Bong>().iter().next().map(|f| (f.health, f.max_health)).unwrap();
+    assert!(health < max, "the seat's own well hurt its own bong: {health} of {max}");
 }
 
 // --- the collapse ---------------------------------------------------------
 
 #[test]
-fn the_collapse_flings_hulls_and_hurts_only_the_other_side() {
+fn the_collapse_flings_and_hurts_every_hull_the_owners_included() {
     let mut game = round("");
     let enemy = still_enemy(&mut game, MID + Vec2::new(60.0, 0.0), 1, 0.0);
     game.place_tank(seat(&game), MID - Vec2::new(60.0, 0.0), Some(0.0)).expect("placed");
@@ -602,9 +604,9 @@ fn the_collapse_flings_hulls_and_hurts_only_the_other_side() {
     }
     assert_eq!(collapsed(&seen).len(), 1);
     assert!(seen.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Enemy { .. }, cause: HitCause::Well, .. })));
-    assert!(!seen.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Player { .. }, .. })), "the owner's side unhurt");
+    assert!(seen.iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Player { .. }, cause: HitCause::Well, .. })), "the owner's side is hurt too");
     assert!(with_tank(&game.world, enemy, |t| t.damage) > eh);
-    assert_eq!(with_tank(&game.world, seat(&game), |t| t.damage), sh);
+    assert!(with_tank(&game.world, seat(&game), |t| t.damage) > sh);
     idle(&mut game, 6);
     assert!(pos(&game, enemy).distance_to(MID) > 30.0 || pos(&game, seat(&game)).distance_to(MID) > 30.0, "flung out");
 }

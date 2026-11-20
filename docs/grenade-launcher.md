@@ -43,10 +43,22 @@ weapons along the way").
   `grenade_blink_hz_start` to
   `grenade_blink_hz_end` across `grenade_fuse_seconds` (6), so how fast it
   flashes says how soon it goes. Then a blast: `grenade_blast_radius`,
-  falloff damage to the side opposing whoever launched it, a shove for
-  everyone in range, the opposing bong hurt, tiles cracked, drums set off,
-  crates broken - and a shockwave (`grenade_shock`, with the screen flash).
-  Kicking a grenade back at its launcher only shoves them.
+  falloff damage and a shove for every hull in range - the launcher, its
+  teammate and the enemy alike - and for either bong, tiles cracked, drums
+  set off, crates broken - and a shockwave (`grenade_shock`, with the
+  screen flash). Friendly fire is full (docs/november-26-rebuild-upgrade.md
+  decision 2): a grenade kicked back at its launcher, or one that bounces
+  back off a wall, hurts them as it would an enemy.
+- **The ring.** For the last `blast_ring_seconds` (1) of the fuse its
+  reach is drawn on the ground round it, one 2 px block wide at
+  `grenade_blast_radius`, in the band's flash ramp, coming in through the
+  Bayer pattern and burning from red to white as the fuse runs out
+  (`Game::blast_rings`, `blast::draw_blast_ring`, painted last on the
+  floor). Whatever stands inside it when it goes off is hurt - a seat, a
+  teammate, the bong. A seat's missiles in their dive and its drones in
+  theirs ring their own reach the same way (docs/fpv-swarm.md "The
+  ring"). The replica rings a grenade from the position and fuse a
+  snapshot carries.
 
 ## Where it lives
 

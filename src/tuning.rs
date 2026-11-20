@@ -913,8 +913,8 @@ tunables! {
         /// dive straight ahead.
         missile_max_flight_seconds: f32 = 5.2 in 0.5 ..= 30.0;
         /// Each missile's blast: radius (px), centre damage (falling off
-        /// linearly to 0 at the edge) and the shove. Only the side opposing
-        /// the shooter is hurt; everything in range is shoved, and tiles
+        /// linearly to 0 at the edge) and the shove. Every hull and bong in
+        /// range is hurt and shoved, the shooter's side included, and tiles
         /// crack like under any blast.
         missile_blast_radius: f32 = 44.0 in 0.0 ..= 400.0;
         missile_blast_damage_min: f32 = 7.0 in 0.0 ..= 100.0;
@@ -996,9 +996,9 @@ tunables! {
         grenade_blink_hz_start: f32 = 1.5 in 0.1 ..= 30.0;
         grenade_blink_hz_end: f32 = 10.0 in 0.1 ..= 30.0;
         /// The blast: radius (px), centre damage (falling off linearly to
-        /// 0 at the edge) and the shove. Only the side opposing the
-        /// launcher is hurt; everything in range is shoved, and tiles crack
-        /// like under any blast.
+        /// 0 at the edge) and the shove. Every hull and bong in range is
+        /// hurt and shoved, the launcher and its own bong included, and
+        /// tiles crack like under any blast.
         grenade_blast_radius: f32 = 128.0 in 0.0 ..= 400.0;
         grenade_blast_damage_min: f32 = 30.0 in 0.0 ..= 100.0;
         grenade_blast_damage_max: f32 = 50.0 in 0.0 ..= 100.0;
@@ -1052,8 +1052,8 @@ tunables! {
         sonic_skid_grip_floor: f32 = 0.4 in 0.05 ..= 1.0;
         /// The longest a hull is knocked off its tracks (seconds).
         sonic_skid_max_seconds: f32 = 1.2 in 0.0 ..= 5.0;
-        /// Damage at the pivot to the side opposing the shooter, falling
-        /// off like the shove; no roll.
+        /// Damage at the pivot to every hull the wave reaches, the
+        /// shooter's side included, falling off like the shove; no roll.
         sonic_damage: f32 = 4.0 in 0.0 ..= 50.0;
         /// The shooter's kick back along its facing.
         sonic_recoil_speed: f32 = 30.0 in 0.0 ..= 200.0;
@@ -1298,8 +1298,9 @@ tunables! {
         fpv_max_flight_seconds: f32 = 6.0 in 0.5 ..= 30.0;
         /// With nothing to lock, how far ahead of the launcher it dives.
         fpv_aim_px: f32 = 192.0 in 16.0 ..= 1000.0;
-        /// Its burst's damage at the centre to the side opposing the
-        /// launcher, falling to nothing at the radius; no roll.
+        /// Its burst's damage at the centre to every hull and bong it
+        /// reaches, the launcher's side included, falling to nothing at the
+        /// radius; no roll.
         fpv_damage: f32 = 8.0 in 0.0 ..= 100.0;
         /// Its burst's reach (px).
         fpv_blast_radius_px: f32 = 44.0 in 0.0 ..= 200.0;
@@ -1542,8 +1543,9 @@ tunables! {
         well_fling_max_speed: f32 = 480.0 in 0.0 ..= 508.0;
         /// How hard a heavy chassis resists the fling.
         well_fling_mass_exponent: f32 = 1.5 in 0.0 ..= 4.0;
-        /// The collapse's damage at the centre to the side opposing its
-        /// owner, falling to nothing at the reach; no roll.
+        /// The collapse's damage at the centre to every hull and bong in
+        /// its reach, the owner's included, falling to nothing at the
+        /// reach; no roll.
         well_collapse_damage: f32 = 10.0 in 0.0 ..= 100.0;
         /// How fast the collapse throws a grenade off the ring (px/s).
         well_fling_grenade_speed: f32 = 220.0 in 0.0 ..= 1000.0;
@@ -1721,6 +1723,12 @@ tunables! {
         air_jet_bomb_damage_max: f32 = 85.0 in 0.0 ..= 200.0;
         /// One bomb's shove.
         air_jet_bomb_knockback: f32 = 240.0 in 0.0 ..= 1200.0;
+        /// What an aircraft keeps between its blast and a seat's hull or
+        /// the players' bong (px), past the blast's own reach: a burst, a
+        /// bomb or a salvo that would land nearer one is held
+        /// (`air_support::AirView::clear`), as a tower holds fire with a
+        /// friend in line.
+        air_hold_margin_px: f32 = 8.0 in 0.0 ..= 128.0;
     }
 
     group flamethrower {
@@ -2023,7 +2031,10 @@ tunables! {
         ram_damage_cooldown: f32 = 0.5 in 0.0 ..= 5.0;
         /// Two-player rounds: what one player's shell, beam, bullet or ram
         /// deals to the other player, as a factor of the normal roll. 1 is
-        /// full friendly fire, 0 makes teammates harmless to each other.
+        /// full friendly fire, the rule (docs/november-26-rebuild-upgrade.md
+        /// decision 2); 0 makes those harmless to each other. A blast, the
+        /// hammer, the well, a wreck's chip and spall land in full whatever
+        /// this says.
         friendly_fire_damage_factor: f32 = 1.0 in 0.0 ..= 2.0;
         /// Extra half-extent (px) on an enemy's hull and turret boxes for a
         /// player's shot only (`hits::Terrain::sweep`), so a shell whose
@@ -2062,16 +2073,16 @@ tunables! {
         /// (`Tank::last_hit_by`): an enemy that dies later than this after
         /// the seat last touched it - in lava, to a drum - is nobody's.
         kill_credit_seconds: f32 = 10.0 in 0.0 ..= 600.0;
-        /// A tank's death deals a small splash of damage to opposing tanks
-        /// within this radius (px), on top of the shockwave visual.
+        /// A tank's death deals a small splash of damage to every tank and
+        /// bong within this radius (px), on top of the shockwave visual.
         explosion_radius: f32 = 110.0 in 0.0 ..= 600.0;
-        /// Splash damage range - a chip, not a second kill shot; never chips
-        /// the dead tank's own side.
+        /// Splash damage range - a chip, not a second kill shot - to both
+        /// sides and both bongs alike.
         explosion_damage_min: f32 = 3.0 in 0.0 ..= 100.0;
         explosion_damage_max: f32 = 8.0 in 0.0 ..= 100.0;
-        /// The explosion's outward shove isn't side-restricted: every live
-        /// tank in range gets pushed, full at ground zero tapering linearly
-        /// to nothing at `explosion_radius`.
+        /// The explosion's outward shove: every live tank in range gets
+        /// pushed, full at ground zero tapering linearly to nothing at
+        /// `explosion_radius`.
         explosion_knockback_speed: f32 = 90.0 in 0.0 ..= 500.0;
         /// A wreck burns for this long, then settles into a static charred
         /// hulk.
@@ -3035,6 +3046,10 @@ tunables! {
         /// Fraction of the blast radius inside which tall grass is
         /// flattened (the same `crush` a hull drives).
         blast_grass_flatten: f32 = 0.6 in 0.0 ..= 1.5;
+        /// Seconds before a seat's blast goes off that its radius ring
+        /// shows on the ground (`blast::draw_blast_ring`): a grenade's last
+        /// seconds of fuse, a missile's and a drone's dive. 0 draws none.
+        blast_ring_seconds: f32 = 1.0 in 0.0 ..= 5.0;
         /// Trampled cover (docs/ground-memory.md "Trampled cover"): the
         /// passes of a hull's centre into a tall-grass, bush or reed cell
         /// that flatten it for the round - it hides nobody from then on.

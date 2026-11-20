@@ -127,6 +127,13 @@ probe-waves:
 # (0 before) is maze, seed 0x3ea: a tank queued behind two friends parked
 # at their slots for 22.8 s against a 21.3 s budget - the queue working,
 # not a stuck tank; raised on Oto's decision of 2026-11-20.
+# Re-read 2026-11-20 (BB-188) with friendly fire full from every source
+# (every blast hurts every side and both bongs, the hammer and the well
+# their own, spall a teammate, a bong hops from a blast, air support
+# holds what would reach a seat or the bong): no round of these moved -
+# the nine maps' total is 46 as before, every kind's maximum as before -
+# so every ceiling stands (docs/gameplay-verification-design.md, the
+# BB-188 re-baseline).
 # Extra arguments go to every run - a weapon's `--crate <kind>` or an armed
 # `--tuning <file>` (docs/sonic-hammer.md "Probe") - under the same
 # ceilings. How the maps are run is `_probe-maps`; CI runs this recipe
@@ -178,6 +185,11 @@ probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames
 # jitter=15 (14 before, choke; 1-4 px shuffles) and spin=3 (2 before,
 # maze; it came with the fire profiles)
 # (docs/gameplay-verification-design.md, the BB-179 re-baseline).
+# Re-read 2026-11-20 (BB-188) with friendly fire full (see
+# `fixture_ceilings`): the wreck's chip on its own pack re-timed four
+# maps' rounds (choke, props, tight-corridors, towers: a few shots more
+# or less, towers jitter 5 -> 4 and churn 9 -> 10), the nine maps' total
+# stayed 319 and no kind's maximum moved, so every ceiling stands.
 # Re-baseline as `probe-fixtures` is: on purpose, never to go green. CI
 # runs this recipe too.
 survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=15 --budget staircase=14 --budget spin=3 --budget churn=25 --budget clustering=3 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 --budget offbox-fire=0"
@@ -329,6 +341,10 @@ _probe-maps name maps sweep:
 # jitter=6 (7 before) is harbor-lights, re-read 2026-11-20 (BB-179) with
 # the enemies' changes in (see `survive_ceilings`): the maps' total fell
 # from 212 to 198.
+# Re-read 2026-11-20 (BB-188) with friendly fire full (see
+# `fixture_ceilings`): an enemy's missile now hurts its own pack, which
+# moved only castle-moat's fire counts (enemy hits on enemies 2 -> 4);
+# the seven maps' total stayed 198 and every ceiling stands.
 # How the maps are run is `_probe-maps`: one per core, about a minute in a
 # debug build. CI runs this recipe (.github/workflows/ci.yml).
 field_ceilings := "--budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=6 --budget staircase=30 --budget spin=12 --budget churn=43 --budget clustering=1 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=1 --budget offbox-fire=0"

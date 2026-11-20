@@ -21,7 +21,7 @@ that will ask if you want to play in different modes.
 - Map should have at least one player start
 - If initial location for second player is not given; place second player near first player 1 start. Obviously don't overlap tanks.
 - Game is lost if bong is killed (as with single player missions) or if both player tanks are killed.
-- Friendly fire is possibility.
+- Friendly fire is full damage from every source (docs/november-26-rebuild-upgrade.md decision 2).
 
 ## Two player HUD
 
@@ -60,8 +60,18 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   both players.
 - **Rules.** Lost when every player tank is a wreck or the bong dies; one
   wreck of two stays on the field, its keys inert. Friendly fire is full
-  damage scaled by the `friendly_fire_damage_factor` knob (1.0), rams
-  included. A bong bite never finishes either player off.
+  damage from every source (docs/november-26-rebuild-upgrade.md decision
+  2, BB-188): a shell, a beam, a bullet or a ram scaled by the
+  `friendly_fire_damage_factor` knob (1.0); a grenade, a missile, a drone,
+  the jet's bombs, the hammer, the well's collapse, a wreck's chip and
+  spall in full, each to the seat that set it off, its teammate and the
+  players' bong alike. A seat's grenade, missiles and drones ring their
+  reach on the ground before they go off (docs/grenade-launcher.md "The
+  ring"), and air support holds what would reach a seat or the bong
+  (docs/air-support.md). A seat's wreck a seat dealt never scores; the end
+  screen names it, and the players' bong a seat killed, as lost to
+  friendly fire (`RoundStats::friendly_fire`). A bong bite never finishes
+  either player off.
 - **AI.** Each enemy fights the nearer live, unconcealed player, switching
   only past `enemy_target_switch_margin_px` (96 px) so a pair at equal range
   does not flip the pack; a hit-alerted enemy still hunts a concealed

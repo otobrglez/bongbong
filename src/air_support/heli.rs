@@ -7,7 +7,8 @@
 //! follows it as it drives (`Escort`), and with a target in view takes the
 //! nearest one's side of the tank, no nearer it than
 //! `air_heli_standoff_px`, nose on it, firing a salvo every
-//! `air_heli_salvo_seconds` (`Attack`). It goes home (`Egress`) when its
+//! `air_heli_salvo_seconds` (`Attack`) - held while a seat or the players'
+//! bong stands within the salvo's reach of the target (`AirView::clear`). It goes home (`Egress`) when its
 //! ammunition is spent, on the end screen, when its seat has no tank, or
 //! when that tank is a wreck with nothing in view. No clock sends it home:
 //! with rockets left and nothing to shoot at it stays with its tank.
@@ -29,6 +30,13 @@ pub struct HeliState {
     pub since_salvo: f32,
     /// The way home (unit): set when it turns for it, zero until then.
     pub home: Vec2,
+}
+
+/// How far from the point it is fired at a salvo's blasts reach: a
+/// missile's blast past the widest of the tubes' spread
+/// (`Missile::impact_offset`).
+pub(super) fn salvo_reach(t: &Tuning) -> f32 {
+    t.missile_blast_radius + 1.5 * t.missile_impact_spread_px
 }
 
 /// One fixed step of a helicopter (`Aircraft::step`).
@@ -64,7 +72,9 @@ pub(super) fn step(a: &mut Aircraft, view: &AirView, dt: f32, t: &Tuning, acts: 
     let aim = mark.at - a.ground;
     point(a, aim, dt, t);
     let on_target = unit(aim).is_none_or(|dir| a.heading.dot(dir) >= crate::math::cos(t.air_heli_aim_deg.to_radians()));
-    if with_tank && on_target && a.ammo > 0 && a.heli.since_salvo >= t.air_heli_salvo_seconds {
+    // A salvo whose blasts would take in a seat or the players' bong is
+    // held until the target is clear of them.
+    if with_tank && on_target && a.ammo > 0 && a.heli.since_salvo >= t.air_heli_salvo_seconds && view.clear(mark.at, salvo_reach(t), t) {
         a.ammo -= 1;
         a.heli.since_salvo = 0.0;
         acts.push(AirAct::Salvo { from: a.drawn(), at: mark.at });
@@ -177,13 +187,13 @@ fn point(a: &mut Aircraft, toward: Vec2, dt: f32, t: &Tuning) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::air_support::{MarkKey, Sortie};
+    use crate::air_support::{AirFriend, MarkKey, Sortie};
 
     const DT: f32 = 1.0 / 60.0;
     const FIELD: (f32, f32) = (1088.0, 544.0);
 
     fn view(seat: Position, velocity: Vec2, marks: &[AirMark]) -> AirView<'_> {
-        AirView { seat: Some(seat), seat_velocity: velocity, seat_wrecked: false, marks, field: FIELD, live: true }
+        AirView { seat: Some(seat), seat_velocity: velocity, seat_wrecked: false, marks, friends: &[], field: FIELD, live: true }
     }
 
     /// A helicopter coming in over the left edge for a seat at `seat`.
@@ -249,6 +259,33 @@ mod tests {
             assert!((-1.0..=1.0).contains(&after.bank));
             assert!((after.ground - (before.ground + after.velocity * DT)).length() < 1e-3, "it moves as its velocity says");
         }
+    }
+
+    /// A salvo at a target with a seat or the players' bong inside its
+    /// reach is held, and spends nothing; once the friend is clear of it
+    /// the salvo goes.
+    #[test]
+    fn it_holds_a_salvo_that_would_reach_a_friend() {
+        let t = Tuning::default();
+        let seat = Position::new(200.0, 300.0);
+        let target = seat + Vec2::new(300.0, 0.0);
+        let marks = [tank(target)];
+        let mut a = heli(seat, &t);
+        let near = [AirFriend { at: target + Vec2::new(0.0, salvo_reach(&t)), reach: 16.0 }];
+        let mut fired = 0;
+        for _ in 0..(20.0 / DT) as u32 {
+            let mut acts = Vec::new();
+            a.step(&AirView { friends: &near, ..view(seat, Vec2::zero(), &marks) }, DT, &t, &mut acts);
+            fired += acts.len();
+        }
+        assert_eq!(fired, 0, "no salvo with a friend beside the target");
+        assert_eq!(a.ammo as i32, t.air_heli_salvos, "and none spent");
+        let clear = [AirFriend { at: target + Vec2::new(0.0, salvo_reach(&t) + 16.0 + t.air_hold_margin_px + 2.0), reach: 16.0 }];
+        let mut acts = Vec::new();
+        for _ in 0..(2.0 / DT) as u32 {
+            a.step(&AirView { friends: &clear, ..view(seat, Vec2::zero(), &marks) }, DT, &t, &mut acts);
+        }
+        assert!(!acts.is_empty(), "it fires once the friend is clear");
     }
 
     #[test]

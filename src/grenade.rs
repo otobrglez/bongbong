@@ -366,8 +366,9 @@ const BAND: [Color; 4] = [
     Color::new(0xE4, 0x42, 0x19, 255),
 ];
 
-/// The band on its flash: red burning up to white.
-const BAND_LIT: [Color; 4] = [
+/// The band on its flash: red burning up to white. A blast's radius ring
+/// burns in it too (`blast::draw_blast_ring`).
+pub(crate) const BAND_LIT: [Color; 4] = [
     Color::new(0xE4, 0x42, 0x19, 255),
     Color::new(0xFF, 0x42, 0x1A, 255),
     Color::new(0xFF, 0xE2, 0xA0, 255),

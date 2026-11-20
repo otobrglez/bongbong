@@ -115,6 +115,19 @@ level-number = LEVEL { $n } / { $count }
 result-time = TIME { $time }
 result-wrecks = DESTROYED { $n } / { $total }
 
+# Under those, 20 px in about 700 px, only when it happened: what the
+# players' side lost to its own fire - seats' tanks a seat wrecked, the
+# players' bong a seat killed, or both.
+result-friendly-tanks = LOST TO FRIENDLY FIRE: { $n ->
+    [one] 1 TANK
+   *[other] { $n } TANKS
+}
+result-friendly-bong = LOST TO FRIENDLY FIRE: THE BONG
+result-friendly-both = LOST TO FRIENDLY FIRE: { $n ->
+    [one] 1 TANK
+   *[other] { $n } TANKS
+} AND THE BONG
+
 # Over those once the last level is won, 28 px, about 700 px.
 result-all-clear = ALL { $count } LEVELS COMPLETE!
 

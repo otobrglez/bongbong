@@ -130,9 +130,22 @@ and the sprites.
     that means it always leaves. An armed sortie is seven to twelve seconds.
   - It fires only with its ground point over the field, and never on the
     step it arrives.
-- **Friendly fire.** None on hulls and bongs: every hit is
-  `Game::blast` with `BlastParams::ordnance`, which spares `Owner::same_side` - the seats
-  and the players' bong. Tiles take damage whoever's they are
+- **Friendly fire is full, so the aircraft hold.** Every hit is
+  `Game::blast` with `BlastParams::ordnance`, which hurts every hull and
+  every bong it reaches, the caller's own included
+  (docs/november-26-rebuild-upgrade.md decision 2). So an aircraft holds
+  what would reach a friend, as a tower holds fire with a friend in line:
+  the world shows it `AirView::friends` - every seat's live hull on the
+  field and the players' bong, each with its half extent - and
+  `AirView::clear` says whether a blast landing at a point reaches none of
+  them with `air_hold_margin_px` (8) to spare. The jet lets go no cannon
+  burst whose `air_jet_gun_radius_px` reaches one (the stripe walks on
+  past it) and no bomb whose `air_jet_bomb_radius_px` does; a release
+  with both bombs held spends no pass, and the jet comes round again. The
+  helicopter holds a salvo while a friend stands within its reach of the
+  target - `missile_blast_radius` past the tubes' widest spread
+  (1.5 x `missile_impact_spread_px`, `heli::salvo_reach`) - and spends
+  nothing until the target is clear. Tiles take damage whoever's they are
   (`damage_obstacle` with falloff) and crates break, as for a missile, so a
   player's own tower next to what is struck takes the splash - it is never
   aimed at.
@@ -361,7 +374,9 @@ is the same bits.
   outside the box; with nothing in view it stays, and attacks an enemy that
   comes; it brings a tesla down; a wrecked seat with nothing in view and
   the end screen send it home.
-- `air_jet_tests.rs`: it wrecks what is in the box and spares the rest; it
+- `air_jet_tests.rs`: it holds every burst and bomb that would reach the
+  players' bong, which comes through whole, and bombs the same target in
+  the open (`the_jet_holds_what_would_reach_the_players_bong`); it wrecks what is in the box and spares the rest; it
   follows a target moved after the run began and bombs a driving tank where
   it is; it comes back for a second pass; with no enemy in view it circles
   its seat once and leaves without firing; an enemy that shows while it

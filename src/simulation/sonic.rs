@@ -461,25 +461,24 @@ impl Game {
         }
     }
 
-    /// One hull the front reached at `d` px from `origin`: the side
-    /// opposing `shooter` takes `sonic_damage` times the falloff (no roll,
-    /// through a shield first) and logs a sonic `Hit`; a hull it does not
-    /// kill is knocked along the line from the pivot (`combat::knock`); the
-    /// hurt is `Game::hurt_tank`'s.
+    /// One hull the front reached at `d` px from `origin`, whichever side
+    /// it is on - the shooter's teammates and fellow enemies as surely as
+    /// the side it was fired at: it takes `sonic_damage` times the falloff
+    /// (no roll, through a shield first) and logs a sonic `Hit`; a hull it
+    /// does not kill is knocked along the line from the pivot
+    /// (`combat::knock`); the hurt is `Game::hurt_tank`'s.
     fn strike_hull(&mut self, f: &mut Frame, entity: Entity, d: f32, origin: Position, shooter: Owner, t: &Tuning) {
-        let Some((owner, at, dir, footing)) = self.world.get::<&Tank>(entity).ok().map(|tank| {
+        let Some((at, dir, footing)) = self.world.get::<&Tank>(entity).ok().map(|tank| {
             let line = tank.position - origin;
             let len = line.length();
             let dir = if len > 1e-3 { line / len } else { Dir::from_rotation(tank.rotation).unwrap_or(Dir::Up).vec() };
-            (tank.owner(), tank.position, dir, Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time))
+            (tank.position, dir, Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time))
         }) else {
             return;
         };
-        if !shooter.same_side(owner) {
-            let hurt = Hurt::hit(t.sonic_damage * sonic::falloff(t, d), HitCause::Sonic, Some(shooter), at);
-            if self.hurt_tank(f, entity, hurt).is_none_or(|l| l.killed) {
-                return;
-            }
+        let hurt = Hurt::hit(t.sonic_damage * sonic::falloff(t, d), HitCause::Sonic, Some(shooter), at);
+        if self.hurt_tank(f, entity, hurt).is_none_or(|l| l.killed) {
+            return;
         }
         let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
         knock(&mut self.physics, &mut f.shoves, &mut tank, dir, sonic::knock_at(t, d), footing);

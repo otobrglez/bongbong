@@ -215,7 +215,7 @@ impl Game {
                     if bong.is_dead() || !reached.contains(&entity) {
                         continue;
                     }
-                    bong.damage(t.flame_bong_damage_per_second * f.dt);
+                    bong.hurt_by(t.flame_bong_damage_per_second * f.dt, Some(jet.owner));
                     let entered = !self.flame_contacts.contains(&entity);
                     touched.push(entity);
                     if entered || bong.is_dead() {

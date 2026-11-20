@@ -13,8 +13,9 @@
 //! 1. no RNG: the edge it comes in from is hashed from the call's id, the
 //!    targets are sorted by distance and then slot, and everything else is
 //!    the round clock and the fixed step;
-//! 2. a call and an aircraft belong to a seat, and only enemies are hurt
-//!    (`side_blast`, `Owner::same_side`);
+//! 2. a call and an aircraft belong to a seat; its blasts hurt whoever
+//!    they reach (`Game::blast`), so it attacks only enemies and holds a
+//!    blast that would reach a seat or the players' bong (`AirView::clear`);
 //! 3. one sortie of a seat at a time: a call made while another of the seat
 //!    is counting or in the air waits (`AirCall::arrive_at` `None`) and its
 //!    count starts when that one is gone;
@@ -205,6 +206,16 @@ pub struct AirMark {
     pub velocity: Vec2,
 }
 
+/// Something an aircraft's blast must not reach (`AirView::friends`): a
+/// seat's hull or the players' bong, where it stands and how far its edge
+/// lies from there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AirFriend {
+    pub at: Position,
+    /// Its half extent (px): the larger of its box's two.
+    pub reach: f32,
+}
+
 /// What the world shows an aircraft for one step (rule 5).
 #[derive(Clone, Copy, Debug)]
 pub struct AirView<'a> {
@@ -220,10 +231,21 @@ pub struct AirView<'a> {
     /// the enemy towers still standing inside the seat's sight box
     /// (`ai::in_sight_box`), nearest the seat first. Empty with no seat.
     pub marks: &'a [AirMark],
+    /// What its blasts must not reach: every seat's live hull on the field
+    /// and the players' bong.
+    pub friends: &'a [AirFriend],
     /// The field's size.
     pub field: (f32, f32),
     /// False on the end screen: nothing fires, and an aircraft goes home.
     pub live: bool,
+}
+
+impl AirView<'_> {
+    /// Whether a blast of `radius` landing at `at` reaches none of
+    /// `friends`, with `air_hold_margin_px` to spare.
+    pub fn clear(&self, at: Position, radius: f32, t: &Tuning) -> bool {
+        self.friends.iter().all(|friend| friend.at.distance_to(at) > radius + friend.reach + t.air_hold_margin_px)
+    }
 }
 
 /// What an aircraft does to the world in a step (rule 5); the world half

@@ -713,9 +713,13 @@ pub fn draw_banner(d: &mut impl RaylibDraw, area: Rect, text: &str, size: i32, y
     size
 }
 
+/// The friendly-fire line's red: the palette's, the grenade band's.
+const FRIENDLY_FIRE_COLOR: Color = Color::new(0xE4, 0x42, 0x19, 255);
+
 /// Draw the end screen under its outcome (docs/levels.md): every level
 /// complete after the last one's win, the round's time and wrecks, the
-/// wrecks by seat from two seats, then a level's buttons - the way it is
+/// wrecks by seat from two seats, what friendly fire cost when it cost
+/// anything, then a level's buttons - the way it is
 /// counting down to carrying the count - or free play's `countdown` in
 /// their place. In UI points over the dim, centred in the chrome's
 /// `area`, at the rows `hud::result_layout` gives, which is what the hit
@@ -751,6 +755,9 @@ pub fn draw_result(d: &mut impl RaylibDraw, area: Rect, view: &ResultView, count
             d.draw_text(part, x, y as i32, RESULT_SEATS_SIZE, faded(team_color(seat as u8), a));
             x += width(part, RESULT_SEATS_SIZE) + gap;
         }
+    }
+    if let (Some(y), Some(line)) = (rows.friendly_y, crate::hud::friendly_fire_line(&view.stats.friendly_fire)) {
+        centred(d, middle, &line, y, RESULT_SEATS_SIZE, faded(FRIENDLY_FIRE_COLOR, a));
     }
     let lit = Some(Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, 40));
     if let Some(rects) = rows.buttons {

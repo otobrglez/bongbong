@@ -13,7 +13,7 @@ use hecs::Entity;
 
 use crate::ai::{Ai, in_sight_box};
 use crate::air::AirStrike;
-use crate::air_support::{self, AirAct, AirCall, AirMark, AirView, Aircraft, MarkKey, Sortie};
+use crate::air_support::{self, AirAct, AirCall, AirFriend, AirMark, AirView, Aircraft, MarkKey, Sortie};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
 use crate::bong::Side;
 use crate::math::Vec2;
@@ -119,6 +119,26 @@ impl Game {
         out.into_iter().map(|(_, mark)| mark).collect()
     }
 
+    /// What an aircraft's blasts must not reach (`AirView::friends`):
+    /// every seat's live hull on the field, in index order, and the
+    /// players' bong while it lives.
+    fn air_friends(&self) -> Vec<AirFriend> {
+        let mut out: Vec<AirFriend> = self
+            .seats_on_field()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| self.world.get::<&Tank>(e).ok().filter(|t| !t.is_wreck()).map(|t| {
+                let (at, half) = t.hull_bbox_world();
+                AirFriend { at, reach: half.x.max(half.y) }
+            }))
+            .collect();
+        if let Some(bong) = self.bong.and_then(|e| self.world.get::<&crate::bong::Bong>(e).ok().filter(|b| !b.is_dead()).map(|b| b.position)) {
+            let (hx, hy) = crate::BONG_COLLIDER_HALF_EXTENT;
+            out.push(AirFriend { at: bong, reach: hx.max(hy) });
+        }
+        out
+    }
+
     /// Air support's frame: bring in every aircraft whose count ran out,
     /// step them all (`Aircraft::step` on what `AirView` shows each), carry
     /// out what they do, and take away the ones gone off the field. `live`
@@ -137,6 +157,7 @@ impl Game {
         flying.sort_by_key(|&(id, _)| id);
         let mut gone = Vec::new();
         let mut acts = Vec::new();
+        let friends = self.air_friends();
         for (id, entity) in flying {
             let Ok(mut a) = self.world.get::<&mut Aircraft>(entity).map(|a| *a) else { continue };
             let anchor = self.air_anchor(a.seat);
@@ -149,6 +170,7 @@ impl Game {
                 seat_velocity: self.air_anchor_velocity(a.seat),
                 seat_wrecked: anchor.is_some_and(|(_, wreck)| wreck),
                 marks: &marks,
+                friends: &friends,
                 field,
                 live,
             };
