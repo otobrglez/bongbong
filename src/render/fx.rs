@@ -5,35 +5,48 @@
 //! ramp, a fast spark dragging a short tail of blocks; air (smoke, dust, a
 //! missile's trail) is a shaded puff - a shadow step, the body, a lit side
 //! up and left - stepping paler and thinner as it rises; matter (chips,
-//! spray) is a small solid square.
+//! spray) is a small solid square. The layer is drawn in three places
+//! (docs/effects.md, "Painting"): what lies on the ground with the floor
+//! (`draw_ground`), air and matter at the end of the lit field
+//! (`draw_air`), so the night and the fog take them like everything else
+//! that only reflects light, and the light itself in the glowing pass
+//! (`draw_light`). A particle's ramp is its tint's (`fx::Ramp`).
 
 use sola_raylib::prelude::*;
 
-use crate::fx::{Fx, Particle, ParticleKind, EMBER_T, FIRE_T, KICK_DESERT, KICK_DUST, KICK_SNOW, SOOT_T, WHITE_T};
+use crate::fx::{Fx, Particle, ParticleKind, Ramp, KICK_DESERT, KICK_DUST, KICK_SNOW};
 use crate::math::{Color, Rectangle, Vec2};
 use crate::view::culled;
 use crate::pyro::{self, Puff, BLOCK, FIRE, SMOKE};
 use crate::render::pyro::Rl;
 use crate::tuning::{tuning, Tuning};
 
-/// Draw every particle `cull` keeps (`view::Camera::cull`; `None` keeps
-/// them all). Non-additive kinds first in one run, then all the additive
-/// ones inside a single blend-mode block: a blend switch breaks raylib's
-/// batch, so interleaving them would cost one batch per particle instead
-/// of two for the whole layer.
-pub fn draw(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
-    let shown = |p: &&Particle| !culled(cull, p.pos) && !p.kind.on_ground();
+/// Draw the air and the matter `cull` keeps (`view::Camera::cull`; `None`
+/// keeps them all) - smoke, a missile's trail, a grenade's plume, dust,
+/// chips and spray - over everything standing in the lit field
+/// (`paint_field_lit`): they reflect light and give none, so a weathered
+/// frame darkens and fogs them with the ground they hang over.
+pub fn draw_air(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
     let t = tuning();
-    for p in fx.particles().iter().filter(|p| !p.kind.additive()).filter(shown) {
+    for p in fx.particles().iter().filter(|p| p.kind.in_air() && !culled(cull, p.pos)) {
         draw_particle(d, p, &t);
     }
-    if fx.particles().iter().filter(shown).any(|p| p.kind.additive()) {
-        d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
-            for p in fx.particles().iter().filter(|p| p.kind.additive()).filter(shown) {
-                draw_particle(&mut bd, p, &t);
-            }
-        });
+}
+
+/// Draw the light `cull` keeps - sparks and embers - in the glowing pass
+/// (`paint_field_glowing`), inside a single additive block: a blend switch
+/// breaks raylib's batch, so the whole layer's light is one.
+pub fn draw_light(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
+    let shown = |p: &&Particle| p.kind.additive() && !culled(cull, p.pos);
+    if !fx.particles().iter().any(|p| shown(&p)) {
+        return;
     }
+    let t = tuning();
+    d.draw_blend_mode(crate::frame_stages::blend(BlendMode::BLEND_ADDITIVE), |mut bd| {
+        for p in fx.particles().iter().filter(shown) {
+            draw_particle(&mut bd, p, &t);
+        }
+    });
 }
 
 /// Draw what lies on the ground - a hull's dust and powder, a ford's
@@ -57,12 +70,24 @@ impl ParticleKind {
     fn on_ground(self) -> bool {
         matches!(self, ParticleKind::Kick | ParticleKind::Foam)
     }
+
+    /// Drawn over everything standing in the lit field (`draw_air`): air
+    /// and matter, whatever is neither light nor lying on the ground.
+    fn in_air(self) -> bool {
+        !self.additive() && !self.on_ground()
+    }
 }
 
-/// The shadow and lit steps of a hull's dust whose body is `body`.
-fn kick_shades(body: Color) -> (Option<Color>, Option<Color>) {
-    let same = |a: Color, b: Color| a.r == b.r && a.g == b.g && a.b == b.b;
-    [KICK_DUST, KICK_DESERT, KICK_SNOW].iter().find(|ramp| same(ramp[1], body)).map_or((None, None), |ramp| (Some(ramp[0]), Some(ramp[2])))
+/// The shadow and lit steps of a hull's dust on `ramp`; none for a tint
+/// that is no ground's.
+fn kick_shades(ramp: Ramp) -> (Option<Color>, Option<Color>) {
+    let steps = match ramp {
+        Ramp::Dust => KICK_DUST,
+        Ramp::Desert => KICK_DESERT,
+        Ramp::Snow => KICK_SNOW,
+        _ => return (None, None),
+    };
+    (Some(steps[0].color), Some(steps[2].color))
 }
 
 /// Fire cools as it ages: white, pale gold, gold, red, deep red.
@@ -94,7 +119,7 @@ fn ramp_at(ramp: &[Color], t: f32) -> Color {
 /// its own colour dimmed.
 fn tinted(tint: Color, t: f32) -> Color {
     match (t * 3.0) as i32 {
-        0 => WHITE_T,
+        0 => Color::WHITE,
         1 => tint,
         _ => Color::new(tint.r, tint.g, tint.b, 150),
     }
@@ -111,7 +136,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle, knobs: &Tuning) {
         // stepping out over the end; a fast spark drags a tail of blocks
         // stepping down its ramp behind it.
         ParticleKind::Spark | ParticleKind::Ember => {
-            let base = if is_fire(p.tint) { ramp_at(&FIRE_RAMP, t) } else { tinted(p.tint, t) };
+            let base = if p.tint.ramp == Ramp::Fire { ramp_at(&FIRE_RAMP, t) } else { tinted(p.tint.color, t) };
             let k = if t < 0.6 { 1.0 } else if t < 0.8 { 0.66 } else { 0.33 };
             let c = pyro::alpha(base, k);
             // An ember flickers: it drops out for a beat now and then.
@@ -135,8 +160,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle, knobs: &Tuning) {
         ParticleKind::Smoke | ParticleKind::Trail | ParticleKind::Plume | ParticleKind::Dust => {
             let (opacity, body, lit, shadow) = match p.kind {
                 ParticleKind::Smoke => {
-                    let soot = p.tint.r == SOOT_T.r && p.tint.g == SOOT_T.g && p.tint.b == SOOT_T.b;
-                    let body = ramp_at(if soot { &SOOT_RAMP } else { &SMOKE_RAMP }, t);
+                    let body = ramp_at(if p.tint.ramp == Ramp::Soot { &SOOT_RAMP } else { &SMOKE_RAMP }, t);
                     (knobs.smoke_opacity * 1.15, body, lighter(&SMOKE, body), None)
                 }
                 ParticleKind::Trail => {
@@ -145,7 +169,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle, knobs: &Tuning) {
                 }
                 ParticleKind::Plume => (1.0, ramp_at(&PLUME_RAMP, t), Some(PLUME_LIT), Some(PLUME_SHADE)),
                 // Dust keeps the colour of whatever it came off.
-                _ => (0.9, p.tint, None, None),
+                _ => (0.9, p.tint.color, None, None),
             };
             let k = (1.0 - t * t) * opacity;
             if k <= 0.05 {
@@ -169,12 +193,12 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle, knobs: &Tuning) {
         ParticleKind::Kick | ParticleKind::Foam => {
             let cover = 1.0 - t;
             let k = if cover < 0.5 { cover * 2.0 } else { 1.0 };
-            let (shadow, lit) = if p.kind == ParticleKind::Kick { kick_shades(p.tint) } else { (None, None) };
+            let (shadow, lit) = if p.kind == ParticleKind::Kick { kick_shades(p.tint.ramp) } else { (None, None) };
             let fade = |c: Color| pyro::alpha(c, k);
             let puff = Puff {
                 pos: at,
                 radius: (p.size * 0.5).max(BLOCK),
-                body: fade(p.tint),
+                body: fade(p.tint.color),
                 shadow: shadow.map(fade),
                 lit: lit.map(fade),
                 core: None,
@@ -188,7 +212,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle, knobs: &Tuning) {
         _ => {
             let fade_step = ((1.0 - t) * 4.0).ceil() / 4.0;
             let blocks = (p.size / BLOCK).round().max(1.0) as i32;
-            pyro::mark(&mut b, at, blocks * BLOCK as i32, pyro::alpha(p.tint, fade_step));
+            pyro::mark(&mut b, at, blocks * BLOCK as i32, pyro::alpha(p.tint.color, fade_step));
         }
     }
 }
@@ -205,9 +229,3 @@ fn darker(ramp: &[Color], c: Color) -> Option<Color> {
 
 /// Speed (px/s) above which a spark drags a tail.
 const SMEAR_SPEED: f32 = 90.0;
-
-/// Is `c` one of the fire colours a spark or ember is thrown in? Those
-/// cool down `FIRE_RAMP`; anything else keeps its own colour.
-fn is_fire(c: Color) -> bool {
-    [WHITE_T, FIRE_T, EMBER_T].iter().any(|f| f.r == c.r && f.g == c.g && f.b == c.b)
-}

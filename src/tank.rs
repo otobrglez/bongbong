@@ -2582,8 +2582,7 @@ pub fn draw_tank(c: &mut impl Canvas, tank: &Tank, time: f32) {
     draw_tank_turret(c, tank, time, tank.tint());
 }
 
-/// The hull layer of `draw_tank` alone, in `tint` - a hit's flash draws
-/// both halves again in light (`render/game.rs`).
+/// The hull layer of `draw_tank` alone, in `tint`.
 pub fn draw_tank_hull(c: &mut impl Canvas, tank: &Tank, time: f32, tint: Color) {
     blit_layers(c, tank, &[hull_layer(tank, time, false)], tint);
 }
@@ -2591,6 +2590,17 @@ pub fn draw_tank_hull(c: &mut impl Canvas, tank: &Tank, time: f32, tint: Color) 
 /// The turret layer of `draw_tank` and the weapon modules on it, in `tint`.
 pub fn draw_tank_turret(c: &mut impl Canvas, tank: &Tank, time: f32, tint: Color) {
     blit_layers(c, tank, &turret_layers(tank, time, false), tint);
+}
+
+/// The tank's shape - hull, turret and modules - in one flat `color`: a
+/// hit's flash, drawn over the tank at its place among what stands
+/// (`Game::paint_standing`), as bright on a dark chassis as on a pale one.
+pub fn draw_tank_silhouette(c: &mut impl Canvas, tank: &Tank, time: f32, color: Color) {
+    let size = tank.sprite_size();
+    let origin = draw_pivot(size);
+    for (sheet, src, at, rot) in std::iter::once(hull_layer(tank, time, false)).chain(turret_layers(tank, time, false)) {
+        c.solid(sheet, src, Rectangle::new(at.x, at.y, size, size), origin, rot, color);
+    }
 }
 
 /// The tank's light layer - lamps, accent strips, the sensor eye, sparks,

@@ -152,7 +152,7 @@ impl<D, S: Sheets> GpuCanvas<'_, D, S> {
     /// off the quarters, from a sheet with a grid, with the shader there
     /// and `turn_mode` not the plain one. False leaves it to the plain blit.
     #[allow(clippy::too_many_arguments)]
-    fn turned(&mut self, sheet: Sheet, texture: &Texture2D, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color) -> bool {
+    fn turned(&mut self, sheet: Sheet, texture: &Texture2D, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color, solid: bool) -> bool {
         if crate::turn::is_quarter(rotation) {
             return false;
         }
@@ -163,7 +163,7 @@ impl<D, S: Sheets> GpuCanvas<'_, D, S> {
             return false;
         }
         let Some(turned) = Turned::of(src, dest, origin, rotation, block) else { return false };
-        let fit = Fit::of(texture, &turned, block, t.turn_mode == 2, t.turn_corner);
+        let fit = Fit::of(texture, &turned, block, t.turn_mode == 2, t.turn_corner, solid);
         if self.turning.is_none() {
             shader.open();
             frame_stages::shader(());
@@ -198,11 +198,34 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
         let sheets = self.sheets;
         let texture = sheets.texture(sheet);
         frame_stages::blit(texture.id);
-        if self.turned(sheet, texture, src, dest, origin, rotation, tint) {
+        if self.turned(sheet, texture, src, dest, origin, rotation, tint, false) {
             return;
         }
         self.plain();
         self.d.draw_texture_pro(texture, src, dest, origin, rotation, tint);
+    }
+
+    fn solid(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, color: Color) {
+        let sheets = self.sheets;
+        let texture = sheets.texture(sheet);
+        frame_stages::blit(texture.id);
+        // A sprite the turn shader draws on its grid gets its silhouette
+        // from the same shader, block for block; any other from the solid
+        // shader, a batch of its own. Without either it is the sprite in
+        // the colour as a tint.
+        if self.turned(sheet, texture, src, dest, origin, rotation, color, true) {
+            return;
+        }
+        self.plain();
+        match sheets.turn_shader().and_then(|turn| turn.solid()) {
+            Some(shader) => {
+                shader.open();
+                frame_stages::shader(());
+                self.d.draw_texture_pro(texture, src, dest, origin, rotation, color);
+                shader.close();
+            }
+            None => self.d.draw_texture_pro(texture, src, dest, origin, rotation, color),
+        }
     }
 
     fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color) {

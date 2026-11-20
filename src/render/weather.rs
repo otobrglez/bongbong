@@ -52,7 +52,7 @@ use crate::simulation::Game;
 use crate::tuning::{tuning, Tuning};
 use crate::view::Camera;
 use crate::weather::plain::{self, Air, Block};
-use crate::weather::{lightning, lights_in, Light, Look, Plan, Rgb, Shape};
+use crate::weather::{lightning_shown, lights_in, Light, Look, Plan, Rgb, Shape};
 use crate::{Position, MAX_SEATS, OBSTACLE_GRID_SIZE};
 
 /// What a sky is drawn over (docs/weather.md): a round's field
@@ -792,7 +792,7 @@ impl WeatherFx {
         };
         // A strike is a whole-screen flash, so the reduced-flash knob that
         // calms the kill flash and the shake calms it too.
-        let flash = if look.lightning > 0.0 { (lightning(scene.time, &t) * look.lightning * t.screen_fx_intensity).clamp(0.0, 1.5) } else { 0.0 };
+        let flash = if look.lightning > 0.0 { (lightning_shown(scene.time, &t, crate::motion::reduced()) * look.lightning * t.screen_fx_intensity).clamp(0.0, 1.5) } else { 0.0 };
         let ambient = look.ambient.map(|a| a + (1.05 - a).max(0.0) * (flash * 0.9).min(1.0));
         if plan.lit {
             let all = (scene.lights)(camera.part());

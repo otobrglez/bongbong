@@ -135,10 +135,14 @@ impl Impact {
 pub enum Flashed {
     Tank(usize),
     Tile(Position),
+    /// The bong of this side.
+    Bong(crate::bong::Side),
 }
 
-/// A hit's flash: the hull or tile it landed on drawn again in light for a
-/// few frames (`render/game.rs`), stepping down as it goes.
+/// A hit's flash, stepping down as it goes: a hull or a bong covered by
+/// its own silhouette in white, at its place among what stands
+/// (`Game::paint_standing_hit`); a tile drawn again in light
+/// (`render/game.rs`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Flash {
     pub(crate) what: Flashed,
@@ -146,6 +150,11 @@ pub struct Flash {
 }
 
 impl Flash {
+    /// What it is on.
+    pub fn what(&self) -> Flashed {
+        self.what
+    }
+
     /// How bright it is now, in three steps: full, two thirds, one third,
     /// then gone at `hit_flash_seconds`.
     pub fn strength(&self) -> f32 {
@@ -187,6 +196,59 @@ pub enum Taker {
     Bong(crate::bong::Side),
 }
 
+/// The ramp a particle's colour steps along as it ages - what the
+/// drawing reads (`render/fx.rs`), so no painter guesses a ramp from a
+/// colour.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ramp {
+    /// Its own colour: matter keeps it, and a light flashes white, shows
+    /// it, then dims.
+    Own,
+    /// Fire: a spark or an ember thrown in it cools down the fire ramp.
+    Fire,
+    /// Black smoke: the smoke ramp a step darker.
+    Soot,
+    /// A hull's dust over grass, shaded in the dust ramp's sand steps.
+    Dust,
+    /// A hull's dust over the desert.
+    Desert,
+    /// Powder off snow.
+    Snow,
+}
+
+/// What a particle is thrown in: a colour and the ramp it belongs to.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Tint {
+    /// The colour itself: what matter, dust and a tinted light are drawn
+    /// in.
+    pub(crate) color: Color,
+    /// Only the drawing reads it.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    pub(crate) ramp: Ramp,
+}
+
+impl Tint {
+    /// `color` on `ramp`.
+    pub(crate) const fn of(color: Color, ramp: Ramp) -> Self {
+        Tint { color, ramp }
+    }
+
+    /// `color`, kept as it is.
+    pub(crate) const fn own(color: Color) -> Self {
+        Tint::of(color, Ramp::Own)
+    }
+
+    /// One of the fire colours.
+    const fn fire(color: Color) -> Self {
+        Tint::of(color, Ramp::Fire)
+    }
+
+    /// Black smoke.
+    const fn soot(color: Color) -> Self {
+        Tint::of(color, Ramp::Soot)
+    }
+}
+
 pub struct Particle {
     pub(crate) pos: Position,
     /// Only the drawing reads it outside this module: a fast spark is
@@ -203,7 +265,7 @@ pub struct Particle {
     pub(crate) size: f32,
     /// The colour it was thrown with; only the drawing reads it.
     #[cfg_attr(not(feature = "render"), allow(dead_code))]
-    pub(crate) tint: Color,
+    pub(crate) tint: Tint,
     pub(crate) kind: ParticleKind,
 }
 
@@ -368,6 +430,17 @@ impl Fx {
             })
     }
 
+    /// A shot landing on `side`'s bong at `at`: its flash, flecks of its
+    /// `kind`'s own body and a puff of dust.
+    fn bong_hit(&mut self, side: crate::bong::Side, kind: Option<crate::bong::BongKind>, at: Position) {
+        self.flash(Flashed::Bong(side));
+        if let Some(kind) = kind {
+            let body = kind.body().map(Tint::own);
+            self.burst(at, ParticleKind::Chip, self.count(tuning().bong_hit_flecks), 110.0, &body);
+        }
+        self.burst(at, ParticleKind::Dust, self.count(3), 36.0, &[DUST_T]);
+    }
+
     /// Light up what a hit landed on; a second hit on it starts its flash
     /// over rather than stacking another.
     fn flash(&mut self, what: Flashed) {
@@ -486,7 +559,7 @@ impl Fx {
         });
     }
 
-    fn burst(&mut self, at: Position, kind: ParticleKind, n: i32, speed: f32, tints: &[Color]) {
+    fn burst(&mut self, at: Position, kind: ParticleKind, n: i32, speed: f32, tints: &[Tint]) {
         let mut rng = rand::rng();
         for _ in 0..n.max(0) {
             let a = rng.random_range(0.0..std::f32::consts::TAU);
@@ -524,7 +597,7 @@ impl Fx {
     /// spitting sparks down the barrel's line, a laser's burn splashing
     /// back toward the gun.
     #[allow(clippy::too_many_arguments)]
-    fn cone_burst(&mut self, at: Position, dir: Vec2, half: f32, kind: ParticleKind, n: i32, speed: f32, tints: &[Color]) {
+    fn cone_burst(&mut self, at: Position, dir: Vec2, half: f32, kind: ParticleKind, n: i32, speed: f32, tints: &[Tint]) {
         if tuning().fx_max_particles <= 0 || n <= 0 {
             return;
         }
@@ -544,7 +617,7 @@ impl Fx {
     /// A glint off a flying shot: one block of light in the shot's own
     /// colour, loosed backwards and sideways off its path so a bolt sheds a
     /// glittering wake.
-    fn glint(&mut self, at: Position, back: Vec2, kind: ParticleKind, tint: Color) {
+    fn glint(&mut self, at: Position, back: Vec2, kind: ParticleKind, tint: Tint) {
         let mut rng = rand::rng();
         let side = Vec2::new(-back.y, back.x) * rng.random_range(-30.0..30.0);
         self.push(Particle {
@@ -715,7 +788,7 @@ impl Fx {
                 self.burst(at, ParticleKind::Smoke, self.count(smoke), drift, &[SMOKE_T]);
             }
             Explosion::Void => {
-                self.burst(at, ParticleKind::Spark, self.count(sparks), speed, &[crate::pyro::VOID[3], crate::pyro::VOID[4], WHITE_T]);
+                self.burst(at, ParticleKind::Spark, self.count(sparks), speed, &[Tint::own(crate::pyro::VOID[3]), Tint::own(crate::pyro::VOID[4]), WHITE_T]);
                 self.burst(at, ParticleKind::Dust, self.count(smoke), drift * 2.0, &[DUST_T]);
             }
             Explosion::Thud => {
@@ -840,7 +913,7 @@ impl Fx {
                         }
                         self.start_open(CrateOpen { kind, at, taker: Taker::Broken, spilled: false, age: 0.0 });
                         if let Some(ramp) = crate::pyro::dust_of(Material::Wood) {
-                            let tints = [ramp[1], ramp[2]];
+                            let tints = [Tint::own(ramp[1]), Tint::own(ramp[2])];
                             self.burst(at, ParticleKind::Dust, self.count(6), 50.0, &tints);
                         }
                     }
@@ -1085,10 +1158,17 @@ impl Fx {
                         self.burst(at, ParticleKind::Dust, self.count(4), 40.0, &[DUST_T]);
                         self.burst(at, ParticleKind::Chip, self.count(2), 60.0, &[STONE_DK, STONE_MD]);
                     }
-                    // A shot landing on a hull, a bong or the border: a
-                    // shower of hot sparks, a couple of dark flecks of
-                    // armour and a wisp of smoke. Tiles are `tile_chip`'s.
-                    Event::Hit { target: target @ (HitTarget::Player { .. } | HitTarget::Enemy { .. } | HitTarget::Bong { .. }), x, y, .. } => {
+                    // A shot landing on a bong: it flashes, and what
+                    // flies off it is its own - flecks of its body and a
+                    // puff of dust, never the sparks and smoke of armour.
+                    Event::Hit { target: HitTarget::Bong { side }, x, y, .. } => {
+                        let kind = game.world.query::<&crate::bong::Bong>().iter().find(|b| b.side == side).map(|b| b.kind);
+                        self.bong_hit(side, kind, Position::new(x, y));
+                    }
+                    // A shot landing on a hull: a shower of hot sparks, a
+                    // couple of dark flecks of armour and a wisp of smoke.
+                    // Tiles are `tile_chip`'s.
+                    Event::Hit { target: target @ (HitTarget::Player { .. } | HitTarget::Enemy { .. }), x, y, .. } => {
                         let at = Position::new(x, y);
                         match target {
                             HitTarget::Player { player } => self.flash(Flashed::Tank(player as usize)),
@@ -1391,7 +1471,7 @@ impl Fx {
             }
             let sparks = if view.stage >= 3 { 0.5 } else { 0.0 } + if view.burning { 1.0 } else { 0.0 };
             if sparks > 0.0 && self.due(key ^ 0x7a7a, ember_rate * sparks * tuning().fx_density, dt) {
-                let tints: &[Color] = if view.burning { &[EMBER_T, FIRE_T] } else { &[WHITE_T, FIRE_T] };
+                let tints: &[Tint] = if view.burning { &[EMBER_T, FIRE_T] } else { &[WHITE_T, FIRE_T] };
                 self.burst(top, if view.burning { ParticleKind::Ember } else { ParticleKind::Spark }, 1, 30.0, tints);
             }
         }
@@ -1455,7 +1535,7 @@ impl Fx {
         // colour, a shell throws the odd ember off its tracer.
         let glint = tuning().shot_trail_glint_rate * tuning().fx_density;
         if glint > 0.0 {
-            let mut lit: Vec<(u32, Position, Vec2, ParticleKind, Color)> = Vec::new();
+            let mut lit: Vec<(u32, Position, Vec2, ParticleKind, Tint)> = Vec::new();
             for plasma in game.world.query::<&Plasma>().iter() {
                 if plasma.state == PlasmaState::Flying {
                     let tint = match plasma.variant {
@@ -1592,7 +1672,7 @@ impl Fx {
         // parked one rustles nothing.
         let rustle = tuning().grass_rustle_rate;
         if rustle > 0.0 {
-            let flecks: &[Color] = match game.map.theme {
+            let flecks: &[Tint] = match game.map.theme {
                 crate::map::Theme::Grass => &[LEAF_L, LEAF_M, LEAF_D],
                 crate::map::Theme::Desert => &[STRAW_L, STRAW_M, STRAW_D],
             };
@@ -1730,7 +1810,7 @@ impl Fx {
             if muddy || turf {
                 let rate = t.drive_mud_rate * d.weight * if pivot { t.drive_pivot_throw_factor } else { sf } * if turf { 0.5 } else { tread.wet.max(1.0) };
                 let n = self.due_n(key(3), rate * density, dt);
-                let tints: &[Color] = if turf { &TURF } else if desert { &MUD_DESERT } else { &MUD };
+                let tints: &[Tint] = if turf { &TURF } else if desert { &MUD_DESERT } else { &MUD };
                 for _ in 0..n {
                     let from = at(side(&mut rng), rear - 1.5);
                     let up = rng.random_range(60.0..130.0);
@@ -1830,7 +1910,7 @@ impl Fx {
 
     /// One puff of a hull's dust or powder at `at`, swelling to `size` px
     /// across over `life`.
-    fn kick(&mut self, at: Position, vel: Vec2, life: f32, size: f32, tint: Color) {
+    fn kick(&mut self, at: Position, vel: Vec2, life: f32, size: f32, tint: Tint) {
         let start = FX_GRID * 2.0;
         self.push(Particle {
             pos: at,
@@ -1847,7 +1927,7 @@ impl Fx {
 
     /// One drop or clod thrown from `at` along `vel`, up at `up` px/s:
     /// gone the moment it comes down.
-    fn spray(&mut self, at: Position, vel: Vec2, up: f32, size: f32, tint: Color) {
+    fn spray(&mut self, at: Position, vel: Vec2, up: f32, size: f32, tint: Tint) {
         self.push(Particle { pos: at, vel, z: 0.0, vz: -up, age: 0.0, life: 1.5, size, tint, kind: ParticleKind::Spray });
     }
 
@@ -2053,96 +2133,97 @@ const MAX_JOLTS: usize = 8;
 // Particle tints. Deliberately literals rather than a palette import:
 // these are light, not surface, and several are drawn additively where a
 // snapped surface colour would read as muddy.
-pub(crate) const STONE_LT: Color = Color::new(0xC1, 0xC1, 0xC1, 255);
-pub(crate) const STONE_MD: Color = Color::new(0x9E, 0x9E, 0x96, 255);
-const STONE_DK: Color = Color::new(0x7E, 0x7E, 0x7E, 255);
-const WOOD_L: Color = Color::new(0xDE, 0x99, 0x43, 255);
-const WOOD_M: Color = Color::new(0x99, 0x65, 0x24, 255);
-const WOOD_D: Color = Color::new(0x50, 0x33, 0x0B, 255);
-const SAND_L: Color = Color::new(0xC9, 0xB2, 0x66, 255);
-const SAND_M: Color = Color::new(0xB7, 0xA2, 0x48, 255);
-const GLASS_L: Color = Color::new(0x27, 0xD8, 0xC5, 255);
-const GLASS_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
-const DUST_T: Color = crate::pyro::DUST[3];
-const SMOKE_T: Color = crate::pyro::SMOKE[2];
+pub(crate) const STONE_LT: Tint = Tint::own(Color::new(0xC1, 0xC1, 0xC1, 255));
+pub(crate) const STONE_MD: Tint = Tint::own(Color::new(0x9E, 0x9E, 0x96, 255));
+const STONE_DK: Tint = Tint::own(Color::new(0x7E, 0x7E, 0x7E, 255));
+const WOOD_L: Tint = Tint::own(Color::new(0xDE, 0x99, 0x43, 255));
+const WOOD_M: Tint = Tint::own(Color::new(0x99, 0x65, 0x24, 255));
+const WOOD_D: Tint = Tint::own(Color::new(0x50, 0x33, 0x0B, 255));
+const SAND_L: Tint = Tint::own(Color::new(0xC9, 0xB2, 0x66, 255));
+const SAND_M: Tint = Tint::own(Color::new(0xB7, 0xA2, 0x48, 255));
+const GLASS_L: Tint = Tint::own(Color::new(0x27, 0xD8, 0xC5, 255));
+const GLASS_M: Tint = Tint::own(Color::new(0x04, 0xA0, 0xB4, 255));
+const DUST_T: Tint = Tint::own(crate::pyro::DUST[3]);
+const SMOKE_T: Tint = Tint::own(crate::pyro::SMOKE[2]);
 /// Black smoke off burning oil, a burning deck, a wreck: the smoke ramp a
-/// step darker (`render/fx.rs` reads the tint).
-pub(crate) const SOOT_T: Color = crate::pyro::SMOKE[1];
+/// step darker (`Ramp::Soot`).
+pub(crate) const SOOT_T: Tint = Tint::soot(crate::pyro::SMOKE[1]);
 
-/// The light colours of the shots themselves, matched to their drawn
-/// glows (`render/laser.rs`, `render/plasma.rs`).
-const LASER_RED_T: Color = Color::new(0xFF, 0x50, 0x46, 255);
-const LASER_BLUE_T: Color = Color::new(0x50, 0x9A, 0xFF, 255);
-const PLASMA_TEAL_T: Color = Color::new(0x28, 0xDC, 0xC8, 255);
-const PLASMA_PURPLE_T: Color = Color::new(0xB0, 0x6A, 0xF0, 255);
-pub(crate) const EMBER_T: Color = Color::new(0xE4, 0x42, 0x19, 255);
-pub(crate) const FIRE_T: Color = Color::new(0xEE, 0xA3, 0x43, 255);
-pub(crate) const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
+/// The light colours of the shots themselves: a laser's is its ramp's
+/// beam step (`pyro::LASER_RED`, `LASER_BLUE`), a plasma bolt's its drawn
+/// glow (`render/plasma.rs`).
+const LASER_RED_T: Tint = Tint::own(crate::pyro::LASER_RED[2]);
+const LASER_BLUE_T: Tint = Tint::own(crate::pyro::LASER_BLUE[2]);
+const PLASMA_TEAL_T: Tint = Tint::own(Color::new(0x28, 0xDC, 0xC8, 255));
+const PLASMA_PURPLE_T: Tint = Tint::own(Color::new(0xB0, 0x6A, 0xF0, 255));
+pub(crate) const EMBER_T: Tint = Tint::fire(Color::new(0xE4, 0x42, 0x19, 255));
+pub(crate) const FIRE_T: Tint = Tint::fire(Color::new(0xEE, 0xA3, 0x43, 255));
+pub(crate) const WHITE_T: Tint = Tint::fire(Color::new(0xFF, 0xFF, 0xFF, 255));
 // The ground tileset's own water tones (`ground::WATER_FLOW_MARK` and the
 // flat lake), so spray is the water it came out of.
-const WATER_L: Color = Color::new(0x1D, 0xCC, 0xCB, 255);
-const WATER_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
+const WATER_L: Tint = Tint::own(Color::new(0x1D, 0xCC, 0xCB, 255));
+const WATER_M: Tint = Tint::own(Color::new(0x04, 0xA0, 0xB4, 255));
 // Foliage. The one place particles are allowed green - it is the same
 // exemption trees_sheet.png/nature_sheet.png take (`just check-sheets`):
 // manufactured objects are never green, vegetation is.
-const LEAF_L: Color = Color::new(0x7C, 0x98, 0x3C, 255);
-const LEAF_M: Color = Color::new(0x5F, 0x91, 0x4B, 255);
-const LEAF_D: Color = Color::new(0x1C, 0x4C, 0x33, 255);
+const LEAF_L: Tint = Tint::own(Color::new(0x7C, 0x98, 0x3C, 255));
+const LEAF_M: Tint = Tint::own(Color::new(0x5F, 0x91, 0x4B, 255));
+const LEAF_D: Tint = Tint::own(Color::new(0x1C, 0x4C, 0x33, 255));
 // What a moving hull throws (`Fx::drive`). A hull's dust as a puff's
-// shadow, body and lit steps (`render/fx.rs` shades a `Kick` by the ramp
-// its tint is the body of): the dust ramp's sand steps over the grass
+// shadow, body and lit steps (`render/fx.rs` shades a `Kick` by its
+// tint's `Ramp`): the dust ramp's sand steps over the grass
 // theme, paler steps of the retinted dust over the desert, snow's own.
-pub(crate) const KICK_DUST: [Color; 3] = [crate::pyro::DUST[2], crate::pyro::DUST[3], crate::pyro::DUST[4]];
-pub(crate) const KICK_DESERT: [Color; 3] = [Color::new(0xC2, 0xA8, 0x7D, 255), Color::new(0xE6, 0xD8, 0xB2, 255), Color::new(0xF4, 0xEC, 0xD6, 255)];
-pub(crate) const KICK_SNOW: [Color; 3] = [Color::new(0xD3, 0xDD, 0xE8, 255), Color::new(0xF6, 0xF9, 0xFC, 255), Color::new(0xFF, 0xFF, 0xFF, 255)];
+pub(crate) const KICK_DUST: [Tint; 3] = [Tint::of(crate::pyro::DUST[2], Ramp::Dust), Tint::of(crate::pyro::DUST[3], Ramp::Dust), Tint::of(crate::pyro::DUST[4], Ramp::Dust)];
+pub(crate) const KICK_DESERT: [Tint; 3] = [Tint::of(Color::new(0xC2, 0xA8, 0x7D, 255), Ramp::Desert), Tint::of(Color::new(0xE6, 0xD8, 0xB2, 255), Ramp::Desert), Tint::of(Color::new(0xF4, 0xEC, 0xD6, 255), Ramp::Desert)];
+pub(crate) const KICK_SNOW: [Tint; 3] = [Tint::of(Color::new(0xD3, 0xDD, 0xE8, 255), Ramp::Snow), Tint::of(Color::new(0xF6, 0xF9, 0xFC, 255), Ramp::Snow), Tint::of(Color::new(0xFF, 0xFF, 0xFF, 255), Ramp::Snow)];
 // Mud clods, over each theme, and turf torn off dry grass (green under the
 // foliage exemption: it is grass).
-const MUD: [Color; 3] = [Color::new(0x73, 0x62, 0x4D, 255), Color::new(0x67, 0x51, 0x2A, 255), Color::new(0x59, 0x34, 0x1F, 255)];
-const MUD_DESERT: [Color; 3] = [Color::new(0xA0, 0x80, 0x58, 255), Color::new(0x8A, 0x6D, 0x47, 255), Color::new(0x73, 0x62, 0x4D, 255)];
-const TURF: [Color; 3] = [Color::new(0x5C, 0x8E, 0x3D, 255), Color::new(0x7E, 0xA6, 0x4A, 255), Color::new(0x73, 0x62, 0x4D, 255)];
+const MUD: [Tint; 3] = [Tint::own(Color::new(0x73, 0x62, 0x4D, 255)), Tint::own(Color::new(0x67, 0x51, 0x2A, 255)), Tint::own(Color::new(0x59, 0x34, 0x1F, 255))];
+const MUD_DESERT: [Tint; 3] = [Tint::own(Color::new(0xA0, 0x80, 0x58, 255)), Tint::own(Color::new(0x8A, 0x6D, 0x47, 255)), Tint::own(Color::new(0x73, 0x62, 0x4D, 255))];
+const TURF: [Tint; 3] = [Tint::own(Color::new(0x5C, 0x8E, 0x3D, 255)), Tint::own(Color::new(0x7E, 0xA6, 0x4A, 255)), Tint::own(Color::new(0x73, 0x62, 0x4D, 255))];
 // Rainwater out of a rut, the ford's foam, and spray off a churned bed.
-const PUDDLE_T: [Color; 3] = [Color::new(0x7A, 0x90, 0xB4, 255), Color::new(0x4D, 0x5E, 0x80, 255), Color::new(0x67, 0x51, 0x2A, 255)];
-pub(crate) const FOAM_T: [Color; 2] = [Color::new(0x93, 0xEC, 0xE2, 255), WHITE_T];
-const SILTY_T: [Color; 3] = [Color::new(0xA3, 0xA7, 0x80, 255), Color::new(0x7D, 0x8A, 0x5C, 255), Color::new(0x5D, 0x7F, 0x6C, 255)];
+const PUDDLE_T: [Tint; 3] = [Tint::own(Color::new(0x7A, 0x90, 0xB4, 255)), Tint::own(Color::new(0x4D, 0x5E, 0x80, 255)), Tint::own(Color::new(0x67, 0x51, 0x2A, 255))];
+pub(crate) const FOAM_T: [Tint; 2] = [Tint::own(Color::new(0x93, 0xEC, 0xE2, 255)), WHITE_T];
+const SILTY_T: [Tint; 3] = [Tint::own(Color::new(0xA3, 0xA7, 0x80, 255)), Tint::own(Color::new(0x7D, 0x8A, 0x5C, 255)), Tint::own(Color::new(0x5D, 0x7F, 0x6C, 255))];
 // Dry grass (the desert theme). What a hull kicks out of a desert tuft is
 // straw, not leaf: the SAND_* steps gen_grass.py builds a blade's tip, lit
 // side and body from, so the flecks are the tuft's own colours leaving it.
-const STRAW_L: Color = Color::new(0xD2, 0xBA, 0x6B, 255);
-const STRAW_M: Color = Color::new(0xB7, 0xA2, 0x48, 255);
-const STRAW_D: Color = Color::new(0x67, 0x51, 0x2A, 255);
+const STRAW_L: Tint = Tint::own(Color::new(0xD2, 0xBA, 0x6B, 255));
+const STRAW_M: Tint = Tint::own(Color::new(0xB7, 0xA2, 0x48, 255));
+const STRAW_D: Tint = Tint::own(Color::new(0x67, 0x51, 0x2A, 255));
 // The bong health pack's burst. Green under the same exemption - the bong
 // is the one living thing on the field, and `hud::BONG_COLOR` is what the
 // bar already reads it in.
-const HEAL_T: Color = Color::new(0x78, 0xDC, 0x5A, 255);
+const HEAL_T: Tint = Tint::own(Color::new(0x78, 0xDC, 0x5A, 255));
 /// Rainbow-shield violet, matching `hud::SHIELD_COLOR` so a deflection and
 /// the HUD gauge read as the same mechanic. Off the Puny Palette on purpose,
 /// like the shield ring itself.
-const SHIELD_T: Color = Color::new(0xAA, 0x78, 0xFF, 255);
+const SHIELD_T: Tint = Tint::own(Color::new(0xAA, 0x78, 0xFF, 255));
 /// The tesla bolt's violets (`render::tower`'s strands), off the palette
 /// like the shield's.
-const TESLA_T: Color = Color::new(0xCA, 0xA6, 0xFF, 255);
+const TESLA_T: Tint = Tint::own(Color::new(0xCA, 0xA6, 0xFF, 255));
 /// A gauss rail's sparks: its ramp's pale step (`pyro::RAIL`).
-const RAIL_T: Color = crate::pyro::RAIL[3];
+const RAIL_T: Tint = Tint::own(crate::pyro::RAIL[3]);
 /// An EMP's sparks: its ramp's pale blue (`pyro::EMP`).
-const EMP_T: Color = crate::pyro::EMP[3];
+const EMP_T: Tint = Tint::own(crate::pyro::EMP[3]);
 /// The specks of a cruising drone's buzz: its rotors' grey.
-const ROTOR_T: Color = crate::pyro::SMOKE[5];
-const TESLA_DEEP_T: Color = Color::new(0x9A, 0x66, 0xFF, 255);
+const ROTOR_T: Tint = Tint::own(crate::pyro::SMOKE[5]);
+const TESLA_DEEP_T: Tint = Tint::own(Color::new(0x9A, 0x66, 0xFF, 255));
 /// The bio slush's ooze, the sheet's acid lime (`tower::OOZE_*`).
-const OOZE_TINTS: [Color; 3] = [crate::tower::OOZE_HI, crate::tower::OOZE_LT, crate::tower::OOZE_MD];
+const OOZE_TINTS: [Tint; 3] = [Tint::own(crate::tower::OOZE_HI), Tint::own(crate::tower::OOZE_LT), Tint::own(crate::tower::OOZE_MD)];
 /// The tower pack's rainbow, the colours its icon sweeps through.
-const RAINBOW_TINTS: [Color; 6] = [
-    Color::new(0xFF, 0x50, 0x46, 255),
-    Color::new(0xFF, 0xA0, 0x3C, 255),
-    Color::new(0xFF, 0xE6, 0x5A, 255),
+const RAINBOW_TINTS: [Tint; 6] = [
+    Tint::own(Color::new(0xFF, 0x50, 0x46, 255)),
+    Tint::own(Color::new(0xFF, 0xA0, 0x3C, 255)),
+    Tint::own(Color::new(0xFF, 0xE6, 0x5A, 255)),
     HEAL_T,
     PORTAL_T,
     SHIELD_T,
 ];
 /// A portal's blues - the P1 team ramp, deliberately off-palette like the
 /// portal sheet itself (docs/PALETTE.md).
-const PORTAL_T: Color = Color::new(0x4D, 0x9B, 0xE6, 255);
-const PORTAL_LT_T: Color = Color::new(0x8F, 0xD3, 0xFF, 255);
+const PORTAL_T: Tint = Tint::own(Color::new(0x4D, 0x9B, 0xE6, 255));
+const PORTAL_LT_T: Tint = Tint::own(Color::new(0x8F, 0xD3, 0xFF, 255));
 
 #[cfg(test)]
 mod fx_tests {
@@ -2235,6 +2316,50 @@ mod fx_tests {
         }
         assert!(hit, "the wave hit the hull");
         assert!(!fx.flashes.is_empty() || fx.particles.iter().any(|p| p.kind == ParticleKind::Dust), "the flash and the dust");
+    }
+
+    /// A bong is no tank: a shot on it flashes it and throws flecks of its
+    /// own body and dust, never the sparks and smoke of armour.
+    #[test]
+    fn a_hit_bong_flashes_and_sheds_its_own_colours() {
+        use crate::bong::{BongKind, Side};
+        for kind in BongKind::ALL {
+            let mut fx = Fx::default();
+            fx.bong_hit(Side::Enemy, Some(kind), Position::new(100.0, 100.0));
+            assert_eq!(fx.flashes().iter().map(|f| f.what()).collect::<Vec<_>>(), [Flashed::Bong(Side::Enemy)], "{kind:?}: its flash");
+            assert!(fx.particles.iter().all(|p| matches!(p.kind, ParticleKind::Chip | ParticleKind::Dust)), "{kind:?}: no spark, ember or smoke");
+            let body = kind.body();
+            let flecks: Vec<&Particle> = fx.particles.iter().filter(|p| p.kind == ParticleKind::Chip).collect();
+            assert!(!flecks.is_empty(), "{kind:?}: flecks fly");
+            assert!(flecks.iter().all(|p| p.tint.ramp == Ramp::Own && body.contains(&p.tint.color)), "{kind:?}: in its body's colours");
+        }
+        // A second hit starts the one flash over.
+        let mut fx = Fx::default();
+        fx.bong_hit(Side::Player, None, Position::new(0.0, 0.0));
+        fx.tick(0.05);
+        fx.bong_hit(Side::Player, None, Position::new(0.0, 0.0));
+        assert_eq!(fx.flashes().len(), 1);
+        assert_eq!(fx.flashes()[0].strength(), 1.0);
+    }
+
+    /// Every tint says which ramp it steps along, so the drawing never
+    /// tells fire from a colour by comparing them.
+    #[test]
+    fn a_tint_carries_its_ramp() {
+        for fire in [WHITE_T, FIRE_T, EMBER_T] {
+            assert_eq!(fire.ramp, Ramp::Fire);
+        }
+        assert_eq!(SOOT_T.ramp, Ramp::Soot);
+        assert_eq!(SMOKE_T.ramp, Ramp::Own);
+        assert!(KICK_DUST.iter().all(|t| t.ramp == Ramp::Dust));
+        assert!(KICK_DESERT.iter().all(|t| t.ramp == Ramp::Desert));
+        assert!(KICK_SNOW.iter().all(|t| t.ramp == Ramp::Snow));
+        // Snow's lit step and a white-hot spark are one colour on two ramps.
+        assert_eq!(KICK_SNOW[2].color, WHITE_T.color);
+        assert_ne!(KICK_SNOW[2], WHITE_T);
+        // The one laser red: a laser's sparks are its ramp's beam step.
+        assert_eq!(LASER_RED_T.color, crate::laser::LaserVariant::Red.ramp()[2]);
+        assert_eq!(LASER_BLUE_T.color, crate::laser::LaserVariant::Blue.light());
     }
 
     #[test]

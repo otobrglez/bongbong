@@ -42,6 +42,7 @@ pub mod shell;
 pub mod shockwave;
 pub mod shot_fx;
 pub mod shot_shaders;
+pub mod solid;
 pub mod tank;
 pub mod target;
 pub mod thumbnail;

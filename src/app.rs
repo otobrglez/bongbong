@@ -24,7 +24,7 @@ use crate::net::client::{Identity, RoomClient, RoomSetup, Target};
 use crate::net::round::{AnyRound, OnlineRound};
 #[cfg(not(target_os = "emscripten"))]
 use crate::net::transport::Transport;
-use crate::render::shockwave::{RippleFx, RippleShader, RippleTuning};
+use crate::render::shockwave::{RippleFx, Ripples};
 use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
 use crate::tank::{Dir, TankKind};
@@ -1201,45 +1201,6 @@ impl TuningWatch {
     }
 }
 
-/// The three ripple post-effects, compiled once: they measure every ring in
-/// the standard field (`shockwave::RIPPLE_FRAME`) whatever the map.
-fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread) -> (RippleFx, RippleFx, RippleFx) {
-    let shock = RippleFx::load(
-        rl,
-        thread,
-        RippleShader::Shockwave,
-        RippleTuning {
-            speed: tuning().shockwave_speed,
-            width: tuning().shockwave_width,
-            strength: tuning().shockwave_strength * tuning().screen_fx_intensity,
-            duration: tuning().shockwave_duration,
-        },
-    );
-    let muzzle = RippleFx::load(
-        rl,
-        thread,
-        RippleShader::MuzzleFlash,
-        RippleTuning {
-            speed: tuning().muzzle_flash_speed,
-            width: tuning().muzzle_flash_width,
-            strength: tuning().muzzle_flash_strength,
-            duration: tuning().muzzle_flash_duration,
-        },
-    );
-    let impact = RippleFx::load(
-        rl,
-        thread,
-        RippleShader::Impact,
-        RippleTuning {
-            speed: tuning().impact_flash_speed,
-            width: tuning().impact_flash_width,
-            strength: tuning().impact_flash_strength,
-            duration: tuning().impact_flash_duration,
-        },
-    );
-    (shock, muzzle, impact)
-}
-
 /// The whole game, from window to loop, for one set of options. `main`
 /// fills them from the command line on desktop; the iOS entry runs them
 /// with the defaults.
@@ -1509,7 +1470,7 @@ pub fn run(args: Args) {
         .map(|kind| crate::render::bong::BongTextures::load(&mut rl, &thread, kind))
         .collect();
 
-    let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread);
+    let mut shock_fx = RippleFx::load(&mut rl, &thread, Ripples::of(&tuning()));
     // The plasma orb and flame jet shaders. A driver that cannot compile
     // them still plays: the bolt flies as its baked sprite and the stream
     // is its particles.
@@ -1916,31 +1877,14 @@ pub fn run(args: Args) {
         // Then land any tuning edits staged since last frame (dev panel
         // via capi.rs, the `--tuning` file watch, or the dev server)
         // before the simulation reads the table, so a frame never sees two
-        // values of one knob. The ripple shaders cache their knobs as
+        // values of one knob. The ripple shader caches its knobs as
         // uniforms, so re-upload those only when something actually changed.
         if let Some(watch) = &mut tuning_watch {
             watch.poll();
         }
         if tuning::apply_pending() {
             let t = tuning::current();
-            shock_fx.set_tuning(RippleTuning {
-                speed: t.shockwave_speed,
-                width: t.shockwave_width,
-                strength: t.shockwave_strength * t.screen_fx_intensity,
-                duration: t.shockwave_duration,
-            });
-            muzzle_fx.set_tuning(RippleTuning {
-                speed: t.muzzle_flash_speed,
-                width: t.muzzle_flash_width,
-                strength: t.muzzle_flash_strength,
-                duration: t.muzzle_flash_duration,
-            });
-            impact_fx.set_tuning(RippleTuning {
-                speed: t.impact_flash_speed,
-                width: t.impact_flash_width,
-                strength: t.impact_flash_strength,
-                duration: t.impact_flash_duration,
-            });
+            shock_fx.set_tuning(Ripples::of(&t));
         }
         // A pointer is read on the window, where the builder takes it (its
         // frame puts it on the canvas or on its chrome), and in UI points,
@@ -2820,8 +2764,6 @@ pub fn run(args: Args) {
             BAR_FILL,
             &mut Effects {
                 shock: &mut shock_fx,
-                muzzle: &mut muzzle_fx,
-                impact: &mut impact_fx,
                 shots: shot_shaders.as_mut(),
                 weather: Some(&mut weather_fx),
                 fx: &fx,
