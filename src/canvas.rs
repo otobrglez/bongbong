@@ -46,6 +46,10 @@ pub enum Sheet {
     /// ground.rs): one file per theme, so a loader that wants every sheet
     /// gets both and the field names the map's.
     Ground(Theme),
+    /// A biome's own ground tileset (`Biome::ground_texture_path`,
+    /// docs/biomes.md): the same tiles as `Ground`, drawn in its place on
+    /// a field with a biome.
+    BiomeGround(crate::biome::Biome),
     /// static/scifi_tanks_sheet.png (docs/SPRITESHEET_SPEC.md).
     Tanks,
     /// static/scifi_tanks_glow.png - the tank sheet's light layer, the same
@@ -120,6 +124,7 @@ impl Sheet {
     pub fn path(self) -> String {
         match self {
             Sheet::Ground(theme) => theme.ground_texture_path().into(),
+            Sheet::BiomeGround(biome) => biome.ground_texture_path().into(),
             Sheet::Tanks => "static/scifi_tanks_sheet.png".into(),
             Sheet::TankGlow => "static/scifi_tanks_glow.png".into(),
             Sheet::TankModules => "static/tank_modules.png".into(),
@@ -144,6 +149,7 @@ impl Sheet {
     /// every theme, the single sheets and every bong kind's five clips.
     pub fn all() -> Vec<Sheet> {
         let mut all: Vec<Sheet> = Theme::ALL.iter().flat_map(|&t| [Sheet::Ground(t), Sheet::Grass(t)]).collect();
+        all.extend(crate::biome::Biome::ALL.iter().map(|&b| Sheet::BiomeGround(b)));
         all.extend(SINGLE_SHEETS);
         for kind in BongKind::ALL {
             all.extend(BONG_CLIPS.iter().map(|&clip| Sheet::Bong { kind, clip }));
@@ -1029,7 +1035,7 @@ mod tests {
         paths.sort();
         paths.dedup();
         assert_eq!(paths.len(), n);
-        assert_eq!(n, 2 * Theme::ALL.len() + SINGLE_SHEETS.len() + BongKind::ALL.len() * BONG_CLIPS.len());
+        assert_eq!(n, 2 * Theme::ALL.len() + crate::biome::Biome::ALL.len() + SINGLE_SHEETS.len() + BongKind::ALL.len() * BONG_CLIPS.len());
     }
 
     /// The ground and grass sheets follow the theme, the way `app.rs`

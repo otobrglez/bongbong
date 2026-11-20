@@ -110,7 +110,10 @@ impl<'a> Scene<'a> {
             frozen: game.water().is_frozen(),
             seats,
             lights: Box::new(move |part| lights_in(game, impacts, &look, &tuning(), part)),
-            depth: Box::new(|at| game.water.depth_at(at)),
+            depth: Box::new(|at| {
+                let (col, row) = crate::map::world_to_cell(at);
+                game.ground.drawn_depth(col, row, game.water.depth_at(at))
+            }),
             roads: Box::new(|| game.map.iter_cells().filter(|(_, _, cell)| matches!(cell, CellObject::Road)).map(|(c, r, _)| (c, r)).collect()),
             made: RoundKey::of(game),
             frame: game.frame(),

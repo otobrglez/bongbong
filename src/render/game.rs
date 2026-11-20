@@ -142,7 +142,9 @@ impl Sheets for Textures<'_> {
             // `app.rs` picks `ground`/`grass` from the round's map theme
             // every frame, the same theme `paint_floor`/`paint_standing`
             // name here, so the payload needs no second lookup.
-            Sheet::Ground(_) => self.ground,
+            // `ground` is the live map's tileset - its biome's when it has
+            // one - so either name finds it.
+            Sheet::Ground(_) | Sheet::BiomeGround(_) => self.ground,
             Sheet::Tanks => self.tanks,
             Sheet::TankGlow => self.tank_glow,
             Sheet::TankModules => self.tank_modules,

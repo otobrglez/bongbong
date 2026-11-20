@@ -1228,7 +1228,7 @@ impl Fx {
                     // fleck or two in it.
                     Event::SlimeWashed { slot } => {
                         if let Some(&(_, at, _)) = game.wading().iter().find(|w| w.0 == slot) {
-                            self.burst(at, ParticleKind::Spray, self.count(10), 80.0, &[WATER_L, WATER_M, WHITE_T]);
+                            self.burst(at, ParticleKind::Spray, self.count(10), 80.0, &water_tints(game, true));
                             self.burst(at, ParticleKind::Spray, self.count(4), 60.0, &OOZE_TINTS);
                         }
                     }
@@ -1389,7 +1389,7 @@ impl Fx {
     /// scorch (docs/water.md).
     fn splash_if_wet(&mut self, game: &Game, at: Position, n: i32) {
         if game.water().depth_at(at).is_wet() {
-            self.burst(at, ParticleKind::Spray, self.count(n), 130.0, &[WATER_L, WATER_M, WHITE_T]);
+            self.burst(at, ParticleKind::Spray, self.count(n), 130.0, &water_tints(game, true));
         }
     }
 
@@ -1406,12 +1406,12 @@ impl Fx {
         for (slot, pos, speed) in game.wading() {
             wading_now.insert(slot);
             if !self.wading.contains(&slot) {
-                self.burst(pos, ParticleKind::Spray, self.count(10), 80.0, &[WATER_L, WATER_M, WHITE_T]);
+                self.burst(pos, ParticleKind::Spray, self.count(10), 80.0, &water_tints(game, true));
             }
             if spray > 0.0 && speed > 15.0 && self.sees(pos) {
                 let rate = spray * (speed / 120.0).clamp(0.2, 1.5) * tuning().fx_density;
                 if self.due(0x5A7E_0000 ^ slot as u32, rate, dt) {
-                    self.burst(pos, ParticleKind::Spray, 1, 50.0, &[WATER_L, WATER_M]);
+                    self.burst(pos, ParticleKind::Spray, 1, 50.0, &water_tints(game, false));
                 }
             }
         }
@@ -2227,6 +2227,22 @@ pub(crate) const WHITE_T: Tint = Tint::fire(Color::new(0xFF, 0xFF, 0xFF, 255));
 // flat lake), so spray is the water it came out of.
 const WATER_L: Tint = Tint::own(Color::new(0x1D, 0xCC, 0xCB, 255));
 const WATER_M: Tint = Tint::own(Color::new(0x04, 0xA0, 0xB4, 255));
+
+/// The spray off `game`'s water: the tileset's own tones, or its biome's
+/// ripple and water (docs/biomes.md); with a white fleck when `fleck`.
+fn water_tints(game: &Game, fleck: bool) -> Vec<Tint> {
+    let mut tints = match game.ground.biome() {
+        Some(biome) => {
+            let water = biome.look().water;
+            vec![Tint::own(water.ripple), Tint::own(water.fill)]
+        }
+        None => vec![WATER_L, WATER_M],
+    };
+    if fleck {
+        tints.push(WHITE_T);
+    }
+    tints
+}
 // Foliage. The one place particles are allowed green - it is the same
 // exemption trees_sheet.png/nature_sheet.png take (`just check-sheets`):
 // manufactured objects are never green, vegetation is.
