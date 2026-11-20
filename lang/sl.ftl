@@ -59,6 +59,7 @@ level-number = STOPNJA { $n } / { $count }
 result-time = ČAS { $time }
 result-wrecks = UNIČENIH { $n } / { $total }
 result-all-clear = VSE STOPNJE SO OPRAVLJENE!
+result-uncounted = S SPREMEMBAMI SE NE ŠTEJE
 result-again = ŠE ENKRAT
 result-next = NASLEDNJA STOPNJA
 result-first = NAZAJ NA ZAČETEK

@@ -1051,6 +1051,36 @@ kind to its cross-fixture maximum exactly — deterministic, so an
 exceedance is a real behavior change; the justfile comment carries the
 re-baselining policy.
 
+### Re-baseline: round flow (BB-189)
+
+2026-11-20. A round that cannot stall (docs/levels.md): the last tanks
+called after a lull, a blocked lane waited out, a fallen seat brought back
+on the final wave and dropped in where no lane takes it; and honest level
+locks, which touch no simulation. Each step was measured against a clean
+checkout of origin/master (6d0ff43): `cargo test --lib --no-default-features
+--features dev-tools determinism_tests`, `just probe-fixtures`,
+`just probe-survive` (its sweep), `just probe-fields`, `just probe-waves`.
+
+| step | the pinned pair (one seat, two seats) | probe readings (fixtures, survive, fields, waves) |
+|---|---|---|
+| before | 9140234918546171875, 2367344100585956785 | 46, 319, 198, 23 |
+| the last tanks called (`straggler_call_alive`, `straggler_call_after_seconds`) | unchanged | 46, 319, 198, 23 |
+| blocked lanes and the seat's return (`wave_lane_wait_seconds`, `wave_final_return_seconds`) | unchanged | 46, 319, 198, 23 |
+| honest locks (no simulation) | unchanged | not re-run: nothing the probe plays changed |
+
+Nothing moved, to the last ANOMALY line: every sweep's output is the
+same as master's, and so is a three-round `defend` on longwater and the
+study map (`--frames 25200 --rounds 3 --seed 1000`, debug). The rules
+only act on a round that has already stalled, and none of these does:
+the afk rounds end with the seat wrecked inside 25 s, survive's
+enemies stay in touch for its whole 30 s, and in `defend` the last wave's
+tanks walk in to be destroyed before any lull of 20 s with three or fewer
+alive. They are held by `mechanics_tests::round_flow` instead. The pinned
+pair is a band round of four enemies for ten seconds: never down to three
+for a lull, and a band round brings no seat back.
+
+No ceiling was changed and no reading stands over one.
+
 ### Re-baseline: enemies (BB-179)
 
 2026-11-20. Straight routes in an arena, a wander that resamples on

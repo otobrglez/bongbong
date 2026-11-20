@@ -107,6 +107,7 @@ keys! {
     RESULT_TIME = "result-time";
     RESULT_WRECKS = "result-wrecks";
     RESULT_ALL_CLEAR = "result-all-clear";
+    RESULT_UNCOUNTED = "result-uncounted";
     RESULT_AGAIN = "result-again";
     RESULT_NEXT = "result-next";
     RESULT_FIRST = "result-first";
@@ -1039,6 +1040,7 @@ mod text_tests {
             (keys::ROUND_TRAINED, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::ROUND_LOST, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_ALL_CLEAR, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("count", 14.into())]),
+            (keys::RESULT_UNCOUNTED, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),
             (keys::RESULT_WRECKS, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("n", 99.into()), ("total", 99.into())]),
             (keys::RESULT_AGAIN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),

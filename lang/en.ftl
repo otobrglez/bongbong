@@ -118,6 +118,11 @@ result-wrecks = DESTROYED { $n } / { $total }
 # Over those once the last level is won, 28 px, about 700 px.
 result-all-clear = ALL { $count } LEVELS COMPLETE!
 
+# In its place after a win that opens no level, because the level was
+# played with changes (an edit, a different enemy count or tank), 28 px,
+# about 700 px.
+result-uncounted = PLAYED WITH CHANGES: NOT COUNTED
+
 # A level's end-screen buttons, 18 px text in a 224 px button (about 18
 # letters): the same level again, the next one after a win, and the first
 # one again after the last.

@@ -5,7 +5,11 @@
 //! plus `Ai` - once it reaches the gate's inside point. Also the wave-round
 //! wreck despawn, and the one other thing that comes in through a gate: a
 //! **seat that fell while the team fought on** drives back in with the next
-//! wave (docs/online-coop-prd.md section 4.11, decision 7). Everything here
+//! wave, or on the final wave after `wave_final_return_seconds`
+//! (docs/online-coop-prd.md section 4.11, decision 7). A wave tank or a
+//! seat that no lane takes - a map with no gate, or lanes busy past
+//! `wave_lane_wait_seconds` - drops onto the field instead
+//! (docs/levels.md, "A round that cannot stall"). Everything here
 //! runs inside `Game::update`'s frame, draws only from the frame's round
 //! RNG, and is a no-op under the band plan and in any round that seats one,
 //! so a band round's and a solo round's RNG streams are untouched.
@@ -99,9 +103,18 @@ pub(crate) struct WaveState {
     used_gates: Vec<(usize, (usize, usize))>,
     /// Seats whose tank is a wreck and which the next wave brings back,
     /// in seat order (docs/online-coop-prd.md section 4.11, decision 7).
-    /// Filled by `call_wave`, drained by the same staggered roll-in the
+    /// Filled by `call_wave` - and on the final wave by
+    /// `queue_final_returns` -, drained by the same staggered roll-in the
     /// wave's own tanks use. Empty in every round that seats one.
     returning: VecDeque<usize>,
+    /// Seconds the roll-in has found every lane busy in a row; past
+    /// `wave_lane_wait_seconds` the tank waiting drops onto the field
+    /// instead (`wave_phase`).
+    lane_wait: f32,
+    /// Seconds each seat has been a wreck, by seat; 0 for a live one.
+    /// What the final wave brings a fallen seat back by
+    /// (`queue_final_returns`).
+    wrecked_for: [f32; crate::MAX_SEATS],
 }
 
 impl WaveState {
@@ -255,7 +268,8 @@ impl Game {
     /// at its peak, stretched to a rest after one, shortened while nothing
     /// happens). Queued tanks start their roll-in `wave_stagger_seconds`
     /// apart while live enemies stay under `wave_max_alive`, and a seat
-    /// the wave is bringing back takes the first of those windows.
+    /// the wave is bringing back takes the first of those windows; the
+    /// final wave queues a fallen seat itself (`queue_final_returns`).
     pub(super) fn wave_phase(&mut self, f: &mut Frame) {
         let SpawnPlan::Waves { waves, .. } = self.spawn_plan else { return };
         let (gap_seconds, timeout, next_when_alive, stagger_seconds, max_alive) = {
@@ -284,22 +298,38 @@ impl Game {
             }
         }
 
+        self.tick_wrecked_seats(f.dt);
+        if self.wave.called >= waves {
+            self.queue_final_returns();
+        }
+
         self.wave.stagger = (self.wave.stagger - f.dt).max(0.0);
-        if self.wave.stagger <= 0.0 {
-            let queued = !self.wave.pending.is_empty() && self.live_enemy_count() < max_alive;
-            if queued || !self.wave.returning.is_empty() {
-                // One lane per stagger window, the seat coming back first:
-                // a player who lost their tank drives in at the head of
-                // the wave rather than behind all of it. A wave with every
-                // lane busy tries again next frame. On a field map the seat
-                // takes the lane nearest the living seats rather than a
-                // wave's (`pick_return_gate`).
-                let returning = self.field_map && self.wave.returning.front().is_some_and(|&seat| self.seat(seat).is_some());
-                let gate = if returning { self.pick_return_gate(f) } else { self.pick_gate(f) };
-                let took = self.seat_returns(gate) || (queued && self.spawn_wave_tank(f, gate));
-                if took {
-                    self.wave.stagger = stagger_seconds;
+        let queued = !self.wave.pending.is_empty() && self.live_enemy_count() < max_alive;
+        if !queued && self.wave.returning.is_empty() {
+            self.wave.lane_wait = 0.0;
+        } else if self.wave.stagger <= 0.0 {
+            // One lane per stagger window, the seat coming back first:
+            // a player who lost their tank drives in at the head of
+            // the wave rather than behind all of it. A wave with every
+            // lane busy tries again next frame. On a field map the seat
+            // takes the lane nearest the living seats rather than a
+            // wave's (`pick_return_gate`).
+            let returning = self.field_map && self.wave.returning.front().is_some_and(|&seat| self.seat(seat).is_some());
+            let gate = if returning { self.pick_return_gate(f) } else { self.pick_gate(f) };
+            let mut took = self.seat_returns(gate, f) || (queued && self.spawn_wave_tank(f, gate));
+            if !took && matches!(gate, GatePick::Busy) {
+                // Every lane busy - seats parked on every gate, say - for
+                // `wave_lane_wait_seconds`: the one waiting drops onto the
+                // field as a gate-less map's would, so a blocked lane never
+                // holds a wave or a seat out for ever.
+                self.wave.lane_wait += f.dt;
+                if self.wave.lane_wait >= tuning().wave_lane_wait_seconds {
+                    took = self.seat_returns(GatePick::None, f) || (queued && self.spawn_wave_tank(f, GatePick::None));
                 }
+            }
+            if took {
+                self.wave.stagger = stagger_seconds;
+                self.wave.lane_wait = 0.0;
             }
         }
 
@@ -457,31 +487,78 @@ impl Game {
         }
     }
 
-    /// Put the seat at the head of the return queue back on the field
-    /// through `gate`, as a fresh tank of its own chassis: the same
-    /// entity, owner slot, chassis and worn tread look, and everything a
-    /// round is fought with - health, shells, any picked-up weapon, a
-    /// shield - as `init` would have spawned it. It drives in like a wave
-    /// tank (`rollin_phase`) and answers the stick the frame it arrives.
+    /// Count how long each seat has been a wreck (`WaveState::wrecked_for`).
+    fn tick_wrecked_seats(&mut self, dt: f32) {
+        for seat in 0..self.players.count() {
+            let wreck = self.seat(seat).is_some_and(|e| with_tank(&self.world, e, Tank::is_wreck));
+            self.wave.wrecked_for[seat] = if wreck { self.wave.wrecked_for[seat] + dt } else { 0.0 };
+        }
+    }
+
+    /// The final wave has no next wave to bring a fallen seat back with,
+    /// so it brings back every seat that has been a wreck for
+    /// `wave_final_return_seconds` itself, in seat order and never twice.
+    /// Somebody is still fighting, or `check_round_end` would have lost
+    /// the round. A round that seats one queues nothing, as `call_wave`
+    /// does not; 0 seconds keeps a seat that falls on the final wave
+    /// where it fell.
+    fn queue_final_returns(&mut self) {
+        let after = tuning().wave_final_return_seconds;
+        if self.players.count() < 2 || after <= 0.0 {
+            return;
+        }
+        for seat in 0..self.players.count() {
+            if self.wave.wrecked_for[seat] >= after && !self.wave.returning.contains(&seat) {
+                self.wave.returning.push_back(seat);
+            }
+        }
+    }
+
+    /// Put the seat at the head of the return queue back on the field,
+    /// as a fresh tank of its own chassis (`renew_seat`): through `gate`
+    /// when it is a free lane, driving in like a wave tank (`rollin_phase`)
+    /// and answering the stick the frame it arrives; dropped onto the
+    /// field near the living seats with `GatePick::None` - a map with no
+    /// gate, or lanes busy past `wave_lane_wait_seconds` - announced with
+    /// `Event::TankEntered` the frame it lands (`seat_drops_in`).
     ///
-    /// `false` when nothing is waiting or no lane is free this frame: the
-    /// seat keeps its place and the wave's own tanks roll on, so a map
-    /// with no gate at all never deadlocks behind a seat waiting to come
-    /// back (it is a `waves-no-gates` lint error in the first place).
-    fn seat_returns(&mut self, gate: GatePick) -> bool {
+    /// `false` when nothing is waiting, every lane is busy this frame or
+    /// no cell takes the drop: the seat keeps its place and the wave's own
+    /// tanks roll on, so a wave never deadlocks behind a seat waiting to
+    /// come back.
+    fn seat_returns(&mut self, gate: GatePick, f: &mut Frame) -> bool {
         let Some(&seat) = self.wave.returning.front() else { return false };
-        let GatePick::Free(gate) = gate else { return false };
         let Some(entity) = self.seat(seat) else {
             self.wave.returning.pop_front();
             return false;
         };
-        self.wave.returning.pop_front();
-        // The hulk's body goes with it: the roll-in is kinematic and
-        // `rollin_phase` spawns a fresh one at the gate's inside point.
+        match gate {
+            GatePick::Busy => false,
+            GatePick::None => {
+                if !self.seat_drops_in(seat, entity, f) {
+                    return false;
+                }
+                self.wave.returning.pop_front();
+                true
+            }
+            GatePick::Free(gate) => {
+                self.wave.returning.pop_front();
+                self.renew_seat(seat, entity, gate.outside, gate.heading().rotation());
+                self.world.insert_one(entity, RollIn { to: gate.inside }).expect("a seat's tank is never despawned");
+                true
+            }
+        }
+    }
+
+    /// Seat `seat`'s wreck made a fresh tank of its own chassis standing
+    /// at `at`, facing `rotation`, with no body: the same entity, owner
+    /// slot, chassis and worn tread look, and everything a round is fought
+    /// with - health, shells, any picked-up weapon, a shield - as `init`
+    /// would have spawned it. The hulk's body goes with it.
+    fn renew_seat(&mut self, seat: usize, entity: Entity, at: Position, rotation: f32) {
         if let Some(body) = with_tank(&self.world, entity, |t| t.body) {
             self.physics.remove_body(body);
         }
-        let rotation = gate.heading().rotation();
         with_tank_mut(&self.world, entity, |t| {
             *t = Tank {
                 row: t.row,
@@ -489,7 +566,7 @@ impl Game {
                 damage_variant: t.damage_variant,
                 tread_phase: t.tread_phase,
                 tread_press: t.tread_press,
-                position: gate.outside,
+                position: at,
                 rotation,
                 visual_rotation: rotation,
                 turret_visual_rotation: rotation,
@@ -497,12 +574,37 @@ impl Game {
                 ..Tank::default()
             };
         });
-        self.world.insert_one(entity, RollIn { to: gate.inside }).expect("a seat's tank is never despawned");
         // A trigger held when the tank went keeps `dispatch_fire` waiting
         // for a release that already happened, and the slots claimed
         // around the hulk are around nothing now.
         self.player_fire_held_last_frame[seat] = false;
         self.engage[seat].clear();
+        self.wave.wrecked_for[seat] = 0.0;
+    }
+
+    /// Drop seat `seat` back onto the field with no lane to drive in by:
+    /// on the cell nearest the first living seat (`Game::drop_cell`:
+    /// spawn-legal clearance, dry, off a portal) that a tank can drive to
+    /// from there and that stands clear of every tank, with its body, the
+    /// stick's at once. `false` when no cell takes it.
+    fn seat_drops_in(&mut self, seat: usize, entity: Entity, f: &mut Frame) -> bool {
+        let Some(&near) = self.live_seat_positions().first() else { return false };
+        let grid = self.nav_grid(f.width, f.height);
+        let parts = grid.components();
+        let clear = Tank::default().size() * 2.0;
+        let tanks: Vec<Position> =
+            self.world.query::<&Tank>().iter().filter(|t| t.body.is_some()).map(|t| t.position).collect();
+        let Some((col, row)) = self.drop_cell(&grid, near, |_, p| {
+            parts.connected(&grid, near, p) && tanks.iter().all(|&q| q.distance_to(p) >= clear)
+        }) else {
+            return false;
+        };
+        let at = crate::map::cell_to_world(col, row);
+        self.renew_seat(seat, entity, at, 0.0);
+        let (half, mass) = with_tank(&self.world, entity, |t| (t.move_half_extents(false), t.mass()));
+        let body = self.physics.spawn_tank(at, half, mass);
+        with_tank_mut(&self.world, entity, |t| t.body = Some(body));
+        f.events.push(Event::TankEntered { slot: seat });
         true
     }
 

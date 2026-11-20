@@ -4820,8 +4820,8 @@ cells."1,1" = { kind = "wall" }"#;
         // Past Boot Camp, level 0, to the first level with an enemy.
         let mut campaign = crate::levels::Campaign::new(crate::levels::Levels::shipped(), None);
         campaign.won(0);
+        // The level as it ships, so its win opens the next.
         let mut game = Game::default();
-        game.enemy_count_override = Some(1);
         game.seed_override = Some(3);
         game.map = campaign.map(1).expect("level 2 opens");
         let (w, h) = game.map.field_size();
@@ -4831,13 +4831,15 @@ cells."1,1" = { kind = "wall" }"#;
         let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["level"]["number"], 1, "{status}");
         assert_eq!(status["level"]["map"], "lotus-lagoon");
-        assert_eq!(status["stats"]["enemies"], 1);
+        assert_eq!(status["stats"]["enemies"], 5);
 
-        let enemy = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().unwrap();
-        s.game.debug_kill(enemy).unwrap();
+        let enemies: Vec<usize> = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).collect();
+        for enemy in enemies {
+            s.game.debug_kill(enemy).unwrap();
+        }
         s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
         let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
-        assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(1)), "{status}");
+        assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(5)), "{status}");
         let at = screen_button(&mut server, &tx, &mut s, "next");
         let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
         assert_eq!(m["level"]["number"], 2, "{m}");
