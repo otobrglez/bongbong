@@ -406,8 +406,31 @@ pub struct Look {
 pub enum FloorPx {
     Land,
     Bank,
+    /// A ford's water, a stream's or a shore's.
     Water,
+    /// Open water no hull enters: the one tile a deep cell draws
+    /// (`WATER_SHORE[0b1111]`).
+    Deep,
     Road,
+}
+
+impl FloorPx {
+    /// Water of either depth.
+    pub fn is_water(self) -> bool {
+        matches!(self, FloorPx::Water | FloorPx::Deep)
+    }
+}
+
+/// A road cell between two stretches of water, which a biome draws as a
+/// plank deck with the water running on beneath it (docs/biomes.md). The
+/// picture only: to the rules it is the dry road it always was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Deck {
+    /// The map cell.
+    pub cell: (i32, i32),
+    /// The road runs east-west across water to the north and south; the
+    /// other way round when false.
+    pub across: bool,
 }
 
 /// What source pixel (`sx`, `sy`) of tile `tile` is; plain ground for a
@@ -419,6 +442,7 @@ fn tile_px(tile: i32, sx: usize, sy: usize) -> FloorPx {
     };
     match (masks[i].1[sy] >> (2 * sx)) & 0b11 {
         1 => FloorPx::Bank,
+        2 if tile == WATER_SHORE[0b1111] => FloorPx::Deep,
         2 => FloorPx::Water,
         3 => FloorPx::Road,
         _ => FloorPx::Land,
@@ -471,6 +495,11 @@ pub struct GroundGrid {
     /// first time the floor is drawn, like the shade; never for a grid
     /// with no biome.
     materials: OnceLock<BlockImage>,
+    /// The plank decks a biome draws (`Deck`), and the cells whose tile
+    /// was resolved as if each deck were water so the river runs on under
+    /// it (`bridge`). Both empty with no biome.
+    decks: Vec<Deck>,
+    bridged: BTreeSet<(i32, i32)>,
     /// This build's name (`NEXT_SHADE_STAMP`), its shade's first; a
     /// repaint that reaches the field's edge gives it another (`repaint`).
     stamp: u64,
@@ -498,11 +527,97 @@ impl GroundGrid {
     /// use; `None` with no biome. An edit bakes them again whole
     /// (`repaint`).
     pub fn materials(&self) -> Option<&BlockImage> {
+        // A layer of blocks starts at the field's corner, so the floor
+        // carried past the field (`beyond`) has none.
+        if self.layout.origin != (0, 0) {
+            return None;
+        }
         let biome = self.look.biome?;
         Some(self.materials.get_or_init(|| {
             let (w, h) = (((self.width / 2.0).ceil() as usize).max(1), ((self.height / 2.0).ceil() as usize).max(1));
-            crate::biome::bake(biome.look(), w, h, &self.floor_blocks(w, h), next_block_stamp())
+            crate::biome::bake(biome.look(), w, h, &self.floor_blocks(w, h), &self.decks, next_block_stamp())
         }))
+    }
+
+    /// The plank decks the biome draws (`Deck`), none with no biome.
+    pub fn decks(&self) -> &[Deck] {
+        &self.decks
+    }
+
+    /// The water in map cell (`col`, `row`) as the weather's ground pass
+    /// should treat it (`render::weather`'s cell mask): the rules' `rules`,
+    /// except that a cell a deck's bridging drew water in - the river
+    /// under a deck, a bank corner rounded to meet it - is a ford, so its
+    /// water freezes and takes the rain with the rest. Picture only.
+    pub fn drawn_depth(&self, col: i32, row: i32, rules: Depth) -> Depth {
+        if rules != Depth::Dry || !self.bridged.contains(&(col, row)) {
+            return rules;
+        }
+        let Some(i) = self.idx(col - self.layout.origin.0, row - self.layout.origin.1) else { return rules };
+        let tile = self.tiles[i][0];
+        let wet = (0..16).any(|sy| (0..16).any(|sx| tile_px(tile, sx, sy).is_water()));
+        if wet { Depth::Shallow } else { rules }
+    }
+
+    /// Find the decks - map road cells, not under a wall, with water on
+    /// two opposite sides - and resolve again every tile a deck changes,
+    /// as if each deck were water: the river's tiles then run on under it,
+    /// while a road keeps the rules' own reading so it still joins the
+    /// deck. A deck's water has no current, so no mark drifts over the
+    /// planks. The rules never see any of it: `layout` stays the map's
+    /// (`depth`, `water_at`, `WaterLayout`). `touched` are the cells an
+    /// edit just resolved from the rules, which may need the bridged
+    /// reading again. Answers every cell resolved here.
+    fn bridge(&mut self, touched: &BTreeSet<(i32, i32)>) -> BTreeSet<(i32, i32)> {
+        let layout = &self.layout;
+        let walls: BTreeSet<(i32, i32)> = self.walls.iter().copied().collect();
+        let mut decks = Vec::new();
+        for y in 0..layout.map_rows as i32 {
+            for x in 0..layout.map_cols as i32 {
+                if layout.at(x, y) != Material::Road || walls.contains(&(x, y)) {
+                    continue;
+                }
+                if layout.is_water(x, y - 1) && layout.is_water(x, y + 1) {
+                    decks.push(Deck { cell: (x, y), across: true });
+                } else if layout.is_water(x - 1, y) && layout.is_water(x + 1, y) {
+                    decks.push(Deck { cell: (x, y), across: false });
+                }
+            }
+        }
+        let mut picture = layout.clone();
+        let paint: Vec<((usize, usize), Material)> = decks.iter().map(|d| ((d.cell.0 as usize, d.cell.1 as usize), Material::Water)).collect();
+        let moved = picture.repaint(&paint);
+        let deck_cells: BTreeSet<(i32, i32)> = decks.iter().map(|d| d.cell).collect();
+        let redo: BTreeSet<(i32, i32)> = moved.iter().chain(&self.bridged).chain(touched).chain(&deck_cells).copied().collect();
+        for &(x, y) in &redo {
+            let Some(i) = self.idx(x, y) else { continue };
+            let deck = deck_cells.contains(&(x, y));
+            let from = if self.layout.at(x, y) == Material::Road && !deck { &self.layout } else { &picture };
+            (self.tiles[i], self.current[i]) = resolve(from, self.seed, self.drifts, x, y);
+            if deck {
+                self.current[i] = Current::Still;
+            }
+        }
+        self.bridged = moved.into_iter().chain(deck_cells).collect();
+        if self.decks != decks {
+            self.decks = decks;
+            self.materials = OnceLock::new();
+        }
+        redo
+    }
+
+    /// The biome this floor is drawn in (`Look::biome`): its tileset, its
+    /// water's accents and, on the field itself, its materials.
+    pub fn biome(&self) -> Option<crate::biome::Biome> {
+        self.look.biome
+    }
+
+    /// The tileset this floor is drawn from: its biome's, or its theme's.
+    pub fn sheet(&self) -> Sheet {
+        match self.look.biome {
+            Some(biome) => Sheet::BiomeGround(biome),
+            None => Sheet::Ground(self.look.theme),
+        }
     }
 
     /// `floor_px` for every 2 px block of a field `w` x `h` blocks from its
@@ -596,10 +711,14 @@ impl GroundGrid {
                 walls_moved.push(cell);
             }
         }
-        let touched = self.layout.repaint(&paint);
+        let mut touched = self.layout.repaint(&paint);
         for &(x, y) in &touched {
             let i = y as usize * self.cols + x as usize;
             (self.tiles[i], self.current[i]) = resolve(&self.layout, self.seed, self.drifts, x, y);
+        }
+        if self.look.biome.is_some() {
+            let bridged = self.bridge(&touched);
+            touched.extend(bridged);
         }
         if let (false, Some(shade)) = (walls_moved.is_empty(), self.shade.get_mut()) {
             shade.rebake(&self.walls, &walls_moved);
@@ -689,11 +808,13 @@ impl GroundGrid {
             width: self.width,
             height: self.height,
             walls: Vec::new(),
-            // A layer of blocks starts at the field's corner, so the floor
-            // past the field carries the tiles but no materials.
-            look: Look { theme: self.look.theme, edge_shade: false, biome: None },
+            // The biome's tileset carries on past the field; its materials
+            // do not (`materials`).
+            look: Look { theme: self.look.theme, edge_shade: false, biome: self.look.biome },
             shade: OnceLock::new(),
             materials: OnceLock::new(),
+            decks: Vec::new(),
+            bridged: BTreeSet::new(),
             stamp: NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed),
             layout,
             seed: self.seed,
@@ -851,7 +972,7 @@ fn drift_noise(seed: u64, vx: i32, vy: i32, period: f32) -> f32 {
 /// every cell of a layout carried `beyond` it) copy the water of the map
 /// cell nearest them, so a sea or river painted to the edge carries on out
 /// of the picture instead of ending on a shore along it.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Layout {
     cols: usize,
     rows: usize,
@@ -1418,7 +1539,7 @@ pub fn build(
         .iter()
         .map(|pos| ((pos.x / OBSTACLE_GRID_SIZE).round() as i32, (pos.y / OBSTACLE_GRID_SIZE).round() as i32))
         .collect();
-    GroundGrid {
+    let mut grid = GroundGrid {
         cols,
         rows,
         tiles,
@@ -1429,11 +1550,17 @@ pub fn build(
         look,
         shade: OnceLock::new(),
         materials: OnceLock::new(),
+        decks: Vec::new(),
+        bridged: BTreeSet::new(),
         stamp: NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed),
         layout,
         seed,
         drifts,
+    };
+    if look.biome.is_some() {
+        grid.bridge(&BTreeSet::new());
     }
+    grid
 }
 
 /// How the sand drifts: the share of the open floor it covers and the
@@ -1910,6 +2037,11 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
     let t = tuning();
     let frame = ((time / t.water_frame_seconds.max(0.01)).floor() as i64).rem_euclid(WATER_FRAME_COUNT as i64) as usize;
     let (ox, oy) = grid.layout.origin;
+    // A biome draws its own tileset; otherwise the theme names it.
+    let sheet = match grid.biome() {
+        Some(biome) => Sheet::BiomeGround(biome),
+        None => Sheet::Ground(theme),
+    };
     let (cols, rows) = cell_span(grid, c.cull());
     for y in rows {
         for x in cols.clone() {
@@ -1918,7 +2050,7 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
             };
             let src = source_rec(grid.tiles[i][frame]);
             let dest = Rectangle::new((x as i32 + ox) as f32 * GROUND_WORLD_TILE, (y as i32 + oy) as f32 * GROUND_WORLD_TILE, size, size);
-            c.blit(Sheet::Ground(theme), src, dest, origin, 0.0, Color::WHITE);
+            c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
         }
     }
     // The biome's materials lie on the tiles, under everything else.
@@ -1972,6 +2104,8 @@ fn lane_hash(x: i32, lane: u32) -> u64 {
 /// edge enters the next cell's top edge without a jump - the flow reads as
 /// one body of water, not a grid of looping cells.
 fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, lanes: u32) {
+    // The tileset's own ripple tone, or the biome's.
+    let mark = grid.biome().map_or(WATER_FLOW_MARK, |b| Color { a: WATER_FLOW_MARK.a, ..b.look().water.ripple });
     if lanes == 0 {
         return;
     }
@@ -2007,7 +2141,7 @@ fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, l
                 for block in 0..WATER_FLOW_MARK_BLOCKS {
                     let by = ly + 2.0 * block as f32;
                     if (0.0..tile).contains(&by) {
-                        c.fill_rect((left + lx) as i32, (top + by) as i32, 2, 2, WATER_FLOW_MARK);
+                        c.fill_rect((left + lx) as i32, (top + by) as i32, 2, 2, mark);
                     }
                 }
             }
@@ -2075,7 +2209,8 @@ mod tests {
         let grid = build(W, H, 7, &world(&road), &world(&lake), &[], Look::default());
         let centre = |c: i32, r: i32| (c * GROUND_WORLD_TILE as i32, r * GROUND_WORLD_TILE as i32);
         let (x, y) = centre(6, 6);
-        assert_eq!(grid.floor_px(x, y), FloorPx::Water, "the open water");
+        assert_eq!(grid.floor_px(x, y), FloorPx::Deep, "the open water");
+        assert_eq!(grid.depth(6, 6), Depth::Deep, "the rules agree");
         let (x, y) = centre(4, 2);
         assert_eq!(grid.floor_px(x, y), FloorPx::Road, "the middle of a road");
         let (x, y) = centre(1, 8);
@@ -2084,7 +2219,7 @@ mod tests {
         // outer edge of its corner cell is dry, its inner corner wet.
         let (x, y) = centre(5, 5);
         assert_eq!(grid.floor_px(x - 14, y - 14), FloorPx::Land);
-        assert_eq!(grid.floor_px(x + 14, y + 14), FloorPx::Water);
+        assert!(grid.floor_px(x + 14, y + 14).is_water());
         // Somewhere between the two lies the bank outline.
         assert!((0..28).any(|d| grid.floor_px(x - 14 + d, y - 14 + d) == FloorPx::Bank), "a shore has a bank");
         assert_eq!(grid.floor_px(-500, 9000), FloorPx::Land, "off the grid");
@@ -2103,6 +2238,40 @@ mod tests {
                 assert_eq!(blocks[by * w + bx], grid.floor_px(bx as i32 * 2, by as i32 * 2), "block ({bx}, {by})");
             }
         }
+    }
+
+    #[test]
+    fn a_road_over_a_river_is_a_deck_the_water_runs_under_and_still_dry_road_to_the_rules() {
+        // A river two cells wide down columns 4 and 5, a road along row 5
+        // across it, and a wall over the river further down on row 8.
+        let river: Vec<(i32, i32)> = (0..10).filter(|&y| y != 5 && y != 8).flat_map(|y| [(4, y), (5, y)]).collect();
+        let road: Vec<(i32, i32)> = (0..10).map(|x| (x, 5)).collect();
+        let wall = [(4, 8), (5, 8)];
+        let roads: Vec<(i32, i32)> = road.iter().chain(&wall).copied().collect();
+        let valley = Look { biome: Some(crate::biome::Biome::Valley), ..Look::default() };
+        let grid = build(W, H, 7, &world(&roads), &world(&river), &world(&wall), valley);
+        let decks: Vec<(i32, i32)> = grid.decks().iter().map(|d| d.cell).collect();
+        assert_eq!(decks, vec![(4, 5), (5, 5)], "the crossing, and not the wall");
+        assert!(grid.decks().iter().all(|d| d.across), "the road runs east-west over a river running south");
+        // The picture: water through the deck's cell, so the river runs on.
+        let (x, y) = (4 * GROUND_WORLD_TILE as i32 + 8, 5 * GROUND_WORLD_TILE as i32);
+        assert!(grid.floor_px(x, y).is_water(), "the river is drawn under the deck");
+        // The rules: dry road, as without a biome.
+        assert_eq!(grid.depth(4, 5), Depth::Dry);
+        assert_eq!(grid.floor_at(crate::map::cell_to_world(4, 5)), GroundFloor::Road);
+        let rules = WaterLayout::build(W, H, &world(&roads), &world(&river));
+        assert_eq!(rules.depth_of_cell(4, 5), Depth::Dry);
+        // The weather's ground pass freezes and rains on the water drawn
+        // under it, while the rules keep it dry.
+        assert_eq!(grid.drawn_depth(4, 5, grid.depth(4, 5)), Depth::Shallow);
+        assert_eq!(grid.drawn_depth(0, 0, grid.depth(0, 0)), Depth::Dry, "a meadow is still dry");
+        // Without a biome there is no deck and the river stops at the road.
+        let plain = build(W, H, 7, &world(&roads), &world(&river), &world(&wall), Look::default());
+        assert!(plain.decks().is_empty());
+        assert_eq!(plain.drawn_depth(4, 5, plain.depth(4, 5)), Depth::Dry);
+        assert_eq!(plain.floor_px(x, y), FloorPx::Road);
+        // The road beside the deck still joins it.
+        assert_eq!(tile(&grid, 3, 5), tile(&plain, 3, 5), "the road's own tile is the rules'");
     }
 
     #[test]

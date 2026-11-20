@@ -15,6 +15,15 @@ from the pristine original every time this runs - one file per
           patches (`Material::Sand`, `Theme::drifts`). Wood, roofs, water
           and greys are untouched.
 
+A biome (docs/biomes.md) brings a tileset of its own, made the same way and
+written beside them:
+
+  valley  static/punyworld/punyworld-overworld-tileset-valley.png - the
+          grass retint, then its water in the valley's alpine ramp, the
+          open water (tile 305, exactly the cells no hull enters) a step
+          darker, and the olive shore outline in damp silt (`AFTER`,
+          `DEEP`; the steps are `biome::VALLEY`'s, BB-192).
+
 Before retinting, `tools/water_tiles.py` composes the water tiles the
 pack lacks (saddles and corner mouths) into transparent cells of the
 image in memory, so both themes carry them in their own tones and
@@ -89,6 +98,35 @@ THEMES = {
             (110.0, 0.0, 1.00, 1.00),
         ],
         "table": {},
+    },
+    "valley": {
+        "dst": "static/punyworld/punyworld-overworld-tileset-valley.png",
+        # The grass theme's retint first (`base`), then `after` on what it
+        # made, then `deep` on the open water's own tile.
+        "base": "grass",
+        "after": {
+            # the water, by the role each tone plays (docs/biomes.md)
+            hx("#0E818C"): hx("#145F70"),  # the shadow under a bank
+            hx("#4A7A72"): hx("#145F70"),
+            hx("#0A90A0"): hx("#1B7584"),  # darker water
+            hx("#04A0B4"): hx("#258E9A"),  # the water itself
+            hx("#15AEB9"): hx("#38A5A9"),  # its lit part
+            hx("#23C0BF"): hx("#38A5A9"),
+            hx("#1DCCCB"): hx("#6CC7C0"),  # ripples
+            hx("#13DBDA"): hx("#6CC7C0"),
+            hx("#81E5EF"): hx("#B4E6DE"),  # glints
+            # the olive shore outline -> damp silt, its light steps to
+            # packed earth, the sandy specks along it to gravel
+            hx("#4E5A39"): hx("#554536"),
+            hx("#5B6641"): hx("#6E5A44"),
+            hx("#67744D"): hx("#977F55"),
+            hx("#76855A"): hx("#977F55"),
+            hx("#BDAB70"): hx("#C9B993"),
+            hx("#BAA666"): hx("#C9B993"),
+        },
+        # The open water, a calm darker tone: the one tile drawn there
+        # (`ground::WATER_SHORE[0b1111]`, which has no animation).
+        "deep": {"tiles": [305], "table": {hx("#258E9A"): hx("#165A6A")}},
     },
     "desert": {
         "dst": "static/punyworld/punyworld-overworld-tileset-desert.png",
@@ -170,6 +208,8 @@ def write(name, theme):
     # retint so they take each theme's tones (tools/water_tiles.py).
     water_tiles.compose(img)
     px = img.load()
+    base = THEMES[theme["base"]] if "base" in theme else theme
+    after = theme.get("after", {})
     cache = {}
     for y in range(img.height):
         for x in range(img.width):
@@ -179,9 +219,21 @@ def write(name, theme):
             key = (r, g, b)
             out = cache.get(key)
             if out is None:
-                out = retint(key, theme)
+                out = retint(key, base)
+                out = after.get(out, out)
                 cache[key] = out
             px[x, y] = (out[0], out[1], out[2], a)
+    deep = theme.get("deep")
+    if deep:
+        T, COLS = water_tiles.T, water_tiles.COLS
+        for tid in deep["tiles"]:
+            tx, ty = (tid % COLS) * T, (tid // COLS) * T
+            for y in range(ty, ty + T):
+                for x in range(tx, tx + T):
+                    r, g, b, a = px[x, y]
+                    hit = deep["table"].get((r, g, b))
+                    if hit is not None:
+                        px[x, y] = (hit[0], hit[1], hit[2], a)
     dst = theme["dst"]
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     img.save(dst)
@@ -189,7 +241,7 @@ def write(name, theme):
     for label, rgb in [("grass", (0x85, 0xA6, 0x43)), ("dirt", (0xC4, 0xB2, 0x53)),
                        ("sand", (0xC9, 0xB2, 0x66)), ("tuft", (0x7E, 0x9E, 0x3F))]:
         print(f"  {label}: #{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X} -> "
-              f"#{'%02X%02X%02X' % retint(rgb, theme)}")
+              f"#{'%02X%02X%02X' % retint(rgb, base)}")
 
 
 def main():

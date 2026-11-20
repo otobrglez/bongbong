@@ -90,9 +90,42 @@ arithmetic, the same on every platform.
 Each biome carries a water ramp (`biome::WaterRamp`), one step for each
 role the tileset's water colours play, and its own tone for open water no
 hull enters, so a ford and a lake read apart for the first time (today
-they share one colour). The tiles, the current marks, spray, foam, the
-minimap and the rain shader take it in stage 2; until then the water is
-today's.
+they share one colour).
+
+- **Its own tileset.** `tools/retint_ground.py` writes
+  `punyworld-overworld-tileset-valley.png`: the grass retint, then the
+  water in the ramp, the olive shore outline in silt, and tile 305 - the
+  one tile a deep cell draws, `WATER_SHORE[0b1111]` - in the open-water
+  tone. The field draws it as `Sheet::BiomeGround` in place of the theme's
+  tileset (`GroundGrid::sheet`); the window loads one per biome up front.
+- **Open water and the ford.** `FloorPx::Deep` is tile 305's water, the
+  rules' deep cells. The materials soften it into a body rather than the
+  cells' squares (`biome::deepness`): every deep cell adds a cone 26 px
+  across its centre, full to 16 px, so a run of cells is solid with a
+  rounded edge that fades within about 10 px of the deep cells, and a lone
+  deep cell - Serpent River has one - is a round pool. The ford shows a
+  pebble of its bed (`WaterRamp::bed`) on about one block in 23 away from
+  the open water.
+- **What follows it.** The current marks take the ripple tone, the spray
+  the ripple and water tones (`fx::water_tints`), the minimap its light
+  and open-water tones (`minimap::Class::color_in`). Foam stays white. The
+  rain and ice shaders still tell water by colour, and every valley water
+  tone passes their test; moving them onto the tile mask is stage 4.
+
+### Decks (stage 2, BB-194)
+
+A road cell between two stretches of water - on Serpent River, (43, 18)
+and (44, 18) - is dry road to the rules, so today the river stops at one
+side and starts again on the other. With a biome the picture bridges it
+(`GroundGrid::bridge`): every such map road cell that no wall stands on is
+a `Deck`, the tiles round it are resolved as if it were water so the river
+runs on under it, a road keeps the rules' own reading so it still joins the
+deck, and the materials lay planks over it - a band 24 px across the road,
+railed on both edges, planks running across the water. A deck's water has
+no current. Nothing that plays sees any of it: `WaterLayout`, the nav
+grid, footing, tread marks and the minimap read the map's own layout, and
+the probe plays the same round either way. Real bridges with their own
+rules are BB-62.
 
 ### Later stages
 
@@ -111,6 +144,8 @@ a field rendered by the game's own painter with every sprite left as it is.
 |---|---|
 | Water: edge, dark, fill, light, ripple, glint | `#145F70` `#1B7584` `#258E9A` `#38A5A9` `#6CC7C0` `#B4E6DE` |
 | Open water: fill, dark | `#165A6A` `#114B59` |
+| A pebble on a ford's bed | `#5E9C92` |
+| Deck: rail, seam, planks | `#3A2A1C` `#4E3A28` `#8A6A48` `#7A5C3D` |
 | Gravel: pale, middle, dark | `#E2D4B0` `#C9B993` `#A99A78` |
 | Silt: away from the water, beside it | `#6E5A44` `#554536` |
 | Road shoulder | `#B09868` `#977F55` |
@@ -127,7 +162,11 @@ The water roles map from today's tileset colours: edge ← `#0E818C`,
   today's road and the ammo crate are 30 apart
   (`biome::tests::every_material_stands_apart_from_every_seat_pickup_and_shell`).
   The closest valley pair is the pale gravel and seat 3's silver, 24.9.
-  Open water stands ΔE 10 from a ford.
+  Open water stands ΔE 10 from a ford, and both the ford and open water
+  stand ΔE 20 from every seat colour, the teal hull and glass - but seat 8,
+  whose deep teal is ΔE 5 from the valley's ford (12 from today's cyan).
+  Seat 8's colour is to change (BB-202); until then the test holds it as
+  its one exception (`SEAT_ON_ITS_WATER`).
 - **De-greened.** Large areas stay deep green or earth tan, never olive or
   yellow-khaki; a meadow patch keeps green its strongest channel
   (`a_meadow_patch_stays_green`, docs/PALETTE.md).

@@ -144,5 +144,6 @@ group's `drive_foam_rate`.
 
 Sideways stream segments carry no current (their direction is ambiguous),
 there is no bridge tile (a road cell over water is dry ground and stays
-in the road autotile), oil does not float, wrecks do not sink, and no
+in the road autotile; a biome draws it as a plank deck with the river
+running on beneath, picture only - docs/biomes.md), oil does not float, wrecks do not sink, and no
 chassis is amphibious. Each is a separate decision.

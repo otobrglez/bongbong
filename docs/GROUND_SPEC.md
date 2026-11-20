@@ -491,5 +491,11 @@ a grass-fill colour), road dirt (a warm pixel of a road tile) or plain
 ground. `GroundGrid::floor_px` answers for any field pixel through it; a
 source pixel is a 2 px block. A biome (docs/biomes.md) places its materials
 by it, and `draw` lays that layer (`GroundGrid::materials`) right after the
-tiles. Run the script again after any change to the tables;
+tiles. Water in tile 305 (`WATER_SHORE[0b1111]`, the one tile a deep cell
+draws) is `FloorPx::Deep`, so the picture's open water is the rules' deep
+water exactly. A biome also draws its own retinted tileset
+(`Sheet::BiomeGround`) and bridges road cells between two stretches of
+water as plank decks (`GroundGrid::bridge`, docs/biomes.md), resolving the
+tiles round them as if they were water while the rules' `layout` stays
+the map's. Run the script again after any change to the tables;
 `tests::every_road_and_water_tile_has_a_mask` fails when it is behind.
