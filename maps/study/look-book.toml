@@ -1,0 +1,128 @@
+# look-book - every contact a biome has to draw, once, on a small field
+# (docs/biomes.md). Hand-authored: re-saving from the builder would drop
+# these comments.
+#
+# A two-cell ford runs down columns 9-10, broken by the road along row 6; a
+# lake at 17-22 x 1-4 has open water in its middle (18-21 x 2-3); a wood
+# stands in the south-west, willows and birches on the banks; a run of
+# glass, brick, timber, concrete and iron stands on row 9; tall grass, four
+# crates and the bong fill the rest. A sandbox: no enemies and nothing to
+# win - a fixture for screenshots and the palette card, not a level.
+
+version = 1
+size = [26, 13]
+tanks = 0
+tank = "longbow"
+tank2 = "obelisk"
+biome = "valley"
+cells."9,0" = { kind = "water" }
+cells."10,0" = { kind = "water" }
+cells."7,1" = { kind = "willow" }
+cells."9,1" = { kind = "water" }
+cells."10,1" = { kind = "water" }
+cells."12,1" = { kind = "birch" }
+cells."16,1" = { kind = "tree" }
+cells."17,1" = { kind = "water" }
+cells."18,1" = { kind = "water" }
+cells."19,1" = { kind = "water" }
+cells."20,1" = { kind = "water" }
+cells."21,1" = { kind = "water" }
+cells."22,1" = { kind = "water" }
+cells."1,2" = { kind = "tall_grass" }
+cells."2,2" = { kind = "tall_grass" }
+cells."3,2" = { kind = "tall_grass" }
+cells."9,2" = { kind = "water" }
+cells."10,2" = { kind = "water" }
+cells."17,2" = { kind = "water" }
+cells."18,2" = { kind = "water" }
+cells."19,2" = { kind = "water" }
+cells."20,2" = { kind = "water" }
+cells."21,2" = { kind = "water" }
+cells."22,2" = { kind = "water" }
+cells."1,3" = { kind = "tall_grass" }
+cells."2,3" = { kind = "tall_grass" }
+cells."7,3" = { kind = "willow" }
+cells."9,3" = { kind = "water" }
+cells."10,3" = { kind = "water" }
+cells."13,3" = { kind = "road" }
+cells."14,3" = { kind = "road" }
+cells."15,3" = { kind = "road" }
+cells."17,3" = { kind = "water" }
+cells."18,3" = { kind = "water" }
+cells."19,3" = { kind = "water" }
+cells."20,3" = { kind = "water" }
+cells."21,3" = { kind = "water" }
+cells."22,3" = { kind = "water" }
+cells."23,3" = { kind = "pine" }
+cells."9,4" = { kind = "water" }
+cells."10,4" = { kind = "water" }
+cells."13,4" = { kind = "road" }
+cells."17,4" = { kind = "water" }
+cells."18,4" = { kind = "water" }
+cells."19,4" = { kind = "water" }
+cells."20,4" = { kind = "water" }
+cells."21,4" = { kind = "water" }
+cells."22,4" = { kind = "water" }
+cells."8,5" = { kind = "start" }
+cells."9,5" = { kind = "water" }
+cells."10,5" = { kind = "water" }
+cells."13,5" = { kind = "road" }
+cells."16,5" = { kind = "tall_grass" }
+cells."17,5" = { kind = "tall_grass" }
+cells."0,6" = { kind = "road" }
+cells."1,6" = { kind = "road" }
+cells."2,6" = { kind = "road" }
+cells."3,6" = { kind = "road" }
+cells."4,6" = { kind = "road" }
+cells."5,6" = { kind = "road" }
+cells."6,6" = { kind = "road" }
+cells."7,6" = { kind = "road" }
+cells."8,6" = { kind = "road" }
+cells."9,6" = { kind = "road" }
+cells."10,6" = { kind = "road" }
+cells."11,6" = { kind = "road" }
+cells."12,6" = { kind = "road" }
+cells."13,6" = { kind = "road" }
+cells."14,6" = { kind = "pickup", pickup = "ammo" }
+cells."15,6" = { kind = "road" }
+cells."16,6" = { kind = "road" }
+cells."17,6" = { kind = "road" }
+cells."18,6" = { kind = "road" }
+cells."19,6" = { kind = "road" }
+cells."20,6" = { kind = "road" }
+cells."21,6" = { kind = "road" }
+cells."22,6" = { kind = "road" }
+cells."23,6" = { kind = "road" }
+cells."24,6" = { kind = "road" }
+cells."25,6" = { kind = "road" }
+cells."9,7" = { kind = "water" }
+cells."10,7" = { kind = "water" }
+cells."11,7" = { kind = "start2" }
+cells."21,7" = { kind = "pickup", pickup = "shield" }
+cells."5,8" = { kind = "pickup", pickup = "health" }
+cells."9,8" = { kind = "water" }
+cells."10,8" = { kind = "water" }
+cells."2,9" = { kind = "pine" }
+cells."3,9" = { kind = "pine" }
+cells."8,9" = { kind = "willow" }
+cells."9,9" = { kind = "water" }
+cells."10,9" = { kind = "water" }
+cells."13,9" = { kind = "wall", material = "glass" }
+cells."14,9" = { kind = "wall", material = "glass" }
+cells."15,9" = { kind = "wall", material = "brick" }
+cells."16,9" = { kind = "wall", material = "brick" }
+cells."17,9" = { kind = "wall", material = "wood" }
+cells."18,9" = { kind = "wall", material = "concrete" }
+cells."19,9" = { kind = "wall", material = "iron" }
+cells."23,9" = { kind = "bong" }
+cells."2,10" = { kind = "pine" }
+cells."3,10" = { kind = "tree" }
+cells."9,10" = { kind = "water" }
+cells."10,10" = { kind = "water" }
+cells."4,11" = { kind = "tree" }
+cells."9,11" = { kind = "water" }
+cells."10,11" = { kind = "water" }
+cells."11,11" = { kind = "birch" }
+cells."24,11" = { kind = "pickup", pickup = "laser" }
+cells."9,12" = { kind = "water" }
+cells."10,12" = { kind = "water" }
