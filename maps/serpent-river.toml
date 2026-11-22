@@ -11,7 +11,10 @@
 # east.
 #
 # Pine forests crowd both banks, a timber watermill sits on the bend, fields
-# behind fences, reed beds along the water. Long sight lines down the river
+# behind fences, reed beds along the water. Where a wood faces the river its
+# edge turns to willow, with birch a step behind it (BB-195): softer trees
+# than the broadleaf - a willow takes 10 to fell, a birch 8 and goes over
+# quicker under a ram - that hide a hull just the same. Long sight lines down the river
 # for the longbow; laser and missiles on the far bank's hills.
 
 version = 1
@@ -49,10 +52,10 @@ cells."19,2" = { kind = "water" }
 cells."20,2" = { kind = "water" }
 cells."21,2" = { kind = "water" }
 cells."22,2" = { kind = "water" }
-cells."31,2" = { kind = "tree" }
+cells."31,2" = { kind = "willow" }
 cells."32,2" = { kind = "pine" }
 cells."33,2" = { kind = "pine" }
-cells."35,2" = { kind = "tree" }
+cells."35,2" = { kind = "birch" }
 cells."36,2" = { kind = "tree" }
 cells."37,2" = { kind = "pine" }
 cells."39,2" = { kind = "road" }
@@ -68,12 +71,12 @@ cells."19,3" = { kind = "water" }
 cells."20,3" = { kind = "water" }
 cells."21,3" = { kind = "water" }
 cells."22,3" = { kind = "water" }
-cells."31,3" = { kind = "tree" }
+cells."31,3" = { kind = "willow" }
 cells."32,3" = { kind = "pine" }
 cells."33,3" = { kind = "pine" }
-cells."34,3" = { kind = "tree" }
+cells."34,3" = { kind = "willow" }
 cells."35,3" = { kind = "tree" }
-cells."36,3" = { kind = "tree" }
+cells."36,3" = { kind = "willow" }
 cells."37,3" = { kind = "pine" }
 cells."39,3" = { kind = "road" }
 cells."2,4" = { kind = "pine" }
@@ -447,9 +450,9 @@ cells."23,25" = { kind = "pine" }
 cells."24,25" = { kind = "pine" }
 cells."25,25" = { kind = "pine" }
 cells."26,25" = { kind = "pine" }
-cells."27,25" = { kind = "tree" }
+cells."27,25" = { kind = "birch" }
 cells."28,25" = { kind = "tree" }
-cells."29,25" = { kind = "tree" }
+cells."29,25" = { kind = "willow" }
 cells."30,25" = { kind = "pine" }
 cells."38,25" = { kind = "water" }
 cells."39,25" = { kind = "water" }
@@ -475,7 +478,7 @@ cells."24,26" = { kind = "pine" }
 cells."25,26" = { kind = "tree" }
 cells."26,26" = { kind = "tree" }
 cells."27,26" = { kind = "tree" }
-cells."28,26" = { kind = "tree" }
+cells."28,26" = { kind = "birch" }
 cells."29,26" = { kind = "pine" }
 cells."30,26" = { kind = "pine" }
 cells."38,26" = { kind = "water" }
@@ -529,14 +532,14 @@ cells."25,28" = { kind = "pine" }
 cells."26,28" = { kind = "pine" }
 cells."27,28" = { kind = "pine" }
 cells."28,28" = { kind = "tree" }
-cells."29,28" = { kind = "tree" }
+cells."29,28" = { kind = "willow" }
 cells."30,28" = { kind = "pine" }
 cells."37,28" = { kind = "tall_grass" }
 cells."38,28" = { kind = "water" }
 cells."39,28" = { kind = "water" }
 cells."46,28" = { kind = "pickup", pickup = "missiles" }
 cells."52,28" = { kind = "pine" }
-cells."53,28" = { kind = "tree" }
+cells."53,28" = { kind = "birch" }
 cells."54,28" = { kind = "tree" }
 cells."55,28" = { kind = "tree" }
 cells."56,28" = { kind = "tree" }
@@ -555,7 +558,7 @@ cells."29,29" = { kind = "tree" }
 cells."30,29" = { kind = "pine" }
 cells."38,29" = { kind = "water" }
 cells."39,29" = { kind = "water" }
-cells."54,29" = { kind = "tree" }
+cells."54,29" = { kind = "birch" }
 cells."55,29" = { kind = "pine" }
 cells."56,29" = { kind = "tree" }
 cells."57,29" = { kind = "tree" }
