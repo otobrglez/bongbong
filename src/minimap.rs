@@ -331,7 +331,7 @@ pub struct Minimap {
     cols: usize,
     rows: usize,
     theme: Theme,
-    /// The biome its water is drawn in.
+    /// The biome its water and open ground are drawn in (`texel`).
     biome: Option<crate::biome::Biome>,
     /// Per cell, what lies on the floor and what stands on it.
     floor: Vec<Class>,
@@ -368,9 +368,24 @@ impl Minimap {
 
     fn of_classes(field: (f32, f32), theme: Theme, biome: Option<crate::biome::Biome>, floor: Vec<Class>, solid: Vec<Option<Class>>) -> Minimap {
         let (cols, rows) = cells_of(field);
-        let texels = floor.iter().zip(&solid).map(|(f, s)| s.unwrap_or(*f).color_in(theme, biome)).collect();
-        let image = BlockImage { width: cols, height: rows, block: 1, texels, stamp: next_stamp(), patches: Vec::new() };
-        Minimap { field, cols, rows, theme, biome, floor, solid, image }
+        let image = BlockImage { width: cols, height: rows, block: 1, texels: Vec::new(), stamp: next_stamp(), patches: Vec::new() };
+        let mut minimap = Minimap { field, cols, rows, theme, biome, floor, solid, image };
+        minimap.image.texels = (0..cols * rows).map(|i| minimap.texel(i)).collect();
+        minimap
+    }
+
+    /// The colour of cell `i`: its class's (`Class::color_in`), and under a
+    /// biome, open ground in the biome's shapes - a broad gravel shelf on a
+    /// bank, the meadow's patches (`biome::BiomeLook::minimap_ground`).
+    fn texel(&self, i: usize) -> Color {
+        let class = self.solid[i].unwrap_or(self.floor[i]);
+        let plain = class.color_in(self.theme, self.biome);
+        let Some(biome) = self.biome.filter(|_| class == Class::Ground) else { return plain };
+        let (col, row) = ((i % self.cols) as i32, (i / self.cols) as i32);
+        let wet = |c: i32, r: i32| self.index(c, r).is_some_and(|j| matches!(self.floor[j], Class::Shallow | Class::Deep | Class::Ice));
+        let bank = wet(col - 1, row) || wet(col + 1, row) || wet(col, row - 1) || wet(col, row + 1);
+        let centre = crate::map::cell_to_world(col, row);
+        biome.look().minimap_ground(plain, centre.x, centre.y, bank)
     }
 
     /// The image: a texel per cell, row by row.
@@ -428,10 +443,24 @@ impl Minimap {
 
     /// Recolour the texels `cells` (indices) from their classes, and note
     /// the rectangle round the ones whose colour moved as one patch.
-    fn repaint_texels(&mut self, cells: Vec<usize>) -> bool {
+    fn repaint_texels(&mut self, mut cells: Vec<usize>) -> bool {
+        // Under a biome a cell's colour reads its neighbours' water too.
+        if self.biome.is_some() {
+            let around: Vec<usize> = cells
+                .iter()
+                .flat_map(|&i| {
+                    let (c, r) = ((i % self.cols) as i32, (i / self.cols) as i32);
+                    [(c - 1, r), (c + 1, r), (c, r - 1), (c, r + 1)]
+                })
+                .filter_map(|(c, r)| self.index(c, r))
+                .collect();
+            cells.extend(around);
+            cells.sort_unstable();
+            cells.dedup();
+        }
         let mut bounds: Option<(usize, usize, usize, usize)> = None;
         for i in cells {
-            let color = self.solid[i].unwrap_or(self.floor[i]).color_in(self.theme, self.biome);
+            let color = self.texel(i);
             if self.image.texels[i] == color {
                 continue;
             }

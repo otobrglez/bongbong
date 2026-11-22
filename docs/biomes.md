@@ -183,12 +183,45 @@ rules are BB-62.
   the whole of it is open ground. This is level design, live whatever the
   biome switch says.
 
+### Everything that shows the map (stage 5, BB-197)
+
+- **The whole field.** The materials were always baked over the whole
+  field, so all of Serpent River takes the look at once: the western
+  meadow approach stays quiet - patches only - the wooded pockets sit in
+  meadow, and every reach of the river has its banks. Nothing in this stage
+  is placed by hand.
+- **The margins.** The floor carried past an arena (`GroundGrid::beyond`)
+  carries the materials on (`biome::bake_beyond`, keyed by the world block
+  so they meet the field's without a seam) and thins them away through the
+  Bayer pattern by `ground::BEYOND_MATERIAL_CELLS` (6) past the edge - the
+  margins of a tablet or an ultrawide round a standard arena; beyond that
+  the margin shade's plateau hides the ground. The shade still deepens off
+  the playfield, so the edge of play reads as before. `render::margin`
+  uploads the layer itself. A followed field map has no margins.
+- **The minimap** (`Minimap::texel`): open ground beside water where the
+  bank's gravel shelf is broad takes the shelf's middle stone, and the
+  meadow takes its patches from the same noise as the field
+  (`BiomeLook::minimap_ground`), so the small picture has the field's large
+  shapes. Fords and open water were the biome's already. The builder's
+  navigator and the Load list's thumbnails are the same minimap.
+- **The thumbnail.** The CPU thumbnail always drew the materials; the GPU
+  one (`mapshot --renderer gpu`) now uploads them too.
+- **Tread marks** (docs/ground-memory.md "Colours"): a mark takes the
+  colours of the material under its block (`GroundGrid::floor_material`,
+  `Ramp::in_biome`) - pressed meadow deepening into earth, not olive; dark
+  tracks crushed into a gravel shelf; dark mud on a bank's silt; dry dust on
+  packed earth and the road - and a hull's wet carry out of a ford prints
+  the silt's mud into the meadow.
+
+Measured on 2026-11-22: a 1280x720 window holds frame p99 within noise with
+the biome on (`tools/perf/scene.py`, 12 s a scene: Serpent River 7.06 off,
+7.03 on; Longwater 7.33, 7.30). The CPU canvas pays for blending the layer
+every frame (`just perf-paint`, 60 frames: Serpent River 13.7 to 15.8 ms,
+Longwater 49.9 to 57.0 ms); the window draws it as one texture.
+
 ### Later stages
 
-The whole map with its margins, minimap,
-thumbnail and tread marks (BB-197), the other two biomes and the builder's
-LOOK row (BB-198). The floor past an arena's field (`GroundGrid::beyond`)
-carries no materials yet: a block layer starts at the field's corner.
+The other two biomes and the builder's LOOK row (BB-198).
 
 ## The valley's palette
 

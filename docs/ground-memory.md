@@ -139,7 +139,20 @@ map's theme and `Sky::of` the round's weather):
 Every ramp is steps from the Puny palette (`tools/punypalette.py`) and the
 retinted ground tileset's own pixels, never a blend; the tables are `GRASS`,
 `ROAD`, `SAND`, `DESERT_DUST`, `DESERT_ROAD` and `DESERT_SAND` in `wear.rs`,
-with the snow ramp built over each ground's dark step. Burnt-in marks take
+with the snow ramp built over each ground's dark step.
+
+Under a biome (docs/biomes.md) a mark on grass or a road takes the ramp of
+the material under its block instead (`Ramp::in_biome`, built from the
+biome's own tones; `GroundGrid::floor_material` reads the block back off
+the materials layer, `wear::BiomeFloor` carries it to the bake): pressed
+meadow lies lighter and deepens into the biome's earth rather than the
+grass ramp's olive; on a gravel shelf the stones crush into dark tracks
+with pale stones pushed up beside them; on a bank's silt it is dark wet
+mud; on packed earth - a road's shoulder, a furrow, the road's own dirt -
+dry dust. Wet tracks out of a ford print the silt's mud on any of them, so
+a hull's carry off the bank shows as a brown trail into the meadow. It is
+the bake's choice alone: what is pressed, and every rule above, is the
+same with or without a biome. Burnt-in marks take
 `pyro::CHAR`. A wood's floor and the ruts baked along its trails
 (`woods.rs`, docs/WOODS.md) are a picture over the ground, not a ground of
 their own: a mark pressed there takes the ramp of the ground under it and

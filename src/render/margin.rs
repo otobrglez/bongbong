@@ -2,7 +2,8 @@
 //! item 7): the world an arena shows past its field, drawn into a target
 //! of its own, a texel per world pixel, for `Game::render` to put round the
 //! field on the window (`render::view::present_into`). The round's ground
-//! carried on out of the field (`Margin::ground`) and the shade that takes
+//! carried on out of the field (`Margin::ground`, a biome's materials
+//! thinning away over it) and the shade that takes
 //! it off the playfield (`Margin::shade`), then the round's sky the way the
 //! field takes it: the ground, light and sky passes of `render::weather`
 //! over this target's own world rectangle, under a light map of the
@@ -22,7 +23,7 @@ use sola_raylib::prelude::*;
 use crate::ground::{self, MarginShade, SHADE_BLOCK};
 use crate::margin::{around, overlap, Margin, MarginFrame};
 use crate::math::{Color, Rectangle};
-use crate::render::canvas::{BlockTexture, GpuCanvas};
+use crate::render::canvas::{BlockTexture, GpuCanvas, Sheets};
 use crate::render::game::Textures;
 use crate::render::weather::{self, CellMask, MaskTexture, PassView, WeatherFrame, WeatherFx};
 
@@ -78,6 +79,9 @@ pub struct MarginFx {
     kept: Option<Kept>,
     /// The shade's image on the GPU.
     shade: BlockTexture,
+    /// The biome's materials carried past the field
+    /// (`GroundGrid::materials` of `Margin::ground`), on the GPU.
+    materials: BlockTexture,
     targets: Option<Targets>,
     /// A light map of one texel, the ambient.
     light: Option<RenderTexture2D>,
@@ -126,15 +130,16 @@ impl MarginFx {
             self.margin = Some(Margin::new(scene.ground, scene.field, scene.theme, frame.cells, &tuning()));
             self.made += 1;
         }
-        let MarginFx { margin, made, kept, shade, targets, light, mask, .. } = self;
+        let MarginFx { margin, made, kept, shade, materials, targets, light, mask, .. } = self;
         let margin = margin.as_ref().expect("made above");
         let shade_texture = shade.sync(rl, thread, &margin.shade.image).map(|(_, texture)| texture);
+        let materials = margin.ground.materials().and_then(|image| materials.sync(rl, thread, image));
         let asked = sky.is_none().then(|| Kept {
             frame: *frame,
             margin: *made,
             shade: shade_texture.map_or(0, |_| margin.shade.image.stamp),
             theme: margin.theme,
-            sheet: crate::render::canvas::Sheets::texture(textures, crate::canvas::Sheet::Ground(margin.theme)).id,
+            sheet: textures.texture(margin.ground.sheet()).id,
             backdrop,
             clock: ground::clock_step(margin.moves, scene.time, &tuning()),
         });
@@ -150,7 +155,8 @@ impl MarginFx {
         let parts = frame.parts(UNDER_FIELD_PX);
         let local: Vec<Rectangle> = parts.iter().map(|p| Rectangle::new(p.x - rect.x, p.y - rect.y, p.width, p.height)).collect();
         let reach = parts.iter().copied().reduce(bounds).unwrap_or(rect);
-        let floor = Floor { margin, shade: shade_texture, textures, parts: &parts, reach, time: scene.time };
+        let sheets = WithMaterials { textures, materials };
+        let floor = Floor { margin, shade: shade_texture, sheets: &sheets, parts: &parts, reach, time: scene.time };
         let ground_and_shade = |rl: &mut RaylibHandle, a: &mut RenderTexture2D| {
             rl.draw_texture_mode(thread, crate::frame_stages::target(a), |mut d| {
                 d.clear_background(backdrop);
@@ -290,12 +296,35 @@ fn bounds(a: Rectangle, b: Rectangle) -> Rectangle {
     Rectangle::new(x0, y0, x1 - x0, y1 - y0)
 }
 
+/// The round's textures, and the margins' own materials layer on the GPU.
+struct WithMaterials<'a, 't> {
+    textures: &'a Textures<'t>,
+    materials: Option<(u64, &'a Texture2D)>,
+}
+
+impl Sheets for WithMaterials<'_, '_> {
+    fn texture(&self, sheet: crate::canvas::Sheet) -> &Texture2D {
+        self.textures.texture(sheet)
+    }
+
+    fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
+        match self.materials {
+            Some((held, texture)) if held == stamp => Some(texture),
+            _ => self.textures.blocks_texture(stamp),
+        }
+    }
+
+    fn turn_shader(&self) -> Option<&crate::render::turn::TurnShader> {
+        self.textures.turn_shader()
+    }
+}
+
 /// What the margins' floor is painted from, in world pixels.
 struct Floor<'a, 't> {
     margin: &'a Margin,
     /// The shade's image on the GPU; `None` paints the plateau alone.
     shade: Option<&'a Texture2D>,
-    textures: &'a Textures<'t>,
+    sheets: &'a WithMaterials<'a, 't>,
     /// The parts drawn (`MarginFrame::parts`), none overlapping, and the
     /// world they reach across.
     parts: &'a [Rectangle],
@@ -307,7 +336,7 @@ impl Floor<'_, '_> {
     /// The round's ground carried past its field, the cells the parts
     /// reach across: opaque tiles, drawn once each.
     fn ground(&self, d: &mut impl RaylibDraw) {
-        ground::draw(&mut GpuCanvas::culled(d, self.textures, Some(self.reach)), &self.margin.ground, self.margin.theme, self.time);
+        ground::draw(&mut GpuCanvas::culled(d, self.sheets, Some(self.reach)), &self.margin.ground, self.margin.theme, self.time);
     }
 
     /// The shade, part by part so no block of it is laid twice: its image

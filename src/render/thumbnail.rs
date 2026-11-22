@@ -42,11 +42,13 @@ impl Sheets for GpuSheets {
     }
 }
 
-/// The loaded sheets plus one map's floor shade, uploaded for this render.
+/// The loaded sheets plus one map's floor layers - its shade, the lava's
+/// banks, a biome's materials - uploaded for this render.
 struct WithShade<'a> {
     sheets: &'a GpuSheets,
     shade: Option<(u64, &'a Texture2D)>,
     banks: Option<(u64, &'a Texture2D)>,
+    materials: Option<(u64, &'a Texture2D)>,
 }
 
 impl Sheets for WithShade<'_> {
@@ -55,7 +57,7 @@ impl Sheets for WithShade<'_> {
     }
 
     fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
-        [self.shade, self.banks].into_iter().flatten().find(|(held, _)| *held == stamp).map(|(_, texture)| texture)
+        [self.shade, self.banks, self.materials].into_iter().flatten().find(|(held, _)| *held == stamp).map(|(_, texture)| texture)
     }
 }
 
@@ -69,7 +71,9 @@ pub fn render_gpu(rl: &mut RaylibHandle, thread: &RaylibThread, sheets: &GpuShee
     let shade = upload.sync(rl, thread, game.ground.shade());
     let mut upload_banks = BlockTexture::default();
     let banks = if game.lava().is_empty() { None } else { upload_banks.sync(rl, thread, game.lava().banks()) };
-    let sheets = WithShade { sheets, shade, banks };
+    let mut upload_materials = BlockTexture::default();
+    let materials = game.ground.materials().and_then(|image| upload_materials.sync(rl, thread, image));
+    let sheets = WithShade { sheets, shade, banks, materials };
     rl.draw_texture_mode(thread, crate::frame_stages::target(&mut scene), |mut d| {
         d.clear_background(Color::WHITE);
         game.paint_field(&mut GpuCanvas::new(&mut d, &sheets), PAINT);

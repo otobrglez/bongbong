@@ -410,8 +410,11 @@ impl Game {
             self.tile_index.borrow_mut().rebuild(&self.world);
         }
         let surface = |p: crate::Position| self.surface_at(p);
+        // Under a biome the marks take the colours of its materials.
+        let material = |bx: i32, by: i32| self.ground.floor_material(bx, by);
+        let floor = self.ground.biome().map(|biome| crate::wear::BiomeFloor { biome, at: &material });
         self.wear.refresh_pictures(
-            &crate::wear::PictureFrame { time: self.time, look: self.wear_look(), views, surface: &surface },
+            &crate::wear::PictureFrame { time: self.time, look: self.wear_look(), views, surface: &surface, floor },
             &crate::tuning::tuning(),
         );
         if self.lava.is_empty() && self.volcanoes.is_empty() && !self.fires.iter().any(|f| f.lava) {

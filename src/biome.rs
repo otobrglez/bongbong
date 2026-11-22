@@ -227,14 +227,39 @@ fn distance(w: usize, h: usize, near: impl Fn(usize) -> bool) -> Vec<u16> {
 /// the tiles lay on each block, row by row (`GroundGrid::floor_blocks`).
 /// See the module comment for what goes where.
 pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[Deck], places: &Places, stamp: u64) -> BlockImage {
+    let mut texels = lay(look, (0, 0), w, h, class);
+    for &(cell, across) in &places.fields {
+        lay_furrows(look, cell, across, w, h, class, &mut texels);
+    }
+    for &(from, to) in &places.races {
+        lay_race(look, from, to, w, h, class, &mut texels);
+    }
+    for deck in decks {
+        lay_deck(look, deck, w, h, class, &mut texels);
+    }
+    BlockImage { width: w, height: h, block: 2, texels, stamp, patches: Vec::new() }
+}
+
+/// The materials carried past a field (`GroundGrid::beyond`, an arena's
+/// margins): `bake`'s silt, gravel, shoulders, meadow and open water over
+/// `w` x `h` blocks whose first lies at world block `at`, every choice
+/// hashed from the world block as on the field, so the two meet without a
+/// seam. No decks or places: those stand on the map's own cells.
+pub fn bake_beyond(look: &BiomeLook, at: (i32, i32), w: usize, h: usize, class: &[FloorPx], stamp: u64) -> BlockImage {
+    BlockImage { width: w, height: h, block: 2, texels: lay(look, at, w, h, class), stamp, patches: Vec::new() }
+}
+
+/// The materials of `w` x `h` blocks whose first is world block `at`, one
+/// texel a block (`bake`).
+fn lay(look: &BiomeLook, at: (i32, i32), w: usize, h: usize, class: &[FloorPx]) -> Vec<Color> {
     assert_eq!(class.len(), w * h, "a class a block");
     let to_water = distance(w, h, |i| class[i].is_water());
-    let deepness = deepness(w, h, class);
+    let deepness = deepness(at, w, h, class);
     let to_road = distance(w, h, |i| class[i] == FloorPx::Road);
     let clear = Color::new(0, 0, 0, 0);
     let mut texels = vec![clear; w * h];
     for (i, texel) in texels.iter_mut().enumerate() {
-        let (bx, by) = ((i % w) as i32, (i / w) as i32);
+        let (bx, by) = ((i % w) as i32 + at.0, (i / w) as i32 + at.1);
         let (x, y) = (bx as f32 * 2.0, by as f32 * 2.0);
         let threshold = crate::pyro::bayer(bx, by);
         let wet = to_water[i] as f32 * 2.0;
@@ -285,26 +310,17 @@ pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[De
             }
         };
     }
-    for &(cell, across) in &places.fields {
-        lay_furrows(look, cell, across, w, h, class, &mut texels);
-    }
-    for &(from, to) in &places.races {
-        lay_race(look, from, to, w, h, class, &mut texels);
-    }
-    for deck in decks {
-        lay_deck(look, deck, w, h, class, &mut texels);
-    }
-    BlockImage { width: w, height: h, block: 2, texels, stamp, patches: Vec::new() }
+    texels
 }
 
-/// How far into open water each block of a field `w` x `h` blocks lies,
-/// 0 to 1: every deep cell (one whose middle block is `FloorPx::Deep`)
+/// How far into open water each block of `w` x `h` blocks from world
+/// block `at` lies, 0 to 1: every deep cell (one whose middle block is `FloorPx::Deep`)
 /// adds a cone `DEEP_REACH` px across its centre, full within
 /// `DEEP_REACH - DEEP_FADE` px, and the sum is held to 1. A run of deep
 /// cells adds up to one body with a soft, rounded edge about where the
 /// cells end; a lone cell is a round pool. Only `sqrt` and the basic
 /// operations, exact on every platform.
-fn deepness(w: usize, h: usize, class: &[FloorPx]) -> Vec<f32> {
+fn deepness(at: (i32, i32), w: usize, h: usize, class: &[FloorPx]) -> Vec<f32> {
     // A cell's corner is 22.6 px from the four centres round it, so a
     // reach past that keeps a lake's middle solid where cells meet; full
     // out to 16 px, a deep cell's own edge.
@@ -312,13 +328,14 @@ fn deepness(w: usize, h: usize, class: &[FloorPx]) -> Vec<f32> {
     const DEEP_FADE: f32 = 10.0;
     let mut out = vec![0.0f32; w * h];
     // A cell is 16 blocks and centred on its world cell, so cell `c`'s
-    // middle block is `c * 16`.
-    let (cols, rows) = (w as i32 / 16 + 1, h as i32 / 16 + 1);
+    // middle block is `c * 16` - here `c * 16 - at`.
+    let first = |a: i32| a.div_euclid(16) + i32::from(a.rem_euclid(16) != 0);
+    let (c0, r0) = (first(at.0), first(at.1));
     let reach = (DEEP_REACH / 2.0).ceil() as i32;
-    for r in 0..rows {
-        for c in 0..cols {
-            let (cx, cy) = (c * 16, r * 16);
-            if cx as usize >= w || cy as usize >= h || class[cy as usize * w + cx as usize] != FloorPx::Deep {
+    for r in r0..=(at.1 + h as i32) / 16 {
+        for c in c0..=(at.0 + w as i32) / 16 {
+            let (cx, cy) = (c * 16 - at.0, r * 16 - at.1);
+            if cx < 0 || cy < 0 || cx as usize >= w || cy as usize >= h || class[cy as usize * w + cx as usize] != FloorPx::Deep {
                 continue;
             }
             for by in (cy - reach).max(0)..(cy + reach + 1).min(h as i32) {
@@ -539,6 +556,68 @@ fn shoulder(look: &BiomeLook, x: f32, y: f32, dirt: f32, threshold: f32) -> Opti
     Some(look.shoulder[if wear > 0.6 { 1 } else { 0 }])
 }
 
+/// What a tread mark is pressed into under a biome (`BiomeLook::floor_of`),
+/// which picks its colours (`wear.rs`): the meadow's grass, a gravel
+/// shelf, damp silt on a bank, or packed earth - a road's shoulder, a
+/// furrow, the road's own dirt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Floor {
+    Meadow,
+    Gravel,
+    Silt,
+    Earth,
+}
+
+impl Floor {
+    /// Every floor, in the order `Floor as usize` counts them.
+    pub const ALL: [Floor; 4] = [Floor::Meadow, Floor::Gravel, Floor::Silt, Floor::Earth];
+}
+
+impl BiomeLook {
+    /// The `Floor` a block of the materials layer (`bake`) shows, read back
+    /// from its texel: clear, or a meadow patch, is the meadow; a stone,
+    /// silt or packed earth is that. Water, the open-water softening and a
+    /// deck's planks are not ground a mark is pressed into: `None`. Every
+    /// tone of a look is its own (`a_looks_tones_are_each_its_own`), so the
+    /// reading is exact.
+    pub fn floor_of(&self, texel: Color) -> Option<Floor> {
+        if texel.a == 0 || texel == self.meadow_dark || texel == self.meadow_light {
+            Some(Floor::Meadow)
+        } else if self.gravel.contains(&texel) {
+            Some(Floor::Gravel)
+        } else if self.silt.contains(&texel) {
+            Some(Floor::Silt)
+        } else if self.shoulder.contains(&texel) {
+            Some(Floor::Earth)
+        } else {
+            None
+        }
+    }
+
+    /// The minimap's texel (`minimap::Minimap`) for an open ground cell
+    /// centred at field px (`x`, `y`) whose plain colour is `plain`, under
+    /// this look: a cell beside water where the bank's gravel shelf is broad
+    /// (the noise `gravel` reads) takes the shelf's middle stone, and the
+    /// meadow takes its patches (the noise `bake` reads) at their own
+    /// opacity, so the map's small picture has the field's large shapes.
+    pub fn minimap_ground(&self, plain: Color, x: f32, y: f32, bank: bool) -> Color {
+        if bank && noise(x, y, 44.0, 7) > 0.5 {
+            return self.gravel[1];
+        }
+        let n = noise(x, y, 220.0, 5);
+        let over = if n < 0.38 {
+            self.meadow_dark
+        } else if n > 0.64 {
+            self.meadow_light
+        } else {
+            return plain;
+        };
+        let a = over.a as u32;
+        let mix = |p: u8, o: u8| ((p as u32 * (255 - a) + o as u32 * a + 127) / 255) as u8;
+        Color::new(mix(plain.r, over.r), mix(plain.g, over.g), mix(plain.b, over.b), 255)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,6 +780,67 @@ mod tests {
             assert_eq!(map.cell(cell.0, cell.1), Some(&CellObject::TallGrass), "{cell:?} is a field of tall grass");
             assert!(across, "the farm's fences run east-west, so do its furrows");
         }
+    }
+
+    /// A look's ground tones are each its own, so a texel of its layer
+    /// reads back as the one material it is (`BiomeLook::floor_of`).
+    #[test]
+    fn a_looks_tones_are_each_its_own() {
+        for biome in Biome::ALL {
+            let look = biome.look();
+            let w = look.water;
+            let mut tones: Vec<Color> = vec![w.edge, w.dark, w.fill, w.light, w.ripple, w.glint, w.deep, w.deep_dark, w.bed, look.meadow_dark, look.meadow_light];
+            tones.extend(look.gravel.iter().chain(&look.silt).chain(&look.shoulder).chain(&look.deck));
+            for (i, a) in tones.iter().enumerate() {
+                assert!(!tones[i + 1..].contains(a), "{}: {a:?} plays two roles", biome.name());
+            }
+            assert_eq!(look.floor_of(look.gravel[2]), Some(Floor::Gravel));
+            assert_eq!(look.floor_of(look.silt[1]), Some(Floor::Silt));
+            assert_eq!(look.floor_of(look.shoulder[0]), Some(Floor::Earth));
+            assert_eq!(look.floor_of(look.meadow_light), Some(Floor::Meadow));
+            assert_eq!(look.floor_of(Color::new(0, 0, 0, 0)), Some(Floor::Meadow));
+            assert_eq!(look.floor_of(w.deep), None);
+            assert_eq!(look.floor_of(look.deck[2]), None);
+        }
+    }
+
+    /// The layer carried past a field (`bake_beyond`) is the field's own
+    /// wherever it reads the same tiles: every choice is keyed by the world
+    /// block, so the two meet without a seam.
+    #[test]
+    fn the_layer_beyond_a_field_is_the_fields_where_they_meet() {
+        let (w, h) = (128, 128);
+        let class = tiny_blocks();
+        let field = bake(&VALLEY, w, h, &class, &[], &Places::default(), 1);
+        // The same blocks laid from world block (-20, -12), with a strip
+        // of plain ground before them: far enough from the field's blocks
+        // that no distance a block reads changes.
+        let (bw, bh) = (w + 20, h + 12);
+        let mut wide = vec![FloorPx::Land; bw * bh];
+        for y in 0..h {
+            wide[(y + 12) * bw + 20..(y + 12) * bw + 20 + w].copy_from_slice(&class[y * w..(y + 1) * w]);
+        }
+        let beyond = bake_beyond(&VALLEY, (-20, -12), bw, bh, &wide, 2);
+        for y in 0..h {
+            for x in 0..w {
+                assert_eq!(beyond.texels[(y + 12) * bw + x + 20], field.texels[y * w + x], "block ({x}, {y})");
+            }
+        }
+    }
+
+    /// The minimap's open ground under the valley: a broad shelf's stone
+    /// on a bank, the meadow's patches elsewhere, plain ground between.
+    #[test]
+    fn the_minimap_ground_takes_the_shelves_and_the_patches() {
+        let plain = Color::new(0x5F, 0x91, 0x4B, 255);
+        let cells: Vec<(f32, f32)> = (0..60).flat_map(|r| (0..60).map(move |c| (c as f32 * 32.0, r as f32 * 32.0))).collect();
+        let banks: Vec<Color> = cells.iter().map(|&(x, y)| VALLEY.minimap_ground(plain, x, y, true)).collect();
+        assert!(banks.contains(&VALLEY.gravel[1]) && banks.iter().any(|c| *c != VALLEY.gravel[1]), "a shelf comes and goes along a bank");
+        let open: Vec<Color> = cells.iter().map(|&(x, y)| VALLEY.minimap_ground(plain, x, y, false)).collect();
+        assert!(!open.contains(&VALLEY.gravel[1]), "no stone away from the water");
+        let kinds: std::collections::BTreeSet<(u8, u8, u8)> = open.iter().map(|c| (c.r, c.g, c.b)).collect();
+        assert_eq!(kinds.len(), 3, "plain ground and two patches: {kinds:?}");
+        assert!(open.iter().all(|c| c.g > c.r && c.g > c.b), "every patch stays green");
     }
 
     #[test]
