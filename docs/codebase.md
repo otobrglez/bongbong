@@ -1030,7 +1030,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `spawn_loose` is a barrel's dynamic body, `is_loose`/`touching_loose` keep it out of the contact
   kinds; `props::sync_loose` reads drums back after the step and sets one off on a hard knock
   (`barrel_burst_speed`), `throw_loose` is a blast's throw. A drum is known by `Obstacle::home`
-  (`key_cell`) on the wire (`Snapshot::loose`, `Event::LooseGone`) and is no wall in the nav grid.
+  (`key_cell`) on the wire (`Snapshot::loose`, `Event::LooseGone`) and is no wall in the nav grid. The BB-209 props
+  (`obstacle::NEW_PROPS`: tyres, hay, a wooden crate, a barrier, a tank trap) take their body from
+  `Material::loose_body` and their knock from `Material::burst_speed`; docs/sandbags-barrels-fences.md
+  "New props".
 
 ## AI
 

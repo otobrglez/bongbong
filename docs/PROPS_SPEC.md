@@ -19,7 +19,7 @@ nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
 
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
-| `props_sheet.png` | 128x320 | 4 cols x 10 rows of 32x32 | `OBSTACLE_SCALE` (1:1, like walls) |
+| `props_sheet.png` | 128x480 | 4 cols x 15 rows of 32x32 | `OBSTACLE_SCALE` (1:1, like walls) |
 | `target_sheet.png` | 308x44 | 7 cols x 1 row of 44x44 | 1:1, centred on its 32px cell, overhanging it 6px a side |
 | `barrel_explosion.png` | 768x320 | 12 cols x 5 rows of 64x64 | `scorch_scale` (2.0 default); only row 1 is drawn |
 
@@ -47,6 +47,11 @@ variant`, except fences: `row_base + variant*2 + axis`.
 | 5–6 | Fence, wooden | 5 | horizontal (row 5), vertical (row 6) | 0–1 | intact, damaged (two pickets gone, one leaning, broken rail, splinters) |
 | 7–8 | Fence, wire | 5 | horizontal (row 7), vertical (row 8) | 0–1 | intact, damaged (a hole torn in the mesh, loose wire ends) |
 | 9 | Oil trail (`PROPS_OIL_ROW`) | – | four puddle variants, picked by position hash | 0–3 | not an obstacle: the `kind = "oil"` ground cell a fire runs along (`obstacle::draw_oil_cell`), drawn under everything that stands |
+| 10 | Tyre stack (`PROPS_TYRES_ROW`) | 10 | one | 0–1 | three tyres stacked (black rings, a lit arc, the ground in the hole), slumped (the top one rolled off, one squashed) |
+| 11 | Hay bale (`PROPS_HAY_ROW`) | 11 | one | 0–1, 3 | intact (straw on two twine bands), torn (a corner pulled off, straw spilled); **col 3 burnt** (`PROPS_HAY_BURNT_COL`: black, glowing at the seams, drawn while it burns, the flames over it at run time) |
+| 12 | Wooden crate (`PROPS_CRATE_ROW`) | 12 | one | 0–1 | a shipping crate with an X brace, split (a lid plank gone, splinters) |
+| 13 | Concrete barrier (`PROPS_BARRIER_ROW`) | 13 | one | 0–2 | a jersey barrier lying east-west, chipped, cracked to rust-red rebar |
+| 14 | Tank trap (`PROPS_TRAP_ROW`) | 14 | one | 0–1 | a steel hedgehog from above, rusted, bent |
 **The range board** (docs/range-target-prd.md) is `target_sheet.png`, one
 row of seven 44x44 cells drawn on a 22x22 macro canvas and doubled like
 the props: cols 0–3 intact, holed (three shot holes with a pale splinter

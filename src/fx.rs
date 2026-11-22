@@ -694,8 +694,20 @@ impl Fx {
                 self.burst(at, ParticleKind::Chip, n, 100.0, &[WOOD_L, WOOD_M, WOOD_D]);
                 self.burst(at, ParticleKind::Ember, self.count(4), 50.0, &[EMBER_T, FIRE_T]);
             }
-            Material::Sandbag => {
+            Material::Sandbag | Material::Hay => {
                 self.burst(at, ParticleKind::Dust, self.count(tuning().tile_burst_particles + 4), 55.0, &[SAND_L, SAND_M]);
+            }
+            Material::WoodCrate => {
+                self.burst(at, ParticleKind::Chip, self.count(tuning().tile_burst_particles + 4), 110.0, &[WOOD_L, WOOD_M, WOOD_D]);
+                self.burst(at, ParticleKind::Dust, self.count(4), 40.0, &[DUST_T]);
+            }
+            Material::Tyres => {
+                self.burst(at, ParticleKind::Chip, n, 80.0, &[STONE_DK, STONE_MD]);
+                self.burst(at, ParticleKind::Smoke, self.count(3), 20.0, &[SOOT_T]);
+            }
+            Material::Barrier | Material::TankTrap => {
+                self.burst(at, ParticleKind::Chip, n, 90.0, &[STONE_LT, STONE_MD, STONE_DK]);
+                self.burst(at, ParticleKind::Dust, self.count(6), 40.0, &[DUST_T]);
             }
             Material::Barrel => {
                 self.burst(at, ParticleKind::Spark, self.count(10), 170.0, &[FIRE_T, EMBER_T]);

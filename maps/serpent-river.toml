@@ -586,3 +586,6 @@ cells."55,30" = { kind = "pine" }
 cells."56,30" = { kind = "tree" }
 cells."57,30" = { kind = "tree" }
 cells."59,30" = { kind = "tree" }
+cells."4,22" = { kind = "hay" }
+cells."5,22" = { kind = "hay" }
+cells."13,24" = { kind = "hay" }

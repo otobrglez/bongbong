@@ -90,6 +90,15 @@ pub enum CellObject {
     /// a solid wooden prop placed to be shot at - it wears through four
     /// stages and splinters, or burns when fire reaches it.
     Target,
+    /// The BB-209 props (docs/sandbags-barrels-fences.md "New props"),
+    /// each spawning an `Obstacle` of its `Material`.
+    Tyres,
+    Hay,
+    #[serde(rename = "wood_crate")]
+    WoodCrate,
+    Barrier,
+    #[serde(rename = "tank_trap")]
+    TankTrap,
     /// An oil trail: a ground cell that is *not* solid and has no nav
     /// effect until a blast or a burning neighbour lights it, after which
     /// the fire runs along it cell by cell (`oil_trail_cells_per_second`),
@@ -193,6 +202,11 @@ impl CellObject {
             CellObject::Barrel { .. } => Some(Material::Barrel),
             CellObject::Fence => Some(Material::Fence),
             CellObject::Target => Some(Material::Target),
+            CellObject::Tyres => Some(Material::Tyres),
+            CellObject::Hay => Some(Material::Hay),
+            CellObject::WoodCrate => Some(Material::WoodCrate),
+            CellObject::Barrier => Some(Material::Barrier),
+            CellObject::TankTrap => Some(Material::TankTrap),
             CellObject::Tree => Some(Material::Tree),
             CellObject::Pine => Some(Material::Pine),
             CellObject::Spruce => Some(Material::Spruce),
@@ -291,6 +305,11 @@ impl CellObject {
             Material::Barrel => Some(CellObject::Barrel { drum: None }),
             Material::Fence => Some(CellObject::Fence),
             Material::Target => Some(CellObject::Target),
+            Material::Tyres => Some(CellObject::Tyres),
+            Material::Hay => Some(CellObject::Hay),
+            Material::WoodCrate => Some(CellObject::WoodCrate),
+            Material::Barrier => Some(CellObject::Barrier),
+            Material::TankTrap => Some(CellObject::TankTrap),
             Material::Tree => Some(CellObject::Tree),
             Material::Pine => Some(CellObject::Pine),
             Material::Spruce => Some(CellObject::Spruce),
