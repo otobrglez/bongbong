@@ -1,0 +1,2269 @@
+# The cue manifest (docs/sound-system-prd.md section 4.8): every sound the
+# game plays, and how. Read by `audio::cues`, embedded in the binary.
+#
+# A [sample.<id>] is a set of sound files (its takes, under static/audio/)
+# and the recipe that made them: the prompt after the style prefix, the
+# ElevenLabs parameters, and each take's provenance. `status` is where it
+# stands: planned (wanted, not made), review (takes made, not picked),
+# approved (picked, processed, shipped), placeholder, rejected.
+#
+# A [cue."<id>"] is a behaviour: its bus, kind, priority, audibility class
+# (section 4.3), polyphony, cooldown, level, and the samples it layers by
+# distance. Ids are dotted, general to specific; a cue the game asks for
+# that is not here falls back to its parent (`hit.shell.metal.iron` ->
+# `hit.shell.metal` -> `hit.shell`).
+#
+# The `sound-gen` skill makes the planned samples; the `sound-audit` skill
+# adds what a new feature needs. Edit by hand freely: a dev build reloads
+# this file while it runs.
+
+[style]
+model = "eleven_text_to_sound_v3"
+prefix = "close-mic, dry, punchy, realistic"
+
+# ---------------------------------------------------------------- samples
+
+[sample.cannon_medium_near]
+status = "approved"
+bus = "weapons"
+prompt = "tank main gun firing, sharp concussive crack, deep body, metallic breech clank, no music, no reverb"
+duration_seconds = 1.2
+  [[sample.cannon_medium_near.take]]
+  file = "weapons/cannon_medium_near_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "GAfNVBilApkT8uNwwqbp"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.72
+  peak_dbtp = -1.00
+  seconds = 0.98
+  [[sample.cannon_medium_near.take]]
+  file = "weapons/cannon_medium_near_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "sOhWmgw6tYZxX4hyIKza"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.98
+  peak_dbtp = -1.00
+  seconds = 0.94
+
+[sample.cannon_far]
+status = "approved"
+bus = "weapons"
+prompt = "distant tank cannon shot across open country, low muffled thump then a rolling boom, no music"
+duration_seconds = 2.0
+  [[sample.cannon_far.take]]
+  file = "weapons/cannon_far_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "QPeiRwn4TSRUsTUE75j3"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.08
+  peak_dbtp = -1.00
+  seconds = 1.88
+  [[sample.cannon_far.take]]
+  file = "weapons/cannon_far_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "pRvyLoU8mBTK6iAe48ZE"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.67
+  peak_dbtp = -1.00
+  seconds = 1.81
+
+[sample.minigun_loop]
+status = "approved"
+bus = "weapons"
+prompt = "rotary minigun firing continuously, fast buzzing roar of rounds, mechanical whine, steady, no music"
+duration_seconds = 2.0
+prompt_influence = 0.5
+loop = true
+  [[sample.minigun_loop.take]]
+  file = "weapons/minigun_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "05aXuG7XTJ9ZygsJxXPh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.26
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.minigun_loop.take]]
+  file = "weapons/minigun_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "viyHoH6XhKRgDLAGiMRB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.52
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.minigun_spin_down]
+status = "approved"
+bus = "weapons"
+prompt = "rotary minigun barrels spinning down after firing, falling mechanical whir with light clicks, no music"
+duration_seconds = 1.2
+  [[sample.minigun_spin_down.take]]
+  file = "weapons/minigun_spin_down_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "PJZyyRsliU3e3Lu78mQA"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.75
+  peak_dbtp = -1.00
+  seconds = 1.03
+  [[sample.minigun_spin_down.take]]
+  file = "weapons/minigun_spin_down_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "ydekfA1Hxy6DDuOcuCqt"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.21
+  peak_dbtp = -1.00
+  seconds = 1.20
+
+[sample.hit_shell_metal]
+status = "approved"
+bus = "impacts"
+prompt = "heavy shell striking thick steel armour, hard metallic clang, short rattle, no music, no reverb"
+duration_seconds = 0.8
+  [[sample.hit_shell_metal.take]]
+  file = "impacts/hit_shell_metal_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "FUmfCP0R30j3OC5NcCGu"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.09
+  peak_dbtp = -1.00
+  seconds = 0.60
+  [[sample.hit_shell_metal.take]]
+  file = "impacts/hit_shell_metal_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "yaxIkfwaLcvOs75gLS11"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.61
+  peak_dbtp = -1.52
+  seconds = 0.64
+
+[sample.hit_shell_masonry]
+status = "approved"
+bus = "impacts"
+prompt = "shell smashing into a brick wall, crunchy thud, falling grit and chips, no music, no reverb"
+duration_seconds = 0.8
+  [[sample.hit_shell_masonry.take]]
+  file = "impacts/hit_shell_masonry_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "9Vo6wijCj1f5OuR3juNP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.47
+  peak_dbtp = -1.00
+  seconds = 0.80
+  [[sample.hit_shell_masonry.take]]
+  file = "impacts/hit_shell_masonry_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "jnl20tO7AmCbXeUnALG0"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.46
+  peak_dbtp = -1.00
+  seconds = 0.62
+
+[sample.wreck_tank]
+status = "approved"
+bus = "explosions"
+prompt = "armoured vehicle exploding, deep heavy boom, metal debris clatter, crackling fire tail, no music"
+duration_seconds = 2.5
+  [[sample.wreck_tank.take]]
+  file = "explosions/wreck_tank_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "Ur96yHYryBQVFwlbrWRq"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.38
+  peak_dbtp = -1.00
+  seconds = 2.14
+  [[sample.wreck_tank.take]]
+  file = "explosions/wreck_tank_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "NOa0usstaoHgmptMZQul"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.73
+  peak_dbtp = -1.00
+  seconds = 2.22
+
+[sample.blast_barrel_oil]
+status = "approved"
+bus = "explosions"
+prompt = "oil drum exploding, quick fiery whoomp, steel barrel clatter and scattering debris, no music"
+duration_seconds = 2.0
+  [[sample.blast_barrel_oil.take]]
+  file = "explosions/blast_barrel_oil_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "RXKOrEzZJQ16Yzq3hTEh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.46
+  peak_dbtp = -1.00
+  seconds = 1.51
+  [[sample.blast_barrel_oil.take]]
+  file = "explosions/blast_barrel_oil_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "wc18ME4JqhPfJzOeqgCR"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.40
+  peak_dbtp = -1.00
+  seconds = 1.56
+
+[sample.explosion_far]
+status = "approved"
+bus = "explosions"
+prompt = "distant explosion far across open fields, deep muffled boom rolling away, no music"
+duration_seconds = 2.5
+  [[sample.explosion_far.take]]
+  file = "explosions/explosion_far_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "kDEiM67RG03LPXyWXfkL"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.70
+  peak_dbtp = -1.00
+  seconds = 2.10
+  [[sample.explosion_far.take]]
+  file = "explosions/explosion_far_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "KjYOdLKZ2ntW0DLLEEh8"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.44
+  peak_dbtp = -1.00
+  seconds = 2.26
+
+[sample.engine_light_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "small light tank engine running steadily, fast rattling petrol engine putter, constant revs, no music"
+duration_seconds = 3.0
+prompt_influence = 0.5
+loop = true
+  [[sample.engine_light_loop.take]]
+  file = "vehicles/engine_light_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "ZOxGFKXe7RKudih3uekb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -4.16
+  seconds = 3.00
+  [[sample.engine_light_loop.take]]
+  file = "vehicles/engine_light_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "zQwj79biNl2XprCAx3F6"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.01
+  peak_dbtp = -5.68
+  seconds = 3.00
+
+[sample.engine_medium_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "medium diesel tank engine running steadily, throaty rumble with a mechanical knock, constant revs, no music"
+duration_seconds = 3.0
+prompt_influence = 0.5
+loop = true
+  [[sample.engine_medium_loop.take]]
+  file = "vehicles/engine_medium_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "0XHmTpIWj3roJkA8WMr5"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.10
+  seconds = 3.00
+  [[sample.engine_medium_loop.take]]
+  file = "vehicles/engine_medium_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "kmXoTD67KeI6peIWHqFw"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -7.29
+  seconds = 3.00
+
+[sample.engine_heavy_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "huge heavy tank diesel engine running steadily, deep slow powerful rumble, constant revs, no music"
+duration_seconds = 3.0
+prompt_influence = 0.5
+loop = true
+  [[sample.engine_heavy_loop.take]]
+  file = "vehicles/engine_heavy_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "fRNgWNrxV2RSYritet3D"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -9.59
+  seconds = 3.00
+  [[sample.engine_heavy_loop.take]]
+  file = "vehicles/engine_heavy_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "1bQudT204oD5BsH8gxx4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -9.34
+  seconds = 3.00
+
+[sample.treads_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "steel tank tracks rolling over dirt, rhythmic clanking links and squeaking road wheels, steady, no engine, no music"
+duration_seconds = 2.0
+prompt_influence = 0.5
+loop = true
+  [[sample.treads_loop.take]]
+  file = "vehicles/treads_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "j9Xyzt9c91yxicg1QcjP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -7.47
+  seconds = 2.00
+  [[sample.treads_loop.take]]
+  file = "vehicles/treads_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "BTMCtM0d7IgeSQTyWuEH"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.05
+  peak_dbtp = -2.69
+  seconds = 2.00
+
+[sample.ui_click]
+status = "approved"
+bus = "ui"
+prompt = "short clean tactile button click, small mechanical switch, dry, no music"
+duration_seconds = 0.5
+prompt_influence = 0.5
+
+# Planned: weapons.
+  [[sample.ui_click.take]]
+  file = "ui/ui_click_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "UlhVyRyfAD9tukjvMlNJ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.85
+  peak_dbtp = -1.00
+  seconds = 0.26
+
+[sample.laser_fire]
+bus = "weapons"
+prompt = "sci-fi tank laser cannon firing, bright electric zap with a searing hum tail, no music"
+duration_seconds = 0.8
+
+[sample.plasma_fire]
+bus = "weapons"
+prompt = "plasma cannon firing a glowing bolt, deep electric whump with a crackling hiss, no music"
+duration_seconds = 0.8
+
+[sample.missiles_fire]
+bus = "weapons"
+prompt = "small guided missile launching from a tube, sharp pop then a rushing rocket whoosh, no music"
+duration_seconds = 1.2
+
+[sample.grenade_launch]
+bus = "weapons"
+prompt = "grenade launcher firing, hollow thunk of a launched grenade, metallic action, no music"
+duration_seconds = 0.6
+
+[sample.flamethrower_loop]
+bus = "weapons"
+prompt = "flamethrower spraying a continuous jet of fire, roaring whoosh of burning fuel, steady, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.sonic_hammer]
+bus = "weapons"
+prompt = "massive sonic blast weapon, deep concussive whomp of compressed air with a ringing shock, no music"
+duration_seconds = 1.5
+
+[sample.emp_burst]
+bus = "weapons"
+prompt = "electromagnetic pulse discharge, rising electric whine then a heavy crackling burst, no music"
+duration_seconds = 1.5
+
+[sample.emp_disabled]
+bus = "impacts"
+prompt = "electronics shorting out, sputtering sparks and a dying electric buzz, no music"
+duration_seconds = 0.8
+
+[sample.gauss_fire]
+bus = "weapons"
+prompt = "railgun firing, violent electromagnetic crack with a supersonic snap and a metallic ring, no music"
+duration_seconds = 1.2
+
+[sample.gauss_charge_loop]
+bus = "weapons"
+prompt = "railgun capacitor charging, steady rising electric whine and hum, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.gauss_vent]
+bus = "weapons"
+prompt = "high pressure steam and electric discharge venting from a weapon, hissing sputter, no music"
+duration_seconds = 1.0
+
+[sample.drone_launch]
+bus = "weapons"
+prompt = "small quadcopter drones launching, rising buzz of tiny rotors and a release clack, no music"
+duration_seconds = 1.0
+
+[sample.drone_burst]
+bus = "explosions"
+prompt = "small drone exploding, sharp crack of a light charge and plastic debris, no music"
+duration_seconds = 1.0
+
+[sample.drone_downed]
+bus = "impacts"
+prompt = "small drone shot down, rotor sputter and a plastic crunch, no music"
+duration_seconds = 0.8
+
+[sample.rod_call]
+bus = "warnings"
+prompt = "orbital strike designator locking on, rising electronic tone with a radio blip, no music"
+duration_seconds = 1.2
+
+[sample.rod_incoming]
+bus = "warnings"
+prompt = "incoming projectile falling from the sky, descending shrill whistle growing louder, no music"
+duration_seconds = 3.0
+
+[sample.rod_impact]
+bus = "explosions"
+prompt = "huge kinetic orbital impact, earth shaking boom, crushing crack and rumbling debris, no music"
+duration_seconds = 3.5
+
+[sample.well_fire]
+bus = "weapons"
+prompt = "dark energy orb launching, low warping whoosh with a subsonic hum, no music"
+duration_seconds = 1.0
+
+[sample.well_anchor]
+bus = "weapons"
+prompt = "gravity well forming, deep pulling hum that bends and warbles, sucking air, no music"
+duration_seconds = 2.0
+
+[sample.well_collapse]
+bus = "explosions"
+prompt = "gravity well collapsing, imploding whomp then a reversed boom, no music"
+duration_seconds = 1.5
+
+[sample.missile_dud]
+bus = "impacts"
+prompt = "dud missile clanking to the ground without exploding, metallic thud and fizzle, no music"
+duration_seconds = 0.8
+
+# Planned: impacts.
+
+[sample.hit_shell_wood]
+bus = "impacts"
+prompt = "shell smashing through a wooden wall, splintering crack of planks, no music, no reverb"
+duration_seconds = 0.8
+
+[sample.hit_glass]
+bus = "impacts"
+prompt = "thick glass pane shattering from a hit, bright crash and tinkling shards, no music"
+duration_seconds = 1.0
+
+[sample.hit_earth]
+bus = "impacts"
+prompt = "shell thudding into sandbags, dull heavy thump and pouring sand, no music"
+duration_seconds = 0.7
+
+[sample.hit_foliage]
+bus = "impacts"
+prompt = "shell ripping through a tree, cracking branches and rustling leaves, no music"
+duration_seconds = 0.8
+
+[sample.hit_bullet_metal]
+bus = "impacts"
+prompt = "bullets pinging off steel armour, sharp metallic ping, no music"
+duration_seconds = 0.4
+
+[sample.hit_bullet_masonry]
+bus = "impacts"
+prompt = "bullet striking a stone wall, short crack and chip of stone, no music"
+duration_seconds = 0.4
+
+[sample.hit_energy]
+bus = "impacts"
+prompt = "energy bolt striking metal, sizzling electric splash and hiss, no music"
+duration_seconds = 0.6
+
+[sample.hit_flame]
+bus = "impacts"
+prompt = "flames licking against metal, short fiery whoosh and sizzle, no music"
+duration_seconds = 0.6
+
+[sample.ricochet]
+bus = "impacts"
+prompt = "bullet ricochet off steel, sharp whining zing that flies away, no music"
+duration_seconds = 0.6
+
+[sample.shield_break]
+bus = "impacts"
+prompt = "energy shield shattering, crystalline crack and a collapsing electric hum, no music"
+duration_seconds = 1.0
+
+[sample.shells_collide]
+bus = "impacts"
+prompt = "two shells colliding in mid air, sharp metallic clang and a small burst, no music"
+duration_seconds = 0.7
+
+# Planned: explosions.
+
+[sample.blast_fuel]
+bus = "explosions"
+prompt = "fuel tank exploding, big fiery roaring fireball, burning debris, no music"
+duration_seconds = 2.5
+
+[sample.blast_small]
+bus = "explosions"
+prompt = "small missile explosion, sharp punchy blast with a short crackle, no music"
+duration_seconds = 1.2
+
+[sample.blast_grenade]
+bus = "explosions"
+prompt = "grenade explosion, sharp crack, dirt and shrapnel spray, no music"
+duration_seconds = 1.5
+
+[sample.lava_bomb]
+bus = "explosions"
+prompt = "molten lava bomb hitting the ground, heavy splat and sizzling burst, no music"
+duration_seconds = 1.5
+
+[sample.drum_launch]
+bus = "explosions"
+prompt = "steel drum blown into the air, hollow metallic clang and whoosh, no music"
+duration_seconds = 1.0
+
+[sample.cookoff]
+bus = "explosions"
+prompt = "ammunition cooking off inside a burning vehicle, rapid popping and crackling bursts, no music"
+duration_seconds = 2.0
+
+[sample.air_bomb]
+bus = "explosions"
+prompt = "aircraft bomb detonating, massive deep blast, ground shaking, no music"
+duration_seconds = 2.5
+
+# Planned: vehicles.
+
+[sample.engine_twin_loop]
+bus = "vehicles"
+prompt = "two huge diesel engines running together in a super heavy tank, deep layered growl, constant revs, no music"
+duration_seconds = 3.0
+loop = true
+
+[sample.ground_grass_loop]
+bus = "vehicles"
+prompt = "heavy tracks rolling through grass, steady swishing and soft crunching, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.ground_sand_loop]
+bus = "vehicles"
+prompt = "heavy tracks churning through dry sand, steady hissing grind, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.ground_water_loop]
+bus = "vehicles"
+prompt = "heavy vehicle driving through shallow water, continuous splashing and sloshing, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.ground_ice_loop]
+bus = "vehicles"
+prompt = "heavy tracks grinding over ice, steady crunching and cracking, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.slam]
+bus = "impacts"
+prompt = "heavy tank slamming into a wall, deep crunching metal impact, no music"
+duration_seconds = 1.0
+
+[sample.scrape_loop]
+bus = "vehicles"
+prompt = "steel hull scraping along a stone wall, continuous grinding screech, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.ram]
+bus = "impacts"
+prompt = "two heavy tanks ramming each other, huge clanging metal crash, no music"
+duration_seconds = 1.0
+
+# Planned: pickups, the bong, towers, the world.
+
+[sample.pickup_weapon]
+bus = "ui"
+prompt = "picking up a weapon crate, solid mechanical cha-chunk of a gun being loaded, no music"
+duration_seconds = 0.6
+
+[sample.pickup_health]
+bus = "ui"
+prompt = "health pickup, warm rising chime with a soft mechanical click, no music"
+duration_seconds = 0.6
+
+[sample.pickup_ammo]
+bus = "ui"
+prompt = "ammunition box picked up, rattle of shells and a latch snap, no music"
+duration_seconds = 0.5
+
+[sample.pickup_boost]
+bus = "ui"
+prompt = "power-up activating, short rising electric whoosh, no music"
+duration_seconds = 0.6
+
+[sample.crate_break]
+bus = "impacts"
+prompt = "wooden supply crate smashed open, splintering crack and scattering contents, no music"
+duration_seconds = 0.8
+
+[sample.crate_drop]
+bus = "world"
+prompt = "supply crate landing on the ground from a parachute, heavy wooden thud, no music"
+duration_seconds = 0.7
+
+[sample.bong_bite]
+bus = "voice"
+prompt = "small cute creature biting, snappy chomp with a squeaky growl, no music"
+duration_seconds = 0.5
+
+[sample.bong_heal]
+bus = "voice"
+prompt = "small cute creature healed, happy sparkling chime and a coo, no music"
+duration_seconds = 0.8
+
+[sample.bong_babble]
+bus = "voice"
+prompt = "cute small creature babbling gibberish, playful chirpy nonsense syllables, no words, no music"
+duration_seconds = 2.0
+
+[sample.tesla_strike]
+bus = "weapons"
+prompt = "tesla coil lightning strike, violent electric crackle and zap, no music"
+duration_seconds = 0.8
+
+[sample.tesla_charge_loop]
+bus = "world"
+prompt = "tesla coil charging, steady rising electric buzz and crackle, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.gun_tower_fire]
+bus = "weapons"
+prompt = "automatic gun turret firing a short burst, rapid mechanical bangs, no music"
+duration_seconds = 0.8
+
+[sample.bio_fire]
+bus = "weapons"
+prompt = "slime cannon firing a glob, wet gloopy launch, no music"
+duration_seconds = 0.6
+
+[sample.bio_splash]
+bus = "impacts"
+prompt = "glob of thick slime splattering on the ground, wet splat and bubbling, no music"
+duration_seconds = 0.6
+
+[sample.fire_loop]
+bus = "world"
+prompt = "large fire burning steadily outdoors, crackling and roaring flames, no music"
+duration_seconds = 3.0
+loop = true
+
+[sample.fire_ignite]
+bus = "world"
+prompt = "fire catching quickly, sudden whoosh of igniting flames, no music"
+duration_seconds = 0.8
+
+[sample.fuse]
+bus = "world"
+prompt = "burning fuse fizzing and sparking, steady hiss, no music"
+duration_seconds = 1.5
+loop = true
+
+[sample.rain_loop]
+bus = "world"
+prompt = "steady heavy rain falling on open ground, constant downpour, no thunder, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.wind_loop]
+bus = "world"
+prompt = "strong gusty wind blowing sand across a desert, steady howl and hiss, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.night_loop]
+bus = "world"
+prompt = "quiet night in the countryside, crickets chirping, gentle breeze, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.thunder]
+bus = "world"
+prompt = "distant thunder clap rolling across the sky, deep rumble, no music"
+duration_seconds = 3.5
+
+[sample.bed_grass_loop]
+bus = "world"
+prompt = "open green meadow ambience, light wind in grass, distant birds, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.bed_desert_loop]
+bus = "world"
+prompt = "empty desert ambience, dry wind, faint shifting sand, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.bed_valley_loop]
+bus = "world"
+prompt = "river valley ambience, flowing water of a mill race, birds, light wind, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.bed_floodplain_loop]
+bus = "world"
+prompt = "marshy floodplain ambience, frogs croaking, still water, insects, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.bed_karst_loop]
+bus = "world"
+prompt = "rocky karst plateau ambience, wind whistling over limestone, sparse birds, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.volcano_rumble_loop]
+bus = "world"
+prompt = "volcano rumbling, deep continuous earth rumble with hissing vents, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.lava_whistle]
+bus = "world"
+prompt = "lava bomb flying through the air, falling whoosh and crackle, no music"
+duration_seconds = 1.2
+
+[sample.portal_hum_loop]
+bus = "world"
+prompt = "sci-fi teleport portal humming, steady warbling energy drone, no music"
+duration_seconds = 3.0
+loop = true
+
+[sample.portal_teleport]
+bus = "world"
+prompt = "teleporter whoosh, swirling energy zap with a quick swoosh, no music"
+duration_seconds = 0.8
+
+[sample.door_open]
+bus = "world"
+prompt = "heavy metal gate sliding open, grinding steel and a clunk, no music"
+duration_seconds = 1.2
+
+[sample.lantern]
+bus = "world"
+prompt = "glass lantern breaking, small crash of glass and a fizzling flame, no music"
+duration_seconds = 0.6
+
+[sample.destroy_masonry]
+bus = "impacts"
+prompt = "brick wall collapsing, heavy crumbling bricks and dust, no music"
+duration_seconds = 1.5
+
+[sample.destroy_metal]
+bus = "impacts"
+prompt = "steel structure torn apart, crunching twisted metal and a clattering fall, no music"
+duration_seconds = 1.2
+
+[sample.destroy_wood]
+bus = "impacts"
+prompt = "wooden fence smashed to pieces, splintering crash of planks, no music"
+duration_seconds = 1.0
+
+[sample.destroy_tree]
+bus = "impacts"
+prompt = "tree snapping and falling, cracking trunk and crashing branches, no music"
+duration_seconds = 1.5
+
+[sample.chunk_masonry]
+bus = "impacts"
+prompt = "chunk of brick wall breaking off, short crumble and falling stones, no music"
+duration_seconds = 0.6
+
+# Planned: air support.
+
+[sample.heli_loop]
+bus = "vehicles"
+prompt = "attack helicopter hovering close by, steady thumping rotor blades and turbine whine, no music"
+duration_seconds = 3.0
+loop = true
+
+[sample.jet_loop]
+bus = "vehicles"
+prompt = "ground attack jet flying overhead, roaring turbofan engine, steady, no music"
+duration_seconds = 3.0
+loop = true
+
+[sample.air_cannon]
+bus = "weapons"
+prompt = "aircraft rotary cannon strafing run, ripping burst of heavy rounds, no music"
+duration_seconds = 1.2
+
+[sample.air_salvo]
+bus = "weapons"
+prompt = "helicopter firing a pair of rockets, double whoosh launch, no music"
+duration_seconds = 1.0
+
+[sample.aircraft_downed]
+bus = "explosions"
+prompt = "aircraft shot down, engine sputter, explosion and crashing wreckage, no music"
+duration_seconds = 2.5
+
+# Planned: warnings, the round, the UI.
+
+[sample.lock_warning]
+bus = "warnings"
+prompt = "missile lock warning, fast insistent electronic beeping alarm, no music"
+duration_seconds = 1.0
+
+[sample.windup]
+bus = "warnings"
+prompt = "weapon charging up to fire, short rising electric whine, no music"
+duration_seconds = 0.6
+
+[sample.air_radio]
+bus = "warnings"
+prompt = "military radio squelch and a short beep of a call acknowledged, no voice, no music"
+duration_seconds = 0.8
+
+[sample.round_start]
+bus = "ui"
+prompt = "battle start horn, short brassy military signal, no music"
+duration_seconds = 1.5
+
+[sample.round_won]
+bus = "ui"
+prompt = "victory fanfare sting, short triumphant brass flourish"
+duration_seconds = 2.0
+
+[sample.round_lost]
+bus = "ui"
+prompt = "defeat sting, short low descending brass phrase"
+duration_seconds = 2.0
+
+[sample.wave_start]
+bus = "ui"
+prompt = "incoming wave warning, short rising siren blast, no music"
+duration_seconds = 1.5
+
+[sample.ui_refuse]
+bus = "ui"
+prompt = "soft negative buzz of a refused button press, short, no music"
+duration_seconds = 0.4
+
+[sample.ui_beat]
+bus = "ui"
+prompt = "small positive chime for a task completed, bright short ding"
+duration_seconds = 0.6
+
+[sample.flyby_shell]
+bus = "impacts"
+prompt = "artillery shell flying past close by, fast tearing whoosh, no music"
+duration_seconds = 0.6
+
+[sample.flyby_bullet]
+bus = "impacts"
+prompt = "bullets whizzing past the ear, quick supersonic snaps, no music"
+duration_seconds = 0.4
+
+[sample.flyby_missile]
+bus = "impacts"
+prompt = "rocket streaking past close by, roaring whoosh moving away, no music"
+duration_seconds = 1.0
+
+# ------------------------------------------------------------------- cues
+
+[cue."ui.click"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+jitter = false
+layers = [{ sample = "ui_click" }]
+note = "A button pressed."
+
+[cue."ui.refuse"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "ui_refuse" }]
+note = "A press the game refuses."
+
+[cue."ui.beat"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 1
+layers = [{ sample = "ui_beat" }]
+note = "A training beat done."
+
+[cue."round.start"]
+kind = "stinger"
+bus = "ui"
+priority = "critical"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "round_start" }]
+note = "A round begins."
+
+[cue."round.won"]
+kind = "stinger"
+bus = "ui"
+priority = "critical"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "round_won" }]
+note = "The round is won."
+
+[cue."round.lost"]
+kind = "stinger"
+bus = "ui"
+priority = "critical"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "round_lost" }]
+note = "The round is lost."
+
+[cue."round.wave"]
+kind = "stinger"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 1
+layers = [{ sample = "wave_start" }]
+note = "A wave rolls in."
+
+# Weapons.
+
+[cue."weapon.shell.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "cannon_medium_near", until_px = 700 }, { sample = "cannon_far", from_px = 450 }]
+note = "A tank's main gun; tiered by calibre (light, medium, heavy, super) and pitched by mass."
+
+[cue."weapon.laser.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "laser_fire" }]
+note = "A laser beam fired."
+
+[cue."weapon.plasma.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "plasma_fire" }]
+note = "A plasma bolt fired."
+
+[cue."weapon.minigun.loop"]
+kind = "loop"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 4
+layers = [{ sample = "minigun_loop" }]
+note = "A minigun firing: one loop while rounds leave, never one sound a round."
+
+[cue."weapon.minigun.spin_down"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "minigun_spin_down" }]
+note = "A minigun's barrels winding down after a burst."
+
+[cue."weapon.missiles.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "missiles_fire" }]
+note = "Seeker missiles launched."
+
+[cue."weapon.missiles.dud"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "missile_dud" }]
+note = "A missile that came down without going off."
+
+[cue."weapon.flamethrower.loop"]
+kind = "loop"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "flamethrower_loop" }]
+note = "A flamethrower's jet."
+
+[cue."weapon.grenades.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "grenade_launch" }]
+note = "A grenade launched."
+
+[cue."weapon.sonic_hammer.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "sonic_hammer" }]
+note = "The sonic hammer's wave."
+
+[cue."weapon.emp_burst.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "emp_burst" }]
+note = "An EMP burst."
+
+[cue."weapon.emp_burst.disabled"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 200
+layers = [{ sample = "emp_disabled" }]
+note = "A tank's electrics knocked out."
+
+[cue."tower.disabled"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "emp_disabled" }]
+note = "A tower's electrics knocked out."
+
+[cue."weapon.gauss_rail.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "gauss_fire" }]
+note = "A rail slug fired; overcharged is its own child cue."
+
+[cue."weapon.gauss_rail.charge"]
+kind = "modulated_loop"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "gauss_charge_loop" }]
+note = "The rail's charge, rising in pitch as it fills."
+
+[cue."weapon.gauss_rail.vent"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "gauss_vent" }]
+note = "A charge vented, fizzled or let lapse."
+
+[cue."weapon.fpv_swarm.launch"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "drone_launch" }]
+note = "FPV drones launched."
+
+[cue."weapon.fpv_swarm.burst"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "drone_burst" }]
+note = "A drone's charge going off."
+
+[cue."weapon.fpv_swarm.downed"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "drone_downed" }]
+note = "A drone shot down or crashed."
+
+[cue."weapon.rod_from_god.call"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "rod_call" }]
+note = "The rod's designator locks a cell."
+
+[cue."weapon.rod_from_god.impact"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "rod_impact", until_px = 900 }, { sample = "explosion_far", from_px = 700 }]
+note = "The rod lands."
+
+[cue."weapon.gravity_well.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "well_fire" }]
+note = "The gravity well's orb launched."
+
+[cue."weapon.gravity_well.anchor"]
+kind = "one_shot"
+bus = "weapons"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "well_anchor" }]
+note = "The well forms."
+
+[cue."weapon.gravity_well.collapse"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "well_collapse" }]
+note = "The well collapses."
+
+[cue."weapon.gravity_well.swallow"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 80
+layers = [{ sample = "well_collapse", gain_db = -12.0 }]
+note = "The well swallows a shot or a drone."
+
+[cue."weapon.gravity_well.fizzle"]
+kind = "one_shot"
+bus = "weapons"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "gauss_vent", gain_db = -6.0 }]
+note = "An orb fizzles out."
+
+# Impacts: hit.<shot>.<what>, what = hull, bong, wall, or <family>.<material>.
+
+[cue."hit"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 6
+cooldown_ms = 30
+layers = [{ sample = "hit_shell_masonry", gain_db = -4.0 }]
+note = "Any hit with nothing more specific."
+
+[cue."hit.shell"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_masonry" }]
+note = "A shell hitting something."
+
+[cue."hit.shell.hull"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_metal" }]
+note = "A shell on a tank's hull."
+
+[cue."hit.shell.metal"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_metal" }]
+note = "A shell on iron, a door, a drum, a tower."
+
+[cue."hit.shell.masonry"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_masonry" }]
+note = "A shell on brick, concrete or rock."
+
+[cue."hit.shell.wall"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_masonry" }]
+note = "A shell on the field's edge."
+
+[cue."hit.shell.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_wood" }]
+note = "A shell on wood."
+
+[cue."hit.shell.glass"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "hit_glass" }]
+note = "A shell on glass or a lamp."
+
+[cue."hit.shell.earth"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_earth" }]
+note = "A shell on sandbags."
+
+[cue."hit.shell.foliage"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_foliage" }]
+note = "A shell through a tree."
+
+[cue."hit.shell.bong"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "hit_earth" }]
+note = "A shell on a bong."
+
+[cue."hit.bullet"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_bullet_masonry" }]
+note = "A round hitting something."
+
+[cue."hit.bullet.hull"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_bullet_metal" }]
+note = "A round pinging off a hull."
+
+[cue."hit.bullet.metal"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_bullet_metal" }]
+note = "A round on metal."
+
+[cue."hit.plasma"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 6
+cooldown_ms = 30
+layers = [{ sample = "hit_energy" }]
+note = "A plasma bolt splashing."
+
+[cue."hit.laser"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 60
+layers = [{ sample = "hit_energy" }]
+note = "A beam searing what it hits."
+
+[cue."hit.rail"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 6
+layers = [{ sample = "hit_shell_metal" }]
+note = "A rail slug punching through."
+
+[cue."hit.flame"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 250
+layers = [{ sample = "hit_flame" }]
+note = "Flame licking what it reaches."
+
+[cue."hit.tesla"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 3
+cooldown_ms = 100
+layers = [{ sample = "hit_energy" }]
+note = "A tesla bolt landing."
+
+[cue."hit.spall"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 60
+layers = [{ sample = "hit_bullet_metal", gain_db = -6.0 }]
+note = "Spall off a broken shell."
+
+[cue."hit.deflect"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "ricochet" }]
+note = "A shot deflected off a shield."
+
+[cue."hit.ricochet"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "ricochet" }]
+note = "A shell glancing off."
+
+[cue."hit.shield_break"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "shield_break" }]
+note = "A shield breaking."
+
+[cue."hit.shells_collide"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "shells_collide" }]
+note = "Two shells meeting in the air."
+
+# Explosions.
+
+[cue."explosion.wreck"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 4
+steal = "oldest"
+layers = [{ sample = "wreck_tank", until_px = 800 }, { sample = "explosion_far", from_px = 550 }]
+note = "A tank wrecked."
+
+[cue."explosion.barrel.oil"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 4
+steal = "oldest"
+layers = [{ sample = "blast_barrel_oil", until_px = 800 }, { sample = "explosion_far", from_px = 550 }]
+note = "An oil drum goes up; each link of a chain plays a step quieter."
+
+[cue."explosion.barrel.fuel"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 4
+steal = "oldest"
+layers = [{ sample = "blast_fuel", until_px = 800 }, { sample = "explosion_far", from_px = 550 }]
+note = "A fuel drum goes up."
+
+[cue."explosion.lava_bomb"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 4
+layers = [{ sample = "lava_bomb" }]
+note = "A lava bomb landing."
+
+[cue."explosion.drum_launch"]
+kind = "one_shot"
+bus = "explosions"
+priority = "medium"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "drum_launch" }]
+note = "A drum thrown by a blast."
+
+[cue."explosion.missile"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "blast_small", until_px = 700 }, { sample = "explosion_far", from_px = 500, gain_db = -6.0 }]
+note = "A missile's blast."
+
+[cue."explosion.grenade"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 4
+layers = [{ sample = "blast_grenade", until_px = 700 }, { sample = "explosion_far", from_px = 500, gain_db = -4.0 }]
+note = "A grenade's blast."
+
+[cue."explosion.cookoff"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 2
+layers = [{ sample = "cookoff" }]
+note = "Ammunition cooking off."
+
+# Vehicles.
+
+[cue."engine.light"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 8
+jitter = false
+layers = [{ sample = "engine_light_loop" }]
+note = "Scout, wraith, flak, glacier: revs and level from speed, pitch from mass."
+
+[cue."engine.medium"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 8
+jitter = false
+layers = [{ sample = "engine_medium_loop" }]
+note = "Assault, warden, longbow, obelisk."
+
+[cue."engine.heavy"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 8
+jitter = false
+layers = [{ sample = "engine_heavy_loop" }]
+note = "Breaker, ravager."
+
+[cue."engine.twin"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 4
+jitter = false
+layers = [{ sample = "engine_twin_loop" }]
+note = "Titan, leviathan: two engine decks."
+
+[cue."vehicle.treads"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 8
+jitter = false
+layers = [{ sample = "treads_loop" }]
+note = "Tracks rolling, louder and faster with speed."
+
+[cue."vehicle.ground.grass"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -6.0
+layers = [{ sample = "ground_grass_loop" }]
+note = "Tracks through grass."
+
+[cue."vehicle.ground.sand"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -6.0
+layers = [{ sample = "ground_sand_loop" }]
+note = "Tracks through sand."
+
+[cue."vehicle.ground.water"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+layers = [{ sample = "ground_water_loop" }]
+note = "Wading a ford."
+
+[cue."vehicle.ground.ice"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -4.0
+layers = [{ sample = "ground_ice_loop" }]
+note = "Tracks on ice."
+
+[cue."vehicle.slam"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam" }]
+note = "A hull slamming into a wall, as loud as the impulse."
+
+[cue."vehicle.scrape"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "scrape_loop" }]
+note = "A hull grinding along a wall."
+
+[cue."vehicle.ram"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 3
+cooldown_ms = 300
+layers = [{ sample = "ram" }]
+note = "Two tanks ramming."
+
+# Pickups and the bong.
+
+[cue."pickup.weapon"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_weapon" }]
+note = "A weapon crate picked up."
+
+[cue."pickup.health"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_health" }]
+note = "A health pack picked up."
+
+[cue."pickup.ammo"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_ammo" }]
+note = "Ammunition picked up."
+
+[cue."pickup.boost"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_boost" }]
+note = "A speed-up or a shield picked up."
+
+[cue."pickup.tower"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_boost" }]
+note = "A tower pack picked up."
+
+[cue."pickup.air"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "air_radio" }]
+note = "An air support call picked up."
+
+[cue."pickup.crate.break"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 3
+layers = [{ sample = "crate_break" }]
+note = "A crate shot open."
+
+[cue."pickup.crate.cookoff"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "cookoff" }]
+note = "A crate's contents cooking off."
+
+[cue."pickup.respawn"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "crate_drop" }]
+note = "A crate dropped in again."
+
+[cue."bong.bite"]
+kind = "one_shot"
+bus = "voice"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "bong_bite" }]
+note = "A bong biting a tank."
+
+[cue."bong.heal"]
+kind = "one_shot"
+bus = "voice"
+priority = "medium"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "bong_heal" }]
+note = "A bong healed."
+
+[cue."bong.pack"]
+kind = "one_shot"
+bus = "voice"
+priority = "medium"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "bong_heal" }]
+note = "A bong taking a health pack."
+
+[cue."bong.revive"]
+kind = "one_shot"
+bus = "voice"
+priority = "high"
+class = "medium"
+polyphony = 1
+layers = [{ sample = "bong_heal" }]
+note = "A bong revived in training."
+
+[cue."voice.bong"]
+kind = "voice"
+bus = "voice"
+priority = "high"
+class = "medium"
+polyphony = 1
+layers = [{ sample = "bong_babble" }]
+note = "The bong's babble with its bubble: no words, a pitch per kind."
+
+# Towers.
+
+[cue."tower.tesla.strike"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "tesla_strike" }]
+note = "A tesla tower's bolt."
+
+[cue."world.tesla.charge"]
+kind = "modulated_loop"
+bus = "world"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "tesla_charge_loop" }]
+note = "A tesla tower charging toward a strike."
+
+[cue."tower.gun.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "gun_tower_fire" }]
+note = "A gun tower's burst."
+
+[cue."tower.bio.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "bio_fire" }]
+note = "A bio tower's glob."
+
+[cue."tower.bio.splash"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 3
+layers = [{ sample = "bio_splash" }]
+note = "A glob landing."
+
+[cue."tower.bio.slimed"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "bio_splash" }]
+note = "A tank coated in slime."
+
+[cue."tower.bio.washed"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "ground_water_loop", gain_db = -6.0 }]
+note = "Slime washed off in water."
+
+[cue."tower.repaired"]
+kind = "one_shot"
+bus = "world"
+priority = "medium"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_boost" }]
+note = "A tower repaired."
+
+# Air support.
+
+[cue."air.called"]
+kind = "stinger"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 1
+layers = [{ sample = "air_radio" }]
+note = "Air support called in."
+
+[cue."air.arrive"]
+kind = "one_shot"
+bus = "warnings"
+priority = "high"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "air_radio" }]
+note = "Air support on station."
+
+[cue."air.heli"]
+kind = "loop"
+bus = "vehicles"
+priority = "high"
+class = "large"
+polyphony = 2
+layers = [{ sample = "heli_loop" }]
+note = "The helicopter's rotor, doppler-bent as it passes."
+
+[cue."air.jet"]
+kind = "loop"
+bus = "vehicles"
+priority = "high"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "jet_loop" }]
+note = "The jet's engine, doppler-bent as it passes."
+
+[cue."air.salvo"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 2
+layers = [{ sample = "air_salvo" }]
+note = "The helicopter's rockets."
+
+[cue."air.cannon"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 3
+layers = [{ sample = "air_cannon" }]
+note = "The jet's gun run."
+
+[cue."air.bomb"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "huge"
+polyphony = 3
+layers = [{ sample = "air_bomb", until_px = 900 }, { sample = "explosion_far", from_px = 700 }]
+note = "The jet's bombs."
+
+[cue."air.downed"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "aircraft_downed" }]
+note = "An aircraft shot down."
+
+# Warnings.
+
+[cue."warning.lock"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 2
+cooldown_ms = 1500
+layers = [{ sample = "lock_warning" }]
+note = "A missile locked on a tank."
+
+[cue."warning.windup"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "large"
+polyphony = 3
+layers = [{ sample = "windup" }]
+note = "An enemy's sonic or EMP winding up."
+
+[cue."warning.rod"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "rod_incoming" }]
+note = "The rod falling."
+
+# Destruction: destroy.<family>.<material>, chunk.<family>.
+
+[cue."destroy"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 30
+layers = [{ sample = "destroy_masonry" }]
+note = "A tile destroyed."
+
+[cue."destroy.metal"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "destroy_metal" }]
+note = "Iron, a door, a tower torn apart."
+
+[cue."destroy.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "destroy_wood" }]
+note = "Wood, a fence, a target smashed."
+
+[cue."destroy.glass"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "hit_glass" }]
+note = "Glass or a lamp shattered."
+
+[cue."destroy.earth"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "hit_earth" }]
+note = "Sandbags burst."
+
+[cue."destroy.foliage"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "destroy_tree" }]
+note = "A tree felled."
+
+[cue."destroy.slime"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "bio_splash" }]
+note = "A bio tower destroyed."
+
+[cue."chunk"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "chunk_masonry" }]
+note = "A chunk broken off a wall."
+
+[cue."chunk.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "destroy_wood", gain_db = -8.0 }]
+note = "A plank broken off a wooden wall."
+
+# The world.
+
+[cue."world.fire"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "medium"
+polyphony = 6
+layers = [{ sample = "fire_loop" }]
+note = "A fire cluster burning, louder the more it burns."
+
+[cue."world.fire.ignite"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 250
+layers = [{ sample = "fire_ignite" }]
+note = "Something catching fire."
+
+[cue."world.fuse"]
+kind = "loop"
+bus = "world"
+priority = "medium"
+class = "small"
+polyphony = 3
+layers = [{ sample = "fuse" }]
+note = "A fused barrel's fuse."
+
+[cue."world.rain"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "rain_loop" }]
+note = "Rain, by the sky's rain."
+
+[cue."world.wind"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "wind_loop" }]
+note = "A sandstorm's wind; snow's softer wind is its child."
+
+[cue."world.night"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -6.0
+layers = [{ sample = "night_loop" }]
+note = "Night's insects."
+
+[cue."world.thunder"]
+kind = "one_shot"
+bus = "world"
+priority = "medium"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "thunder" }]
+note = "Thunder after lightning, from the round clock."
+
+[cue."world.volcano"]
+kind = "modulated_loop"
+bus = "world"
+priority = "medium"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "volcano_rumble_loop" }]
+note = "A volcano rumbling toward an eruption."
+
+[cue."world.volcano.bomb"]
+kind = "one_shot"
+bus = "world"
+priority = "medium"
+class = "large"
+polyphony = 4
+layers = [{ sample = "lava_whistle" }]
+note = "A lava bomb thrown."
+
+[cue."world.portal"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "portal_hum_loop" }]
+note = "A portal's hum."
+
+[cue."world.portal.teleport"]
+kind = "one_shot"
+bus = "world"
+priority = "high"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "portal_teleport" }]
+note = "A tank through a portal."
+
+[cue."world.portal.shot"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 60
+layers = [{ sample = "portal_teleport", gain_db = -8.0 }]
+note = "A shot through a portal."
+
+[cue."world.door"]
+kind = "one_shot"
+bus = "world"
+priority = "high"
+class = "medium"
+polyphony = 1
+layers = [{ sample = "door_open" }]
+note = "A training door opening."
+
+[cue."world.flag"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 1
+layers = [{ sample = "ui_beat" }]
+note = "A training flag taken."
+
+[cue."world.lantern"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "lantern" }]
+note = "A lantern set or broken."
+
+[cue."bed.grass"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_grass_loop" }]
+note = "A grass map's air."
+
+[cue."bed.desert"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_desert_loop" }]
+note = "A desert map's air."
+
+[cue."bed.valley"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_valley_loop" }]
+note = "The valley biome's air."
+
+[cue."bed.floodplain"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_floodplain_loop" }]
+note = "The floodplain biome's air."
+
+[cue."bed.karst"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_karst_loop" }]
+note = "The karst biome's air."
+
+# Fly-bys (the flyby watcher).
+
+[cue."flyby.shell"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "tiny"
+polyphony = 3
+layers = [{ sample = "flyby_shell" }]
+note = "A shell passing close by a seat."
+
+[cue."flyby.bullet"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "tiny"
+polyphony = 3
+cooldown_ms = 80
+layers = [{ sample = "flyby_bullet" }]
+note = "Rounds snapping past a seat."
+
+[cue."flyby.missile"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "flyby_missile" }]
+note = "A missile streaking past a seat."

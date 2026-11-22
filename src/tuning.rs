@@ -163,6 +163,14 @@ pub const GUN_NAMES: [&str; 7] = ["shell", "laser", "plasma", "minigun", "missil
 /// `Tier::index`.
 pub const TIER_NAMES: [&str; 4] = ["light", "medium", "heavy", "super"];
 
+/// The sound buses in `audio::Bus` declaration order - index with
+/// `Bus::index`.
+pub const BUS_NAMES: [&str; 9] = ["music", "weapons", "impacts", "explosions", "vehicles", "world", "warnings", "voice", "ui"];
+
+/// The audibility classes in `audio::Class` declaration order - index with
+/// `Class::index`.
+pub const CLASS_NAMES: [&str; 5] = ["tiny", "small", "medium", "large", "huge"];
+
 /// The table macro. Grammar, one row per knob:
 ///
 /// ```text
@@ -4981,6 +4989,85 @@ tunables! {
         /// ground and the fog, sand, rain and snow in the air as plain
         /// blocks. For looking at that picture where the shaders work.
         weather_without_shaders: bool = false in 0 ..= 1;
+    }
+    group audio {
+        /// The whole mix, in dB, before the player's own volume setting
+        /// (docs/sound-system-prd.md section 4.5).
+        audio_master_db: f32 = (-3.0) in -60.0 ..= 12.0;
+        /// Each bus's level in dB, in `audio::Bus` order.
+        audio_bus_db: [f32; 9] = [-8.0, 0.0, -2.0, 0.0, -5.0, -9.0, 0.0, 0.0, -6.0] in -60.0 ..= 12.0 labels BUS_NAMES;
+        /// How many voices play at once; past it the quietest, lowest
+        /// priority one gives way (section 4.5).
+        audio_voices: usize = 48 in 4 ..= 128;
+        /// The HDR window (section 4.5): a voice more than this many dB under
+        /// the loudest sound playing is not started, and a loop under it is
+        /// let go.
+        audio_hdr_window_db: f32 = 45.0 in 6.0 ..= 96.0;
+        /// How fast the top of the HDR window falls back after a loud
+        /// sound, in dB a second.
+        audio_hdr_release_db_s: f32 = 20.0 in 1.0 ..= 200.0;
+        /// The listener floats above the field this share of half the
+        /// view's width (section 4.3): pan is `dx / sqrt(dx^2 + h^2)`.
+        audio_listener_height: f32 = 0.6 in 0.05 ..= 4.0;
+        /// Where a followed field puts the ears: 0 at the camera's centre,
+        /// 1 on the seat's own tank.
+        audio_ear_bias: f32 = 0.6 in 0.0 ..= 1.0;
+        /// How wide the stereo field is: 1 full, 0 mono.
+        audio_pan_width: f32 = 0.85 in 0.0 ..= 1.0;
+        /// The distance (px) inside which a sound plays at its full level.
+        audio_near_px: f32 = 96.0 in 1.0 ..= 2000.0;
+        /// How far each audibility class carries (px), in
+        /// `audio::Class` order; the huge class covers any map.
+        audio_class_far_px: [f32; 5] = [300.0, 600.0, 1200.0, 2500.0, 12000.0] in 50.0 ..= 20000.0 labels CLASS_NAMES;
+        /// How steeply a sound falls with distance past `audio_near_px`:
+        /// 1 is the inverse-distance law.
+        audio_rolloff: f32 = 1.0 in 0.1 ..= 4.0;
+        /// The high-cut a sound reaches at the end of its class's range
+        /// (Hz): the far end of a fight is its rumble.
+        audio_far_cutoff_hz: f32 = 1500.0 in 100.0 ..= 20000.0;
+        /// The most a wall line between listener and sound takes off, in dB.
+        audio_occlusion_max_db: f32 = (-24.0) in -80.0 ..= 0.0;
+        /// The high-cut a fully occluded sound falls to (Hz).
+        audio_occlusion_cutoff_hz: f32 = 800.0 in 100.0 ..= 20000.0;
+        /// The speed sound travels at (px a second) for the propagation
+        /// delay; about 1700 is the real one at the game's scale.
+        audio_sound_speed_px: f32 = 3000.0 in 300.0 ..= 50000.0;
+        /// The longest a far sound waits for its distance (s). 0 turns the
+        /// delay off.
+        audio_delay_max_s: f32 = 0.25 in 0.0 ..= 5.0;
+        /// The speed of sound doppler is figured against (px a second).
+        audio_doppler_c_px: f32 = 3000.0 in 300.0 ..= 50000.0;
+        /// The pitch range doppler may bend a sound across.
+        audio_doppler_min: f32 = 0.8 in 0.5 ..= 1.0;
+        audio_doppler_max: f32 = 1.25 in 1.0 ..= 2.0;
+        /// How close (px) a projectile must pass a seat's tank to whoosh by.
+        audio_flyby_px: f32 = 48.0 in 0.0 ..= 400.0;
+        /// An engine's pitch at idle and at top speed, before the chassis's
+        /// own offset (section 4.4).
+        audio_engine_idle_pitch: f32 = 0.8 in 0.25 ..= 2.0;
+        audio_engine_top_pitch: f32 = 1.3 in 0.25 ..= 3.0;
+        /// The seconds a standard chassis takes to rev to a new speed; a
+        /// heavier one takes longer by its mass factor.
+        audio_engine_spool_s: f32 = 0.35 in 0.01 ..= 5.0;
+        /// The engine's level at idle and at speed, linear.
+        audio_engine_idle_gain: f32 = 0.45 in 0.0 ..= 2.0;
+        audio_engine_drive_gain: f32 = 0.85 in 0.0 ..= 2.0;
+        /// How much quieter another tank's engine sits than a seat's own,
+        /// in dB: the field full of engines stays a bed.
+        audio_engine_others_db: f32 = (-6.0) in -40.0 ..= 0.0;
+        /// The speed (px a second) at which the tracks clank at full level.
+        audio_treads_full_px_s: f32 = 180.0 in 1.0 ..= 2000.0;
+        /// How much each link of a drum chain plays under the one before
+        /// it, in dB.
+        audio_chain_step_db: f32 = (-3.0) in -24.0 ..= 0.0;
+        /// How deep an explosion ducks the vehicles and the world, in dB,
+        /// and how fast they come back (s).
+        audio_explosion_duck_db: f32 = (-6.0) in -40.0 ..= 0.0;
+        audio_duck_release_s: f32 = 0.3 in 0.01 ..= 5.0;
+        /// The share of pitch and the dB of level a take may vary by, so a
+        /// sound heard often is never quite the same twice.
+        audio_pitch_jitter: f32 = 0.04 in 0.0 ..= 0.5;
+        audio_gain_jitter_db: f32 = 1.5 in 0.0 ..= 12.0;
     }
 }
 

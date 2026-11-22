@@ -1,0 +1,256 @@
+//! What each kind of thing sounds like (docs/sound-system-prd.md section 4.4):
+//! one exhaustive `match` per enumeration a sound depends on, so a new
+//! chassis, weapon, material, pickup, sky, theme or biome fails to compile
+//! until it has a sound decision (section 4.9). Each answers with a cue id
+//! or a family that ids are built from; `audio_tests` walks every `ALL` and
+//! checks the answer resolves in the manifest.
+
+use crate::biome::Biome;
+use crate::bong::BongKind;
+use crate::map::{Theme, Weather};
+use crate::obstacle::Material;
+use crate::pickup::PickupKind;
+use crate::simulation::HitCause;
+use crate::tank::{ActiveWeapon, TankKind};
+use crate::tower::TowerKind;
+use crate::wear::Surface;
+use crate::well::Swallow;
+
+/// Which engine a chassis has: four families, each its own sample set,
+/// pitched per chassis by its mass (`engine_pitch`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineFamily {
+    Light,
+    Medium,
+    Heavy,
+    Twin,
+}
+
+impl EngineFamily {
+    pub fn cue(self) -> &'static str {
+        match self {
+            EngineFamily::Light => "engine.light",
+            EngineFamily::Medium => "engine.medium",
+            EngineFamily::Heavy => "engine.heavy",
+            EngineFamily::Twin => "engine.twin",
+        }
+    }
+}
+
+pub fn engine_family(kind: TankKind) -> EngineFamily {
+    match kind {
+        TankKind::Scout | TankKind::Wraith | TankKind::Flak | TankKind::Glacier => EngineFamily::Light,
+        TankKind::Assault | TankKind::Warden | TankKind::Longbow | TankKind::Obelisk => EngineFamily::Medium,
+        TankKind::Breaker | TankKind::Ravager => EngineFamily::Heavy,
+        TankKind::Titan | TankKind::Leviathan => EngineFamily::Twin,
+    }
+}
+
+/// A chassis's engine pitch against its family's sample: heavier is lower.
+/// `mass_factor` is the chassis's `tank_mass_factor` (0.77 to 1.89).
+pub fn engine_pitch(mass_factor: f32) -> f32 {
+    (1.0 / mass_factor.max(0.1)).powf(0.35)
+}
+
+/// How a cannon sounds by calibre (`tank_damage_factor`).
+pub fn cannon_cue(damage_factor: f32) -> &'static str {
+    if damage_factor < 0.85 {
+        "weapon.shell.fire.light"
+    } else if damage_factor < 1.1 {
+        "weapon.shell.fire.medium"
+    } else if damage_factor < 1.4 {
+        "weapon.shell.fire.heavy"
+    } else {
+        "weapon.shell.fire.super"
+    }
+}
+
+/// What firing a weapon sounds like at the trigger (`Event::Fired`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FireSound {
+    /// A one-shot at the tank.
+    Cue(&'static str),
+    /// The cannon, tiered by the chassis's calibre (`cannon_cue`).
+    Cannon,
+    /// A loop a watcher drives while the weapon fires.
+    Watched(&'static str),
+    /// Another event carries the sound: the weapon's own show.
+    Elsewhere(&'static str),
+}
+
+pub fn weapon_sound(weapon: ActiveWeapon) -> FireSound {
+    match weapon {
+        ActiveWeapon::Shell => FireSound::Cannon,
+        ActiveWeapon::Laser => FireSound::Elsewhere("LaserBeam"),
+        ActiveWeapon::Plasma => FireSound::Cue("weapon.plasma.fire"),
+        ActiveWeapon::Minigun => FireSound::Watched("minigun"),
+        ActiveWeapon::Missiles => FireSound::Cue("weapon.missiles.fire"),
+        ActiveWeapon::Flamethrower => FireSound::Watched("flame"),
+        ActiveWeapon::Grenades => FireSound::Cue("weapon.grenades.fire"),
+        ActiveWeapon::SonicHammer => FireSound::Elsewhere("SonicBlast"),
+        ActiveWeapon::Emp => FireSound::Elsewhere("EmpPulse"),
+        ActiveWeapon::GaussRail => FireSound::Elsewhere("RailSlug"),
+        ActiveWeapon::FpvSwarm => FireSound::Elsewhere("DroneLaunched"),
+        ActiveWeapon::RodFromGod => FireSound::Elsewhere("RodCalled"),
+        ActiveWeapon::GravityWell => FireSound::Cue("weapon.gravity_well.fire"),
+    }
+}
+
+/// What a surface sounds like when struck: the family part of a hit's cue
+/// id (`hit.<shot>.<family>.<material>`).
+pub fn surface_family(material: Material) -> &'static str {
+    match material {
+        Material::Brick | Material::Concrete | Material::Volcano => "masonry",
+        Material::Iron | Material::Door | Material::Barrel | Material::Tesla | Material::GunTower => "metal",
+        Material::Wood | Material::Fence | Material::Target => "wood",
+        Material::Glass | Material::Lamp => "glass",
+        Material::Sandbag => "earth",
+        Material::BioSlush => "slime",
+        Material::Tree
+        | Material::Pine
+        | Material::Spruce
+        | Material::Scots
+        | Material::Fir
+        | Material::Birch
+        | Material::Willow
+        | Material::Palm
+        | Material::Snag => "foliage",
+    }
+}
+
+/// The material's own name in a hit's cue id.
+pub fn material_name(material: Material) -> &'static str {
+    match material {
+        Material::Brick => "brick",
+        Material::Iron => "iron",
+        Material::Wood => "wood",
+        Material::Glass => "glass",
+        Material::Concrete => "concrete",
+        Material::Sandbag => "sandbag",
+        Material::Barrel => "barrel",
+        Material::Fence => "fence",
+        Material::Tree => "tree",
+        Material::Pine => "pine",
+        Material::Tesla => "tesla",
+        Material::GunTower => "gun_tower",
+        Material::BioSlush => "bio_slush",
+        Material::Volcano => "volcano",
+        Material::Lamp => "lamp",
+        Material::Door => "door",
+        Material::Target => "target",
+        Material::Spruce => "spruce",
+        Material::Scots => "scots",
+        Material::Fir => "fir",
+        Material::Birch => "birch",
+        Material::Willow => "willow",
+        Material::Palm => "palm",
+        Material::Snag => "snag",
+    }
+}
+
+/// The shot part of a hit's cue id.
+pub fn hit_shot(cause: HitCause) -> &'static str {
+    match cause {
+        HitCause::Shell => "shell",
+        HitCause::Bullet => "bullet",
+        HitCause::Plasma => "plasma",
+        HitCause::Laser => "laser",
+        HitCause::Flame => "flame",
+        HitCause::Tesla => "tesla",
+        HitCause::Sonic => "sonic",
+        HitCause::Rail => "rail",
+        HitCause::Rod => "rod",
+        HitCause::Well => "well",
+        HitCause::Spall => "spall",
+        HitCause::Blast => "blast",
+        HitCause::Lava => "lava",
+        HitCause::Fire => "fire",
+        HitCause::Slime => "slime",
+    }
+}
+
+/// What picking up a crate sounds like.
+pub fn pickup_cue(kind: PickupKind) -> &'static str {
+    match kind {
+        PickupKind::Health | PickupKind::BongHealth => "pickup.health",
+        PickupKind::Ammo => "pickup.ammo",
+        PickupKind::SpeedUp | PickupKind::Shield | PickupKind::HeatShield => "pickup.boost",
+        PickupKind::TowerPack => "pickup.tower",
+        PickupKind::AirHeli | PickupKind::AirJet => "pickup.air",
+        PickupKind::Laser
+        | PickupKind::Minigun
+        | PickupKind::Plasma
+        | PickupKind::Missiles
+        | PickupKind::Flamethrower
+        | PickupKind::Grenades
+        | PickupKind::SonicHammer
+        | PickupKind::Emp
+        | PickupKind::GaussRail
+        | PickupKind::FpvSwarm
+        | PickupKind::RodFromGod
+        | PickupKind::GravityWell => "pickup.weapon",
+    }
+}
+
+/// A bong's babble pitch: each kind its own voice (section 4.7).
+pub fn bong_pitch(kind: BongKind) -> f32 {
+    match kind {
+        BongKind::Spike => 1.0,
+        BongKind::Oggle => 0.85,
+        BongKind::Gloop => 0.72,
+        BongKind::Puff => 1.25,
+        BongKind::Capi => 1.12,
+        BongKind::Blip => 1.4,
+        BongKind::Fuzz => 0.93,
+    }
+}
+
+/// What a tower's shot sounds like.
+pub fn tower_cue(kind: TowerKind) -> &'static str {
+    match kind {
+        TowerKind::Tesla => "tower.tesla.strike",
+        TowerKind::Gun => "tower.gun.fire",
+        TowerKind::Bio => "tower.bio.fire",
+    }
+}
+
+/// What a gravity well swallowing something sounds like.
+pub fn swallow_cue(what: Swallow) -> &'static str {
+    match what {
+        Swallow::Shell | Swallow::Bullet | Swallow::Plasma | Swallow::Orb | Swallow::Missile | Swallow::Drone => "weapon.gravity_well.swallow",
+    }
+}
+
+/// The bed a sky lays under the round, if it has one.
+pub fn sky_bed(weather: Weather) -> Option<&'static str> {
+    match weather {
+        Weather::Rain | Weather::Storm => Some("world.rain"),
+        Weather::Sandstorm => Some("world.wind"),
+        Weather::Snow => Some("world.wind.soft"),
+        Weather::Night => Some("world.night"),
+        Weather::Clear | Weather::Dusk | Weather::Fog | Weather::HeatHaze | Weather::Random => None,
+    }
+}
+
+/// The bed a place lays under the round: the theme's, or its biome's.
+pub fn place_bed(theme: Theme, biome: Option<Biome>) -> &'static str {
+    match (theme, biome) {
+        (_, Some(Biome::Valley)) => "bed.valley",
+        (_, Some(Biome::Floodplain)) => "bed.floodplain",
+        (_, Some(Biome::Karst)) => "bed.karst",
+        (Theme::Grass, None) => "bed.grass",
+        (Theme::Desert, None) => "bed.desert",
+    }
+}
+
+/// The layer the tracks add for the ground under them.
+pub fn surface_layer(surface: Surface) -> Option<&'static str> {
+    match surface {
+        Surface::Grass => Some("vehicle.ground.grass"),
+        Surface::Road => None,
+        Surface::Sand => Some("vehicle.ground.sand"),
+        Surface::Ford => Some("vehicle.ground.water"),
+        Surface::Deep => Some("vehicle.ground.water"),
+        Surface::Ice => Some("vehicle.ground.ice"),
+    }
+}

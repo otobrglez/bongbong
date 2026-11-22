@@ -15,6 +15,7 @@
 //! compiler and no raylib: the probe, the simulation tests and the room
 //! server (docs/online-coop-prd.md section 4.5).
 
+pub mod audio;
 pub mod batch;
 pub mod blast;
 pub mod bubble;

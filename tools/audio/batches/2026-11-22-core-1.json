@@ -1,0 +1,23 @@
+{
+  "flow": "SgNxbu30VDEi7UIUocBy",
+  "name": "bongbong sfx 2026-11-22 core-1",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 1166,
+  "nodes": {
+    "x6et8h7UDyA9Awze4tUD": "cannon_medium_near",
+    "QeuKP5JW1zC4nWwNP28k": "cannon_far",
+    "qxsecW2OC4i6zX1tVwFp": "minigun_loop",
+    "G4mYmKqp8pAsLQwHT64w": "minigun_spin_down",
+    "E50Z87drw94kIlbUV2wr": "hit_shell_metal",
+    "HWINqgnkby5awyOSBs40": "hit_shell_masonry",
+    "XklCWF0QOFU81U19jdUS": "wreck_tank",
+    "azNdqUGU321Euiib93vr": "blast_barrel_oil",
+    "uP8ct29ZoqDJJqZFbz0R": "explosion_far",
+    "iU7lfqOZPRcHgVf8ex7q": "engine_light_loop",
+    "mb8qO2XmsaElRycAxccY": "engine_medium_loop",
+    "nsxwMnla8UnXaDfiQ9E6": "engine_heavy_loop",
+    "xgG6FrAZQXiTKqWJrLhT": "treads_loop",
+    "eZ6fQinWFktgIXvmzsMe": "ui_click"
+  },
+  "sessions": ["cJznjACMWR4Zg9kvYYAc","uQ4tUx8q4N1BYW4i7QRH","dEEs8KC3mvxb45aXHugE","4UUq4FIIQAHK65BIJbvd","6SOVHWBkpBmU9OTRjtsc","f6FBWjDPZpAVa7FBwFeY","qrGDKk7xZ3a12byYBFba","ivDNWU87zKBZJPV8Wqwg","6iqjHOMubDkTmzz9CdE4","WeJuhQk2ees0nDjFxLUn","06iRn6MHYR9b1sxWb2LY","KsYNbQPjuInVTXcF8DRh","DNyRUZT8mAJray0BcwkY","Rmsgk70J3uHMOWiru3rr","v2OZvyrp4RA6RXvkdzFr","bA9Xnq2TNAGs6ZYmhaTj","BrSKpWTk00EVP16bQh1A","FF0HVVbsfNGXcS7O8tTT","Zz3vdqjqOpT8cHAjw24V","ITC39nxhEVxwWIfs7WoN","wLjfhmdK0G5G8lsfkmNF","qu5DWAe2h2NhJ6Dd1064","ZlXbfZ9x5eLc1BYTxaz3","JH8NQJMMQQNI5BsL4QOH","JwyMhQe9rx7gJYxfQqsa","OSuQ2zdzjyuKOz1Bjs6t","C77R7RRJR8Iqu2QSi19j","Cap3ghfHL2sZ0vtIIsIY","bNM81ZztNvOvZTNfyanl","kqX68kzMLSkaT8QmdM8q","J8hZ6idzjd5hgkyrqa2w","PdGKBZrsW77hJK7vFOIS","YLtLGXJc8bd0ObmY9R3P","iiWzkw39cRMBfFCJEoSt","rDNSYZPoibSbQq9LJZha","V20igzV1oYufwwnHQl8m","9fo5BvsRwoBacLiUwQ58","PE5z4GyCUq4Xu4GnydHo","doU3Rd6IgVfs05SyQwuQ","NS5iE1xlyaKQFLEZexR6","XE7iVJJhHyt4VBZ9XeiE","ct8s4LNzZMSShzGf6GZw","vJ0A9UFyhNkYLBMimUp0","eNIIAVCoW0bWltFyMdtU","4VSRXabyNt9dduMSqcfd","Yx6kErdJUzCqS99oXDMg","X5ouVWdevdmndVGNyjUf","zzMabaC0kVVF1IGN3E7g","Ll5AYfkEjI70Kn6g2ozy","zsjcePa3ZDBGotRi5VQC","YjUF9XgJpxkZzpyeaXCT","4L4dzq5afHqPjkKyTe51","QbfImSt7lezVmo1eBUmo","rHOKOALJf6PNYppvpvHa","WvOSI6VpUsP31W8B3Ofb","IPkuqBajLdpv9dcK5hzA"]
+}

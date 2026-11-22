@@ -34,6 +34,11 @@ unic-langid = "0.9"
 # the probe and the tests never name it.
 sola-raylib = { version = "6.4.1", optional = true }
 toml = "1"
+# The sound files' decoder (src/audio/dsp/decode.rs, docs/sound-system-prd.md
+# D3): Ogg Vorbis in pure Rust, so the headless build, the probe's offline
+# render and every platform's window decode the same bytes the same way,
+# with no C and nothing raylib-side.
+lewton = "0.10"
 
 # The client's native WebSocket (src/net/native.rs,
 # docs/online-coop-prd.md section 4.6), behind the `online` feature: the

@@ -120,6 +120,29 @@ fn local_seats(session: &Session) -> Vec<u8> {
     }
 }
 
+/// What the sound hears from (`audio::space::View`): the camera's view, and
+/// a couch split's second; a followed view's ears lean toward its seat's
+/// tank, a whole field's sit at its middle.
+fn audio_views(game: &Game, camera: &Camera, second: Option<crate::math::Rectangle>, seats: &[u8]) -> Vec<crate::audio::space::View> {
+    let seat_at = |i: usize| {
+        seats
+            .get(i)
+            .and_then(|&s| crate::audio::bind::tank_in(game, s as usize))
+            .filter(|t| !t.is_wreck())
+            .map(|t| t.position)
+    };
+    let view = |r: crate::math::Rectangle, seat: Option<crate::math::Vec2>| crate::audio::space::View {
+        center: crate::math::Vec2::new(r.x + 0.5 * r.width, r.y + 0.5 * r.height),
+        half_width: 0.5 * r.width,
+        seat,
+    };
+    let mut views = vec![view(camera.rect(), if camera.shows_whole_field() { None } else { seat_at(0) })];
+    if let Some(r) = second {
+        views.push(view(r, seat_at(1)));
+    }
+    views
+}
+
 /// Whether the particle layer ages this frame: with the round on screen.
 /// A room's replica always runs; the local round does while it is played
 /// (`Session::playing`: no dialog, level select, lobby or builder over it)
@@ -1790,6 +1813,12 @@ pub fn run(args: Args) {
         feedback,
         awareness,
         voice,
+        audio: {
+            let mut audio = crate::audio::Audio::shipped();
+            audio.warm();
+            audio
+        },
+        audio_out: crate::render::audio::AudioOut::open(),
         round_blocks,
         builder_blocks,
         round_minimap,
@@ -1917,6 +1946,11 @@ struct App {
     feedback: crate::feedback::Feedback,
     awareness: crate::indicators::ScreenAwareness,
     voice: crate::bubble::BongVoice,
+    /// Sound (docs/sound-system-prd.md): the director, which reads the
+    /// round as `fx` does, and the device its mix plays through - `None`
+    /// where the machine has none, and the game plays silent.
+    audio: crate::audio::Audio,
+    audio_out: Option<crate::render::audio::AudioOut>,
     round_blocks: crate::render::canvas::BlockTextures,
     builder_blocks: crate::render::canvas::BlockTextures,
     round_minimap: crate::minimap::RoundMinimap,
@@ -2006,6 +2040,12 @@ impl App {
         let mut f = self.frame_input(rl, thread);
         if self.session.mode() == Driver::Build {
             self.frame_build(rl, thread, &f);
+            // The builder hears its own buttons; the round's sound holds.
+            self.audio.observe(&self.session.game, &[], &[], f.dt, false);
+            let commands = self.audio.take_commands();
+            if let Some(out) = &self.audio_out {
+                out.send(commands);
+            }
             return;
         }
         let stepped = self.frame_sim(&f);
@@ -2527,6 +2567,7 @@ impl App {
             // read each step's events before the next step clears them.
             let mut after_step = |game: &Game| {
                 self.fx.observe_events(game);
+                self.audio.observe_events(game);
                 self.follow.observe_events(game);
                 self.awareness.observe_events(game, &seats);
                 self.feedback.observe_events(game, &seats, &tuning(), hold);
@@ -2777,6 +2818,23 @@ impl App {
         self.fx.tick(fx_dt);
         self.feedback.tick(fx_dt, dt, &tuning());
         drop(fx_stage);
+        // Sound (docs/sound-system-prd.md): a replica's events read once a
+        // frame (a local round's were read after every step), then the
+        // frame's mix, heard from the views the window shows.
+        let audio_stage = crate::frame_stages::stage("audio");
+        if self.session.mode() == Driver::Online {
+            self.audio.observe_events(game);
+        }
+        let seats = local_seats(&self.session);
+        let ears = audio_views(game, &camera, second_shown, &seats);
+        let own: Vec<usize> = seats.iter().map(|&s| s as usize).collect();
+        let running = fx_runs(self.session.mode(), self.session.playing(), game.paused);
+        self.audio.observe(game, &ears, &own, dt, running);
+        let commands = self.audio.take_commands();
+        if let Some(out) = &self.audio_out {
+            out.send(commands);
+        }
+        drop(audio_stage);
         // What the screen cannot see: a replica's events read once a frame
         // (a local round's were read after every step), and the arrows
         // drawn only while the camera shows less than the whole field, so
