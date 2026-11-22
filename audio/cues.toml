@@ -1314,6 +1314,145 @@ loop = true
   peak_dbtp = -8.49
   seconds = 3.00
 
+[sample.ground_lava_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "heavy steel tank tracks wading through thick molten lava, slow viscous gloop and heavy sucking blorps, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.lava_sizzle_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "steel armour standing in molten lava, loud steady hissing sizzle with crackling spits of burning paint, no music"
+duration_seconds = 3.0
+loop = true
+
+[sample.ground_mud_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "heavy tank tracks churning through thick wet mud, sucking squelch and wet slaps, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.ground_snow_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "heavy tank tracks rolling over packed snow, steady crisp squeaking crunch, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.rubble_crunch_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "heavy steel tracks rolling over broken bricks and rubble, crunching masonry and clattering stones, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.track_pivot_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "steel tank tracks pivoting in place, links scrubbing sideways over dirt with a grinding squeal, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.track_slip_ice_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "steel tank tracks spinning and sliding on ice, high scraping screech and an icy hiss, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.track_slip_mud_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "steel tank tracks spinning in deep mud, slushy whirr and flung wet slaps, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.skid_turf_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "heavy steel tank sliding sideways across a grass field, tearing turf and ripping roots, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.splash_in]
+status = "planned"
+bus = "vehicles"
+prompt = "heavy tank plunging into a shallow river, big slosh and a heavy splash of displaced water, no engine, no music"
+duration_seconds = 1.2
+
+[sample.splash_out]
+status = "planned"
+bus = "vehicles"
+prompt = "heavy tank climbing out of a river onto the bank, water pouring and streaming off its tracks and hull, no engine, no music"
+duration_seconds = 1.5
+
+[sample.drip_loop]
+status = "planned"
+bus = "vehicles"
+prompt = "water dripping off a wet steel vehicle onto dirt, irregular drips and small trickles, steady, no engine, no music"
+duration_seconds = 3.0
+loop = true
+
+[sample.steam_hiss]
+status = "planned"
+bus = "world"
+prompt = "red hot metal plunged into water, violent steam hiss and a short bubbling boil, no music"
+duration_seconds = 1.5
+
+[sample.water_geyser]
+status = "planned"
+bus = "explosions"
+prompt = "explosion in shallow water, heavy geyser slap of water thrown up then a rain of droplets splashing down, no music"
+duration_seconds = 2.0
+
+[sample.water_plop]
+status = "planned"
+bus = "impacts"
+prompt = "heavy metal object dropping into shallow water, deep plunk and a fizzling bubble, no music"
+duration_seconds = 0.8
+
+[sample.grenade_bounce]
+status = "planned"
+bus = "impacts"
+prompt = "small heavy metal grenade landing on hard ground, dull metallic clunk and a short skitter, no music"
+duration_seconds = 0.5
+
+[sample.bong_splash]
+status = "planned"
+bus = "impacts"
+prompt = "small rubbery cartoon creature landing in a puddle, comic bloop and a bright little splash, no music"
+duration_seconds = 0.8
+
+[sample.grass_trample]
+status = "planned"
+bus = "world"
+prompt = "tall grass and reeds pressed flat under a heavy tank, crunchy rustle and a sweeping swish of stalks going down, no music"
+duration_seconds = 0.8
+
+[sample.water_lap_loop]
+status = "planned"
+bus = "world"
+prompt = "small waves lapping gently against a muddy lake shore, soft slaps and trickles, steady, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.stream_babble_loop]
+status = "planned"
+bus = "world"
+prompt = "shallow stream babbling over stones, steady bright trickling and gurgling, no music"
+duration_seconds = 4.0
+loop = true
+
+[sample.ice_creak_loop]
+status = "planned"
+bus = "world"
+prompt = "frozen lake at rest, sparse faint deep creaks of ice under a low cold hush, no music"
+duration_seconds = 4.0
+loop = true
+
 [sample.ground_grass_loop]
 status = "approved"
 bus = "vehicles"
@@ -3552,6 +3691,389 @@ polyphony = 8
 jitter = false
 layers = [{ sample = "treads_loop" }]
 note = "Tracks rolling, louder and faster with speed."
+
+[cue."vehicle.ground.lava"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "ground_lava_loop" }]
+note = "Tracks wading lava, or a hull skidding through it: a thick gloop."
+
+[cue."world.lava.sizzle"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "lava_sizzle_loop" }]
+note = "A hull in lava sizzling, faint on a hot bank (Game::heat_at); none under a heat shield."
+
+[cue."vehicle.ground.mud"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -4.0
+layers = [{ sample = "ground_mud_loop" }]
+note = "Tracks in mud: rain on anything but sand, or tracks wet from a ford (wear::muddy)."
+
+[cue."vehicle.ground.puddle"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+layers = [{ sample = "ground_water_loop", gain_db = -10.0 }]
+note = "A road's puddles under rain, over its mud."
+
+[cue."vehicle.ground.snow"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -5.0
+layers = [{ sample = "ground_snow_loop" }]
+note = "Tracks under a snowy sky."
+
+[cue."vehicle.ground.dust"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -6.0
+layers = [{ sample = "ground_sand_loop", gain_db = -4.0 }]
+note = "The desert's pale dust where the tileset's grass is: the sand's hiss, lighter."
+
+[cue."vehicle.ground.rubble"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+gain_db = -3.0
+layers = [{ sample = "rubble_crunch_loop" }]
+note = "Tracks over rubble, louder on heavy (Rubble::level)."
+
+[cue."vehicle.ground.brush"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+gain_db = -2.0
+layers = [{ sample = "ground_grass_loop" }]
+note = "A hull pushing through tall grass, reeds or a bush; quieter once the cell is trampled."
+
+[cue."vehicle.pivot"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_pivot_loop" }]
+note = "Tracks pivoting in place (Roll::Pivoting): a grind and a squeal."
+
+[cue."vehicle.slip"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "scrape_loop", gain_db = -6.0 }]
+note = "Tracks sliding across their runs on dry ground (Roll::Sliding): a scrub."
+
+[cue."vehicle.slip.ice"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_ice_loop" }]
+note = "Tracks spinning on a start or sliding on ice: a screech."
+
+[cue."vehicle.slip.mud"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_mud_loop" }]
+note = "Tracks spinning on a start or sliding in mud: a slushy whirr."
+
+[cue."vehicle.coast.ice"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_ice_loop", gain_db = -8.0 }]
+note = "A hull coasting to a stop on ice: a long hiss."
+
+[cue."vehicle.skid"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "scrape_loop", gain_db = -2.0 }]
+note = "A hull knocked off its tracks sliding over a road (Game::skidding): steel scraping."
+
+[cue."vehicle.skid.grass"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "skid_turf_loop" }]
+note = "A hull skidding across grass: torn turf."
+
+[cue."vehicle.skid.sand"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "ground_sand_loop" }]
+note = "A hull skidding across sand or the desert's dust: a sand hiss."
+
+[cue."vehicle.skid.ice"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_ice_loop" }]
+note = "A hull skidding across ice: an icy hiss."
+
+[cue."vehicle.skid.water"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "ground_water_loop" }]
+note = "A hull skidding through a ford: a wash of water."
+
+[cue."vehicle.skid.snow"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "ground_snow_loop" }]
+note = "A hull skidding across snow."
+
+[cue."vehicle.skid.mud"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_mud_loop" }]
+note = "A hull skidding through mud."
+
+[cue."vehicle.splash"]
+kind = "one_shot"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "splash_in" }]
+note = "A hull wading into a ford: a heavy slosh by its speed and mass."
+
+[cue."vehicle.splash.out"]
+kind = "one_shot"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "splash_out" }]
+note = "A hull climbing out of a ford: water pouring off the runs."
+
+[cue."vehicle.drip"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "tiny"
+polyphony = 4
+jitter = false
+layers = [{ sample = "drip_loop" }]
+note = "Drips off the runs after a ford, following Tread::wet and dying away (audio_drip_seconds)."
+
+[cue."world.fire.douse"]
+kind = "one_shot"
+bus = "world"
+priority = "medium"
+class = "small"
+polyphony = 3
+layers = [{ sample = "steam_hiss" }]
+note = "A burning hull's fire put out by the water: a steam hiss."
+
+[cue."world.fire.hiss"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "fuse", gain_db = -2.0 }, { sample = "fire_loop", gain_db = -12.0 }]
+note = "A wreck burning in a ford or in rain: a hiss in place of the crackle (the fuse's fizz pitched down from code)."
+
+[cue."pickup.boost.fizzle"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "emp_disabled", gain_db = -6.0 }]
+note = "A speed boost the water takes, fizzling out (pitched up from code)."
+
+[cue."explosion.water"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 4
+layers = [{ sample = "water_geyser" }]
+note = "A blast on liquid water, under the blast's own sound: a geyser slap and a rain of droplets."
+
+[cue."explosion.water.steam"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "steam_hiss" }]
+note = "A lava bomb landing in water: a burst of steam."
+
+[cue."explosion.water.plop"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 3
+layers = [{ sample = "water_plop" }]
+note = "A dud missile or a downed drone falling in water: a plop and a fizzle."
+
+[cue."explosion.water.column"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "water_geyser", gain_db = 4.0 }]
+note = "The rod striking water: a column of it thrown up."
+
+[cue."weapon.grenades.bounce"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "grenade_bounce" }]
+note = "A grenade touching down on dry ground, smaller each hop."
+
+[cue."weapon.grenades.bounce.water"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "water_plop", gain_db = -6.0 }]
+note = "A grenade touching down in water: a small plop (the plop pitched up from code)."
+
+[cue."weapon.grenades.bounce.ice"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "grenade_bounce" }]
+note = "A grenade touching down on ice: the clunk pitched up into a skitter from code."
+
+[cue."bong.land.water"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "bong_splash" }]
+note = "The bong's hop landing in water: a comic plop, pitched by its kind."
+
+[cue."world.grass.trample"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 120
+layers = [{ sample = "grass_trample" }]
+note = "Tall grass, a bush or reeds trampled flat for the round (Event::GrassTrampled)."
+
+[cue."world.water.lap"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+layers = [{ sample = "water_lap_loop" }]
+note = "A lake's or a ford's shore lapping, one a cluster of its cells near the ears."
+
+[cue."world.water.stream"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+layers = [{ sample = "stream_babble_loop" }]
+note = "A stream babbling where its current runs, one a cluster."
+
+[cue."world.water.ice"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+gain_db = -4.0
+layers = [{ sample = "ice_creak_loop" }]
+note = "A frozen shore's hush and faint creak."
+
+[cue."world.rain.water"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "rain_loop", gain_db = -6.0 }]
+note = "Rain on the water in earshot, by how much of it there is (the rain bed pitched up from code)."
 
 [cue."vehicle.ground.grass"]
 kind = "modulated_loop"

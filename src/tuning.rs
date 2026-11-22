@@ -5232,6 +5232,26 @@ tunables! {
         audio_engine_others_db: f32 = (-6.0) in -40.0 ..= 0.0;
         /// The speed (px a second) at which the tracks clank at full level.
         audio_treads_full_px_s: f32 = 180.0 in 1.0 ..= 2000.0;
+        /// The speed (px a second) at which a hull wading into a ford
+        /// splashes at its full strength; a hull rolling in at walking pace
+        /// splashes at about a third.
+        audio_splash_full_px_s: f32 = 120.0 in 1.0 ..= 2000.0;
+        /// How long (s) the drips off a hull's runs fall after it climbs
+        /// out of a ford with its tracks full of water.
+        audio_drip_seconds: f32 = 6.0 in 0.1 ..= 60.0;
+        /// How long (s) a pivot's grind, a slip's screech or a coast's hiss
+        /// holds after the last frame the tracks did it, so a quick turn is
+        /// heard whole.
+        audio_turn_hold_s: f32 = 0.2 in 0.0 ..= 2.0;
+        /// How fast a hull on ice must be slowing (px a second, each second)
+        /// for its tracks to hiss as it coasts.
+        audio_coast_decel_px_s2: f32 = 20.0 in 0.0 ..= 2000.0;
+        /// The speed (px a second) at which a hull knocked off its tracks
+        /// skids at full level.
+        audio_skid_full_px_s: f32 = 200.0 in 1.0 ..= 2000.0;
+        /// How many placed water beds - a shore lapping, a stream, a frozen
+        /// shore - play at once: the nearest the ears.
+        audio_water_beds: usize = 6 in 0 ..= 32;
         /// How much each link of a drum chain plays under the one before
         /// it, in dB.
         audio_chain_step_db: f32 = (-3.0) in -24.0 ..= 0.0;

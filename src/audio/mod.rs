@@ -409,6 +409,7 @@ impl Audio {
         if running {
             let mut wishes = Vec::new();
             let mut plays = Vec::new();
+            self.watch.set_ears(self.space.ears().iter().map(|e| e.at));
             self.watch.sample(game, own, self.time, &t, &mut wishes, &mut plays);
             self.pending.extend(plays);
             self.loops(&wishes, &t);

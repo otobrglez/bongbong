@@ -231,6 +231,14 @@ pub fn is_soft(look: Look, surface: Surface) -> bool {
     }
 }
 
+/// Whether a hull's runs churn `surface` to mud under `look` with its
+/// tracks `wet` (0 to 1): rain on anything but sand, or tracks still wet
+/// from a ford; never water or ice. What throws mud off the tracks
+/// (`simulation::press_treads`) and what the tracks sound like there.
+pub fn muddy(look: Look, surface: Surface, wet: f32) -> bool {
+    !surface.is_water() && surface != Surface::Ice && ((look.sky == Sky::Rain && surface != Surface::Sand) || wet > 0.15)
+}
+
 /// Whether a sandstorm's gust scours marks off `surface`: sand, desert
 /// dust and its roads, anything under snow.
 pub fn erodes(look: Look, surface: Surface) -> bool {

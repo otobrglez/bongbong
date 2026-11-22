@@ -13,7 +13,7 @@ use crate::pickup::PickupKind;
 use crate::simulation::HitCause;
 use crate::tank::{ActiveWeapon, TankKind};
 use crate::tower::TowerKind;
-use crate::wear::Surface;
+use crate::wear::{Look, Sky, Surface};
 use crate::well::Swallow;
 
 /// Which engine a chassis has: four families, each its own sample set,
@@ -273,5 +273,53 @@ pub fn surface_layer(surface: Surface) -> Option<&'static str> {
         Surface::Ford => Some("vehicle.ground.water"),
         Surface::Deep => Some("vehicle.ground.water"),
         Surface::Ice => Some("vehicle.ground.ice"),
+    }
+}
+
+/// The layer the tracks add for the ground under them as the round has it
+/// (docs/ground-memory.md): lava for a hull wading it, snow under a snowy
+/// sky, mud where the runs churn the ground to mud (`wear::muddy`), the
+/// desert's pale dust where the tileset's grass is, and otherwise the
+/// surface's own (`surface_layer`).
+pub fn ground_layer(surface: Surface, look: Look, wet: f32, lava: bool) -> Option<&'static str> {
+    if lava {
+        return Some("vehicle.ground.lava");
+    }
+    match surface {
+        Surface::Ford | Surface::Deep | Surface::Ice => surface_layer(surface),
+        Surface::Grass | Surface::Road | Surface::Sand if look.sky == Sky::Snow => Some("vehicle.ground.snow"),
+        Surface::Grass | Surface::Road | Surface::Sand if crate::wear::muddy(look, surface, wet) => Some("vehicle.ground.mud"),
+        Surface::Grass if look.theme == Theme::Desert => Some("vehicle.ground.dust"),
+        Surface::Grass | Surface::Road | Surface::Sand => surface_layer(surface),
+    }
+}
+
+/// Tracks sliding across their runs or spinning on a slippery start
+/// (`Roll`): a screech on ice, a slushy whirr in mud, a scrub on dry
+/// ground. In water the wading layer covers it.
+pub fn slip_cue(surface: Surface, muddy: bool) -> &'static str {
+    match surface {
+        Surface::Ice => "vehicle.slip.ice",
+        Surface::Grass | Surface::Road | Surface::Sand | Surface::Ford | Surface::Deep if muddy => "vehicle.slip.mud",
+        Surface::Grass | Surface::Road | Surface::Sand | Surface::Ford | Surface::Deep => "vehicle.slip",
+    }
+}
+
+/// A hull knocked off its tracks sliding (`Game::skidding`), by what it
+/// slides over: lava's gloop, a water wash, an ice hiss, snow, mud, a sand
+/// hiss (the desert's dust too), torn turf, and steel scraping a road.
+pub fn skid_cue(surface: Surface, look: Look, wet: f32, lava: bool) -> &'static str {
+    if lava {
+        return "vehicle.ground.lava";
+    }
+    match surface {
+        Surface::Ford | Surface::Deep => "vehicle.skid.water",
+        Surface::Ice => "vehicle.skid.ice",
+        Surface::Grass | Surface::Road | Surface::Sand if look.sky == Sky::Snow => "vehicle.skid.snow",
+        Surface::Grass | Surface::Road | Surface::Sand if crate::wear::muddy(look, surface, wet) => "vehicle.skid.mud",
+        Surface::Grass if look.theme == Theme::Desert => "vehicle.skid.sand",
+        Surface::Sand => "vehicle.skid.sand",
+        Surface::Grass => "vehicle.skid.grass",
+        Surface::Road => "vehicle.skid",
     }
 }

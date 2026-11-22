@@ -155,7 +155,7 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         Event::EmpPulse { x, y, .. } => one(Play::new("weapon.emp_burst.fire", point(x, y))),
         Event::Disabled { x, y, .. } => one(Play::new("weapon.emp_burst.disabled", point(x, y))),
         Event::TowerDisabled { x, y } => one(Play::new("tower.disabled", point(x, y))),
-        Event::MissileDud { x, y } => one(Play::new("weapon.missiles.dud", point(x, y))),
+        Event::MissileDud { x, y } => on_water(game, x, y, Play::new("weapon.missiles.dud", point(x, y)), ids::WATER_PLOP.0, 1.0),
         Event::RailSlug { x0, y0, leg, overcharged, .. } => {
             if leg == 0 {
                 let cue = if overcharged { "weapon.gauss_rail.fire.overcharged" } else { "weapon.gauss_rail.fire" };
@@ -174,14 +174,14 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
             one(Play::new(cue, At::Slot(slot)))
         }
         Event::DroneLaunched { x, y, .. } => one(Play::new("weapon.fpv_swarm.launch", point(x, y))),
-        Event::DroneBurst { x, y, .. } => one(Play::new("weapon.fpv_swarm.burst", point(x, y))),
+        Event::DroneBurst { x, y, .. } => on_water(game, x, y, Play::new("weapon.fpv_swarm.burst", point(x, y)), ids::WATER_BLAST.0, 0.5),
         Event::DroneDowned { x, y, .. } => one(Play::new("weapon.fpv_swarm.downed", point(x, y))),
-        Event::DroneCrashed { x, y, .. } => one(Play::new("weapon.fpv_swarm.downed.crash", point(x, y))),
+        Event::DroneCrashed { x, y, .. } => on_water(game, x, y, Play::new("weapon.fpv_swarm.downed.crash", point(x, y)), ids::WATER_PLOP.0, 0.7),
         Event::DroneLockLost { .. } => Binding::Silent("the drone flies on; its lock tone stops with the watcher"),
         Event::AirSupportCalled { .. } => one(Play::new("air.called", At::Nowhere)),
         Event::AirSupportArrived { x, y, .. } => one(Play::new("air.arrive", point(x, y))),
         Event::AirSalvo { x, y, .. } => one(Play::new("air.salvo", point(x, y))),
-        Event::AirStrike { bomb, x, y, .. } => one(Play::new(if bomb { "air.bomb" } else { "air.cannon" }, point(x, y))),
+        Event::AirStrike { bomb, x, y, .. } => on_water(game, x, y, Play::new(if bomb { "air.bomb" } else { "air.cannon" }, point(x, y)), ids::WATER_BLAST.0, if bomb { 1.2 } else { 0.5 }),
         Event::AircraftDowned { x, y, .. } => one(Play::new("air.downed", point(x, y))),
         Event::AirSupportLeft { .. } => Binding::Watched("aircraft"),
         Event::RodCalled { cell: c, land, .. } => {
@@ -191,12 +191,15 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
             let whistle = (land - game.time - ROD_WHISTLE_S).max(0.0);
             Binding::Play(vec![Play::new("weapon.rod_from_god.call", cell(c)), Play::new(ids::ROD_INCOMING.0, cell(c)).after(whistle)])
         }
-        Event::RodImpact { cell: c, .. } => one(Play::new("weapon.rod_from_god.impact", cell(c))),
+        Event::RodImpact { cell: c, .. } => {
+            let at = crate::map::cell_to_world(c.0, c.1);
+            on_water(game, at.x, at.y, Play::new("weapon.rod_from_god.impact", cell(c)), ids::WATER_COLUMN.0, 1.0)
+        }
         Event::WellAnchored { x, y, .. } => one(Play::new("weapon.gravity_well.anchor", point(x, y))),
-        Event::WellCollapsed { x, y, .. } => one(Play::new("weapon.gravity_well.collapse", point(x, y))),
+        Event::WellCollapsed { x, y, .. } => on_water(game, x, y, Play::new("weapon.gravity_well.collapse", point(x, y)), ids::WATER_BLAST.0, 0.8),
         Event::Swallowed { what, x, y } => one(Play::new(source::swallow_cue(what), point(x, y))),
         Event::OrbFizzled { x, y, .. } => one(Play::new("weapon.gravity_well.fizzle", point(x, y))),
-        Event::Wreck { slot, x, y } => one(Play::new("explosion.wreck", point(x, y)).source(slot as u64)),
+        Event::Wreck { slot, x, y } => on_water(game, x, y, Play::new("explosion.wreck", point(x, y)).source(slot as u64), ids::WATER_BLAST.0, 1.0),
         Event::HullStruck { slot, surface, x, y, speed, .. } => {
             let t = tuning();
             let span = (t.audio_slam_full_speed - t.hull_struck_min_speed).max(1.0);
@@ -232,7 +235,7 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         }
         Event::ChunksCharred { .. } => Binding::Watched("fire"),
         Event::EmberFlew { .. } => Binding::Watched("fire"),
-        Event::GrassTrampled { .. } => Binding::Watched("engine"),
+        Event::GrassTrampled { cell: c } => one(Play::new(ids::GRASS_TRAMPLE.0, cell(c))),
         Event::Blast { x, y, chained, drum } => {
             let cue = match drum {
                 Drum::Oil => "explosion.barrel.oil",
@@ -240,7 +243,8 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
                 Drum::Lava => "explosion.lava_bomb",
             };
             let strength = if chained { crate::audio::dsp::db_to_gain(tuning().audio_chain_step_db) } else { 1.0 };
-            one(Play::new(cue, point(x, y)).strength(strength))
+            let water = if drum == Drum::Lava { ids::WATER_STEAM.0 } else { ids::WATER_BLAST.0 };
+            on_water(game, x, y, Play::new(cue, point(x, y)).strength(strength), water, strength)
         }
         Event::DrumLaunched { x, y, .. } => one(Play::new("explosion.drum_launch", point(x, y))),
         Event::LanternSet { x, y, .. } => one(Play::new("world.lantern.set", point(x, y))),
@@ -255,9 +259,9 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
             Some(target) => one(Play::new(ids::LOCK_ON.0, At::Slot(target)).source(target as u64)),
             None => Binding::Silent("a lock on nothing"),
         },
-        Event::MissileBlast { x, y, .. } => one(Play::new("explosion.missile", point(x, y))),
-        Event::GrenadeBlast { x, y, .. } => one(Play::new("explosion.grenade", point(x, y))),
-        Event::CookOff { x, y } => one(Play::new("explosion.cookoff", point(x, y))),
+        Event::MissileBlast { x, y, .. } => on_water(game, x, y, Play::new("explosion.missile", point(x, y)), ids::WATER_BLAST.0, 0.8),
+        Event::GrenadeBlast { x, y, .. } => on_water(game, x, y, Play::new("explosion.grenade", point(x, y)), ids::WATER_BLAST.0, 0.8),
+        Event::CookOff { x, y } => on_water(game, x, y, Play::new("explosion.cookoff", point(x, y)), ids::WATER_BLAST.0, 0.7),
         Event::TeslaStrike { x0, y0, x1, y1, chained } => {
             let mid = point(0.5 * (x0 + x1), 0.5 * (y0 + y1));
             let strength = if chained { 0.7 } else { 1.0 };
@@ -284,6 +288,17 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         | Event::Alert { .. }
         | Event::Retarget { .. } => Binding::Silent("an AI trace, recorded only while tracing"),
     }
+}
+
+/// A blast, a fall or a strike on liquid water (`Depth::is_wet`: not ice)
+/// throws the water up under its own sound: `play`, and `water` at
+/// `strength` beside it (docs/water.md: the water takes no scorch).
+fn on_water(game: &Game, x: f32, y: f32, play: Play, water: &'static str, strength: f32) -> Binding {
+    let mut plays = vec![play];
+    if game.water().depth_at(Vec2::new(x, y)).is_wet() {
+        plays.push(Play::new(water, point(x, y)).strength(strength).source(key(x.to_bits() as u64, y.to_bits() as u64)));
+    }
+    Binding::Play(plays)
 }
 
 fn destroyed(material: Material) -> String {

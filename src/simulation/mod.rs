@@ -6049,6 +6049,14 @@ impl Game {
         out
     }
 
+    /// The ground's own drift at `pos` (px/s): a stream's current, a
+    /// sandstorm's gust - what carries a hull that stops there
+    /// (`Footing::flow`). The sound takes it off a hull's measured speed,
+    /// so one parked in a current runs no tracks.
+    pub fn drift_at(&self, pos: Position) -> Position {
+        Footing::at(&self.water, &self.lava, &self.craters, self.weather, pos, self.time).flow
+    }
+
     pub fn grass_disturbed(&self) -> Vec<Position> {
         let reach = OBSTACLE_GRID_SIZE * 0.5 + tuning().grass_crush_radius * 0.5;
         let movers: Vec<Position> = self

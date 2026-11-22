@@ -319,6 +319,262 @@ fn a_seat_has_an_engine_that_revs_with_speed() {
     assert!(pitch_of(&last) > idle, "driving revs the engine: idle {idle}, driving {}", pitch_of(&last));
 }
 
+// ---- Water, mud and ground (the `ground`, `water` and `landing` watchers).
+
+/// Every ground sound the maps can ask for resolves - the surface's layer
+/// under every sky and theme, wet or dry, in lava or out; a slip and a
+/// skid on every surface - and the sky and theme change what the tracks say.
+#[test]
+fn every_ground_sound_resolves() {
+    use crate::wear::{Look, Sky};
+    let m = manifest();
+    let surfaces = [Surface::Grass, Surface::Road, Surface::Sand, Surface::Ford, Surface::Deep, Surface::Ice];
+    for theme in Theme::ALL {
+        for sky in [Sky::Dry, Sky::Rain, Sky::Snow] {
+            let look = Look { theme, sky };
+            for surface in surfaces {
+                for wet in [0.0, 1.0] {
+                    for lava in [false, true] {
+                        if let Some(cue) = source::ground_layer(surface, look, wet, lava) {
+                            resolves(&m, cue);
+                        }
+                        resolves(&m, source::skid_cue(surface, look, wet, lava));
+                    }
+                    resolves(&m, source::slip_cue(surface, crate::wear::muddy(look, surface, wet)));
+                }
+            }
+        }
+    }
+    let rain = Look { theme: Theme::Grass, sky: Sky::Rain };
+    assert_eq!(source::ground_layer(Surface::Grass, rain, 0.0, false), Some("vehicle.ground.mud"));
+    assert_eq!(source::ground_layer(Surface::Sand, rain, 0.0, false), Some("vehicle.ground.sand"), "rain leaves sand sand");
+    assert_eq!(source::ground_layer(Surface::Road, Look::default(), 0.5, false), Some("vehicle.ground.mud"), "tracks wet from a ford");
+    assert_eq!(source::ground_layer(Surface::Grass, Look { theme: Theme::Desert, sky: Sky::Dry }, 0.0, false), Some("vehicle.ground.dust"));
+    assert_eq!(source::ground_layer(Surface::Road, Look { theme: Theme::Grass, sky: Sky::Snow }, 0.0, false), Some("vehicle.ground.snow"));
+    assert_eq!(source::ground_layer(Surface::Deep, Look::default(), 0.0, true), Some("vehicle.ground.lava"));
+    assert_eq!(source::slip_cue(Surface::Ice, false), "vehicle.slip.ice");
+    assert_eq!(source::skid_cue(Surface::Grass, Look::default(), 0.0, false), "vehicle.skid.grass");
+}
+
+/// `OPEN` with `extra` cells (and keys) added.
+fn open_with(extra: &str) -> String {
+    format!("{OPEN}{extra}")
+}
+
+/// A row of water or lava cells at `row`, columns `from..=to`.
+fn strip(kind: &str, row: i32, from: i32, to: i32) -> String {
+    (from..=to).map(|c| format!("cells.\"{c},{row}\" = {{ kind = \"{kind}\" }}\n")).collect()
+}
+
+/// A column of water cells at `col`, rows `from..=to`: a stream.
+fn stream(col: i32, from: i32, to: i32) -> String {
+    (from..=to).map(|r| format!("cells.\"{col},{r}\" = {{ kind = \"water\" }}\n")).collect()
+}
+
+/// The first field point in the box (step 4 px) that `wet` holds for.
+fn find(from: Vec2, to: Vec2, wet: impl Fn(Vec2) -> bool) -> Option<Vec2> {
+    let mut y = from.y;
+    while y <= to.y {
+        let mut x = from.x;
+        while x <= to.x {
+            let p = Vec2::new(x, y);
+            if wet(p) {
+                return Some(p);
+            }
+            x += 4.0;
+        }
+        y += 4.0;
+    }
+    None
+}
+
+fn primed(game: &Game) -> Audio {
+    let mut a = audio();
+    a.observe_events(game);
+    a.observe(game, &view_on(game), &[0], 0.0, true);
+    a.take_commands();
+    a
+}
+
+fn heard(a: &Audio, cue: &str) -> bool {
+    a.status().recent.iter().any(|c| c == cue)
+}
+
+fn playing(a: &Audio, cue: &str) -> bool {
+    a.status().sounds.iter().any(|s| s.cue == cue)
+}
+
+fn steps(game: &mut Game, a: &mut Audio, input: Input, n: usize) {
+    for _ in 0..n {
+        step(game, a, input);
+    }
+}
+
+/// Wading into a ford splashes; climbing out pours and leaves the runs
+/// dripping.
+#[test]
+fn a_hull_splashes_into_a_ford_and_drips_coming_out() {
+    let mut game = game_on(&open_with(&strip("water", 6, 9, 12)));
+    let east = find(Vec2::new(380.0, 180.0), Vec2::new(440.0, 240.0), |p| game.water().depth_at(p).is_wet()).map(|p| {
+        let mut p = p;
+        while game.water().depth_at(Vec2::new(p.x + 4.0, p.y)).is_wet() {
+            p.x += 4.0;
+        }
+        p
+    });
+    let east = east.expect("the ford has a wet point");
+    let mut a = primed(&game);
+    steps(&mut game, &mut a, Input::default(), 2);
+    game.debug_teleport(0, east, Some(90.0)).expect("into the ford");
+    steps(&mut game, &mut a, Input::default(), 4);
+    assert!(heard(&a, "vehicle.splash"), "the splash going in: {:?}", a.status().recent);
+    let right = Input::single(Intent { move_dir: Some(crate::tank::Dir::Right), ..Intent::default() });
+    let mut out = false;
+    for _ in 0..120 {
+        step(&mut game, &mut a, right);
+        if heard(&a, "vehicle.splash.out") {
+            out = true;
+            break;
+        }
+    }
+    assert!(out, "the water pours off climbing out: {:?}", a.status().recent);
+    steps(&mut game, &mut a, Input::default(), 3);
+    assert!(playing(&a, "vehicle.drip"), "and the runs drip: {:?}", a.status().sounds);
+}
+
+/// A hull parked in a stream drifts with the current, and its tracks are
+/// silent: the current is not their speed (`Game::drift_at`).
+#[test]
+fn a_hull_parked_in_a_current_runs_no_tracks() {
+    let mut game = game_on(&open_with(&stream(10, 0, 13)));
+    let at = find(Vec2::new(300.0, 120.0), Vec2::new(380.0, 260.0), |p| game.water().depth_at(p).is_wet() && game.water().pushes_south(p)).expect("a stream cell");
+    let mut a = primed(&game);
+    game.debug_teleport(0, at, None).expect("into the stream");
+    steps(&mut game, &mut a, Input::default(), 90);
+    let now = bind::tank_in(&game, 0).map(|t| t.position).expect("the seat");
+    assert!(now.y - at.y > 10.0, "the current carries it: {at:?} to {now:?}");
+    assert!(game.drift_at(now).y > 0.0, "the drift is the current's");
+    assert!(!playing(&a, "vehicle.treads"), "no tracks for a drift: {:?}", a.status().sounds);
+    assert!(playing(&a, "world.water.stream"), "the stream babbles beside it: {:?}", a.status().sounds);
+}
+
+/// A hull in lava sizzles.
+#[test]
+fn a_hull_in_lava_sizzles() {
+    let mut game = game_on(&open_with(&strip("lava", 6, 9, 12)));
+    let at = find(Vec2::new(300.0, 180.0), Vec2::new(420.0, 240.0), |p| game.lava().depth_at(p) != crate::ground::Depth::Dry).expect("a lava point");
+    let mut a = primed(&game);
+    game.debug_teleport(0, at, None).expect("into the lava");
+    steps(&mut game, &mut a, Input::default(), 6);
+    assert!(playing(&a, "world.lava.sizzle"), "{:?}", a.status().sounds);
+}
+
+/// A lake's shore laps near the ears; frozen under snow it creaks instead.
+#[test]
+fn a_lake_laps_and_a_frozen_one_creaks() {
+    let lake: String = (3..=6).map(|r| strip("water", r, 9, 12)).collect();
+    for (sky, cue) in [("", "world.water.lap"), ("weather = \"snow\"\n", "world.water.ice")] {
+        let mut game = game_on(&format!("{sky}{OPEN}{lake}"));
+        let mut a = primed(&game);
+        steps(&mut game, &mut a, Input::default(), 3);
+        assert!(playing(&a, cue), "{sky:?}: {:?}", a.status().sounds);
+    }
+}
+
+/// A blast on open water throws it up; a lava bomb hisses in it; on dry
+/// ground or ice nothing is added.
+#[test]
+fn a_blast_on_water_adds_the_water() {
+    let lake: String = (3..=6).map(|r| strip("water", r, 9, 12)).collect();
+    let game = game_on(&open_with(&lake));
+    let wet = find(Vec2::new(280.0, 80.0), Vec2::new(440.0, 240.0), |p| game.water().depth_at(p).is_wet()).expect("a wet point");
+    let cues = |e: crate::simulation::Event, game: &Game| match bind::bind(&e, game) {
+        Binding::Play(plays) => plays.into_iter().map(|p| p.cue).collect::<Vec<_>>(),
+        other => panic!("{other:?}"),
+    };
+    let blast = crate::simulation::Event::GrenadeBlast { slot: 0, x: wet.x, y: wet.y };
+    assert!(cues(blast, &game).contains(&"explosion.water".to_string()));
+    let bomb = crate::simulation::Event::Blast { x: wet.x, y: wet.y, chained: false, drum: crate::obstacle::Drum::Lava };
+    assert!(cues(bomb, &game).contains(&"explosion.water.steam".to_string()));
+    let dry = crate::simulation::Event::GrenadeBlast { slot: 0, x: 100.0, y: 400.0 };
+    assert_eq!(cues(dry, &game), vec!["explosion.grenade".to_string()]);
+    let frozen = game_on(&format!("weather = \"snow\"\n{OPEN}{lake}"));
+    assert_eq!(cues(crate::simulation::Event::GrenadeBlast { slot: 0, x: wet.x, y: wet.y }, &frozen), vec!["explosion.grenade".to_string()], "ice takes no splash");
+}
+
+/// A grenade clunks each time it touches down, the second hop softer.
+#[test]
+fn a_grenade_clunks_as_it_lands() {
+    let mut game = game_on(OPEN);
+    let mut a = primed(&game);
+    let seat = bind::tank_in(&game, 0).map(|t| t.position).expect("the seat");
+    let mut g = crate::grenade::Grenade::launch(seat + Vec2::new(0.0, 60.0), Vec2::new(0.0, 1.0), Vec2::new(0.0, 0.0), crate::shell::Owner::Player(0));
+    g.id = 4242;
+    game.world.spawn((g,));
+    let mut strengths = Vec::new();
+    for _ in 0..90 {
+        let mut plays = Vec::new();
+        game.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        a.watch.landings(&game, &crate::tuning::tuning(), &mut plays);
+        strengths.extend(plays.iter().filter(|p| p.cue == "weapon.grenades.bounce").map(|p| p.strength));
+    }
+    assert!(!strengths.is_empty(), "it clunks down");
+    assert!(strengths.windows(2).all(|w| w[1] < w[0]), "each hop softer: {strengths:?}");
+}
+
+/// The bong's hop landing in water plops.
+#[test]
+fn the_bong_plops_into_water() {
+    let mut game = game_on(&open_with(&strip("water", 2, 4, 8)));
+    let wet = find(Vec2::new(130.0, 60.0), Vec2::new(280.0, 110.0), |p| game.water().depth_at(p).is_wet()).expect("a wet point");
+    let mut a = primed(&game);
+    {
+        let mut q = game.world.query::<&mut crate::bong::Bong>();
+        let bong = q.iter().next().expect("the bong");
+        bong.start_hop(wet);
+    }
+    steps(&mut game, &mut a, Input::default(), 60);
+    assert!(heard(&a, "bong.land.water"), "{:?}", a.status().recent);
+}
+
+/// A burning hull driven into a ford has its fire put out with a hiss.
+#[test]
+fn the_water_hisses_a_burning_hull_out() {
+    let mut game = game_on(&open_with(&strip("water", 6, 9, 12)));
+    let wet = find(Vec2::new(300.0, 180.0), Vec2::new(420.0, 240.0), |p| game.water().depth_at(p).is_wet()).expect("a wet point");
+    let mut a = primed(&game);
+    for tank in game.world.query::<&mut crate::tank::Tank>().iter() {
+        if tank.owner_slot() == 0 {
+            tank.burn_timer = 5.0;
+        }
+    }
+    steps(&mut game, &mut a, Input::default(), 2);
+    game.debug_teleport(0, wet, None).expect("into the ford");
+    steps(&mut game, &mut a, Input::default(), 4);
+    assert!(heard(&a, "world.fire.douse"), "{:?}", a.status().recent);
+}
+
+/// A wreck burning in the rain hisses rather than crackles.
+#[test]
+fn a_wreck_in_the_rain_hisses() {
+    let mut game = game_on(&format!("weather = \"rain\"\n{OPEN}"));
+    let mut a = primed(&game);
+    game.debug_kill(0).expect("the seat wrecks");
+    steps(&mut game, &mut a, Input::default(), 4);
+    assert!(playing(&a, "world.fire.hiss"), "{:?}", a.status().sounds);
+    assert!(!playing(&a, "world.fire"), "no crackle under the rain: {:?}", a.status().sounds);
+}
+
+/// Turning from a standstill pivots the tracks, and the pivot is heard.
+#[test]
+fn a_pivot_grinds() {
+    let mut game = game_on(OPEN);
+    let mut a = primed(&game);
+    let right = Input::single(Intent { move_dir: Some(crate::tank::Dir::Right), ..Intent::default() });
+    steps(&mut game, &mut a, right, 12);
+    assert!(heard(&a, "vehicle.pivot"), "{:?}", a.status().recent);
+}
+
 #[test]
 fn every_event_a_round_logs_has_a_decision() {
     // Not a compile check - that is the exhaustive match - but a guard that
