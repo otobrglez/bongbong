@@ -2134,11 +2134,15 @@ tunables! {
         /// ground. It takes this share of the hulk's speed off every
         /// second, so what a pushing hull's drive can hold it at falls
         /// with the hulk's weight twice over - a standard hull shoves a
-        /// standard wreck at about 50 px/s, a titan's at about 20 - and a
-        /// blast's shove moves it a few px. Nothing else in the world
-        /// sets damping. At 4 a wreck was pushed at the pusher's own top
-        /// speed.
-        wreck_linear_damping: f32 = 30.0 in 0.0 ..= 200.0;
+        /// standard wreck at a crawl, a titan's at a creep, into place as
+        /// cover - and once let go it slides a few px and stops. A blast
+        /// throws it a short way (`wreck_blast_factor`). Nothing else in
+        /// the world sets damping. At 4 a wreck was pushed at the pusher's
+        /// own top speed, at 30 it hardly moved.
+        wreck_linear_damping: f32 = 16.0 in 0.0 ..= 200.0;
+        /// The share of a blast's knock on a live hull a wreck in it takes
+        /// (`Game::blast`): a dead hull is thrown, not hurt.
+        wreck_blast_factor: f32 = 1.0 in 0.0 ..= 5.0;
         /// Surface friction on a wreck, against rapier's 0.5 default: a
         /// live tank shunting one should bleed energy rather than skid off
         /// it.
@@ -3120,9 +3124,35 @@ tunables! {
         /// Outward shove a barrel blast gives a tank at its centre (px/s,
         /// mass-normalised like a wreck's knockback).
         barrel_blast_knockback_speed: f32 = 140.0 in 0.0 ..= 500.0;
-        /// Damage per second a tank pushing into a barrel deals it - so
-        /// ramming one sets it off in a fraction of a second.
-        barrel_ram_damage_per_second: f32 = 40.0 in 0.0 ..= 500.0;
+        /// A barrel is loose (docs/sandbags-barrels-fences.md "Loose
+        /// barrels"): a dynamic body a hull shoves, a blast throws and a
+        /// wall throws back. Its mass, against the standard chassis's 1.
+        barrel_mass: f32 = 0.35 in 0.05 ..= 5.0 @ Spawn;
+        /// The share of its speed a barrel loses each second sliding on
+        /// the ground (rapier's linear damping), and the speed (px/s) the
+        /// ground's friction takes off it each second on top
+        /// (`Game::sync_loose`): what brings a shoved or thrown drum to
+        /// rest. A drum shoved at a hull's top speed slides about two cells.
+        barrel_damping: f32 = 1.6 in 0.0 ..= 50.0 @ Spawn;
+        barrel_friction: f32 = 140.0 in 0.0 ..= 5000.0;
+        /// How much of its speed a barrel keeps bouncing off a wall, a hull
+        /// or another drum (restitution).
+        barrel_bounce: f32 = 0.45 in 0.0 ..= 1.0 @ Spawn;
+        /// How hard (px/s) a barrel's velocity has to change in one step -
+        /// a hull ramming it, a wall it is thrown at, another drum - for
+        /// the knock to set it off. Over what a hull at its own top speed
+        /// gives a drum (about 1.1 times that speed), so driving into one
+        /// shoves it and a boosted ram, a thrown drum hitting a wall or a
+        /// hull flung into one pops it.
+        barrel_burst_speed: f32 = 300.0 in 0.0 ..= 5000.0;
+        /// How far past its own radius a blast throws the barrels round it,
+        /// as a multiple of that radius: inside the radius they are lit as
+        /// ever and thrown too, out to this they are only thrown.
+        barrel_throw_reach: f32 = 2.2 in 1.0 ..= 5.0;
+        /// The speed a blast throws a barrel at its centre, as a multiple of
+        /// the blast's knockback on a hull, falling to nothing at
+        /// `barrel_throw_reach`.
+        barrel_throw_factor: f32 = 2.5 in 0.0 ..= 20.0;
         /// Extra shove the blast gives a tank that set a barrel off by
         /// driving into it, as a multiple of the ordinary knockback: the
         /// hull is sitting on the drum, so it should visibly lurch.

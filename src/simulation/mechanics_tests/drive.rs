@@ -281,7 +281,7 @@ fn a_wreck_resists_a_push_in_proportion_to_its_mass() {
     for across in [false, true] {
         let (scout, assault, titan) = (pushed(&on, ASSAULT, SCOUT, across, true), pushed(&on, ASSAULT, ASSAULT, across, true), pushed(&on, ASSAULT, TITAN, across, true));
         assert!(scout > 1.2 * assault && assault > 2.0 * titan, "across {across}: an assault hull shoves a scout's wreck {scout} px, its like's {assault} px, a titan's {titan} px");
-        assert!(assault < 70.0, "across {across}: a wreck is dead weight, shoved {assault} px in a second by its like");
+        assert!(assault < 100.0, "across {across}: a wreck is dead weight, shoved {assault} px in a second by its like");
     }
     // With no damping a wreck is pushed at the pusher's own pace.
     let loose = Tuning { wreck_linear_damping: 0.0, ..Tuning::DEFAULT };

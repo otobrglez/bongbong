@@ -265,6 +265,39 @@ impl Physics {
         handle
     }
 
+    /// Spawn a loose object's dynamic body (docs/sandbags-barrels-fences.md
+    /// "Loose barrels"): a drum standing upright, a ball of `radius` px
+    /// with rotation locked - it slides, it does not spin - of `mass`
+    /// against the standard chassis's 1, losing `damping` of its speed a
+    /// second on the ground and keeping `bounce` of it off whatever it
+    /// hits (restitution, the larger of the two sides', so a drum bounces
+    /// off a wall and a hull though neither bounces off anything). It
+    /// looks a step ahead as a hull does (`HULL_LOOK_AHEAD`), so a thrown
+    /// drum stops at a wall's face rather than in it. Its collider is
+    /// marked loose (`is_loose`): a hull pressing on one is touching
+    /// neither terrain nor a tank (`contact_stats`).
+    pub fn spawn_loose(&mut self, center: Position, radius: f32, mass: f32, damping: f32, bounce: f32) -> RigidBodyHandle {
+        let (handle, _) = self.world.insert(
+            RigidBodyBuilder::dynamic()
+                .translation(to_vector(center))
+                .lock_rotations()
+                .linear_damping(damping)
+                .soft_ccd_prediction(HULL_LOOK_AHEAD),
+            ColliderBuilder::ball(radius)
+                .mass(mass)
+                .restitution(bounce)
+                .restitution_combine_rule(CoefficientCombineRule::Max)
+                .friction(LOOSE_FRICTION)
+                .user_data(LOOSE_TAG),
+        );
+        handle
+    }
+
+    /// Whether `body` is a loose object's (`spawn_loose`).
+    pub fn is_loose(&self, body: RigidBodyHandle) -> bool {
+        self.world.bodies.get(body).and_then(|b| b.colliders().first()).and_then(|&c| self.world.colliders.get(c)).is_some_and(|c| c.user_data == LOOSE_TAG)
+    }
+
     /// Resize a tank's solid movement collider (the one `spawn_tank`
     /// attaches) to new overall `half_extents` (`Tank::move_half_extents`,
     /// same as at spawn; the corner rounding is re-derived via
@@ -502,6 +535,13 @@ impl Physics {
                 continue;
             }
             let other = if pair.collider1 == hull { pair.collider2 } else { pair.collider1 };
+            // A loose drum is neither terrain nor a tank: a hull shoving
+            // one is pressing on nothing the probe's contact kinds or the
+            // parked hold read.
+            if self.world.colliders.get(other).is_some_and(|c| c.user_data == LOOSE_TAG) {
+                stats.touching_loose = true;
+                continue;
+            }
             // A live pair's colliders/bodies always resolve; the chained
             // lookups are just totality, not an expected failure path.
             let other_is_fixed = self
@@ -553,6 +593,10 @@ pub struct ContactStats {
     pub touching_static: bool,
     /// Actively contacting another tank's hull (`dynamic` body).
     pub touching_tank: bool,
+    /// Actively contacting a loose object (`Physics::spawn_loose`), which
+    /// counts as neither of the two above and puts nothing into
+    /// `max_impulse`.
+    pub touching_loose: bool,
     /// Strongest per-contact-point normal impulse the solver applied this
     /// step across those contacts; 0.0 when nothing is actively touching.
     pub max_impulse: f32,
@@ -570,6 +614,14 @@ pub struct FixedContact {
     /// Where they touch.
     pub point: Position,
 }
+
+/// What a loose object's collider carries in its `user_data`
+/// (`Physics::spawn_loose`): past every `Surface` code.
+const LOOSE_TAG: u128 = 1 << 16;
+
+/// A loose object's surface friction: a drum slides along a wall or a hull
+/// rather than catching on it.
+const LOOSE_FRICTION: f32 = 0.2;
 
 /// How square to a face's axis a contact's normal has to be for a cushion
 /// to act on it: a hull meets a face, not a corner it is driving past.

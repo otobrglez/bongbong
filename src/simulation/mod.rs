@@ -712,6 +712,11 @@ pub enum Event {
     /// `grass_trample_passes` times: it hides nobody for the rest of the
     /// round and its tufts lie flat (`simulation::trample`).
     GrassTrampled { cell: (i32, i32) },
+    /// The loose drum placed in `home` (`Obstacle::home`) is gone, wherever
+    /// it went: beside its `ObstacleDestroyed`, which says where. What a
+    /// replica knows the drum by (docs/sandbags-barrels-fences.md "Loose
+    /// barrels").
+    LooseGone { home: (i32, i32) },
     /// A barrel detonated at (`x`, `y`); `chained` when another blast's
     /// fuse (or a fire) set it off rather than a shot or a ram; `drum`
     /// says which kind went off.
@@ -3244,6 +3249,9 @@ impl Game {
         for bong in self.world.query_mut::<&mut crate::bong::Bong>() {
             bong.smooth.begin_step(crate::pose::Pose::at(bong.position));
         }
+        for o in self.world.query_mut::<&mut Obstacle>().into_iter().filter(|o| o.material.is_loose()) {
+            o.smooth.begin_step(crate::pose::Pose::at(o.position));
+        }
     }
 
     /// Pose the round for a frame drawn between two steps (`pose.rs`):
@@ -3281,6 +3289,10 @@ impl Game {
         }
         for bong in self.world.query_mut::<&mut crate::bong::Bong>() {
             bong.smooth.show(Pose::at(bong.position), alpha, BODY_JUMP_PX, false);
+        }
+        for o in self.world.query_mut::<&mut Obstacle>().into_iter().filter(|o| o.material.is_loose()) {
+            let pose = Pose::at(o.position);
+            o.smooth.show(pose, alpha, BODY_JUMP_PX, false);
         }
     }
 
@@ -4982,6 +4994,9 @@ impl Game {
                     tank.ram_velocity = self.physics.velocity(body);
                 }
             }
+            for o in self.world.query::<&mut Obstacle>().iter().filter(|o| o.material.is_loose() && !o.destroyed) {
+                o.loose_velocity = self.physics.velocity(o.body);
+            }
             self.physics.step();
             let (bodies, colliders) = self.physics.quarantined();
             if bodies > 0 || colliders > 0 {
@@ -5035,6 +5050,7 @@ impl Game {
         for tank in self.world.query::<&mut Tank>().iter() {
             sync_tank_from_physics(&self.physics, tank);
         }
+        self.sync_loose(f);
         self.respond_to_contacts(f);
         let (look, now) = (self.wear_look(), self.time);
         let floor = wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
@@ -5565,12 +5581,15 @@ impl Game {
         // order it hands them out again.
         let destroyed: Vec<_> = ordered(self.world.query::<(Entity, &Obstacle)>().iter().filter(|(_, o)| o.destroyed), |(_, o)| cell_order(o.position))
             .into_iter()
-            .map(|(e, o)| (e, o.body))
+            .map(|(e, o)| (e, o.body, o.material.is_loose().then_some(o.home)))
             .collect();
         let removed = !destroyed.is_empty();
-        for (entity, body) in destroyed {
+        for (entity, body, loose) in destroyed {
             self.physics.remove_body(body);
             self.world.despawn(entity).ok();
+            if let Some(home) = loose {
+                self.events.push(Event::LooseGone { home });
+            }
         }
         if removed {
             // A wall run just lost a tile, so its neighbours have newly
@@ -7724,7 +7743,9 @@ mod determinism_tests {
     fn same_seed_replays_a_trampling_round_bit_identical() {
         let run = || {
             let mut game = Game::default();
-            game.seed_override = Some(0xB0B5);
+            // A seed whose enemies cross a meadow inside ten seconds: at
+            // 0xB0B5 none does since the drums are loose (BB-206).
+            game.seed_override = Some(0xB0B7);
             game.level_overrides.mission = Some(Mission::Protect);
             game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
             game.enemy_count_override = Some(4);
@@ -7861,8 +7882,16 @@ mod determinism_tests {
         // 10_710_207_252_993_327_427). The hard and soft faces
         // (`obstacle::Surface`) move neither: no hull in these rounds hits a
         // face hard enough to be thrown or comes at a soft one head on.
+        // The default map's drums are loose (BB-206,
+        // docs/sandbags-barrels-fences.md "Loose barrels"): the router
+        // drives through them and a hull shoves them, which moves both
+        // pins from (17_819_061_092_656_083_158, 16_437_452_299_240_425_103).
+        // A wreck is pushed and thrown more easily too
+        // (`wreck_linear_damping` 16, `wreck_blast_factor`): with those at
+        // 30 and 0 the two-seat pin is 4_061_215_847_753_561_933, the
+        // one-seat round has no wreck a hull or a blast moves.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (17_819_061_092_656_083_158, 16_437_452_299_240_425_103), "(one seat, two seats)");
+        assert_eq!((one, two), (15_897_095_261_118_420_066, 11_034_883_656_416_814_066), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -7972,6 +8001,10 @@ mod mechanics_tests {
     // As `drive`: its cases put a knob table in force on their thread.
     #[cfg(feature = "dev-tools")]
     mod surfaces;
+
+    // As `drive`: its cases put a knob table in force on their thread.
+    #[cfg(feature = "dev-tools")]
+    mod loose;
 
     const W: f32 = 1280.0;
     const H: f32 = 720.0;

@@ -53,8 +53,8 @@ knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
   along the contact between them as the step began, whether driven, knocked
   or skidding - a hull grazing along a prop's face does not ram it. The
   same test runs a fence's and a tree's clock and a barrel's ram damage.
-- **Barrels**: `barrel_max_health` 18; a lethal hit or a ram
-  (`barrel_ram_damage_per_second` 40) detonates it at once. The blast
+- **Barrels**: `barrel_max_health` 18; a lethal hit or a hard knock
+  (`barrel_burst_speed`, "Loose barrels" below) detonates it at once. The blast
   (`barrel_blast_radius` 96, `barrel_blast_damage_min/max` 15/30 with
   linear falloff, `barrel_blast_knockback_speed` 140) hurts everyone — both
   sides, bongs, walls and props — and puts every barrel in range on a
@@ -104,3 +104,102 @@ knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
   `blast { x, y, chained, drum }` for a detonation, `drum_launched { x, y,
   to_x, to_y }` for a fuel drum leaving the ground, and `fire_started { x,
   y, pool }` for a ground cell catching.
+
+## Loose barrels (BB-206, 2026-11-22)
+
+Oto: "can barrels also be movable meaning that they don't behave same as
+wall but more like objects that can be moved/bounced etc." A barrel is a
+loose object now: still placed as a `kind = "barrel"` cell in the builder,
+but in the round a dynamic body a hull shoves, a blast throws and a wall
+throws back. `Material::is_loose` names it (a barrel today); the rules are
+`simulation/props.rs` (`sync_loose`, `throw_loose`), the body
+`Physics::spawn_loose`, the knobs `group props`.
+
+**What a player sees.** Drive into a drum at a hull's own pace and it is
+shoved ahead and slides about two cells, slowing to rest. Roll one at a
+wall and it bounces off; it bounces off hulls and other drums too. A blast
+throws the drums round it - the ones it lit as well, which go off where
+they come to rest - out to `barrel_throw_reach` (2.2) times its radius. A
+drum goes off on a hard enough knock: rammed by a hull going faster than
+any drives (a speed boost, a hull itself thrown), thrown hard into a wall
+or into another drum. Shots set it off as ever, and the two drums keep their
+own explosions, fuses, launches and pools (docs/barrel-explosion-variety.md).
+
+The decisions, each system in turn:
+
+- **The body** (`Physics::spawn_loose`): a dynamic ball of the tile's own
+  half extent (12 px), rotation locked - a drum standing upright slides, it
+  does not spin - of `barrel_mass` (0.35 of the standard chassis), rapier's
+  linear damping `barrel_damping` (1.6) and a steady ground friction on top
+  (`barrel_friction`, 140 px/s each second, applied in `sync_loose`) so it
+  comes to a stop rather than creeping forever, and restitution
+  `barrel_bounce` (0.45, the larger side's, so a drum bounces off a wall or
+  a hull though neither bounces off anything else). It looks a step ahead
+  as a hull does, so a thrown drum stops at a wall's face. The wrecks'
+  `settle_wreck` was the precedent: a body the solver moves, braked by
+  damping.
+- **Going off** (`Game::sync_loose`, after the step, before the rams): a
+  drum whose velocity the step changed by `barrel_burst_speed` (300 px/s)
+  or more is set off as a ram sets one off (the ram's column, the rammer's
+  lurch). A hull at its own top speed (210) gives a drum about 1.1 times
+  its speed, so it shoves; 300 is a boosted or flung hull, a drum thrown at
+  a wall at about 210 or more, two drums thrown together. The knock is
+  measured on the step alone - a blast's throw is an impulse between steps
+  and is not a knock. A lit drum is left to its fuse. The old ram damage
+  (`barrel_ram_damage_per_second`) is gone: a slow push only moves a drum.
+- **Blasts** (`Game::blast` -> `throw_loose`): every loose drum within
+  `barrel_throw_reach` of the radius is thrown straight away from the
+  centre at `barrel_throw_factor` (2.5) times the blast's knockback on a
+  hull, falling linearly to nothing at the reach. Inside the radius a
+  drum is lit as before and thrown too.
+- **Identity** (`Obstacle::home`, `key_cell`): a drum is known by the cell
+  the map placed it in, wherever it has gone. `Obstacle::cell` is the cell
+  it stands on now (the nearest, `map::world_to_cell`); what reads a drum's
+  cell for a rule - a fire beside it, an oil trail's end, the dev server's
+  `detonate` - reads where it stands.
+- **Projectiles** (`hits.rs`): `Terrain::build` is rebuilt every frame from
+  where every tile stands, so a shot meets a drum where it is; a drum takes
+  its own box (`battlefield::tile_half_extent`) and closes no seam with a
+  neighbour, here, in the colliders or in the nav grid. Lag compensation
+  rewinds hulls and bongs only: a drum is shot where the room has it now -
+  it moves only when something shoves it, and a shove is the room's.
+- **Nav and AI** (`nav.rs`): a loose drum is no wall. The layer leaves it
+  out (and the kept layer's tile list too, so a drum shoved about rebuilds
+  nothing), so the router drives straight through a drum's cell and the
+  hull shoves the drum out of the way; a shoved drum leaves no wall behind
+  and blocks no cell where it stops. The kept grid stays the one a rebuild
+  makes (`a_round_routed_on_the_kept_grid_plays_as_one_routed_from_scratch`).
+  The map linter holds the planner only to the fixed colliders
+  (`check_planner_physics`) and does not call the nook a drum was placed in
+  a trap (`check_boxed_in`). Enemy spawn clearance still keeps off a drum's
+  cell.
+- **Contacts**: a hull pressing a drum touches neither terrain nor a tank
+  (`ContactStats::touching_loose`): the probe's contact kinds, the parked
+  hold and the slam effects leave it out. The turn fit and the lane assist
+  ask only fixed bodies, so they never steer round a drum.
+- **Drawing** (`pose.rs`, `tile_index.rs`): a drum keeps a `Smooth`
+  (`Obstacle::smooth`), begun and posed with the tanks and bongs, and is
+  drawn and shadowed from it (`Obstacle::drawn_at`). The painters' tile
+  index sees a drum that moved and files the tiles again that frame
+  (`TileIndex::matches`).
+- **Online** (protocol 37): `Snapshot::loose` lists every drum off its own
+  cell's centre, by home cell, at the wire's quarter pixel (`LooseState`,
+  diffed in `delta.rs`); `apply_loose` stands the replica's drum - body and
+  all, so a client's prediction sandbox meets it where the room's hull
+  did - there, and one no longer listed back home. A drum's death is
+  `Event::LooseGone { home }` beside its `ObstacleDestroyed` (which says
+  where it went off): the replica takes the drum out by its home cell and
+  the snapshot's tile entry is written under it too. A replica's drum is
+  never stepped.
+- **The builder and maps**: unchanged - a drum is a cell; only where it
+  starts comes from the map.
+- **Determinism**: no RNG on contact; the drums are synced, knocked and
+  thrown in home-cell order; rapier is deterministic in the spawn order.
+
+**Wrecks** (by the same request): a wreck is shovable. Its damping is
+`wreck_linear_damping` 16 times its chassis's mass factor (30 before): an
+assault hull shoves an assault's wreck at about 83 px/s, a scout's at 133 and
+a titan's at 28, and let go it slides a few px and stops - cover you can
+push into place. A blast throws a wreck as it throws a live hull, at
+`wreck_blast_factor` (1) of the knock, but never hurts it and draws no roll;
+a wreck's own death blast spares it.

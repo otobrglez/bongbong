@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    AirState, BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, bong_flags, quantise_bank, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    AirState, BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, bong_flags, quantise_bank, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::bong::Bong;
@@ -106,6 +106,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         craters: game.craters().list().iter().map(|c| CraterState { cell: cell_index(cols, c.cell), tick: ticks_of(c.at) }).collect(),
         rubble: game.rubble.cells().map(|(c, units)| RubbleState { cell: cell_index(cols, c), units }).collect(),
         well_drums: well_drums(game, cols),
+        loose: loose(game, cols),
         air: air(game),
         volcano_shifts: volcano_shifts(game),
         smoke_cells: game.smoke_cells.iter().map(|&c| cell_index(cols, c)).collect(),
@@ -149,7 +150,7 @@ pub fn welcome(
         .query::<&Obstacle>()
         .iter()
         .filter(|o| !o.destroyed)
-        .map(|o| cell_index(cols, o.cell()))
+        .map(|o| cell_index(cols, o.key_cell()))
         .collect();
     let dead_cells: Vec<u16> = game
         .map
@@ -284,6 +285,24 @@ fn shots(game: &Game) -> Vec<ShotState> {
     for o in game.orbs() {
         out.push(shot(o.id, ShotKind::Orb, o.position, o.rotation, i32::from(o.age >= crate::well::ORB_SWELL_SECONDS), 0, o.owner));
     }
+    out
+}
+
+/// The loose drums off their own cells' centres
+/// (docs/sandbags-barrels-fences.md "Loose barrels"), by home cell.
+fn loose(game: &Game, cols: u16) -> Vec<LooseState> {
+    let mut out: Vec<LooseState> = game
+        .world
+        .query::<&Obstacle>()
+        .iter()
+        .filter(|o| o.material.is_loose() && !o.destroyed)
+        .filter_map(|o| {
+            let (x, y) = (quantise_pos(o.position.x), quantise_pos(o.position.y));
+            let home = map::cell_to_world(o.home.0, o.home.1);
+            ((x, y) != (quantise_pos(home.x), quantise_pos(home.y))).then(|| LooseState { home: cell_index(cols, o.home), x, y })
+        })
+        .collect();
+    out.sort_by_key(|d| d.home);
     out
 }
 
@@ -486,7 +505,7 @@ fn tiles(game: &Game, cols: u16) -> Vec<TileState> {
                 flags |= ((strength << 2) | pusher) << tile_flags::LEAN_SHIFT;
             }
             TileState {
-                cell: cell_index(cols, o.cell()),
+                cell: cell_index(cols, o.key_cell()),
                 hp: tile_points(o.health),
                 flags,
                 faces: o.scorched,
@@ -496,10 +515,14 @@ fn tiles(game: &Game, cols: u16) -> Vec<TileState> {
         })
         .collect();
     for event in game.events() {
-        if let Event::ObstacleDestroyed { x, y, .. } = *event {
-            let cell = cell_index(cols, map::world_to_cell(Position::new(x, y)));
-            out.push(TileState { cell, hp: 0, flags: tile_flags::DESTROYED, faces: 0, chunks: 0, cage: 0 });
-        }
+        // A loose drum is known by the cell it was placed in, wherever it
+        // went off (`Event::LooseGone`).
+        let cell = match *event {
+            Event::ObstacleDestroyed { material, x, y } if !material.is_loose() => map::world_to_cell(Position::new(x, y)),
+            Event::LooseGone { home } => home,
+            _ => continue,
+        };
+        out.push(TileState { cell: cell_index(cols, cell), hp: 0, flags: tile_flags::DESTROYED, faces: 0, chunks: 0, cage: 0 });
     }
     out
 }

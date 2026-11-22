@@ -909,6 +909,19 @@ pub struct WellDrumState {
     pub tick: u32,
 }
 
+/// A loose drum shoved or thrown off the cell the map placed it in
+/// (docs/sandbags-barrels-fences.md "Loose barrels"), by that cell
+/// (`Obstacle::home`, `encode::cell_index`): where it stands now. A drum
+/// still on its own cell's centre never appears; its health, fuse and
+/// death travel in `tiles` under the same cell.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LooseState {
+    pub home: u16,
+    /// Where it stands, `quantise_pos`.
+    pub x: i16,
+    pub y: i16,
+}
+
 /// A rod's crater (`rod::Crater`), by the cell struck: its cells are worked
 /// out from the map as the room did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1020,6 +1033,8 @@ pub struct Snapshot {
     pub rubble: Vec<RubbleState>,
     /// The drums the gravity wells hold (`WellDrumState`), by id.
     pub well_drums: Vec<WellDrumState>,
+    /// The loose drums off their own cells (`LooseState`), by home cell.
+    pub loose: Vec<LooseState>,
     /// Air support's calls and aircraft (`AirState`), by id.
     pub air: Vec<AirState>,
     /// Each volcano's cycle shift in ticks (`volcano::Volcano::shift`, a
@@ -1070,6 +1085,8 @@ impl Snapshot {
         self.rubble.dedup_by_key(|r| r.cell);
         self.well_drums.sort_by_key(|d| d.id);
         self.well_drums.dedup_by_key(|d| d.id);
+        self.loose.sort_by_key(|d| d.home);
+        self.loose.dedup_by_key(|d| d.home);
         self.smoke_cells.sort();
         self.smoke_cells.dedup();
         self.grass_flat.sort_by_key(|g| g.cell);

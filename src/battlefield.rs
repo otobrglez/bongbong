@@ -228,7 +228,7 @@ pub(crate) fn tile_half_extent(
     gy: i32,
     base: f32,
 ) -> Position {
-    if material.is_tree() || material == Material::Lamp {
+    if material.is_tree() || material == Material::Lamp || material.is_loose() {
         return Position::new(base, base);
     }
     tile_hull_half_extent(cells, gx, gy, base)
@@ -488,7 +488,7 @@ pub fn spawn_from_map(
     // outcome, not a seam bug.
     let mut solid_cells: HashSet<(i32, i32)> = map
         .iter_cells()
-        .filter(|(_, _, obj)| obj.is_solid() && !obj.material().is_some_and(|m| m.is_tree() || m == Material::Lamp))
+        .filter(|(_, _, obj)| obj.is_solid() && !obj.material().is_some_and(|m| m.is_tree() || m == Material::Lamp || m.is_loose()))
         .map(|(col, row, _)| (col, row))
         .collect();
     // A volcano's cone is one slab: every cell under it closes its seams
@@ -556,11 +556,14 @@ pub fn spawn_from_map(
                 let dry = material.is_dry(map.theme);
                 let chance = material.flammable_chance(dry);
                 let flammable = chance > 0.0 && rng.random_bool(chance);
-                let body = physics.spawn_static(
-                    pos,
-                    tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
-                );
-                physics.set_surface(body, material.surface());
+                let body = if material.is_loose() {
+                    let t = crate::tuning::tuning();
+                    physics.spawn_loose(pos, obstacle_half_extent, t.barrel_mass, t.barrel_damping, t.barrel_bounce)
+                } else {
+                    let body = physics.spawn_static(pos, tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent));
+                    physics.set_surface(body, material.surface());
+                    body
+                };
                 obstacle_positions.push(pos);
                 let mut tile = Obstacle::new(material, variant, pos, flammable, body);
                 tile.dry = dry;
