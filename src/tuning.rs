@@ -2992,6 +2992,76 @@ tunables! {
         glass_stress_damage: f32 = 1.0 in 0.0 ..= 10.0;
     }
 
+    group surfaces {
+        /// How fast (px/s) a hull has to be going into a hard face, along
+        /// the contact, as the step began for the face to throw it back
+        /// (`obstacle::Surface`, docs/physics-engine-design.md "Hard and
+        /// soft"). Over a driven hull's own push into a face it rests on
+        /// (a step of `tank_accel_force`, 70 to 90 px/s), so only a hit
+        /// bounces, never a hull leaning on a wall.
+        hull_bounce_min_speed: f32 = 130.0 in 0.0 ..= 1000.0;
+        /// The share of a hit's speed a hard face (iron, concrete, brick,
+        /// glass, a training door, the field's edge) throws the hull back
+        /// with. 0 stops it dead.
+        hard_bounce: f32 = 0.38 in 0.0 ..= 1.0;
+        /// The share a tower or a volcano's cone throws back: the hardest
+        /// thing on the field.
+        hardest_bounce: f32 = 0.5 in 0.0 ..= 1.0;
+        /// How long a bounce takes the hull off its tracks (`Tank::skid`),
+        /// seconds, so the throw is seen before the drive takes it back.
+        hull_bounce_skid_seconds: f32 = 0.14 in 0.0 ..= 2.0;
+        /// Seconds after a bounce before the same hull bounces again, or
+        /// reports a hit: a hull still pressed at the wall comes back at it
+        /// under its own drive, and that is not a fresh hit.
+        hull_bounce_rest_seconds: f32 = 0.6 in 0.0 ..= 5.0;
+        /// How hard a soft face (sandbags, a fence, a lamp post, a range
+        /// board) brakes a hull coming at it head on, px/s^2: the hull
+        /// slows over the last `v^2 / 2a` px before the face (about 10 px
+        /// at `tank_speed`) instead of stopping dead on it. 0 is a hard
+        /// stop.
+        soft_cushion_decel: f32 = 2200.0 in 0.0 ..= 100000.0;
+        /// The same for a tree that gives a little - a birch, a willow, a
+        /// snag (about 4 px at `tank_speed`).
+        yielding_cushion_decel: f32 = 5500.0 in 0.0 ..= 100000.0;
+        /// The same for a firm one - a timber wall, a broadleaf, a pine, a
+        /// spruce, a Scots pine, a fir, a palm, a drum (about 2 px).
+        firm_cushion_decel: f32 = 11000.0 in 0.0 ..= 100000.0;
+        /// How fast (px/s) a hull has to hit a pane of glass, along the
+        /// contact, to crack it instead of bouncing off it.
+        glass_crack_speed: f32 = 170.0 in 0.0 ..= 2000.0;
+        /// The damage that crack does to the pane: half a pane's health
+        /// (`wall_max_health`), so the first hit cracks it and the second
+        /// goes through.
+        glass_ram_damage: f32 = 1.0 in 0.0 ..= 500.0;
+        /// How fast (px/s) a hull has to meet a face for the meeting to
+        /// count as a hit (`Event::HullStruck`): the jolt, the dust and the
+        /// chips, a tree's crown shaking.
+        hull_struck_min_speed: f32 = 120.0 in 0.0 ..= 1000.0;
+        /// How hard a hit jolts the seat's own view, 0 to 1 of a full blow
+        /// (`feedback::Feedback`), at `tank_speed`, by what it hit: a tower
+        /// or a cone, a hard face, a firm one, a soft one. A faster hit
+        /// jolts more, a slower one less.
+        hardest_jolt: f32 = 0.9 in 0.0 ..= 1.0;
+        hard_jolt: f32 = 0.55 in 0.0 ..= 1.0;
+        firm_jolt: f32 = 0.25 in 0.0 ..= 1.0;
+        soft_jolt: f32 = 0.08 in 0.0 ..= 1.0;
+        /// How far a tree's crown swings when a hull hits its trunk, px at
+        /// `tank_speed`, and how long the swing takes to die away.
+        tree_shake_px: f32 = 5.0 in 0.0 ..= 30.0;
+        tree_shake_seconds: f32 = 0.8 in 0.05 ..= 5.0;
+        /// Seconds a hull has to push into a lamp post before it snaps and
+        /// goes over, like a fence.
+        lamp_ram_seconds: f32 = 0.12 in 0.05 ..= 5.0;
+        /// Seconds a hull has to push into a range board before it tips
+        /// over.
+        target_ram_seconds: f32 = 0.2 in 0.05 ..= 5.0;
+        /// The share of its top speed and drive a hull keeps in tall grass
+        /// and in reeds, which it parts as it goes.
+        grass_pace: f32 = 0.95 in 0.1 ..= 1.0;
+        /// The share it keeps pushing through a bush.
+        bush_pace: f32 = 0.88 in 0.1 ..= 1.0;
+    }
+
     group props {
         /// Sandbag toughness: hp absorbed over its three visible stages
         /// (intact, torn, collapsed) before it flattens. Baked in at spawn.

@@ -558,6 +558,8 @@ impl Material {
         match self {
             Material::Sandbag => Some(tuning().sandbag_ram_seconds),
             Material::Fence => Some(tuning().fence_ram_seconds),
+            Material::Lamp => Some(tuning().lamp_ram_seconds),
+            Material::Target => Some(tuning().target_ram_seconds),
             Material::Tree | Material::Pine | Material::Scots | Material::Willow => Some(tuning().tree_ram_seconds),
             Material::Spruce => Some(tuning().spruce_ram_seconds),
             Material::Fir | Material::Snag => Some(tuning().sapling_ram_seconds),
@@ -569,6 +571,108 @@ impl Material {
     /// Detonates when destroyed (`Game::apply_blast`).
     pub fn is_explosive(self) -> bool {
         self == Material::Barrel
+    }
+
+    /// How a hull meets this tile (`Surface`, docs/physics-engine-design.md
+    /// "Hard and soft").
+    pub fn surface(self) -> Surface {
+        match self {
+            Material::Tesla | Material::GunTower | Material::BioSlush | Material::Volcano => Surface::Hardest,
+            Material::Iron | Material::Concrete | Material::Brick | Material::Door => Surface::Hard,
+            Material::Glass => Surface::Brittle,
+            Material::Wood
+            | Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Palm
+            | Material::Barrel => Surface::Firm,
+            Material::Birch | Material::Willow | Material::Snag => Surface::Yielding,
+            Material::Sandbag | Material::Fence | Material::Lamp | Material::Target => Surface::Soft,
+        }
+    }
+}
+
+/// How hard a solid thing is to drive into (docs/physics-engine-design.md
+/// "Hard and soft"): what a hull does as it meets it, head on. Only the
+/// contact's normal is touched - a hull sliding along a face slides as it
+/// does along any other, which is the whole of why this is not friction.
+///
+/// - A **hard** face stops the hull flush and, on a hit at
+///   `hull_bounce_min_speed` or more, throws it back (`hard_bounce`,
+///   `hardest_bounce`) - a knock through `combat::knock` with a short skid.
+/// - A **brittle** one (glass) is hard, but a hit at `glass_crack_speed`
+///   cracks the pane instead of throwing the hull.
+/// - A **firm**, **yielding** or **soft** one cushions: the solver lets a
+///   hull coming at it head on close only as fast as `v^2 = 2 a d` allows
+///   at `d` from the face (`firm_cushion_decel`, `yielding_cushion_decel`,
+///   `soft_cushion_decel`), so it slows over the last few px and settles
+///   against the face with no dead stop and no bounce.
+///
+/// `Plain` is what deep water, lava and the bong are: the solver's own stop
+/// and nothing else. The number is what a collider carries in its
+/// `user_data` (`physics::Physics::set_surface`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum Surface {
+    #[default]
+    Plain = 0,
+    /// The towers and a volcano's cone.
+    Hardest = 1,
+    /// Iron, concrete, brick, a training door, the field's edge.
+    Hard = 2,
+    /// Glass.
+    Brittle = 3,
+    /// A timber wall, the firm trees (broadleaf, pine, spruce, Scots pine,
+    /// fir, palm), a drum.
+    Firm = 4,
+    /// A birch, a willow, a snag.
+    Yielding = 5,
+    /// Sandbags, a fence, a lamp post, a range board.
+    Soft = 6,
+}
+
+impl Surface {
+    pub const ALL: [Surface; 7] = [Surface::Plain, Surface::Hardest, Surface::Hard, Surface::Brittle, Surface::Firm, Surface::Yielding, Surface::Soft];
+
+    /// The surface a collider's `user_data` names; `Plain` for anything
+    /// else.
+    pub fn from_code(code: u128) -> Surface {
+        Surface::ALL.get(code as usize).copied().unwrap_or(Surface::Plain)
+    }
+
+    /// The share of a hit's speed this face throws a hull back with: 0 for
+    /// everything that is not hard.
+    pub fn bounce(self, t: &Tuning) -> f32 {
+        match self {
+            Surface::Hardest => t.hardest_bounce,
+            Surface::Hard | Surface::Brittle => t.hard_bounce,
+            _ => 0.0,
+        }
+    }
+
+    /// How hard this face brakes a hull coming at it head on, px/s^2: 0
+    /// for a face that stops it where it meets it.
+    pub fn cushion(self, t: &Tuning) -> f32 {
+        match self {
+            Surface::Firm => t.firm_cushion_decel,
+            Surface::Yielding => t.yielding_cushion_decel,
+            Surface::Soft => t.soft_cushion_decel,
+            _ => 0.0,
+        }
+    }
+
+    /// How hard a hit on this face at `tank_speed` jolts the seat's view,
+    /// 0 to 1.
+    pub fn jolt(self, t: &Tuning) -> f32 {
+        match self {
+            Surface::Hardest => t.hardest_jolt,
+            Surface::Hard | Surface::Brittle => t.hard_jolt,
+            Surface::Firm | Surface::Yielding => t.firm_jolt,
+            Surface::Soft => t.soft_jolt,
+            Surface::Plain => 0.0,
+        }
     }
 }
 
