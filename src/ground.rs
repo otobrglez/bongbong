@@ -500,6 +500,9 @@ pub struct GroundGrid {
     /// it (`bridge`). Both empty with no biome.
     decks: Vec<Deck>,
     bridged: BTreeSet<(i32, i32)>,
+    /// The places the biome dresses (`biome::places`): its mill races and
+    /// fields, set from the map by whoever builds the grid (`set_places`).
+    places: crate::biome::Places,
     /// This build's name (`NEXT_SHADE_STAMP`), its shade's first; a
     /// repaint that reaches the field's edge gives it another (`repaint`).
     stamp: u64,
@@ -535,8 +538,18 @@ impl GroundGrid {
         let biome = self.look.biome?;
         Some(self.materials.get_or_init(|| {
             let (w, h) = (((self.width / 2.0).ceil() as usize).max(1), ((self.height / 2.0).ceil() as usize).max(1));
-            crate::biome::bake(biome.look(), w, h, &self.floor_blocks(w, h), &self.decks, next_block_stamp())
+            crate::biome::bake(biome.look(), w, h, &self.floor_blocks(w, h), &self.decks, &self.places, next_block_stamp())
         }))
+    }
+
+    /// Dress `places` (`biome::places` of the map) under the biome: its
+    /// mill races and fields join the materials, baked again if they
+    /// moved. A grid with no biome keeps none.
+    pub fn set_places(&mut self, places: crate::biome::Places) {
+        if self.look.biome.is_some() && self.places != places {
+            self.places = places;
+            self.materials = OnceLock::new();
+        }
     }
 
     /// The plank decks the biome draws (`Deck`), none with no biome.
@@ -815,6 +828,7 @@ impl GroundGrid {
             materials: OnceLock::new(),
             decks: Vec::new(),
             bridged: BTreeSet::new(),
+            places: crate::biome::Places::default(),
             stamp: NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed),
             layout,
             seed: self.seed,
@@ -1552,6 +1566,7 @@ pub fn build(
         materials: OnceLock::new(),
         decks: Vec::new(),
         bridged: BTreeSet::new(),
+        places: crate::biome::Places::default(),
         stamp: NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed),
         layout,
         seed,

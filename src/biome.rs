@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::canvas::BlockImage;
 use crate::ground::{Deck, FloorPx};
+use crate::map::{CellObject, MapFile};
+use crate::obstacle::Material;
 use crate::math::Color;
 use crate::tuning::Tuning;
 
@@ -217,7 +219,7 @@ fn distance(w: usize, h: usize, near: impl Fn(usize) -> bool) -> Vec<u16> {
 /// texel a block, clear where the tiles show through. `class` says what
 /// the tiles lay on each block, row by row (`GroundGrid::floor_blocks`).
 /// See the module comment for what goes where.
-pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[Deck], stamp: u64) -> BlockImage {
+pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[Deck], places: &Places, stamp: u64) -> BlockImage {
     assert_eq!(class.len(), w * h, "a class a block");
     let to_water = distance(w, h, |i| class[i].is_water());
     let deepness = deepness(w, h, class);
@@ -276,6 +278,12 @@ pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[De
             }
         };
     }
+    for &(cell, across) in &places.fields {
+        lay_furrows(look, cell, across, w, h, class, &mut texels);
+    }
+    for &(from, to) in &places.races {
+        lay_race(look, from, to, w, h, class, &mut texels);
+    }
     for deck in decks {
         lay_deck(look, deck, w, h, class, &mut texels);
     }
@@ -321,6 +329,144 @@ fn deepness(w: usize, h: usize, class: &[FloorPx]) -> Vec<f32> {
         }
     }
     out
+}
+
+/// What a biome dresses on a map, found by rule from its cells (`places`):
+/// nothing here is authored, so every map with a biome gets them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Places {
+    /// Mill races, field px: from the middle of a timber building's wall
+    /// cell to the middle of the water cell nearest it.
+    pub races: Vec<((f32, f32), (f32, f32))>,
+    /// Ploughed cells behind a fence, and whether their furrows run
+    /// east-west (along a fence that does).
+    pub fields: Vec<((i32, i32), bool)>,
+}
+
+/// How far a timber building may stand from the water and still have a
+/// race, in cells.
+const RACE_REACH: i32 = 3;
+
+/// How far from a fence its field reaches, in cells.
+const FIELD_REACH: i32 = 4;
+
+/// The places `map` dresses under a biome:
+/// - **a mill race** for every timber building (wood walls touching, by
+///   eight neighbours) within `RACE_REACH` cells of water: from the wall
+///   cell nearest the water to that water, the nearest pair winning and
+///   ties going to the first in cell order;
+/// - **a field** of every tall-grass cell within `FIELD_REACH` cells of a
+///   fence, its furrows running along the nearest fence - a patch of them,
+///   never a lone cell.
+pub fn places(map: &MapFile) -> Places {
+    use std::collections::{BTreeMap, BTreeSet};
+    let cells: BTreeMap<(i32, i32), CellObject> = map.iter_cells().map(|(c, r, o)| ((c, r), *o)).collect();
+    let water: Vec<(i32, i32)> = cells.iter().filter(|(_, o)| **o == CellObject::Water).map(|(c, _)| *c).collect();
+    let timber: BTreeSet<(i32, i32)> = cells.iter().filter(|(_, o)| o.material() == Some(Material::Wood) && o.is_solid()).map(|(c, _)| *c).collect();
+    let chebyshev = |a: (i32, i32), b: (i32, i32)| (a.0 - b.0).abs().max((a.1 - b.1).abs());
+    let centre = |(c, r): (i32, i32)| (c as f32 * crate::OBSTACLE_GRID_SIZE, r as f32 * crate::OBSTACLE_GRID_SIZE);
+    let mut places = Places::default();
+    // Timber buildings, each one race.
+    let mut seen = BTreeSet::new();
+    for &start in &timber {
+        if !seen.insert(start) {
+            continue;
+        }
+        let mut building = vec![start];
+        let mut i = 0;
+        while i < building.len() {
+            let (c, r) = building[i];
+            for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))) {
+                let n = (c + dx, r + dy);
+                if timber.contains(&n) && seen.insert(n) {
+                    building.push(n);
+                }
+            }
+            i += 1;
+        }
+        building.sort();
+        let best = building.iter().flat_map(|&wall| water.iter().map(move |&wet| (chebyshev(wall, wet), wall, wet))).min();
+        if let Some((d, wall, wet)) = best
+            && d <= RACE_REACH
+        {
+            places.races.push((centre(wall), centre(wet)));
+        }
+    }
+    // Fields behind the fences.
+    let fences: Vec<(i32, i32)> = cells.iter().filter(|(_, o)| **o == CellObject::Fence).map(|(c, _)| *c).collect();
+    let runs_across = |(c, r): (i32, i32)| fences.contains(&(c - 1, r)) || fences.contains(&(c + 1, r));
+    for (&cell, obj) in &cells {
+        if *obj != CellObject::TallGrass {
+            continue;
+        }
+        let nearest = fences.iter().map(|&f| (chebyshev(cell, f), f)).min();
+        if let Some((d, fence)) = nearest
+            && d <= FIELD_REACH
+        {
+            places.fields.push((cell, runs_across(fence)));
+        }
+    }
+    // A field is a patch, not a lone tuft: a cell keeps its furrows only
+    // with two field cells among its eight neighbours.
+    let field: BTreeSet<(i32, i32)> = places.fields.iter().map(|(c, _)| *c).collect();
+    places.fields.retain(|&((c, r), _)| (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (c + dx, r + dy))).filter(|n| *n != (c, r) && field.contains(n)).count() >= 2);
+    places
+}
+
+/// Furrows over field cell `cell`: rows of dark furrow and earthen ridge
+/// with grass between, every 6 px, running east-west when `across`.
+fn lay_furrows(look: &BiomeLook, cell: (i32, i32), across: bool, w: usize, h: usize, class: &[FloorPx], texels: &mut [Color]) {
+    let (bx0, by0) = (cell.0 * 16 - 8, cell.1 * 16 - 8);
+    for ly in 0..16 {
+        for lx in 0..16 {
+            let (bx, by) = (bx0 + lx, by0 + ly);
+            if bx < 0 || by < 0 || bx as usize >= w || by as usize >= h {
+                continue;
+            }
+            let i = by as usize * w + bx as usize;
+            if class[i] != FloorPx::Land {
+                continue;
+            }
+            // Counted on the field's own grid, so neighbouring cells line up.
+            let row = if across { by } else { bx };
+            texels[i] = match row.rem_euclid(3) {
+                0 => look.silt[1],
+                1 => look.shoulder[1],
+                _ => continue,
+            };
+        }
+    }
+}
+
+/// A mill race from `from` to `to` (field px): a channel of water 6 px
+/// across lined with stone, cut through the ground and the bank, and a
+/// line of weir foam where it meets the river.
+fn lay_race(look: &BiomeLook, from: (f32, f32), to: (f32, f32), w: usize, h: usize, class: &[FloorPx], texels: &mut [Color]) {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let len2 = (dx * dx + dy * dy).max(1.0);
+    let reach = 10.0;
+    let (x0, x1) = ((from.0.min(to.0) - reach) / 2.0, (from.0.max(to.0) + reach) / 2.0);
+    let (y0, y1) = ((from.1.min(to.1) - reach) / 2.0, (from.1.max(to.1) + reach) / 2.0);
+    for by in (y0.floor().max(0.0) as usize)..(y1.ceil().max(0.0) as usize).min(h) {
+        for bx in (x0.floor().max(0.0) as usize)..(x1.ceil().max(0.0) as usize).min(w) {
+            let (x, y) = (bx as f32 * 2.0 + 1.0, by as f32 * 2.0 + 1.0);
+            let t = (((x - from.0) * dx + (y - from.1) * dy) / len2).clamp(0.0, 1.0);
+            let (px, py) = (from.0 + dx * t, from.1 + dy * t);
+            let d = ((x - px) * (x - px) + (y - py) * (y - py)).sqrt();
+            let i = by * w + bx;
+            match class[i] {
+                FloorPx::Land | FloorPx::Bank if d <= 3.0 => texels[i] = look.water.fill,
+                FloorPx::Land | FloorPx::Bank if d <= 5.0 => texels[i] = look.gravel[2],
+                // Where it falls into the river: foam across its mouth.
+                FloorPx::Water if d <= 8.0 && t > 0.0 && texels[i].a == 0 => {
+                    if hash(bx as i32, by as i32, 19) % 3 != 0 {
+                        texels[i] = if hash(bx as i32, by as i32, 23) % 2 == 0 { look.water.glint } else { look.water.ripple };
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The planks of `deck` over its cell: a band 24 px across the road's
@@ -525,7 +671,7 @@ mod tests {
 
     #[test]
     fn the_layer_leaves_water_and_road_alone_and_lines_every_bank() {
-        let image = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], 1);
+        let image = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], &Places::default(), 1);
         let at = |x: i32, y: i32| image.texels[(y / 2) as usize * image.width + (x / 2) as usize];
         assert_eq!(at(120, 40).a, 0, "water is the tiles'");
         assert_eq!(at(200, 166).a, 0, "a road's dirt is the tiles'");
@@ -537,9 +683,24 @@ mod tests {
 
     #[test]
     fn the_layer_is_the_same_every_time_it_is_baked() {
-        let a = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], 1);
-        let b = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], 2);
+        let a = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], &Places::default(), 1);
+        let b = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], &Places::default(), 2);
         assert_eq!(a.texels, b.texels);
+    }
+
+    #[test]
+    fn serpent_river_has_one_race_at_its_watermill_and_fields_by_its_fences() {
+        let map = MapFile::load(std::path::Path::new("maps/serpent-river.toml")).unwrap();
+        let places = places(&map);
+        assert_eq!(places.races.len(), 1, "one timber building stands by the water: {:?}", places.races);
+        let (from, _) = places.races[0];
+        let mill = crate::map::world_to_cell(crate::Position::new(from.0, from.1));
+        assert!((31..=34).contains(&mill.0) && (8..=10).contains(&mill.1), "the race leaves the watermill, not {mill:?}");
+        assert!(!places.fields.is_empty());
+        for &(cell, across) in &places.fields {
+            assert_eq!(map.cell(cell.0, cell.1), Some(&CellObject::TallGrass), "{cell:?} is a field of tall grass");
+            assert!(across, "the farm's fences run east-west, so do its furrows");
+        }
     }
 
     #[test]

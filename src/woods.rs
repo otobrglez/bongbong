@@ -64,6 +64,11 @@ pub struct Woods {
     trails: BTreeSet<(i32, i32)>,
     crowns: BTreeMap<(i32, i32), Crown>,
     theme: Theme,
+    /// The biome in force (`biome::in_force`): under one, open banks with
+    /// no wood near them grow reeds too.
+    biome: Option<crate::biome::Biome>,
+    /// The map's road cells: a crossing stays clear of reeds.
+    roads: BTreeSet<(i32, i32)>,
     /// The field in px and in cells.
     field: (f32, f32),
     cells: (i32, i32),
@@ -101,7 +106,8 @@ impl Woods {
     pub fn build(map: &MapFile) -> Woods {
         let (w, h) = map.field_size();
         let cells = ((w / OBSTACLE_GRID_SIZE).round() as i32, (h / OBSTACLE_GRID_SIZE).round() as i32);
-        let mut woods = Woods { theme: map.theme, field: (w, h), cells, ..Woods::default() };
+        let biome = crate::biome::in_force(map.biome, &crate::tuning::tuning());
+        let mut woods = Woods { theme: map.theme, biome, field: (w, h), cells, ..Woods::default() };
         for (c, r, obj) in map.iter_cells() {
             woods.taken.insert((c, r));
             match obj.material() {
@@ -113,6 +119,9 @@ impl Woods {
                 }
                 None if *obj == CellObject::Water => {
                     woods.water.insert((c, r));
+                }
+                None if *obj == CellObject::Road => {
+                    woods.roads.insert((c, r));
                 }
                 None => {}
             }
@@ -429,10 +438,19 @@ impl Woods {
         }
     }
 
+    /// Whether open bank cell `cell` (hash `h`) grows reeds under a biome
+    /// with no wood near it: in clumps a few cells long with open banks
+    /// between - a hashed field over 3 x 3 cell blocks, about half of them
+    /// - and never beside a road, so a crossing stays clear.
+    fn sheltered_reeds(&self, (c, r): (i32, i32), h: u32) -> bool {
+        let by_road = (-1..=1).any(|dy| (-1..=1).any(|dx| self.roads.contains(&(c + dx, r + dy))));
+        !by_road && hash((c.div_euclid(3), r.div_euclid(3)), 181) % 100 < 50 && h % 100 < 75
+    }
+
     /// The undergrowth round the woods (see the module comment), as tufts
     /// for `Game::grass`. Pure in the map, no RNG.
     pub fn undergrowth(&self) -> Vec<GrassTuft> {
-        if self.trees.is_empty() {
+        if self.trees.is_empty() && self.biome.is_none() {
             return Vec::new();
         }
         let desert = self.theme == Theme::Desert;
@@ -446,7 +464,10 @@ impl Woods {
             let near = ring(1).filter(|&n| self.tree(n)).count() as u32;
             let bank = ORTHOGONAL.iter().any(|&(dx, dy)| self.water.contains(&(c + dx, r + dy)));
             let h = hash(cell, 161);
-            let bush = if bank && !desert && ring(2).any(|n| self.tree(n)) && h % 100 < 70 {
+            let wooded = ring(2).any(|n| self.tree(n));
+            let bush = if bank && !desert && wooded && h % 100 < 70 {
+                Bush::Reeds
+            } else if bank && !desert && !wooded && self.biome.is_some() && self.sheltered_reeds(cell, h) {
                 Bush::Reeds
             } else if near > 0 && h % 100 < 12 + near * 6 {
                 let pick = (h >> 8) % 3;
@@ -498,6 +519,7 @@ mod tests {
                     'T' => "{ kind = \"tree\" }",
                     'W' => "{ kind = \"water\" }",
                     '#' => "{ kind = \"wall\", material = \"brick\" }",
+                    '=' => "{ kind = \"road\" }",
                     _ => continue,
                 };
                 text.push_str(&format!("cells.\"{c},{r}\" = {kind}\n"));
@@ -627,6 +649,22 @@ mod tests {
         let woods = Woods::build(&map_of(&glade));
         assert!(woods.is_trail((2, 2)) && woods.is_trail((3, 3)));
         assert!(!worn(&glade));
+    }
+
+    #[test]
+    fn under_a_biome_an_open_bank_grows_reeds_in_clumps_and_never_by_a_road() {
+        // A river down column 4, thirty rows long, a road across row 15,
+        // and not a tree anywhere.
+        let rows: Vec<String> = (0..30).map(|r| if r == 15 { "=========".to_string() } else { "....W....".to_string() }).collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let map = map_of(&rows);
+        assert!(Woods::build(&map).undergrowth().is_empty(), "with no biome a treeless bank grows nothing");
+        let valley = Woods { biome: Some(crate::biome::Biome::Valley), ..Woods::build(&map) };
+        let reeds = valley.undergrowth();
+        assert!(!reeds.is_empty(), "under a biome the open bank grows reeds");
+        let rows_with_reeds: BTreeSet<i32> = reeds.iter().map(|t| crate::map::world_to_cell(t.base).1).collect();
+        assert!(rows_with_reeds.len() < 28, "in clumps, with open bank between");
+        assert!(rows_with_reeds.iter().all(|&r| (r - 15).abs() > 1), "the crossing stays clear: {rows_with_reeds:?}");
     }
 
     #[test]

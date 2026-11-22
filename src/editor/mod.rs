@@ -2884,6 +2884,7 @@ impl MapEditor {
         // darkened edge, and the biome's materials.
         let look = ground::Look { theme: self.map.theme, edge_shade: true, biome: crate::biome::in_force(self.map.biome, &crate::tuning::tuning()) };
         self.ground = ground::build(width, height, self.ground_seed, &road_cells, &water_cells, &wall_cells, look);
+        self.ground.set_places(crate::biome::places(&self.map));
         // The navigator's picture, the water as deep as the ground has it.
         self.minimap = Minimap::of_map(&self.map, |col, row| self.ground.depth(col, row));
     }
@@ -2907,6 +2908,10 @@ impl MapEditor {
         }
         let floors: Vec<_> = changes.iter().map(|c| (c.col, c.row, floor_of(self.map.cell(c.col, c.row)))).collect();
         let touched = self.ground.repaint(&floors);
+        // A fence, a tall-grass cell or a timber wall moved the biome's places.
+        if self.ground.biome().is_some() {
+            self.ground.set_places(crate::biome::places(&self.map));
+        }
         let (map, ground) = (&self.map, &self.ground);
         let edited = floors.iter().map(|&(col, row, _)| (col, row));
         self.minimap.repaint(touched.into_iter().chain(edited), |col, row| {

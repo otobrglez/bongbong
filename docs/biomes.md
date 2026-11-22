@@ -127,9 +127,34 @@ grid, footing, tread marks and the minimap read the map's own layout, and
 the probe plays the same round either way. Real bridges with their own
 rules are BB-62.
 
+### Planting and places (stage 3, BB-195)
+
+- **The map.** Serpent River's woods stand at least five cells from its
+  water, so it has no bank trees to swap. Instead the broadleaf trees on
+  the river-facing edges of the two nearest stands turned to willow, with
+  birch a step behind: 6 willows and 5 birches of its 52 broadleaves,
+  edited by hand in `maps/serpent-river.toml`. They are softer than a
+  broadleaf (a willow takes 10 to fell, a birch 8 and goes over quicker
+  under a ram) and hide a hull just the same. This one change is
+  gameplay, and it lands with or without a biome.
+- **Reeds on open banks.** Under a biome, an open bank cell with no tree
+  within two cells grows reeds too, in clumps (`Woods::sheltered_reeds`):
+  a hashed field over 3 x 3 cell blocks, never beside a road. They are
+  undergrowth, picture only, like the reeds on a wooded bank.
+- **Places, found by rule** (`biome::places`, `Places`): a timber building
+  within three cells of water gets a **mill race**, a stone-lined channel
+  6 px across from its nearest wall to that water with weir foam where it
+  meets the river. Tall grass within four cells of a fence is a **field**,
+  ploughed in furrows every 6 px that run along the fence. Nothing is
+  authored, so every map with a biome gets them; `GroundGrid::set_places`
+  holds them, and the round and the builder set them from the map.
+- **Split off:** the farm wall's masonry cap and the fence's wire-and-post
+  look, which need new rows on the walls sheet through every damage state
+  (BB-203).
+
 ### Later stages
 
-Planting and the built places (BB-195), weather on the new ground and
+Weather on the new ground and
 Serpent River's skies (BB-196), the whole map with its margins, minimap,
 thumbnail and tread marks (BB-197), the other two biomes and the builder's
 LOOK row (BB-198). The floor past an arena's field (`GroundGrid::beyond`)

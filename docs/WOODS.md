@@ -85,7 +85,10 @@ map places.
   bush or a juniper, drawn dry. It sits up to 6 px off the cell's middle,
   centred where a wall stands beside it.
 - **Banks:** an open cell beside water and within two cells of a tree
-  grows reeds seven times in ten. There are none on desert.
+  grows reeds seven times in ten. There are none on desert. Under a biome
+  (docs/biomes.md) an open bank with no tree near grows them too, in
+  clumps with open bank between and never beside a road
+  (`sheltered_reeds`); a map with no trees then still has undergrowth.
 - **Interior:** one tree in five whose eight neighbours are all trees has
   a fern rooted in its own cell, under the crowns.
 - **Never** on water, a trail or a cell beside one, or a cell the map put

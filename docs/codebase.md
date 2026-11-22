@@ -1428,7 +1428,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   draws the plain tiles; `biome_override` puts one over every local round, `in_force`), its
   `BiomeLook` (water ramp, gravel, silt, shoulder, meadow tones) and `bake`, the materials layer of 2 px
   blocks placed by `floor_px` and hashed from position - silt on every bank, gravel shelves by the water,
-  packed earth on road shoulders, meadow patches. A look only: nothing that plays reads it. Its tests
+  packed earth on road shoulders, meadow patches; and `places`, what it dresses by rule (`Places`: a mill
+  race from a timber building near water, furrows on tall grass by a fence), which `GroundGrid::set_places`
+  holds for the bake. A look only: nothing that plays reads it. Its tests
   hold every material ΔE 20 from every seat colour, crate and shell, and every meadow patch green.
   `dry_cell_near` moves a centre-fallback start out of a lake. `GroundGrid` keeps its `Layout`, seed
   and `Drifts`, so `repaint(&[(col, row, CellFloor)])` re-resolves only the tiles an edit can

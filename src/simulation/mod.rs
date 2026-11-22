@@ -2288,6 +2288,10 @@ impl Game {
         let look = crate::ground::Look { theme: self.map.theme, edge_shade: true, biome: crate::biome::in_force(self.map.biome, &crate::tuning::tuning()) };
         self.looks.ground_seed = rng.random();
         self.ground = crate::ground::build(width, height, self.looks.ground_seed, &road_cells, &map_water_cells, &wall_positions, look);
+        // What the biome dresses: the mill races and the fields (picture only).
+        if look.biome.is_some() {
+            self.ground.set_places(crate::biome::places(&self.map));
+        }
 
         // --- Training (docs/training-stage.md): the script's run, on the
         // seats and the map just laid out. No RNG. ---
