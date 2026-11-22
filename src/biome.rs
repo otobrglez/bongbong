@@ -593,18 +593,13 @@ mod tests {
         }
     }
 
-    /// Seat 8's deep teal sits on the valley's water (ΔE 5 from a ford;
-    /// 12 from today's cyan). Its colour is to change (BB-202); held here
-    /// so the test says when it no longer needs the exception.
-    const SEAT_ON_ITS_WATER: usize = 7;
-
     #[test]
     fn every_seat_the_teal_hull_and_glass_stand_apart_from_the_water() {
         let teal_hull = Color::new(0x00, 0xA6, 0x7F, 255);
         let glass = Color::new(0x86, 0xC7, 0xD9, 255);
         for biome in Biome::ALL {
             let w = biome.look().water;
-            let mut things: Vec<(String, Color)> = crate::tank::TEAM_COLORS.iter().enumerate().filter(|(i, _)| *i != SEAT_ON_ITS_WATER).map(|(i, c)| (format!("seat {}", i + 1), *c)).collect();
+            let mut things: Vec<(String, Color)> = crate::tank::TEAM_COLORS.iter().enumerate().map(|(i, c)| (format!("seat {}", i + 1), *c)).collect();
             things.push(("teal hull".to_string(), teal_hull));
             things.push(("glass".to_string(), glass));
             for (role, water) in [("ford", w.fill), ("open water", w.deep)] {
@@ -613,8 +608,6 @@ mod tests {
                     assert!(d >= MIN_DELTA_E, "{}: the {thing} is only {d:.1} from the {role}", biome.name());
                 }
             }
-            let seat8 = delta_e(w.fill, crate::tank::TEAM_COLORS[SEAT_ON_ITS_WATER]);
-            assert!(seat8 < MIN_DELTA_E, "seat 8 now stands {seat8:.1} from the ford: drop SEAT_ON_ITS_WATER");
         }
     }
 
