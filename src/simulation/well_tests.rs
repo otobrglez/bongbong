@@ -1403,8 +1403,8 @@ fn a_drone_is_downed_at_the_core() {
 }
 
 /// A drum already burning is lifted with its fuse, which burns on in the
-/// air: it goes off when the fuse ends, before the collapse. Its cell opens
-/// to the router.
+/// air: it goes off when the fuse ends, before the collapse. A loose drum
+/// is no wall to the router, before or after.
 #[test]
 fn a_fused_drum_is_lifted_with_its_fuse_and_its_cell_opens() {
     let mut game = round("cells.\"15,8\" = { kind = \"barrel\", drum = \"fuel\" }\n");
@@ -1415,13 +1415,13 @@ fn a_fused_drum_is_lifted_with_its_fuse_and_its_cell_opens() {
             o.fuse = Some(crate::obstacle::Fuse { left: fuse, total: fuse, from: None });
         }
     }
-    assert!(!game.nav_grid(W, H).usable(drum_at), "the drum blocks its cell");
+    assert!(game.nav_grid(W, H).usable(drum_at), "a loose drum blocks no cell");
     let centre = crate::map::cell_to_world(17, 8);
     game.debug_well(centre, false).expect("a well");
     let mut seen = idle(&mut game, ticks(tuning().well_form_seconds) + 2);
     let held = game.held_drums().first().copied().expect("lifted");
     assert!(held.fuse.is_some_and(|left| left > 0.0 && left < fuse), "with its fuse: {held:?}");
-    assert!(game.nav_grid(W, H).usable(drum_at), "its cell open");
+    assert!(game.nav_grid(W, H).usable(drum_at), "its cell open still");
     seen.extend(idle(&mut game, ticks(fuse)));
     assert!(seen.iter().any(|e| matches!(e, Event::Blast { chained: true, .. })), "it went off in the air");
     assert!(game.held_drums().is_empty());

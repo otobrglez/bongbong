@@ -286,7 +286,7 @@ impl Terrain {
         let cells: HashSet<(i32, i32)> = world
             .query::<&Obstacle>()
             .iter()
-            .filter(|o| !o.destroyed && !o.material.is_tree())
+            .filter(|o| !o.destroyed && !o.material.is_tree() && !o.material.is_loose())
             .map(|o| battlefield::pos_to_cell(o.position))
             .collect();
         let mut obstacles: Vec<TerrainBox> = world

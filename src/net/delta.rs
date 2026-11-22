@@ -25,7 +25,7 @@ use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
     AirState,
-    BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
+    BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
     ZoneState, TileState, side_code,
 };
 
@@ -97,6 +97,8 @@ pub struct SnapshotDelta {
     /// New or changed held drums, in full.
     pub well_drums: Vec<WellDrumState>,
     pub well_drums_gone: Vec<u16>,
+    pub loose: Vec<LooseState>,
+    pub loose_gone: Vec<u16>,
     /// New or changed air support, in full.
     pub air: Vec<AirState>,
     pub air_moved: Vec<Moved>,
@@ -272,6 +274,12 @@ impl Keyed for WellDrumState {
     }
 }
 
+impl Keyed for LooseState {
+    fn key(&self) -> u16 {
+        self.home
+    }
+}
+
 impl Keyed for CraterState {
     fn key(&self) -> u16 {
         self.cell
@@ -373,6 +381,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (craters, craters_gone) = diff_keyed(&prev.craters, &next.craters);
     let (rubble, rubble_gone) = diff_keyed(&prev.rubble, &next.rubble);
     let (well_drums, well_drums_gone) = diff_keyed(&prev.well_drums, &next.well_drums);
+    let (loose, loose_gone) = diff_keyed(&prev.loose, &next.loose);
     let (air, air_moved, air_gone) = diff_positioned(&prev.air, &next.air);
     let (grass_flat, grass_flat_gone) = diff_keyed(&prev.grass_flat, &next.grass_flat);
     let mut bonus_pickups = next.bonus_pickups.clone();
@@ -422,6 +431,8 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         rubble_gone,
         well_drums,
         well_drums_gone,
+        loose,
+        loose_gone,
         air,
         air_moved,
         air_gone,
@@ -465,6 +476,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         craters: apply_keyed(&prev.craters, &delta.craters, &delta.craters_gone),
         rubble: apply_keyed(&prev.rubble, &delta.rubble, &delta.rubble_gone),
         well_drums: apply_keyed(&prev.well_drums, &delta.well_drums, &delta.well_drums_gone),
+        loose: apply_keyed(&prev.loose, &delta.loose, &delta.loose_gone),
         air: apply_positioned(&prev.air, &delta.air, &delta.air_moved, &delta.air_gone),
         volcano_shifts: delta.volcano_shifts.clone().unwrap_or_else(|| prev.volcano_shifts.clone()),
         smoke_cells: delta.smoke_cells.clone().unwrap_or_else(|| prev.smoke_cells.clone()),
@@ -643,6 +655,7 @@ mod tests {
             .into_iter()
             .map(|id| WellDrumState { id, well: rng.random_range(0..400), cell: rng.random_range(0..600), drum: rng.random_range(0..2), fused: rng.random(), tick: rng.random_range(0..200_000) })
             .collect();
+        let loose = random_keys(rng, 4, 600).into_iter().map(|home| LooseState { home, x: rng.random(), y: rng.random() }).collect();
         let air = random_keys(rng, 3, 400).into_iter().map(|id| random_air(rng, id)).collect();
         let volcano_shifts = if rng.random() { vec![rng.random_range(-4000..4000)] } else { Vec::new() };
         let smoke_cells = random_keys(rng, 3, 600);
@@ -668,6 +681,7 @@ mod tests {
             craters,
             rubble,
             well_drums,
+            loose,
             air,
             volcano_shifts,
             smoke_cells,
@@ -798,6 +812,16 @@ mod tests {
         for id in random_keys(rng, 1, 400) {
             next.well_drums.push(WellDrumState { id, well: rng.random(), cell: rng.random_range(0..600), drum: rng.random_range(0..2), fused: rng.random(), tick: rng.random_range(0..200_000) });
         }
+        // A drum shoved on, one back on its own cell, one shoved off it.
+        for d in next.loose.iter_mut() {
+            if rng.random_ratio(1, 2) {
+                d.x = d.x.wrapping_add(rng.random_range(-40..40));
+            }
+        }
+        next.loose.retain(|_| !rng.random_ratio(1, 4));
+        for home in random_keys(rng, 1, 600) {
+            next.loose.push(LooseState { home, x: rng.random(), y: rng.random() });
+        }
         for cell in random_keys(rng, 1, 600) {
             next.craters.push(CraterState { cell, tick: next.tick });
         }
@@ -826,6 +850,7 @@ mod tests {
         next.lamps.reverse();
         next.crates.reverse();
         next.well_drums.reverse();
+        next.loose.reverse();
         next.grass_flat.reverse();
         next.normalise();
         next
@@ -1037,10 +1062,11 @@ mod tests {
         // (protocol 23); the smoke cells' list one, the delta one for
         // them (protocol 29); air support's list one, the delta three for it
         // (protocol 30); the flattened grass's list one, the delta two for
-        // it (protocol 31).
-        assert!(full <= 503, "full snapshot {full} B");
+        // it (protocol 31); the loose drums' list one, the delta two for
+        // them (protocol 37).
+        assert!(full <= 504, "full snapshot {full} B");
         assert!(moving <= 218, "moving delta {moving} B");
         assert!(busy <= 284, "busy delta {busy} B");
-        assert!(idle <= 67, "idle delta {idle} B");
+        assert!(idle <= 69, "idle delta {idle} B");
     }
 }

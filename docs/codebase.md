@@ -1022,7 +1022,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `simulation/contact.rs` (`respond_to_contacts`, after the step and before the rams) throws a hull
   back off a hard face as a knock, cracks glass under a fast ram, reports `Event::HullStruck` and
   shakes a tree's crown (`TreeShake`, presentation the painters read, set on a replica from the
-  event). `Footing::in_brush` slows a hull a little in grass, reeds and bushes (`Game::brush`).
+  event). `Footing::in_brush` slows a hull a little in grass, reeds and bushes (`Game::brush`). Loose objects
+  (docs/physics-engine-design.md "Loose objects", docs/sandbags-barrels-fences.md "Loose barrels"):
+  `spawn_loose` is a barrel's dynamic body, `is_loose`/`touching_loose` keep it out of the contact
+  kinds; `props::sync_loose` reads drums back after the step and sets one off on a hard knock
+  (`barrel_burst_speed`), `throw_loose` is a blast's throw. A drum is known by `Obstacle::home`
+  (`key_cell`) on the wire (`Snapshot::loose`, `Event::LooseGone`) and is no wall in the nav grid.
 
 ## AI
 

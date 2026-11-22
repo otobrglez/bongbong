@@ -18,6 +18,7 @@ Everything else is the simulation's own:
 | Tank rolling in through a gate | none until it arrives | `rollin_phase` moves it by hand and spawns the body on arrival |
 | Field boundary | 4 fixed cuboids | `battlefield::spawn_walls` |
 | Obstacle tile (wall, prop, tree, tower, cone, door, lamp post) | 1 fixed cuboid each, with its surface ("Hard and soft") | removed when the tile dies |
+| Loose drum (a barrel) | dynamic ball, rotation locked, damped | shoved, thrown and bounced ("Loose objects") |
 | Deep water, deep lava | 1 fixed cuboid a cell | a hull cannot enter; a shot is never stopped by them |
 | Bong | fixed cuboid, relocated | see "The bong" |
 | Shell, bullet, plasma, missile, grenade, drone, orb, laser, rail | **none** | hand-integrated; hit by `simulation::hits` |
@@ -216,13 +217,31 @@ while its way is walled off.
 ### Wrecks
 
 A wreck is no longer driven: what holds it is the damping
-`Physics::settle_wreck` puts on its body, `wreck_linear_damping` (30) times
+`Physics::settle_wreck` puts on its body, `wreck_linear_damping` (16) times
 its chassis's mass factor. Damping takes a share of the hulk's speed off
 every second, so the speed a pusher's drive holds it at falls with the
 hulk's weight twice over: an assault hull shoves a scout's wreck at about
-70 px/s, its like's at about 50 and a titan's at about 20, where at a
-damping of 4 any of them went at the pusher's own pace. A blast still
-throws a wreck (`knock::Knock`), a few px.
+133 px/s, its like's at about 83 and a titan's at about 28 (at 30 they were
+70, 50 and 20, at 4 any of them went at the pusher's own pace), and let go
+it slides a few px and stops - a wreck can be pushed into place as cover
+(BB-206). A blast throws a wreck as it throws a live hull
+(`wreck_blast_factor`, `knock::Knock`), never hurting it; a wreck's own
+death blast spares it.
+
+### Loose objects
+
+A barrel is a loose object (`Material::is_loose`,
+docs/sandbags-barrels-fences.md "Loose barrels"): `Physics::spawn_loose`
+makes it a dynamic ball of the tile's half extent with its rotation locked,
+`barrel_mass`, rapier's linear damping (`barrel_damping`) and restitution
+(`barrel_bounce`, the larger side's, so it bounces off a wall and a hull),
+looking a step ahead as a hull does. Its collider is tagged loose: a hull
+pressing one is touching neither terrain nor a tank (`contact_stats`), and
+the turn fit and the lane assist, which ask fixed bodies only, never steer
+round it. After the step `Game::sync_loose` reads each drum back, sets off
+one whose velocity the step changed by `barrel_burst_speed` or more, and
+takes the ground's friction (`barrel_friction`) off its speed. A blast
+throws the drums round it (`throw_loose`).
 
 ### Knocks
 

@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(stepped["stopped"], "frames", "{stepped}");
         assert_eq!(stepped["frames_run"], 5, "{stepped}");
         // The round ending stops it: the seat's hull goes in one blow.
-        host.call("set_tank", &json!({ "slot": 0, "damage": 1.0 })).unwrap();
+        host.call("set_tank", &json!({ "slot": 0, "damage": crate::MAX_DAMAGE - 1.0 })).unwrap();
         let stepped = host.call("step", &json!({ "frames": 600, "until_outcome": true })).unwrap();
         assert_eq!(stepped["stopped"], "outcome", "{stepped}");
         assert!(stepped["frames_run"].as_u64().unwrap() < 600, "{stepped}");

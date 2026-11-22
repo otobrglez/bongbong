@@ -187,13 +187,16 @@ impl Game {
             .world
             .query::<&Obstacle>()
             .iter()
-            .filter(|o| !o.material.is_tree())
+            .filter(|o| !o.material.is_tree() && !o.material.is_loose())
             .map(|o| battlefield::pos_to_cell(o.position))
             .collect();
+        // A loose tile is no wall (docs/sandbags-barrels-fences.md "Loose
+        // barrels"): a hull shoves it out of its way, so the router drives
+        // through it, and a drum shoved elsewhere leaves no wall behind.
         self.world
             .query::<&Obstacle>()
             .iter()
-            .filter(|o| keep(o))
+            .filter(|o| !o.material.is_loose() && keep(o))
             .map(|o| {
                 let (gx, gy) = battlefield::pos_to_cell(o.position);
                 let half = battlefield::tile_half_extent(o.material, &seam_cells, gx, gy, o.hull_size() * 0.5);
@@ -334,7 +337,7 @@ impl Game {
             for (center, half_extent) in self.nav_tile_shapes() {
                 layer.block(center, half_extent);
             }
-            self.nav.tiles = self.world.query::<&Obstacle>().iter().map(TileKey::of).collect();
+            self.nav.tiles = self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_loose()).map(TileKey::of).collect();
             self.nav.layer = Some(layer);
             #[cfg(test)]
             {
@@ -358,10 +361,11 @@ impl Game {
 
     /// Whether the world's tiles are the ones the layer was built from,
     /// in the same order: a tile that died, one that was added and one
-    /// that moved all fail it.
+    /// that moved all fail it. A loose tile is in neither: the layer
+    /// leaves it out, so a drum shoved about rebuilds nothing.
     fn nav_tiles_unchanged(&self) -> bool {
         let mut kept = self.nav.tiles.iter();
-        let same = self.world.query::<&Obstacle>().iter().all(|o| kept.next().is_some_and(|&k| k == TileKey::of(o)));
+        let same = self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_loose()).all(|o| kept.next().is_some_and(|&k| k == TileKey::of(o)));
         same && kept.next().is_none()
     }
 

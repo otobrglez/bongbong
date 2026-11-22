@@ -18,7 +18,6 @@ use crate::{
     RUBBLE_ROW_MASONRY,
     RUBBLE_ROW_POST_FENCE,
     RUBBLE_ROW_CONCRETE,
-    OBSTACLE_GRID_SIZE,
     RUBBLE_ROW_TREE,
     RUBBLE_ROW_TREE_CHARRED,
     RUBBLE_ROW_BARREL,
@@ -573,6 +572,16 @@ impl Material {
         self == Material::Barrel
     }
 
+    /// A loose object rather than a fixed tile (docs/sandbags-barrels-fences.md
+    /// "Loose barrels"): a dynamic body a hull shoves and a blast throws,
+    /// placed as a cell and identified by the cell it was placed in
+    /// (`Obstacle::home`) wherever it has gone since. It closes no seam, is
+    /// no wall in the nav grid and is drawn from its interpolated pose. A
+    /// barrel.
+    pub fn is_loose(self) -> bool {
+        self == Material::Barrel
+    }
+
     /// How a hull meets this tile (`Surface`, docs/physics-engine-design.md
     /// "Hard and soft").
     pub fn surface(self) -> Surface {
@@ -614,6 +623,7 @@ impl Material {
 /// and nothing else. The number is what a collider carries in its
 /// `user_data` (`physics::Physics::set_surface`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum Surface {
     #[default]
@@ -871,6 +881,17 @@ pub struct Obstacle {
     /// (`sync_health`) and the tile dies when too few stand
     /// (`wall_collapse_chunks`). `None` for a tile that breaks whole.
     pub chunks: Option<Chunks>,
+    /// The cell the map placed this tile in. A fixed tile never leaves it;
+    /// a loose one (`Material::is_loose`) is known by it wherever it has
+    /// been shoved (`key_cell`).
+    pub home: (i32, i32),
+    /// A loose tile's body velocity as the step began, px/s: what the
+    /// knock it takes in the step is measured against
+    /// (`Game::sync_loose`). Zero for a fixed tile.
+    pub loose_velocity: Vec2,
+    /// A loose tile's render interpolation (`pose.rs`): drawn from it,
+    /// never read by anything that plays.
+    pub smooth: crate::pose::Smooth,
     /// This obstacle's rapier fixed-body collider, spawned alongside it.
     /// Unlike a tank's `body`, this is never `None` - an obstacle always has
     /// its physics body for its whole life, right up until `Game::update`
@@ -910,6 +931,9 @@ impl Obstacle {
             edge_mask: 0,
             chunks: material.chunk_health().map(Chunks::new),
             cage: None,
+            home: crate::map::world_to_cell(position),
+            loose_velocity: Vec2::new(0.0, 0.0),
+            smooth: crate::pose::Smooth::default(),
             body,
             destroyed: false,
         }
@@ -1085,13 +1109,23 @@ impl Obstacle {
         self.size() * OBSTACLE_HULL_FRACTION
     }
 
-    /// The grid cell this obstacle sits in (positions are grid-aligned, see
-    /// `map::cell_to_world`).
+    /// The grid cell this obstacle stands on (`map::world_to_cell`, the
+    /// nearest): a fixed tile's position is its cell's exactly, a loose
+    /// drum's wherever it was shoved.
     pub fn cell(&self) -> (i32, i32) {
-        (
-            (self.position.x / OBSTACLE_GRID_SIZE).floor() as i32,
-            (self.position.y / OBSTACLE_GRID_SIZE).floor() as i32,
-        )
+        crate::map::world_to_cell(self.position)
+    }
+
+    /// The cell the round and the wire know this tile by: where it stands
+    /// for a fixed tile, where it was placed for a loose one (`home`).
+    pub fn key_cell(&self) -> (i32, i32) {
+        if self.material.is_loose() { self.home } else { self.cell() }
+    }
+
+    /// Where a painter draws it: its interpolated pose for a loose tile
+    /// (`pose::Smooth::drawn`), where it stands for every other.
+    pub fn drawn_at(&self) -> Position {
+        if self.material.is_loose() { self.smooth.drawn(crate::pose::Pose::at(self.position)).position } else { self.position }
     }
 
     fn row(&self, axis: FenceAxis) -> i32 {
@@ -1497,7 +1531,8 @@ pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
     let (sheet, row) = look.source(obstacle, axis);
     let src = source_rec(sheet, row, obstacle.col());
     let size = obstacle.sprite_size();
-    let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y + obstacle.burn_sag(), size, size);
+    let at = obstacle.drawn_at();
+    let dest = Rectangle::new(at.x + obstacle.fuse_rock(time), at.y + obstacle.burn_sag(), size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, tint);
 }
@@ -1954,9 +1989,10 @@ pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
     let (sheet, row) = look.source(obstacle, axis);
     let src = source_rec(sheet, row, obstacle.col());
     let size = obstacle.sprite_size();
+    let at = obstacle.drawn_at();
     let dest = Rectangle::new(
-        obstacle.position.x + t.shadow_dir_x * t.obstacle_shadow_offset,
-        obstacle.position.y + t.shadow_dir_y * t.obstacle_shadow_offset,
+        at.x + t.shadow_dir_x * t.obstacle_shadow_offset,
+        at.y + t.shadow_dir_y * t.obstacle_shadow_offset,
         size,
         size,
     );
