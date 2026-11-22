@@ -5,15 +5,22 @@
 // is drawn over it - with the sky's mark on it: snow cover and ice, or wet
 // earth, puddles on the road, splashes and rings on the water. Everything
 // drawn after it stands on it, so a tank leaves dark tracks in the snow
-// and a wall stays dry. Water is the cell mask's word and the pixel's own
-// blue together, so a shore's grass in a water cell is ground.
+// and a wall stays dry. Water and a road's dirt are read off the shape of
+// the tile drawn under the pixel (`tileShapes`, `ground::shape_atlas`),
+// as the game reads them (`GroundGrid::floor_px`), so a shore's grass is
+// ground and a lake's corner rounded into a grass cell is water; a cell
+// with no shape - plain grass - falls back to the cell mask's word and the
+// pixel's own blue.
 
 in vec2 fragTexCoord;
 in vec4 fragColor;
 out vec4 finalColor;
 
 uniform sampler2D texture0;   // the bare ground
-uniform sampler2D cellMask;   // per map cell: r water (0 dry, 0.5 ford, 1 deep or ice), g road
+uniform sampler2D cellMask;   // per map cell: r water (0 dry, 0.5 ford, 1 deep or ice), g road, b the tile's shape (0 none)
+uniform sampler2D tileShapes; // every road and water tile's shape, 16 x 16 each side by side: r 0 ground, 1/3 bank, 2/3 water, 1 dirt
+uniform float shapeCount;     // how many shapes tileShapes holds
+uniform float materialWet;    // 1 on a field drawn in a biome: the rain wets each material its own way
 uniform float frozen;         // 1 when the rules froze the water: the ice is solid
 uniform vec2 viewOrigin;      // the world px at the target's top-left corner
 uniform vec2 viewSize;        // the target, px: a texel per world px
@@ -80,6 +87,20 @@ vec4 cellAt(vec2 p) {
     return texture(cellMask, (floor((p + 16.0) / 32.0) - cellOrigin + 0.5) / cells);
 }
 
+// What the tile under field pixel p is made of there: -1 a tile with no
+// shape (plain grass, a drift), 0 ground, 1 a bank, 2 water, 3 a road's
+// dirt. A tile's 16 px are drawn on a 32 px cell, so a source pixel is a
+// 2 px block.
+float shapeAt(vec2 p, vec4 m) {
+    float k = floor(m.b * 255.0 + 0.5);
+    if (k < 0.5) {
+        return -1.0;
+    }
+    vec2 s = floor(mod(p + 16.0, 32.0) / 2.0);
+    vec2 uv = vec2(((k - 1.0) * 16.0 + s.x + 0.5) / (shapeCount * 16.0), (s.y + 0.5) / 16.0);
+    return floor(texture(tileShapes, uv).r * 3.0 + 0.5);
+}
+
 // One expanding ring per `g` px cell now and then: a drop's splash on the
 // ground, its rings on water. `chance` of the cell's turns ring at all;
 // each lasts `life` seconds and grows to `reach` px.
@@ -109,20 +130,42 @@ void main() {
     vec3 base = texture(texture0, fragTexCoord).rgb;
     vec3 col = base;
     vec4 m = cellAt(p);
-    bool water = m.r > 0.25 && base.b > base.r + 0.12 && base.b > 0.3;
-    bool road = m.g > 0.5;
+    float shape = shapeAt(p, m);
+    // Water by the tile's shape - and blue, so a deck's planks laid over
+    // the water under them stay dry - or, in a cell with no shape, by the
+    // cell mask and the pixel's colour.
+    bool water = shape < -0.5 ? (m.r > 0.25 && base.b > base.r + 0.12 && base.b > 0.3) : (shape > 1.5 && shape < 2.5 && base.b > base.r);
+    bool biome = materialWet > 0.5;
+    // A biome puddles only a road's dirt; elsewhere the whole road cell.
+    bool road = biome && shape > -0.5 ? shape > 2.5 : m.g > 0.5;
 
     if (rain > 0.0) {
         float wet = min(rain, 1.0);
         if (water) {
             col = drops(col, pb, 16.0, min(0.9, 0.55 * rain), 0.45, 8.0, 0.45);
         } else {
-            // Wet earth reads darker and cooler.
-            col = mix(col, col * vec3(0.78, 0.83, 0.9), wet);
-            if (road && vnoise(pb * 0.07 + 3.1) > 0.56) {
+            // Wet earth reads darker and cooler. In a biome each material
+            // takes the rain its own way: pale stone sheds it and darkens
+            // least, earth - silt, a packed shoulder, a road's dirt - soaks
+            // it up and darkens most.
+            vec3 tint = vec3(0.78, 0.83, 0.9);
+            float soak = 1.0;
+            if (biome) {
+                float l = lum(base);
+                bool earth = base.r > base.g && base.g > base.b && l < 0.64;
+                if (earth) {
+                    tint = vec3(0.68, 0.72, 0.8);
+                }
+                soak = mix(1.0, 0.45, smoothstep(0.62, 0.82, l));
+            }
+            col = mix(col, col * tint, wet * soak);
+            // Puddles: in a biome smaller and fewer, and lighter.
+            float scale = biome ? 0.11 : 0.07;
+            float edge = biome ? 0.62 : 0.56;
+            if (road && vnoise(pb * scale + 3.1) > edge) {
                 // A puddle: the grey sky in it, rings where drops land,
                 // a glint now and then.
-                col = mix(col, vec3(0.3, 0.37, 0.5), 0.5 * wet);
+                col = mix(col, vec3(0.3, 0.37, 0.5), (biome ? 0.35 : 0.5) * wet);
                 col = drops(col, pb, 10.0, min(0.9, 0.6 * rain), 0.4, 4.0, 0.5);
                 if (hash(blk + floor(time * 5.0)) > 0.985) {
                     col += 0.1 * wet;

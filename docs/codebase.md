@@ -1501,7 +1501,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   still one (`Light::still`: a portal, a lamp post, a lantern) a shadowed pool kept in
   `LightCache`'s atlas until its reach changes and tinted each frame, anything else a fan of
   vertex-coloured triangles out to its reach; stored halved so a pixel lights to twice daylight, a
-  brighter colour drawn in shares), the cell mask (water depth and road per map cell, made again
+  brighter colour drawn in shares), the cell mask (water depth, road and the tile's shape per map cell -
+  `GroundGrid::shape_index`, read against the `ground::shape_atlas` texture the passes upload once - made again
   only for another key - `MaskFor`: the scene's `minimap::RoundKey`, a round's or the canvas's
   (`RoundKey::of_canvas`, new each edit), and the grid's first cell; a `CellMask` names its first
   cell - the shader's `cellOrigin` - so the margins' wider grid reads the same: `margin_mask_bytes`,

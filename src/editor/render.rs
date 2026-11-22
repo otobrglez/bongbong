@@ -296,6 +296,10 @@ impl crate::render::weather::StagePainter for CanvasStages<'_> {
     fn glowing<D: RaylibDraw>(&mut self, d: &mut D, day_pools: f32) {
         self.editor.draw_canvas_glowing(d, self.textures, self.time, self.cull, day_pools);
     }
+
+    fn water_at(&self, p: crate::math::Vec2) -> bool {
+        self.editor.ground.floor_px(p.x as i32, p.y as i32).is_water()
+    }
 }
 
 impl MapEditor {
