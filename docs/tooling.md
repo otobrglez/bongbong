@@ -444,7 +444,8 @@ call (`cargo check --no-default-features` builds none of it).
   `static/punyworld/punyworld-overworld-tileset.png` and `-desert.png` (see its `SOURCE.md`) are
   retinted copies, one per `map::Theme` - `tools/retint_ground.py` reads the pristine
   `static/punyworld/_original/`, composes the water tiles the pack lacks (`tools/water_tiles.py`)
-  and writes both live files (idempotent; `BONGBONG_THEME=x` for one), and `gen_grass.py` writes the
+  and writes both live files, and one per biome made from them (`-valley`, `-floodplain`,
+  `-karst`, docs/biomes.md) (idempotent; `BONGBONG_THEME=x` for one), and `gen_grass.py` writes the
   matching `nature_sheet.png`/`nature_sheet_desert.png` the same way (docs/desert-theme.md). Never
   edit a live PNG or `_original/` directly. Everything else was recoloured to match *it*.
   `tools/ground_mask.py` (Pillow) reads the live grass tileset and the tile tables in `src/ground.rs`

@@ -36,6 +36,9 @@ pub struct MapSettings {
     pub tier_end: Option<Tier>,
     /// The look (`MapFile::theme`).
     pub theme: Theme,
+    /// The kind of place it is drawn as (`MapFile::biome`), none for the
+    /// plain tiles.
+    pub biome: Option<crate::biome::Biome>,
     /// The skies a round may take (`MapFile::weather`).
     pub weather: Skies,
 }
@@ -56,6 +59,7 @@ impl MapSettings {
             tier_start: map.spawn.tier_start,
             tier_end: map.spawn.tier_end,
             theme: map.theme,
+            biome: map.biome,
             weather: map.weather,
         }
     }
@@ -74,6 +78,7 @@ impl MapSettings {
         map.spawn.tier_start = self.tier_start;
         map.spawn.tier_end = self.tier_end;
         map.theme = self.theme;
+        map.biome = self.biome;
         map.weather = self.weather;
     }
 
@@ -119,6 +124,9 @@ impl MapSettings {
         }
         if self.theme != other.theme {
             out.push("theme");
+        }
+        if self.biome != other.biome {
+            out.push("biome");
         }
         if self.weather != other.weather {
             out.push("weather");

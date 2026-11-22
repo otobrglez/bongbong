@@ -22,6 +22,9 @@ never read it, so two maps that differ only in theme play identically.
 - **Shipped**: `maps/default-desert.toml` is in `SHIPPED_MAPS`, so the web
   build lists it too, and `maplint` holds it to zero errors like
   `default.toml`.
+- **Biomes**: the karst (docs/biomes.md) is made for the desert - its
+  tileset is the desert retint with dark pools and a damp seam - and the
+  builder's LOOK row offers it only on a desert map.
 - **Adding a theme** (ice is the obvious next one): one `Theme` variant
   with its two asset paths, one curve/table in `tools/retint_ground.py`,
   one species set in `tools/spritegen/gen_grass.py`, a line in

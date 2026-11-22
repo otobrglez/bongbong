@@ -418,6 +418,15 @@ pickup = "ammo"
   means `grass`, and grass is not written back. The MAP panel's THEME choice
   edits it, and `builder_settings {theme}` on the dev server. See
   `docs/desert-theme.md`.
+- `biome` is an optional top-level `"valley" | "floodplain" | "karst"`
+  (`biome::Biome`): the kind of place the map is drawn as - its water, the
+  ground's materials, a few things dressed by rule. A look only; absent
+  draws the plain tiles and is not written back. Each biome is made for
+  one theme (the karst for the desert, the others for grass), so the MAP
+  panel's LOOK row, under THEME, steps through none and the biomes of the
+  map's theme, and a THEME change drops one made for the other theme in
+  the same undo step; `builder_settings {biome}` on the dev server, which
+  refuses a biome of the other theme. See `docs/biomes.md`.
 - `view` is an optional top-level `"whole" | "follow"` (`map::MapView`):
   how the map is shown. Absent, the map's size decides - up to 36 x 18
   cells it is an arena, shown whole on every screen, and past that a

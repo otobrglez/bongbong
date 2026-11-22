@@ -23,6 +23,12 @@ written beside them:
           open water (tile 305, exactly the cells no hull enters) a step
           darker, and the olive shore outline in damp silt (`AFTER`,
           `DEEP`; the steps are `biome::VALLEY`'s, BB-192).
+  floodplain  ...-floodplain.png - the grass retint, then slate still water
+          with a lighter submerged margin, the shore outline in peat and
+          its sandy specks in sedge (`biome::FLOODPLAIN`, BB-198).
+  karst   ...-karst.png - the *desert* retint (`base`), then dark pools,
+          the desert's shore outline as a damp seam drying to grit
+          (`biome::KARST`, BB-198).
 
 Before retinting, `tools/water_tiles.py` composes the water tiles the
 pack lacks (saddles and corner mouths) into transparent cells of the
@@ -127,6 +133,55 @@ THEMES = {
         # The open water, a calm darker tone: the one tile drawn there
         # (`ground::WATER_SHORE[0b1111]`, which has no animation).
         "deep": {"tiles": [305], "table": {hx("#258E9A"): hx("#165A6A")}},
+    },
+    "floodplain": {
+        "dst": "static/punyworld/punyworld-overworld-tileset-floodplain.png",
+        "base": "grass",
+        "after": {
+            # slate still water, its lit part the lighter submerged margin
+            hx("#0E818C"): hx("#26404F"),
+            hx("#4A7A72"): hx("#26404F"),
+            hx("#0A90A0"): hx("#3A5D6E"),
+            hx("#04A0B4"): hx("#4A7383"),
+            hx("#15AEB9"): hx("#6A93A0"),
+            hx("#23C0BF"): hx("#6A93A0"),
+            hx("#1DCCCB"): hx("#9AB9BE"),
+            hx("#13DBDA"): hx("#9AB9BE"),
+            hx("#81E5EF"): hx("#CFE0DF"),
+            # the olive shore outline -> peat, its light steps to trodden
+            # mud, the sandy specks along it to sedge
+            hx("#4E5A39"): hx("#3A2E24"),
+            hx("#5B6641"): hx("#4C3C2E"),
+            hx("#67744D"): hx("#735F47"),
+            hx("#76855A"): hx("#735F47"),
+            hx("#BDAB70"): hx("#A8925F"),
+            hx("#BAA666"): hx("#A8925F"),
+        },
+        "deep": {"tiles": [305], "table": {hx("#4A7383"): hx("#33536A")}},
+    },
+    "karst": {
+        "dst": "static/punyworld/punyworld-overworld-tileset-karst.png",
+        # The desert's dust and hardpan, its pools darker: the karst keeps
+        # its damp colour round the water and its strong colour in it.
+        "base": "desert",
+        "after": {
+            hx("#0E818C"): hx("#0F3F3E"),
+            hx("#4A7A72"): hx("#0F3F3E"),
+            hx("#0A90A0"): hx("#16524F"),
+            hx("#04A0B4"): hx("#1F6A64"),
+            hx("#15AEB9"): hx("#2C7D74"),
+            hx("#23C0BF"): hx("#2C7D74"),
+            hx("#1DCCCB"): hx("#5FA59A"),
+            hx("#13DBDA"): hx("#5FA59A"),
+            hx("#81E5EF"): hx("#A8D6CB"),
+            # the desert's grey-brown shore outline -> a damp seam, darker
+            # beside the water, drying to grit on its outside
+            hx("#77685C"): hx("#6E583F"),
+            hx("#867568"): hx("#7A6245"),
+            hx("#988779"): hx("#957A57"),
+            hx("#AF9C8C"): hx("#A8956E"),
+        },
+        "deep": {"tiles": [305], "table": {hx("#1F6A64"): hx("#154A49")}},
     },
     "desert": {
         "dst": "static/punyworld/punyworld-overworld-tileset-desert.png",

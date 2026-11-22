@@ -65,7 +65,8 @@ pub struct Woods {
     crowns: BTreeMap<(i32, i32), Crown>,
     theme: Theme,
     /// The biome in force (`biome::in_force`): under one, open banks with
-    /// no wood near them grow reeds too.
+    /// no wood near them grow reeds too, and under one with scrub a wall
+    /// shelters it (`scrub`).
     biome: Option<crate::biome::Biome>,
     /// The map's road cells: a crossing stays clear of reeds.
     roads: BTreeSet<(i32, i32)>,
@@ -447,6 +448,16 @@ impl Woods {
         !by_road && hash((c.div_euclid(3), r.div_euclid(3)), 181) % 100 < 50 && h % 100 < 75
     }
 
+    /// Whether open cell `cell` (hash `h`) grows scrub under a look that has
+    /// it (`BiomeLook::scrub`): beside a wall, in its shelter, in clumps -
+    /// a hashed field over 3 x 3 cell blocks, about a third of them - and
+    /// never beside water or a road.
+    fn scrub(&self, (c, r): (i32, i32), h: u32) -> bool {
+        let walled = ORTHOGONAL.iter().any(|&(dx, dy)| self.walls.contains(&(c + dx, r + dy)));
+        let clear = (-1..=1).all(|dy| (-1..=1).all(|dx| !self.roads.contains(&(c + dx, r + dy)) && !self.water.contains(&(c + dx, r + dy))));
+        walled && clear && hash((c.div_euclid(3), r.div_euclid(3)), 191) % 100 < 35 && h % 100 < 60
+    }
+
     /// The undergrowth round the woods (see the module comment), as tufts
     /// for `Game::grass`. Pure in the map, no RNG.
     pub fn undergrowth(&self) -> Vec<GrassTuft> {
@@ -469,6 +480,9 @@ impl Woods {
                 Bush::Reeds
             } else if bank && !desert && !wooded && self.biome.is_some() && self.sheltered_reeds(cell, h) {
                 Bush::Reeds
+            } else if near == 0 && self.biome.is_some_and(|b| b.look().scrub) && self.scrub(cell, h) {
+                // Dry scrub in a wall's shelter; the theme draws it dry.
+                [Bush::Bush, Bush::Juniper][((h >> 8) % 2) as usize]
             } else if near > 0 && h % 100 < 12 + near * 6 {
                 let pick = (h >> 8) % 3;
                 match (desert, conifer_stand(cell)) {
@@ -665,6 +679,24 @@ mod tests {
         let rows_with_reeds: BTreeSet<i32> = reeds.iter().map(|t| crate::map::world_to_cell(t.base).1).collect();
         assert!(rows_with_reeds.len() < 28, "in clumps, with open bank between");
         assert!(rows_with_reeds.iter().all(|&r| (r - 15).abs() > 1), "the crossing stays clear: {rows_with_reeds:?}");
+    }
+
+    #[test]
+    fn under_the_karst_dry_scrub_grows_in_a_walls_shelter_and_only_there() {
+        // A wall down column 4, forty rows long, and nothing else.
+        let rows: Vec<&str> = (0..40).map(|_| "....#....").collect();
+        let map = map_of(&rows);
+        let karst = Woods { biome: Some(crate::biome::Biome::Karst), ..Woods::build(&map) };
+        let scrub = karst.undergrowth();
+        assert!(!scrub.is_empty(), "the wall shelters scrub");
+        for tuft in &scrub {
+            let (c, _) = crate::map::world_to_cell(tuft.base);
+            assert!(c == 3 || c == 5, "scrub stands beside the wall, not at column {c}");
+        }
+        let rows_with_scrub: BTreeSet<i32> = scrub.iter().map(|t| crate::map::world_to_cell(t.base).1).collect();
+        assert!(rows_with_scrub.len() < 30, "in clumps, with bare wall between");
+        let valley = Woods { biome: Some(crate::biome::Biome::Valley), ..Woods::build(&map) };
+        assert!(valley.undergrowth().is_empty(), "the valley grows no scrub by a wall");
     }
 
     #[test]

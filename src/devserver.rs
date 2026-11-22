@@ -2553,6 +2553,19 @@ fn builder_settings(session: &mut Session, params: &tools::BuilderSettingsParams
             .map(|n| parse_or("theme", &n, crate::map::Theme::parse, THEMES))
             .transpose()?
             .unwrap_or_default();
+        // As the panel's THEME: a look made for the other theme comes off.
+        s.biome = s.biome.filter(|b| b.theme() == s.theme);
+        b.apply_settings(s);
+        s = b.settings();
+    }
+    if let Some(v) = params.biome.clone() {
+        let names: Vec<&str> = crate::biome::Biome::ALL.iter().map(|b| b.name()).collect();
+        s.biome = v.map(|n| parse_or("biome", &n, crate::biome::Biome::parse, &names)).transpose()?;
+        if let Some(biome) = s.biome
+            && biome.theme() != s.theme
+        {
+            return Err(format!("biome {} is made for the {} theme, and this map is {}", biome.name(), biome.theme().name(), s.theme.name()));
+        }
         b.apply_settings(s);
         s = b.settings();
     }
@@ -2609,6 +2622,7 @@ fn settings_json(session: &Session) -> Value {
         "tier_start": s.tier_start.map(Tier::name),
         "tier_end": s.tier_end.map(Tier::name),
         "theme": s.theme.name(),
+        "biome": s.biome.map(crate::biome::Biome::name),
         "weather": s.weather,
         "size": size,
         "anchor": session.builder.resize_anchor().name(),

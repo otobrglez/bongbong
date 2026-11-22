@@ -107,6 +107,7 @@ use crate::hud::Corners;
 use crate::maplint::{LintCell, LintFinding, LintFix, LintSetup, LintSeverity};
 use crate::minimap::{Class, Minimap, MinimapRules};
 use crate::level::{Mission, SpawnKind, Tier};
+use crate::biome::Biome;
 use crate::map::{self, CellObject, MapEntry, MapFile, Theme, Weather};
 use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
@@ -1949,7 +1950,7 @@ impl MapEditor {
         after.write_to(&mut self.map);
         self.history.push(EditStep::Settings { before, after });
         self.map_changed();
-        if after.theme != before.theme {
+        if after.theme != before.theme || after.biome != before.biome {
             self.rebuild_ground();
         }
     }
@@ -2954,7 +2955,7 @@ impl MapEditor {
     fn ground_after(&mut self, step: &EditStep) {
         match step {
             EditStep::Cells(changes) => self.repaint_ground(&changes),
-            EditStep::Settings { before, after } if before.theme == after.theme => {}
+            EditStep::Settings { before, after } if before.theme == after.theme && before.biome == after.biome => {}
             _ => self.rebuild_ground(),
         }
     }
@@ -4396,6 +4397,7 @@ impl MapEditor {
             MapField::Theme => s.theme = Theme::ALL[i],
             _ => return,
         }
+        s.biome = fitting_biome(s.biome, s.theme);
         self.apply_settings(s);
     }
 
@@ -4418,7 +4420,14 @@ impl MapEditor {
             MapField::Growth => s.growth = step_option_number(s.growth, forward, 0, 10),
             MapField::TierStart => s.tier_start = step_option_choice(s.tier_start, &Tier::ALL, forward),
             MapField::TierEnd => s.tier_end = step_option_choice(s.tier_end, &Tier::ALL, forward),
-            MapField::Theme => s.theme = step_choice(s.theme, &Theme::ALL, forward),
+            MapField::Theme => {
+                s.theme = step_choice(s.theme, &Theme::ALL, forward);
+                s.biome = fitting_biome(s.biome, s.theme);
+            }
+            MapField::Look => {
+                let fitting: Vec<Biome> = Biome::ALL.into_iter().filter(|b| b.theme() == s.theme).collect();
+                s.biome = step_option_choice(s.biome, &fitting, forward);
+            }
             MapField::Sky(sky) => s.weather = s.weather.toggled(sky),
             MapField::Width | MapField::Height => {
                 let (cols, rows) = self.size_cells();
@@ -4450,6 +4459,14 @@ impl MapEditor {
         }
     }
 
+}
+
+/// `biome` if it is made for `theme` (`Biome::theme`), else none: a
+/// change of theme takes a look made for the other one off in the same
+/// step, so the ground never comes out as one theme's under the other's
+/// trees.
+fn fitting_biome(biome: Option<Biome>, theme: Theme) -> Option<Biome> {
+    biome.filter(|b| b.theme() == theme)
 }
 
 /// A sky row's label in `t`'s words: the sky's name (`weather-<name>`)
@@ -4506,7 +4523,7 @@ impl MapTab {
             MapTab::Round if waves => vec![vec![Mission], vec![Spawn], vec![Waves, Size, Growth], vec![TierStart, TierEnd]],
             MapTab::Round => vec![vec![Mission], vec![Spawn], vec![Tanks]],
             MapTab::Tanks => vec![vec![Tank], vec![Tank2], vec![Bong, EnemyBong]],
-            MapTab::Field => vec![vec![Theme], vec![Width, Height, Anchor]],
+            MapTab::Field => vec![vec![Theme], vec![Look], vec![Width, Height, Anchor]],
             MapTab::Sky => Weather::SKIES.chunks(3).map(|row| row.iter().map(|w| Sky(*w)).collect()).collect(),
         }
     }
@@ -4535,6 +4552,10 @@ pub enum MapField {
     EnemyBong,
     /// The look (`MapFile::theme`): the canvas redraws in it at once.
     Theme,
+    /// The kind of place (`MapFile::biome`, docs/biomes.md): none, or one
+    /// of the biomes made for the map's theme; the canvas redraws in it
+    /// at once.
+    Look,
     /// The map's size in cells (`MapFile::size`), each press one cell, the
     /// old map placed by ANCHOR (`MapEditor::resize`).
     Width,
@@ -4594,6 +4615,7 @@ impl MapField {
             MapField::Bong => "bong",
             MapField::EnemyBong => "enemy_bong",
             MapField::Theme => "theme",
+            MapField::Look => "look",
             MapField::Width => "width",
             MapField::Height => "height",
             MapField::Anchor => "anchor",
@@ -4619,6 +4641,7 @@ impl MapField {
             MapField::Bong => keys::SETTINGS_BONG,
             MapField::EnemyBong => keys::SETTINGS_ENEMY_BONG,
             MapField::Theme => keys::SETTINGS_THEME,
+            MapField::Look => keys::SETTINGS_LOOK,
             MapField::Width => keys::SETTINGS_WIDTH,
             MapField::Height => keys::SETTINGS_HEIGHT,
             MapField::Anchor => keys::SETTINGS_ANCHOR,
@@ -5708,6 +5731,32 @@ mod editor_tests {
         assert_eq!(ed.history().undo_depth(), depth, "the option in force is no edit");
         press_named(&mut ed, &frame, "theme_grass");
         assert_eq!(ed.settings().theme, Theme::Grass);
+        // LOOK steps through none and the biomes made for the map's theme,
+        // each press one undo step and the ground rebuilt in it; a theme
+        // the look is not made for takes it off in the same step.
+        assert_eq!(ed.settings().biome, None);
+        press_named(&mut ed, &frame, "look_inc");
+        assert_eq!(ed.map().biome, Some(crate::biome::Biome::Valley));
+        assert_eq!(ed.ground.biome(), Some(crate::biome::Biome::Valley), "the canvas redraws in it");
+        press_named(&mut ed, &frame, "look_inc");
+        assert_eq!(ed.map().biome, Some(crate::biome::Biome::Floodplain));
+        press_named(&mut ed, &frame, "look_inc");
+        assert_eq!(ed.map().biome, None, "the karst is the desert's: grass wraps to none");
+        press_named(&mut ed, &frame, "look_dec");
+        assert_eq!(ed.map().biome, Some(crate::biome::Biome::Floodplain));
+        let depth = ed.history().undo_depth();
+        press_named(&mut ed, &frame, "theme_desert");
+        assert_eq!((ed.map().theme, ed.map().biome), (Theme::Desert, None), "a grass look is no desert's");
+        assert_eq!(ed.history().undo_depth(), depth + 1, "one step for both");
+        press_named(&mut ed, &frame, "look_inc");
+        assert_eq!(ed.map().biome, Some(crate::biome::Biome::Karst));
+        ed.undo();
+        ed.undo();
+        assert_eq!((ed.map().theme, ed.map().biome), (Theme::Grass, Some(crate::biome::Biome::Floodplain)), "undone together");
+        assert_eq!(ed.ground.biome(), Some(crate::biome::Biome::Floodplain), "and the ground with them");
+        press_named(&mut ed, &frame, "look_dec");
+        press_named(&mut ed, &frame, "look_dec");
+        assert_eq!(ed.map().biome, None);
         // The SKY tiles: a tap puts a sky among the map's skies or takes
         // it out, each tap one undo step; none is clear, and every sky is
         // what `random` means.

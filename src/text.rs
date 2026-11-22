@@ -244,6 +244,8 @@ keys! {
     SETTINGS_TIER_START = "settings-tier-start";
     SETTINGS_TIER_END = "settings-tier-end";
     SETTINGS_THEME = "settings-theme";
+    SETTINGS_LOOK = "settings-look";
+    SETTINGS_LOOK_NONE = "settings-look-none";
     SETTINGS_WIDTH = "settings-width";
     SETTINGS_HEIGHT = "settings-height";
     SETTINGS_ANCHOR = "settings-anchor";
@@ -793,6 +795,9 @@ mod text_tests {
         for theme in [crate::map::Theme::Grass, crate::map::Theme::Desert] {
             ids.push(format!("theme-{}", theme.name()));
         }
+        for biome in crate::biome::Biome::ALL {
+            ids.push(format!("biome-{}", biome.name()));
+        }
         for weather in crate::map::Weather::ALL {
             ids.push(format!("weather-{}", weather.name()));
         }
@@ -1303,6 +1308,12 @@ mod text_tests {
                         let auto = if matches!(field, MapField::Waves | MapField::Size | MapField::Growth) { keys::SETTINGS_AUTO_SHORT } else { keys::SETTINGS_AUTO };
                         if !matches!(field, MapField::Width | MapField::Height | MapField::Anchor) {
                             fits(format!("{} auto", field.name()), &c.get(auto), MAP_VALUE_SIZE, middle);
+                        }
+                        if field == MapField::Look {
+                            fits(format!("{} none", field.name()), &c.get(keys::SETTINGS_LOOK_NONE), MAP_VALUE_SIZE, middle);
+                            for biome in crate::biome::Biome::ALL {
+                                fits(format!("{} {}", field.name(), biome.name()), &c.named("biome", biome.name()).to_uppercase(), MAP_VALUE_SIZE, middle);
+                            }
                         }
                         if matches!(field, MapField::TierStart | MapField::TierEnd) {
                             for tier in crate::level::Tier::ALL {

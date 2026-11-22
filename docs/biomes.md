@@ -20,11 +20,11 @@ check against the code changed.
 | Biome | Look | First map |
 |---|---|---|
 | **Valley** (Soča Gravel Valley) | clear alpine water, gravel by the banks, earth on the road's shoulders, a meadow in broad patches, willow and birch on the banks | Serpent River |
-| Floodplain (Reclaimed Floodplain) | slate still water, reed belts, peat banks, an old floodwork apron | Lotus Lagoon |
-| Karst (Dry Karst Frontier) | warm hardpan, flat limestone plates and fissures, dry scrub, dark pools | No Man's Land |
+| **Floodplain** (Reclaimed Floodplain) | slate still water with a lighter submerged margin, sedge on the wet banks, peat at the shore, an old floodwork apron of paving round the towers by the water | Lotus Lagoon |
+| **Karst** (Dry Karst Frontier) | on the desert's dust: warm hardpan, flat limestone plates with hairline fissures, dark pools with a damp seam, dry scrub in the shelter of walls | No Man's Land |
 
-Only the valley exists so far. The other two are rows in the same table in
-stage 6 (BB-198).
+All three are rows of one table (`Biome`, `BiomeLook`); the floodplain and
+the karst came in stage 6 (BB-198).
 
 ## How a map gets one
 
@@ -32,16 +32,33 @@ stage 6 (BB-198).
   Absent draws the plain tiles and is not written back, so every older map
   re-saves byte-identical and keeps its revision. An unknown name is a
   parse error, not a fallback.
+- **The builder**: the MAP panel's **LOOK** row, under THEME in the field
+  group: a stepper through none and the biomes made for the map's theme,
+  each press one undo step, the canvas redrawn in it at once. The dev
+  server's `builder_settings {biome}` is the same edit.
 - **Over every local round**: the `biome_override` knob (cosmetics group,
-  `@ Restart`): `-1` follows the map, `0` draws none, `1` the valley. It is
-  a row in the PR preview's tuning panel, which is how a biome is compared
-  on a map that does not name one yet (`biome::in_force`).
-- **Separate from `theme`.** A theme picks the tileset retint and the grass
-  sheet, and also decides a rule: a desert's trees are dry. A biome changes
-  no rule, so it never rides on the theme.
+  `@ Restart`): `-1` follows the map, `0` draws none, `1` the valley, `2`
+  the floodplain, `3` the karst. It is a row in the PR preview's tuning
+  panel, which is how a biome is compared on a map that does not name one
+  (`biome::in_force`); it outranks the map, so LOOK shows `(cli)` under it.
+- **Separate from `theme`, but made for one.** A theme picks the tileset
+  retint and the grass sheet, and also decides a rule: a desert's trees are
+  dry. A biome changes no rule, so it never rides on the theme. But its
+  tileset is one theme's retint (`Biome::theme`: the valley and the
+  floodplain grass, the karst the desert), so on the other theme its
+  ground would not match the trees and the tall grass. The LOOK row offers
+  only the biomes of the map's theme, and a change of THEME takes a look
+  made for the other one off in the same undo step; the knob does not ask.
 
 No shipped map names a biome yet. All three looks go live together once
 the third is accepted (decided 2026-11-20); until then each is opt-in.
+
+**The key travels as text.** A room is handed its map as TOML
+(`wire::map_toml`) or by a shipped map's name, so `biome` reaches every
+seat with no change to the wire and no `PROTOCOL_VERSION` bump. It is part
+of a map's revision (`MapFile::revision`), so naming a biome is an edit
+like any other: a builder map's clear stamp no longer holds, and a shipped
+map's own revision moves with it.
 
 ## What a biome draws
 
@@ -61,13 +78,25 @@ What goes where, in this order:
    `#4E5A39`, `#67744D`), against the de-green rule - is repainted in damp
    silt, darker right beside the water.
 2. **Silt seam**: ground within 4 px of open water or a ford.
-3. **Gravel shelves**: along the water, coming and going in a noise about
-   a cell and a half across; up to 30 px wide where a shelf is broad,
-   fraying into the meadow over its last 8 px.
+3. **The shore band** (`BiomeLook::shore`): along the water, coming and
+   going in a noise about a cell and a half across. **Gravel** shelves up
+   to 30 px wide where a shelf is broad, fraying into the meadow over
+   their last 8 px; or a **sedge** bed (the floodplain): upright stems a
+   block wide and three tall - lit tip, stem, dark foot - three columns in
+   five, each column's stems lifted by its own hash so the tips never line
+   up, the grass between. A stem is whole or absent: the bed's extent is
+   read at its tip.
 4. **Road shoulders**: packed earth up to 10 px out from a road's dirt.
-5. **Meadow patches**: two neighbouring greens laid over the grass at a
-   low opacity in patches five to ten cells across, so the grass tiles'
-   own specks show through.
+5. **Limestone plates** (`Plates`, the karst): pale patches of flat stone
+   in a noise about two cells across, at least 16 px from the water and
+   8 px from a track, their rim crisp so a plate reads as a flat face, not
+   a fade, with hairline fissures across them - a contour of a finer
+   noise, a block wide, broken every few blocks, a step darker than the
+   stone. Nothing in them is strong enough to read as a ledge.
+6. **Open-ground patches**: two neighbouring tones laid over the floor at
+   a low opacity in patches five to ten cells across, so the tiles' own
+   specks show through - a meadow's two greens on grass, warm hardpan and
+   pale dust on the karst's dust.
 
 Water and a road's dirt are never painted: they are the tiles'.
 
@@ -146,6 +175,8 @@ rules are BB-62.
   ploughed in furrows every 6 px that run along the fence. Nothing is
   authored, so every map with a biome gets them; `GroundGrid::set_places`
   holds them, and the round and the builder set them from the map.
+  Only a look that works the land dresses them (`BiomeLook::farms`: the
+  valley).
 - **Masonry and the post fence** (BB-203). A biome that dresses its
   built tiles (`Biome::dresses_tiles`; the valley does) draws every brick
   wall as pale dressed limestone and every fence as one slender run of wire
@@ -219,9 +250,34 @@ the biome on (`tools/perf/scene.py`, 12 s a scene: Serpent River 7.06 off,
 every frame (`just perf-paint`, 60 frames: Serpent River 13.7 to 15.8 ms,
 Longwater 49.9 to 57.0 ms); the window draws it as one texture.
 
-### Later stages
+### The floodplain and the karst (stage 6, BB-198)
 
-The other two biomes and the builder's LOOK row (BB-198).
+- **Their tilesets.** `tools/retint_ground.py` writes
+  `...-floodplain.png` (the grass retint, slate water, the shore outline in
+  peat, its sandy specks in sedge) and `...-karst.png` - the **desert**
+  retint (`base`), dark pools, and the desert's grey-brown shore outline
+  as a damp seam drying to grit. The other three sheets come out
+  byte-identical.
+- **The floodwork apron** (`Places::aprons`, `Apron`): round every tower
+  that stands within two cells of water, two cells each way, and joined
+  across the way in between where two such towers stand within eight
+  cells on one row or column - on Lotus Lagoon the two tesla towers at
+  (21, 13) and (27, 13) flanking the peninsula's mouth. Slabs 16 x 12 px in
+  a running bond on the field's grid, a few lifted in the middle and most
+  at the rim so it frays into the meadow, stained by the water within
+  12 px of it and in damp patches. Only open ground is paved: water, bank
+  and road keep their tiles, and tall grass and the towers stand on it as
+  before. Found by rule, like a mill race; only a look with an `Apron` lays
+  it.
+- **Dry scrub** (`BiomeLook::scrub`, `Woods::scrub`): under the karst, an
+  open cell beside a wall, with no tree, water or road round it, grows a
+  bush or a juniper - drawn dry, as the desert draws them - in clumps, a
+  hashed field over 3 x 3 cell blocks, about a third of them. Undergrowth:
+  picture only, it hides nobody.
+- **Sea water** on Archipelago and Harbor Lights, from the pack's three
+  unused sea sets, waits on the Puny World licence question (BB-109): it
+  uses more of the pack (BB-204).
+
 
 ## The valley's palette
 
@@ -241,7 +297,33 @@ a field rendered by the game's own painter with every sprite left as it is.
 
 The water roles map from today's tileset colours: edge ← `#0E818C`,
 `#4A7A72`; dark ← `#0A90A0`; fill ← `#04A0B4`; light ← `#15AEB9`,
-`#23C0BF`; ripple ← `#1DCCCB`, `#13DBDA`; glint ← `#81E5EF`.
+`#23C0BF`; ripple ← `#1DCCCB`, `#13DBDA`; glint ← `#81E5EF`. The other two
+biomes map the same roles.
+
+## The floodplain's and the karst's palettes
+
+Picked by measurement (BB-198) against the rules below, on renders of
+Lotus Lagoon and No Man's Land by the game's own painter: the designers'
+concepts B and C as the direction, every tone moved until it cleared ΔE 20
+from every seat, crate and shell and the de-green rule.
+
+| Role | Floodplain | Karst |
+|---|---|---|
+| Water: edge, dark, fill, light, ripple, glint | `#26404F` `#3A5D6E` `#4A7383` `#6A93A0` `#9AB9BE` `#CFE0DF` | `#0F3F3E` `#16524F` `#1F6A64` `#2C7D74` `#5FA59A` `#A8D6CB` |
+| Open water: fill, dark | `#33536A` `#2A465A` | `#154A49` `#103D3C` |
+| On a ford's bed | weed `#5A7B6C` | `#3E7A6A` |
+| The shore band | sedge: tip `#C9B27C`, stem `#A8925F`, foot `#7F6C46` | grit `#E8D7B0` `#CDBB93` `#A8956E` |
+| Damp ground at the bank | peat `#4C3C2E` `#3A2E24` | damp seam `#957A57` `#7A6245` |
+| Road shoulder | trodden mud `#8E7759` `#735F47` | worn dust `#B99D72` `#A68B62` |
+| Open-ground patches | `#1C4C33` at 18%, `#7FB15A` at 12% | hardpan `#A07D52` at 35%, pale dust `#E2CFA4` at 31% |
+| Deck: rail, seam, planks | wet timber `#2E241B` `#3E3125` `#7A6046` `#6A533D` | the valley's |
+| Apron: slabs, seam, wet | `#A39E8E` `#959080` `#868274` `#737064` | - |
+| Plates: faces, fissure | - | `#DED0AE` `#D6C6A2` `#A88F69` |
+
+The closest pairs: the floodplain's pale slab and seat 3's silver, 25.9;
+the karst's pale plate and the same silver, 24.1. The floodplain's ford
+stands 31 from glass and 14 from its open water; the karst's 33 from the
+teal hull and 14 from its open water.
 
 ## Rules every biome keeps
 
@@ -255,8 +337,11 @@ The water roles map from today's tileset colours: edge ← `#0E818C`,
   violet `#6B3FD8` for this: its old deep teal was ΔE 5 from the valley's
   ford (BB-202).
 - **De-greened.** Large areas stay deep green or earth tan, never olive or
-  yellow-khaki; a meadow patch keeps green its strongest channel
-  (`a_meadow_patch_stays_green`, docs/PALETTE.md).
+  yellow-khaki: on grass a patch keeps green its strongest channel, on the
+  desert's dust it stays a warm earth, red over green by a clear step
+  (`a_meadow_patch_stays_green_and_a_patch_of_dust_stays_earth`,
+  docs/PALETTE.md). The floodplain's straw sedge is stems on the grass,
+  never an area of it.
 - **Off by default, exact when off.** A map with no biome draws the pixels
   it always did, so the pinned CPU renders of the shipped maps
   (`thumbnail.rs`) hold until a look is turned on deliberately.
@@ -266,9 +351,12 @@ The water roles map from today's tileset colours: edge ← `#0E818C`,
 
 ## Adding a biome
 
-One `Biome` variant with its name, one `BiomeLook` constant, and a row in
+One `Biome` variant with its name, the theme it is made for and its
+tileset (a theme in `tools/retint_ground.py` with that theme as `base`),
+one `BiomeLook` constant, a `biome-<name>` word in every `lang/*.ftl`, and
 `biome_override`'s range. The tests walk `Biome::ALL`, so the new look is
-held to the same contrast and de-green rules at once.
+held to the same contrast and de-green rules at once, its sheet has to
+exist and its name has to fit the LOOK row.
 
 ## The look-book
 
@@ -283,5 +371,7 @@ cargo run --bin mapshot -- -o target/look-book.png maps/study/look-book.toml
 cargo run --bin mapshot -- -o target/serpent-river.png maps/serpent-river.toml   # plain
 ```
 
-A round under the valley on any map: `--tuning` a patch with
-`{"biome_override": 1}`, or the tuning panel's row on a PR preview.
+A round under a biome on any map: `--tuning` a patch with
+`{"biome_override": 1}` (2 the floodplain, 3 the karst), or the tuning
+panel's row on a PR preview. A still of one: a copy of the map with
+`biome = "karst"` added under `version = 1`, through `mapshot`.
