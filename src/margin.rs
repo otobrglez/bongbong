@@ -282,11 +282,11 @@ mod tests {
     fn a_margin_fits_its_round_until_a_window_needs_more_ground() {
         let t = Tuning::DEFAULT;
         let water = [crate::Position::new(5.0 * GROUND_WORLD_TILE, 0.0)];
-        let floor = crate::ground::build(FIELD.0, FIELD.1, 7, &[], &water, &[], crate::ground::Look { theme: Theme::Grass, edge_shade: true });
+        let floor = crate::ground::build(FIELD.0, FIELD.1, 7, &[], &water, &[], crate::ground::Look { theme: Theme::Grass, edge_shade: true, biome: None });
         let margin = Margin::new(&floor, FIELD, Theme::Grass, 8, &t);
         assert!(margin.fits(&floor, 4) && margin.fits(&floor, 8) && !margin.fits(&floor, 12));
         assert_eq!(margin.ground.origin(), (-8, -8));
-        let next = crate::ground::build(FIELD.0, FIELD.1, 7, &[], &water, &[], crate::ground::Look { theme: Theme::Grass, edge_shade: true });
+        let next = crate::ground::build(FIELD.0, FIELD.1, 7, &[], &water, &[], crate::ground::Look { theme: Theme::Grass, edge_shade: true, biome: None });
         assert!(!margin.fits(&next, 4), "a new round's floor is another");
     }
 }

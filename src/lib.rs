@@ -1021,6 +1021,7 @@ pub fn parse_seed(s: &str) -> Result<u64, String> {
 pub mod app;
 pub mod ai;
 pub mod battlefield;
+pub mod biome;
 pub mod blast;
 pub mod bt;
 pub mod bubble;
@@ -1061,6 +1062,7 @@ pub mod zone;
 pub mod well;
 pub mod game;
 pub mod ground;
+mod ground_mask;
 pub mod hud;
 pub mod indicators;
 pub mod knock;

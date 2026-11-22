@@ -4187,6 +4187,12 @@ tunables! {
         /// The patches' scale: the noise lattice pitch in cells. Larger
         /// means fewer, bigger drifts.
         ground_drift_scale: f32 = 5.0 in 1.0 ..= 20.0 @ Restart;
+        /// The biome drawn over every local round (docs/biomes.md): -1
+        /// follows the map's `biome` key, 0 draws none, 1 the valley. A
+        /// look only - gravel, silt and meadow laid over the tiles - so a
+        /// round plays the same under any of them. Read when the ground is
+        /// built, so a change shows from the next round.
+        biome_override: i32 = (-1) in -1 ..= 1 @ Restart;
         /// Seconds each of the pack's four water frames stays up
         /// (`ground::WATER_FRAMES`): the shimmer on shores and streams.
         /// The pack's own timing is 0.1.
