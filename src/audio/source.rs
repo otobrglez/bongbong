@@ -8,7 +8,7 @@
 use crate::biome::Biome;
 use crate::bong::BongKind;
 use crate::map::{Theme, Weather};
-use crate::obstacle::Material;
+use crate::obstacle::{Material, Surface as Face};
 use crate::pickup::PickupKind;
 use crate::simulation::HitCause;
 use crate::tank::{ActiveWeapon, TankKind};
@@ -100,11 +100,12 @@ pub fn weapon_sound(weapon: ActiveWeapon) -> FireSound {
 /// id (`hit.<shot>.<family>.<material>`).
 pub fn surface_family(material: Material) -> &'static str {
     match material {
-        Material::Brick | Material::Concrete | Material::Volcano => "masonry",
-        Material::Iron | Material::Door | Material::Barrel | Material::Tesla | Material::GunTower => "metal",
-        Material::Wood | Material::Fence | Material::Target => "wood",
+        Material::Brick | Material::Concrete | Material::Volcano | Material::Barrier => "masonry",
+        Material::Iron | Material::Door | Material::Barrel | Material::Tesla | Material::GunTower | Material::TankTrap => "metal",
+        Material::Wood | Material::Fence | Material::Target | Material::WoodCrate => "wood",
         Material::Glass | Material::Lamp => "glass",
-        Material::Sandbag => "earth",
+        Material::Sandbag | Material::Hay => "earth",
+        Material::Tyres => "rubber",
         Material::BioSlush => "slime",
         Material::Tree
         | Material::Pine
@@ -145,6 +146,26 @@ pub fn material_name(material: Material) -> &'static str {
         Material::Willow => "willow",
         Material::Palm => "palm",
         Material::Snag => "snag",
+        Material::Tyres => "tyres",
+        Material::Hay => "hay",
+        Material::WoodCrate => "wood_crate",
+        Material::Barrier => "barrier",
+        Material::TankTrap => "tank_trap",
+    }
+}
+
+/// A hull's slam into a fixed face (`Event::HullStruck`), by how the face
+/// takes it: iron, masonry and the towers crash, glass cracks, timber and
+/// the firm trees thud, a birch or a willow creaks and shakes, the soft
+/// props thump, a tyre stack throws the hull back with a rubber boing.
+pub fn slam_cue(face: Face) -> &'static str {
+    match face {
+        Face::Plain | Face::Hardest | Face::Hard => "vehicle.slam",
+        Face::Brittle => "vehicle.slam.glass",
+        Face::Firm => "vehicle.slam.wood",
+        Face::Yielding => "vehicle.slam.tree",
+        Face::Soft => "vehicle.slam.soft",
+        Face::Springy => "vehicle.slam.rubber",
     }
 }
 

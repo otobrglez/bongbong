@@ -23,6 +23,7 @@
 
 use rapier2d::prelude::*;
 
+use crate::obstacle::Surface;
 use crate::{PHYSICS_FIXED_DT, PHYSICS_MAX_SPEED, Position, TANK_MOVE_CORNER_RADIUS};
 
 /// How far ahead along its motion a hull's contacts look: its travel in one
@@ -96,9 +97,61 @@ impl Physics {
     /// Advance the simulation by one fixed step. `IntegrationParameters::dt`
     /// defaults to 1/60s (see `PHYSICS_FIXED_DT`), the one `dt`
     /// `Game::update` is ever given, so an update is exactly one step
-    /// whatever the render frame rate.
+    /// whatever the render frame rate. The surfaces' cushions
+    /// (`SurfaceHooks`) are read from the tuning as the step begins.
     pub fn step(&mut self) {
-        self.world.step();
+        let t = crate::tuning::tuning();
+        let hooks = SurfaceHooks { decel: Surface::ALL.map(|s| s.cushion(&t)), dt: self.world.integration_parameters.dt };
+        self.world.step_with_events(&hooks, &());
+    }
+
+    /// Give a fixed body's collider the surface a hull meets on it
+    /// (`obstacle::Surface`): kept in the collider's `user_data`, and a
+    /// face that cushions asks the solver's contact hook in
+    /// (`SurfaceHooks`). Every collider starts `Plain`.
+    pub fn set_surface(&mut self, body: RigidBodyHandle, surface: Surface) {
+        let handle = self.collider_of(body);
+        let collider = self.world.colliders.get_mut(handle).expect("collider handle should always be valid");
+        collider.user_data = surface as u128;
+        let cushions = matches!(surface, Surface::Firm | Surface::Yielding | Surface::Soft);
+        collider.set_active_hooks(if cushions { ActiveHooks::MODIFY_SOLVER_CONTACTS } else { ActiveHooks::empty() });
+    }
+
+    /// The surface a body's collider carries (`set_surface`).
+    pub fn surface_of(&self, body: RigidBodyHandle) -> Surface {
+        let handle = self.collider_of(body);
+        self.world.colliders.get(handle).map_or(Surface::Plain, |c| Surface::from_code(c.user_data))
+    }
+
+    /// Every fixed body a hull's body is in active contact with after the
+    /// last step, in the narrow phase's own order (fixed by the order the
+    /// bodies were spawned in): the other body, its surface, the normal of
+    /// their deepest contact pointing from the hull into it, and that
+    /// contact's point in the world.
+    pub fn fixed_contacts(&self, body: RigidBodyHandle) -> Vec<FixedContact> {
+        let hull = self.collider_of(body);
+        let mut out = Vec::new();
+        for pair in self.world.contact_pairs_with(hull) {
+            if !pair.has_any_active_contact() {
+                continue;
+            }
+            let other = if pair.collider1 == hull { pair.collider2 } else { pair.collider1 };
+            let Some(collider) = self.world.colliders.get(other) else { continue };
+            let Some(parent) = collider.parent() else { continue };
+            if !self.world.bodies.get(parent).is_some_and(|b| b.is_fixed()) {
+                continue;
+            }
+            let Some((manifold, point)) = pair.find_deepest_contact() else { continue };
+            let n = from_vector(manifold.data.normal);
+            let normal = if pair.collider1 == hull { n } else { Position::new(-n.x, -n.y) };
+            let (local, owner) = if pair.collider1 == hull { (point.local_p1, pair.collider1) } else { (point.local_p2, pair.collider2) };
+            let at = self.world.colliders.get(owner).map_or(Position::new(0.0, 0.0), |c| {
+                let p = c.position().transform_point(local);
+                Position::new(p.x, p.y)
+            });
+            out.push(FixedContact { other: parent, surface: Surface::from_code(collider.user_data), normal, point: at });
+        }
+        out
     }
 
     /// How many bodies and colliders rapier quarantined during the last
@@ -117,6 +170,14 @@ impl Physics {
     }
 
     /// Spawn a static, fixed-body cuboid collider: the battlefield boundary
+    /// (see `battlefield::spawn_walls`) and in-arena obstacles (see
+    /// `obstacle::Obstacle`) both reuse this exact same shape - the only
+    /// difference is whether the caller ever calls `remove_body` on the
+    /// handle later (walls never do; a destroyed obstacle does).
+    /// `center` and `half_extents` are in the same pixel space as
+    /// `Tank`/`Shell` positions; rapier does no unit conversion here (1
+    /// physics unit == 1px). It starts `Plain`; a tile or the field's edge
+    /// is given its surface with `set_surface`.
     ///
     /// The bong uses this too, and is then teleported with `set_position`
     /// every frame. That looks wrong - a moving body "should" be
@@ -134,15 +195,12 @@ impl Physics {
     /// teleporting entity, "fixed body, relocated" is the more faithful
     /// model, not the lazier one. Re-measure with `just probe-fixtures`
     /// before revisiting.
-    /// (see `battlefield::spawn_walls`) and in-arena obstacles (see
-    /// `obstacle::Obstacle`) both reuse this exact same shape - the only
-    /// difference is whether the caller ever calls `remove_body` on the
-    /// handle later (walls never do; a destroyed obstacle does).
-    /// `center` and `half_extents` are in the same pixel space as
-    /// `Tank`/`Shell` positions; rapier does no unit conversion here (1
-    /// physics unit == 1px).
+    ///
     /// Every static keeps rapier's default friction (0.5) and restitution
-    /// (0.0).
+    /// (0.0). How hard a face is (`obstacle::Surface`) acts on the
+    /// contact's normal only: a cushion through the contact hook
+    /// (`SurfaceHooks`), a bounce as a knock after the step
+    /// (`simulation::contact`).
     ///
     /// Per-material surfaces were tried and **measured worse**, twice, so
     /// this deliberately takes no friction parameter. Grippier materials
@@ -153,10 +211,10 @@ impl Physics {
     /// on another. The reason is structural rather than a bad choice of
     /// numbers: `TANK_MOVE_CORNER_RADIUS` exists so a tank *slides* past
     /// wall-tile seams instead of snagging on them, and surface friction is
-    /// the force that fights exactly that. Differentiating how walls feel
-    /// wants a different mechanism - contact FX, or ram behaviour - not
-    /// collider friction. Re-measure with `just probe-sweep --seed <n>`
-    /// before trying again.
+    /// the force that fights exactly that. How walls feel differs instead
+    /// along the normal alone - the cushion and the bounce above - and by
+    /// contact FX and ram behaviour, never by collider friction. Re-measure
+    /// with `just probe-sweep --seed <n>` before trying again.
     pub fn spawn_static(&mut self, center: Position, half_extents: Position) -> RigidBodyHandle {
         let (handle, _) = self.world.insert(
             RigidBodyBuilder::fixed().translation(to_vector(center)),
@@ -205,6 +263,39 @@ impl Physics {
             ColliderBuilder::new(tank_move_shape(half_extents)).mass(mass),
         );
         handle
+    }
+
+    /// Spawn a loose object's dynamic body (docs/sandbags-barrels-fences.md
+    /// "Loose barrels"): a drum standing upright, a ball of `radius` px
+    /// with rotation locked - it slides, it does not spin - of `mass`
+    /// against the standard chassis's 1, losing `damping` of its speed a
+    /// second on the ground and keeping `bounce` of it off whatever it
+    /// hits (restitution, the larger of the two sides', so a drum bounces
+    /// off a wall and a hull though neither bounces off anything). It
+    /// looks a step ahead as a hull does (`HULL_LOOK_AHEAD`), so a thrown
+    /// drum stops at a wall's face rather than in it. Its collider is
+    /// marked loose (`is_loose`): a hull pressing on one is touching
+    /// neither terrain nor a tank (`contact_stats`).
+    pub fn spawn_loose(&mut self, center: Position, radius: f32, mass: f32, damping: f32, bounce: f32) -> RigidBodyHandle {
+        let (handle, _) = self.world.insert(
+            RigidBodyBuilder::dynamic()
+                .translation(to_vector(center))
+                .lock_rotations()
+                .linear_damping(damping)
+                .soft_ccd_prediction(HULL_LOOK_AHEAD),
+            ColliderBuilder::ball(radius)
+                .mass(mass)
+                .restitution(bounce)
+                .restitution_combine_rule(CoefficientCombineRule::Max)
+                .friction(LOOSE_FRICTION)
+                .user_data(LOOSE_TAG),
+        );
+        handle
+    }
+
+    /// Whether `body` is a loose object's (`spawn_loose`).
+    pub fn is_loose(&self, body: RigidBodyHandle) -> bool {
+        self.world.bodies.get(body).and_then(|b| b.colliders().first()).and_then(|&c| self.world.colliders.get(c)).is_some_and(|c| c.user_data == LOOSE_TAG)
     }
 
     /// Resize a tank's solid movement collider (the one `spawn_tank`
@@ -444,6 +535,13 @@ impl Physics {
                 continue;
             }
             let other = if pair.collider1 == hull { pair.collider2 } else { pair.collider1 };
+            // A loose drum is neither terrain nor a tank: a hull shoving
+            // one is pressing on nothing the probe's contact kinds or the
+            // parked hold read.
+            if self.world.colliders.get(other).is_some_and(|c| c.user_data == LOOSE_TAG) {
+                stats.touching_loose = true;
+                continue;
+            }
             // A live pair's colliders/bodies always resolve; the chained
             // lookups are just totality, not an expected failure path.
             let other_is_fixed = self
@@ -495,11 +593,102 @@ pub struct ContactStats {
     pub touching_static: bool,
     /// Actively contacting another tank's hull (`dynamic` body).
     pub touching_tank: bool,
+    /// Actively contacting a loose object (`Physics::spawn_loose`), which
+    /// counts as neither of the two above and puts nothing into
+    /// `max_impulse`.
+    pub touching_loose: bool,
     /// Strongest per-contact-point normal impulse the solver applied this
     /// step across those contacts; 0.0 when nothing is actively touching.
     pub max_impulse: f32,
     /// World-space position of that strongest contact, when there is one.
     pub contact: Option<Position>,
+}
+
+/// One fixed body a hull touches (`Physics::fixed_contacts`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FixedContact {
+    pub other: RigidBodyHandle,
+    pub surface: Surface,
+    /// Unit normal from the hull into the body.
+    pub normal: Position,
+    /// Where they touch.
+    pub point: Position,
+}
+
+/// What a loose object's collider carries in its `user_data`
+/// (`Physics::spawn_loose`): past every `Surface` code.
+const LOOSE_TAG: u128 = 1 << 16;
+
+/// A loose object's surface friction: a drum slides along a wall or a hull
+/// rather than catching on it.
+const LOOSE_FRICTION: f32 = 0.2;
+
+/// How square to a face's axis a contact's normal has to be for a cushion
+/// to act on it: a hull meets a face, not a corner it is driving past.
+const CUSHION_AXIS_COS: f32 = 0.95;
+
+/// How much of a hull's velocity has to go into a face for a cushion to
+/// act on it: a hull coming at it, not one sliding by.
+const CUSHION_HEAD_ON: f32 = 0.7;
+
+/// The solver's contact hook: a cushioning face's give
+/// (docs/physics-engine-design.md "Hard and soft").
+///
+/// Every contact a hull has with a fixed collider within its look-ahead
+/// is a speculative one while they are apart: the solver lets the hull
+/// close the gap `dist` this step and no more. For a face that cushions
+/// (`Surface::cushion` > 0), coming at it head on (`CUSHION_HEAD_ON`,
+/// `CUSHION_AXIS_COS`), the hook shortens that to what `v^2 = 2 a d` allows
+/// at `d = dist` - so the closer the hull is the slower it may come, and it
+/// settles flush with the face over the last few px instead of stopping on
+/// it from full speed. Only the gap along the normal is touched: friction,
+/// and a hull sliding along the face, are the solver's as for any wall.
+/// A pure function of the contact and the hull's velocity: no state, no
+/// RNG.
+struct SurfaceHooks {
+    /// `Surface::cushion` of each surface, by its code.
+    decel: [f32; 8],
+    dt: f32,
+}
+
+impl PhysicsHooks for SurfaceHooks {
+    fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
+        let code = |c: ColliderHandle| context.colliders.get(c).map_or(0, |c| c.user_data as usize);
+        let (c1, c2) = (code(context.collider1), code(context.collider2));
+        let (tile_first, a) = match (self.decel.get(c1).copied().unwrap_or(0.0), self.decel.get(c2).copied().unwrap_or(0.0)) {
+            (a, _) if a > 0.0 => (true, a),
+            (_, a) if a > 0.0 => (false, a),
+            _ => return,
+        };
+        let hull = if tile_first { context.rigid_body2 } else { context.rigid_body1 };
+        let Some(body) = hull.and_then(|h| context.bodies.get(h)) else { return };
+        if !body.is_dynamic() {
+            return;
+        }
+        let v = body.linvel();
+        let dt = self.dt;
+        let Some(rigid) = context.rigid_mut() else { return };
+        let n = *rigid.normal;
+        // From the hull into the face.
+        let into = if tile_first { Vector::new(-n.x, -n.y) } else { n };
+        if into.x.abs().max(into.y.abs()) < CUSHION_AXIS_COS {
+            return;
+        }
+        let speed = v.x * into.x + v.y * into.y;
+        let total = (v.x * v.x + v.y * v.y).sqrt();
+        if speed <= 0.0 || speed < CUSHION_HEAD_ON * total {
+            return;
+        }
+        for contact in rigid.solver_contacts.iter_mut() {
+            if contact.dist <= 0.0 {
+                continue;
+            }
+            let allowed = (2.0 * a * contact.dist).sqrt() * dt;
+            if allowed < contact.dist {
+                contact.dist = allowed;
+            }
+        }
+    }
 }
 
 impl Default for Physics {

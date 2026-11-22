@@ -36,7 +36,7 @@ end in the same `apply_blast`:
 | Trigger | Path | Delay |
 |---|---|---|
 | A shot | `Obstacle::damage` against `barrel_max_health` (18) | none, the frame health hits zero |
-| A ram | `barrel_ram_damage_per_second` (40) | about half a second of pushing |
+| A hard knock (BB-206: a ram harder than a hull drives, a throw into a wall, a hull flung into it) | `barrel_burst_speed` (300 px/s of velocity change in a step) | none, the step it lands; a hull at its own top speed only shoves the drum (docs/sandbags-barrels-fences.md "Loose barrels") |
 | Another blast | health zeroed, `fuse = barrel_fuse_seconds * (0.5 .. 2.5)` by distance | 0.09 s at the centre to 0.45 s at the edge |
 
 `apply_blast` then does exactly one thing, every time, whatever set it off:

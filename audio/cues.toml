@@ -601,6 +601,46 @@ bus = "impacts"
 prompt = "heavy tank slamming into a wall, deep crunching metal impact, no music"
 duration_seconds = 1.0
 
+[sample.slam_glass]
+bus = "impacts"
+prompt = "heavy steel vehicle bumping into a thick glass window, sharp glassy crack and rattle, no music"
+duration_seconds = 1.0
+
+[sample.slam_wood]
+bus = "impacts"
+prompt = "heavy steel vehicle ramming a thick timber wall, deep wooden thud and creak, no music"
+duration_seconds = 1.0
+
+[sample.slam_tree]
+bus = "impacts"
+prompt = "heavy vehicle bumping a young tree, trunk creaking and leaves shaking and rustling, no music"
+duration_seconds = 1.5
+
+[sample.slam_soft]
+bus = "impacts"
+prompt = "heavy steel vehicle pushing into sandbags and hay bales, dull soft thump with gritty rustle, no music"
+duration_seconds = 0.8
+
+[sample.slam_rubber]
+bus = "impacts"
+prompt = "heavy vehicle bouncing off a stack of old rubber tyres, springy rubber boing and thump, no music"
+duration_seconds = 1.0
+
+[sample.hit_rubber]
+bus = "impacts"
+prompt = "bullet and small shell striking a stack of rubber tyres, dull rubbery thwack, no music"
+duration_seconds = 0.6
+
+[sample.destroy_rubber]
+bus = "impacts"
+prompt = "stack of rubber tyres blown apart and tumbling down, rubbery thumps and bounces, no music"
+duration_seconds = 1.5
+
+[sample.crate_land]
+bus = "impacts"
+prompt = "small wooden supply crate thrown through the air landing on dirt, short hollow wooden thump, no music"
+duration_seconds = 0.6
+
 [sample.scrape_loop]
 bus = "vehicles"
 prompt = "steel hull scraping along a stone wall, continuous grinding screech, no music"
@@ -1628,6 +1668,79 @@ class = "medium"
 polyphony = 4
 layers = [{ sample = "slam" }]
 note = "A hull slamming into a wall, as loud as the impulse."
+
+[cue."vehicle.slam.glass"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam_glass" }]
+note = "A hull slamming into glass (Surface::Brittle)."
+
+[cue."vehicle.slam.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam_wood" }]
+note = "A hull slamming into timber or a firm tree (Surface::Firm)."
+
+[cue."vehicle.slam.tree"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "slam_tree" }]
+note = "A hull shaking a birch, a willow or a snag (Surface::Yielding)."
+
+[cue."vehicle.slam.soft"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "slam_soft" }]
+note = "A hull into sandbags, a fence, hay (Surface::Soft)."
+
+[cue."vehicle.slam.rubber"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam_rubber" }]
+note = "A hull thrown back off a tyre stack (Surface::Springy)."
+
+[cue."hit.shell.rubber"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_rubber" }]
+note = "A shell on a tyre stack."
+
+[cue."destroy.rubber"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "destroy_rubber" }]
+note = "A tyre stack shot apart."
+
+[cue."pickup.crate.land"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "crate_land" }]
+note = "A supply crate a blast tossed, landing (Event::CrateTossed)."
 
 [cue."vehicle.scrape"]
 kind = "modulated_loop"

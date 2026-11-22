@@ -184,17 +184,22 @@ fn a_skidding_tank_cannot_drive_and_slides_as_far_whichever_way_it_faces() {
         game.update(input, DT, W, H);
         // Where the knock found it, and how far it went while skidding;
         // the stick is pushed from the knock on.
+        // The knock's skid alone: a hull that drives on into the field's
+        // edge is thrown off it with a skid of its own (`hard_bounce`).
         let mut knocked: Option<Position> = None;
         let mut in_skid = Vec2::zero();
+        let mut over = false;
         for _ in 0..90 {
             let before = pos(&game, mate);
             let mut input = Input::default();
             input.seats[1].move_dir = (drive && knocked.is_some()).then_some(Dir::Up);
             game.update(input, DT, W, H);
-            if with_tank(&game.world, mate, |t| t.skid > 0.0) {
+            let skidding = with_tank(&game.world, mate, |t| t.skid > 0.0);
+            if skidding && !over {
                 let at = *knocked.get_or_insert(before);
                 in_skid = pos(&game, mate) - at;
             }
+            over |= knocked.is_some() && !skidding;
         }
         assert!(knocked.is_some());
         (in_skid, pos(&game, mate) - from)

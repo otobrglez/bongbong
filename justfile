@@ -354,9 +354,18 @@ _probe-maps name maps sweep:
 # `fixture_ceilings`): an enemy's missile now hurts its own pack, which
 # moved only castle-moat's fire counts (enemy hits on enemies 2 -> 4);
 # the seven maps' total stayed 198 and every ceiling stands.
+# jitter=8 (6 before) is hedge-maze, re-read 2026-11-22 (BB-205) with hard
+# and soft faces and the brush's pace in (docs/physics-engine-design.md
+# "Hard and soft"). The faces move no round of the seven maps: with
+# `grass_pace` and `bush_pace` at 1 every map reads as before to the
+# anomaly. The brush does - every hull keeps 0.95 of its pace in grass and
+# reeds and 0.88 in a bush - and the hedge maze is lined with bushes: two
+# more tanks there dither at seed base 1000, and over three seed bases its
+# jitter reads 19 against 14. The seven maps' total fell from 204 to 199;
+# border-stuck=8 is castle-moat, at its ceiling (7 before).
 # How the maps are run is `_probe-maps`: one per core, about a minute in a
 # debug build. CI runs this recipe (.github/workflows/ci.yml).
-field_ceilings := "--budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=6 --budget staircase=30 --budget spin=12 --budget churn=43 --budget clustering=1 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=1 --budget offbox-fire=0"
+field_ceilings := "--budget stale-start=0 --budget stall=1 --budget border-stuck=8 --budget jitter=8 --budget staircase=30 --budget spin=12 --budget churn=43 --budget clustering=1 --budget wall-grind=1 --budget bump-rate=0 --budget low-progress=1 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=1 --budget pile-up=1 --budget offbox-fire=0"
 
 probe-fields *args: (_probe-maps "probe-fields" "maps/study/frontier.toml maps/longwater.toml maps/hedge-maze.toml maps/archipelago.toml maps/black-gold.toml maps/harbor-lights.toml maps/castle-moat.toml" "--frames 3600 --rounds 10 --seed 1000 " + field_ceilings + " " + args)
 

@@ -833,7 +833,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     room's tick; no RNG here beyond the blasts' damage rolls, and a map with neither a volcano nor
     lava runs none of it. Knobs: the `volcano` tuning group. Tests: the lava cases in
     `mechanics_tests`, `simulation::volcano::tests`.
-  - `crates.rs` (docs/CRATES_SPEC.md) — breakable crates, behind `crate_breakable` (off by default,
+  - `crates.rs` (docs/CRATES_SPEC.md) — every blast tosses the pickups round it (`toss_crates`: a
+    landing searched along the line, short of a tile, deep water and lava; `Pickup::airborne` keeps it
+    from being taken in the air; the arc a `pickup::CrateToss` on `Game::crate_tosses`, staged on a
+    replica from `Event::CrateTossed`); breakable crates, behind `crate_breakable` (off by default,
     read once by `init` into `Game::crates_breakable`, so a test turns it on for its own round):
     what reaches the ground breaks a crate - `blast_crates` from every drum, missile, wreck and
     crate blast (mid damage times falloff, no roll), and fire (`tick_crates`: `crate_ignite_seconds`
@@ -1014,7 +1017,23 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   one-step look-ahead (`HULL_LOOK_AHEAD`, rapier's soft CCD, set at spawn for the body's whole
   life), so a hull driven, rammed, blasted, knocked or pulled stops flush against what it meets
   (docs/physics-engine-design.md "Scale"). `quarantined` reports rapier's NaN quarantine as
-  `Event::PhysicsQuarantine`.
+  `Event::PhysicsQuarantine`. Hard and soft faces (docs/physics-engine-design.md "Hard and soft"):
+  `set_surface` puts a tile's `obstacle::Surface` on its collider (`user_data`); `SurfaceHooks`, the
+  one contact hook, cushions a hull coming head on at a firm, yielding or soft face by shortening
+  the speculative contact's gap to `v^2 = 2 a d` - the normal only, so sliding along a face is
+  untouched; `fixed_contacts` lists the fixed bodies a hull touches with their surfaces.
+  `simulation/contact.rs` (`respond_to_contacts`, after the step and before the rams) throws a hull
+  back off a hard face as a knock, cracks glass under a fast ram, reports `Event::HullStruck` and
+  shakes a tree's crown (`TreeShake`, presentation the painters read, set on a replica from the
+  event). `Footing::in_brush` slows a hull a little in grass, reeds and bushes (`Game::brush`). Loose objects
+  (docs/physics-engine-design.md "Loose objects", docs/sandbags-barrels-fences.md "Loose barrels"):
+  `spawn_loose` is a barrel's dynamic body, `is_loose`/`touching_loose` keep it out of the contact
+  kinds; `props::sync_loose` reads drums back after the step and sets one off on a hard knock
+  (`barrel_burst_speed`), `throw_loose` is a blast's throw. A drum is known by `Obstacle::home`
+  (`key_cell`) on the wire (`Snapshot::loose`, `Event::LooseGone`) and is no wall in the nav grid. The BB-209 props
+  (`obstacle::NEW_PROPS`: tyres, hay, a wooden crate, a barrier, a tank trap) take their body from
+  `Material::loose_body` and their knock from `Material::burst_speed`; docs/sandbags-barrels-fences.md
+  "New props".
 
 ## AI
 
@@ -2152,8 +2171,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
 - `bin/soundmap.rs` — the sound map: the code's maps and watchers, the manifest with its files,
   and the catalogue (`audio/interactions.json`) joined into JSON and a viewer
   (`tools/audio/soundmap/template.html`); `--check` is CI's guard.
-- Simulation side: `Event::Slam` (`Game::record_slams`) tells a hull's slam so a client hears it;
-  `OnlineRound::take_press_sounds` hands the window its own presses.
+- Simulation side: a hull's slam is `Event::HullStruck` (`simulation/contact.rs`), sent, so a
+  client hears it with the face's `Surface` (`source::slam_cue`); `OnlineRound::take_press_sounds`
+  hands the window its own presses.
 
 ## HUD and chrome
 

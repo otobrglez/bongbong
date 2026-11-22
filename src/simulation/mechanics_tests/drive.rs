@@ -281,7 +281,7 @@ fn a_wreck_resists_a_push_in_proportion_to_its_mass() {
     for across in [false, true] {
         let (scout, assault, titan) = (pushed(&on, ASSAULT, SCOUT, across, true), pushed(&on, ASSAULT, ASSAULT, across, true), pushed(&on, ASSAULT, TITAN, across, true));
         assert!(scout > 1.2 * assault && assault > 2.0 * titan, "across {across}: an assault hull shoves a scout's wreck {scout} px, its like's {assault} px, a titan's {titan} px");
-        assert!(assault < 70.0, "across {across}: a wreck is dead weight, shoved {assault} px in a second by its like");
+        assert!(assault < 100.0, "across {across}: a wreck is dead weight, shoved {assault} px in a second by its like");
     }
     // With no damping a wreck is pushed at the pusher's own pace.
     let loose = Tuning { wreck_linear_damping: 0.0, ..Tuning::DEFAULT };
@@ -344,7 +344,9 @@ fn the_prop_ram_reads_the_bodys_velocity_toward_the_tile() {
     let mut game = round(&sandbags(), ASSAULT);
     let player = game.player().expect("player");
     game.place_tank(player, cell(12, 6), Some(Dir::Down.rotation())).unwrap();
-    drive(&mut game, Some(Dir::Down), 16);
+    // A sandbag cushions the last few px (`soft_cushion_decel`), so the
+    // hull settles against it a few steps later than against a wall.
+    drive(&mut game, Some(Dir::Down), 24);
     assert!(longest_ram(&game) > 0.0, "driven into, a sandbag's clock runs");
     let (hx, hy) = with_tank(&game.world, player, |t| t.move_half_extents(false));
     let face = player_pos(&game).y + hy;

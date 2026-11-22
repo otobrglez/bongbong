@@ -912,6 +912,10 @@ pub struct Tank {
     /// the ground's flow (px/s): what the skid's length was worked out from
     /// (`sonic::skid_seconds`).
     pub skid_speed: f32,
+    /// Seconds before a hard face may throw this hull back again
+    /// (`hull_bounce_rest_seconds`, `simulation::contact`): set by a
+    /// bounce, counted down in `Game::tick_timers`.
+    pub bounce_rest: f32,
     /// Seconds the sonic hammer's dish shows its firing cell (`kick_sonic`).
     /// Presentation only.
     pub sonic_flash: f32,
@@ -1171,10 +1175,6 @@ pub struct Tank {
     /// whatever a tile or another hull stopped. What a prop is rammed
     /// with (`Game::ram_props`).
     pub ram_velocity: Vec2,
-    /// The hardest contact this hull had with a wall or a tile last step
-    /// (`Game::record_slams`), and the frame of its last slam.
-    pub slam_impulse: f32,
-    pub slam_frame: Option<u64>,
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
@@ -1243,6 +1243,7 @@ impl Default for Tank {
             tell: None,
             skid: 0.0,
             skid_speed: 0.0,
+            bounce_rest: 0.0,
             sonic_flash: 0.0,
             emp_charges: 0,
             disabled: 0.0,
@@ -1287,8 +1288,6 @@ impl Default for Tank {
             tread_press: 1.0,
             velocity: Vec2::new(0.0, 0.0),
             ram_velocity: Vec2::new(0.0, 0.0),
-            slam_impulse: 0.0,
-            slam_frame: None,
             body: None,
 
             owner: Owner::Player(0),

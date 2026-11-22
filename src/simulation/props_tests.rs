@@ -257,19 +257,32 @@ cells."23,11" = { kind = "barrel", drum = "oil" }
 }
 
 #[test]
-fn ramming_a_barrel_sets_it_off() {
+fn driving_into_a_barrel_shoves_it_and_a_ram_harder_than_a_hull_drives_pops_it() {
     let map = map_with("cells.\"20,13\" = { kind = \"barrel\" }\n");
+    let drum = |game: &Game| game.world.query::<&Obstacle>().iter().find(|o| o.material == Material::Barrel && !o.destroyed).map(|o| o.position);
     let mut game = game_on(&map, 8);
     game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
-    let mut blast_frame = None;
-    for frame in 1..=180 {
+    let from = drum(&game).expect("the drum stands");
+    for _ in 1..=40 {
         step(&mut game, drive(Dir::Up));
+        assert!(!game.events().iter().any(|e| matches!(e, Event::Blast { .. })), "a hull at its own top speed shoves a drum");
+    }
+    let to = drum(&game).expect("the drum still stands");
+    assert!(from.y - to.y > 32.0, "shoved up the field: {from:?} -> {to:?}");
+    // Flung at it faster than any hull drives, a hull pops it in its face.
+    let mut game = game_on(&map, 8);
+    game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+    let body = game.world.query::<&Tank>().iter().find(|t| t.owner_slot() == 0).and_then(|t| t.body).expect("a body");
+    let mut blast_frame = None;
+    for frame in 1..=60 {
+        game.physics.set_velocity(body, Position::new(0.0, -420.0));
+        step(&mut game, Input::default());
         if game.events().iter().any(|e| matches!(e, Event::Blast { chained: false, .. })) {
             blast_frame = Some(frame);
             break;
         }
     }
-    assert!(blast_frame.is_some(), "pushing into a barrel pops it");
+    assert!(blast_frame.is_some(), "a ram that hard pops it");
     assert!(player_damage(&game) > 0.0, "and the rammer pays for it");
 }
 
@@ -1279,8 +1292,8 @@ fn a_bush_is_soft_cover_a_tank_drives_through_and_flattens() {
 
 #[test]
 fn a_tank_drives_through_a_bush_cell_without_stopping() {
-    // A hull driving north across a bush cell crosses it in the time open
-    // ground takes: nothing to push over, nothing to ram.
+    // A hull driving north across a bush cell crosses it barely slower
+    // than open ground: nothing to push over, nothing to ram.
     let frames_to = |extra: &str| {
         let mut game = game_on(&map_with(extra), 1);
         game.debug_teleport(0, cell_to_world(20, 14), Some(0.0)).unwrap();
@@ -1291,7 +1304,9 @@ fn a_tank_drives_through_a_bush_cell_without_stopping() {
     };
     let open = frames_to("").expect("the hull crosses open ground");
     let bush = frames_to("cells.\"20,11\" = { kind = \"bush\" }\n").expect("the hull crosses the bush");
-    assert_eq!(bush, open, "a bush costs a hull nothing");
+    // It slows a hull a little (`bush_pace`) and never stops it: a cell
+    // at the bush's pace is a frame or two longer than open ground.
+    assert!(bush >= open && bush <= open + 3, "a bush costs a hull a frame or two: {bush} vs {open}");
 }
 
 #[test]
@@ -1606,7 +1621,9 @@ cells."22,8" = { kind = "barrel", drum = "fuel" }
         }
     }
     let (lf, x, y, tx, ty) = launched.expect("the fuel drum launched");
-    assert_eq!((x, y), (cell_to_world(22, 8).x, cell_to_world(22, 8).y), "from where it stood");
+    // The oil drum's blast threw it a little way east before its fuse ran
+    // out (`barrel_throw_reach`), so it leaves from where it lay.
+    assert!(y == cell_to_world(22, 8).y && x >= cell_to_world(22, 8).x, "from where it lay: ({x}, {y})");
     let cells = Position::new(tx, ty).distance_to(Position::new(x, y)) / crate::OBSTACLE_GRID_SIZE;
     let (lo, hi) = (tuning().fuel_launch_cells_min as f32, tuning().fuel_launch_cells_max as f32);
     assert!(cells >= lo - 0.01 && cells <= hi + 0.01, "{cells} cells away, wanted {lo}..={hi}");

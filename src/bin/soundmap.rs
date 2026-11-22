@@ -112,6 +112,9 @@ fn main() {
         requests.push(("Material".into(), name.into(), format!("hit.shell.{family}.{name}")));
         requests.push(("Material".into(), name.into(), format!("destroy.{family}.{name}")));
     }
+    for s in bongbong::obstacle::Surface::ALL {
+        requests.push(("Surface".into(), format!("{s:?}"), source::slam_cue(s).into()));
+    }
     for k in PickupKind::ALL {
         requests.push(("PickupKind".into(), format!("{k:?}"), source::pickup_cue(k).into()));
     }

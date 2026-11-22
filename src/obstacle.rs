@@ -18,7 +18,6 @@ use crate::{
     RUBBLE_ROW_MASONRY,
     RUBBLE_ROW_POST_FENCE,
     RUBBLE_ROW_CONCRETE,
-    OBSTACLE_GRID_SIZE,
     RUBBLE_ROW_TREE,
     RUBBLE_ROW_TREE_CHARRED,
     RUBBLE_ROW_BARREL,
@@ -137,7 +136,33 @@ pub enum Material {
     /// A dead snag: a grey trunk and bare limbs. Hides nothing, snaps at a
     /// touch, and is tinder on any map (`is_dry`).
     Snag,
+    /// A stack of tyres (docs/sandbags-barrels-fences.md "New props"):
+    /// fixed, and springy - a hull rebounds off it (`Surface::Springy`).
+    /// Shots wear it to a slumped stack, then it goes.
+    #[serde(rename = "tyres")]
+    Tyres,
+    /// A hay bale: loose like a drum but heavier, soft, and it burns - a
+    /// flame or a blast lights it and it burns out to ash.
+    #[serde(rename = "hay")]
+    Hay,
+    /// A wooden crate - not a supply crate, a box: loose, and a shot or a
+    /// hard knock splinters it.
+    #[serde(rename = "wood_crate")]
+    WoodCrate,
+    /// A concrete jersey barrier: loose but so heavy only a sustained push
+    /// shifts it, slowly; it stops shots as concrete does.
+    #[serde(rename = "barrier")]
+    Barrier,
+    /// A tank trap, a steel hedgehog: fixed, the hardest thing on the field
+    /// to drive into, and a shot passes between its beams more often than
+    /// not.
+    #[serde(rename = "tank_trap")]
+    TankTrap,
 }
+
+/// Every prop the soft and loose physics brought (BB-209), in sheet row
+/// order: the map kinds, the builder's palette and the tests walk this.
+pub const NEW_PROPS: [Material; 5] = [Material::Tyres, Material::Hay, Material::WoodCrate, Material::Barrier, Material::TankTrap];
 
 /// Every tree species, in sheet row order - the map kinds, the builder's
 /// palette and the tests walk this rather than spelling the list again.
@@ -182,7 +207,7 @@ impl Material {
     /// Every material, in declaration order. The sound maps walk it
     /// (`audio::source::surface_family`); `audio_tests` holds it whole
     /// against an exhaustive match.
-    pub const ALL: [Material; 24] = [
+    pub const ALL: [Material; 29] = [
         Material::Brick,
         Material::Iron,
         Material::Wood,
@@ -207,6 +232,11 @@ impl Material {
         Material::Willow,
         Material::Palm,
         Material::Snag,
+        Material::Tyres,
+        Material::Hay,
+        Material::WoodCrate,
+        Material::Barrier,
+        Material::TankTrap,
     ];
 
     /// The atlas this material's tiles are drawn from. The drawn materials
@@ -216,6 +246,7 @@ impl Material {
     pub fn sheet(self) -> Sheet {
         match self {
             Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
+            m if NEW_PROPS.contains(&m) => Sheet::Props,
             Material::Target => Sheet::Target,
             Material::Tree
             | Material::Pine
@@ -263,6 +294,11 @@ impl Material {
             // A tower's rows depend on its side as well (`tower::base_row`).
             Material::Tesla | Material::GunTower | Material::BioSlush => 0,
             Material::Volcano | Material::Lamp | Material::Door => 0,
+            Material::Tyres => crate::PROPS_TYRES_ROW,
+            Material::Hay => crate::PROPS_HAY_ROW,
+            Material::WoodCrate => crate::PROPS_CRATE_ROW,
+            Material::Barrier => crate::PROPS_BARRIER_ROW,
+            Material::TankTrap => crate::PROPS_TRAP_ROW,
         }
     }
 
@@ -278,6 +314,7 @@ impl Material {
             m if m.is_tree() => TREE_VARIANTS,
             Material::Tesla | Material::GunTower | Material::BioSlush => 1,
             Material::Volcano | Material::Lamp | Material::Door | Material::Target => 1,
+            m if NEW_PROPS.contains(&m) => 1,
             _ => 4,
         }
     }
@@ -311,6 +348,11 @@ impl Material {
             // Never spent: `Obstacle::damage` turns every blow away.
             Material::Volcano | Material::Door => 1.0,
             Material::Lamp => tuning().lamp_max_health,
+            Material::Tyres => tuning().tyres_max_health,
+            Material::Hay => tuning().hay_max_health,
+            Material::WoodCrate => tuning().wood_crate_max_health,
+            Material::Barrier => tuning().barrier_max_health,
+            Material::TankTrap => tuning().tank_trap_max_health,
         }
     }
 
@@ -346,6 +388,16 @@ impl Material {
             // Intact, scuffed, damaged, critical; the ruin is a decal.
             Material::Tesla | Material::GunTower | Material::BioSlush => 4,
             Material::Volcano | Material::Lamp | Material::Door => 1,
+            // Intact, slumped.
+            Material::Tyres => 2,
+            // Intact, torn; its burn is col 3 (`Obstacle::col`).
+            Material::Hay => 2,
+            // Intact, split.
+            Material::WoodCrate => 2,
+            // Intact, chipped, cracked to the rebar.
+            Material::Barrier => 3,
+            // Intact, bent.
+            Material::TankTrap => 2,
         }
     }
 
@@ -367,8 +419,13 @@ impl Material {
                 if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD },
             )),
             Material::Glass => Some((Sheet::Walls, RUBBLE_ROW_GLASS)),
-            Material::Concrete => Some((Sheet::Walls, RUBBLE_ROW_CONCRETE)),
-            Material::Sandbag => Some((Sheet::Walls, RUBBLE_ROW_SANDBAG)),
+            // A barrier leaves concrete's rubble, a bale the sand's straw.
+            Material::Concrete | Material::Barrier => Some((Sheet::Walls, RUBBLE_ROW_CONCRETE)),
+            Material::Sandbag | Material::Hay => Some((Sheet::Walls, RUBBLE_ROW_SANDBAG)),
+            // A crate's planks are timber.
+            Material::WoodCrate => Some((Sheet::Walls, if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD })),
+            // Tyres and a tank trap leave nothing a rubble tile draws.
+            Material::Tyres | Material::TankTrap => None,
             Material::Barrel => Some((Sheet::Walls, RUBBLE_ROW_BARREL)),
             Material::Fence => Some((Sheet::Walls, RUBBLE_ROW_FENCE)),
             Material::Tree
@@ -456,6 +513,8 @@ impl Material {
     pub fn flammable_chance(self, dry: bool) -> f64 {
         match self {
             Material::Wood => tuning().wood_flammable_chance,
+            // Hay always burns.
+            Material::Hay => 1.0,
             m if m.is_tree() && dry => tuning().dry_tree_flammable_chance,
             m if m.is_tree() => tuning().tree_flammable_chance,
             _ => 0.0,
@@ -482,7 +541,7 @@ impl Material {
     /// Wood and trees catch from the stream by their own rule
     /// (`Game::resolve_flames`) and from the ground by their roll.
     pub fn catches_fire(self) -> bool {
-        self == Material::Target
+        matches!(self, Material::Target | Material::Hay)
     }
 
     /// How long a tile of this material burns before it chars out:
@@ -516,7 +575,19 @@ impl Material {
     pub fn blocks_sight(self) -> bool {
         // A fir sapling is below a hull's eye line, a palm's crown is a few
         // fronds on a pole and a snag is bare limbs.
-        !matches!(self, Material::Sandbag | Material::Fence | Material::Lamp | Material::Fir | Material::Palm | Material::Snag)
+        !matches!(
+            self,
+            Material::Sandbag
+                | Material::Fence
+                | Material::Lamp
+                | Material::Fir
+                | Material::Palm
+                | Material::Snag
+                | Material::Tyres
+                | Material::Hay
+                | Material::WoodCrate
+                | Material::TankTrap
+        )
     }
 
     /// Whether this tile throws a shadow in the weather's light map
@@ -546,17 +617,21 @@ impl Material {
     /// How many dB a sound loses crossing one cell of this tile on its way
     /// to a listener (docs/sound-system-prd.md section 4.3): the masonry,
     /// iron, towers, the volcano and doors take most of it, a wooden wall
-    /// less, glass half; props and trees barely muffle it, and a lamp post
-    /// or a range board not at all. Everything `blocks_sound` stops loses
-    /// at least 6 dB (`audio_tests::sound_transmission_agrees_with_blocks_sound`).
+    /// less, glass half. A low concrete barrier, whose top a sound clears,
+    /// takes less than glass; the soft props a little; trees and boxes
+    /// barely; a lamp post, a range board or a tank trap's open beams not
+    /// at all. Everything `blocks_sound` stops loses at least 6 dB, and
+    /// nothing else does
+    /// (`audio_tests::sound_transmission_agrees_with_blocks_sound`).
     pub fn sound_transmission(self) -> f32 {
         match self {
             Material::Brick | Material::Concrete | Material::Iron | Material::Door | Material::Volcano => -12.0,
             Material::Tesla | Material::GunTower | Material::BioSlush => -12.0,
             Material::Wood => -8.0,
             Material::Glass => -6.0,
-            Material::Sandbag => -3.0,
-            Material::Barrel | Material::Fence => -1.5,
+            Material::Barrier => -4.5,
+            Material::Sandbag | Material::Tyres | Material::Hay => -3.0,
+            Material::Barrel | Material::Fence | Material::WoodCrate => -1.5,
             Material::Tree
             | Material::Pine
             | Material::Spruce
@@ -566,7 +641,7 @@ impl Material {
             | Material::Willow
             | Material::Palm
             | Material::Snag => -1.5,
-            Material::Lamp | Material::Target => 0.0,
+            Material::Lamp | Material::Target | Material::TankTrap => 0.0,
         }
     }
 
@@ -593,6 +668,10 @@ impl Material {
             Material::Fir => t.sapling_pass_over_chance,
             Material::Palm => t.palm_pass_over_chance,
             Material::Snag => t.snag_pass_over_chance,
+            Material::Tyres => t.tyres_pass_over_chance,
+            Material::Hay => t.hay_pass_over_chance,
+            Material::WoodCrate => t.wood_crate_pass_over_chance,
+            Material::TankTrap => t.tank_trap_pass_over_chance,
             _ => 0.0,
         }
     }
@@ -615,6 +694,8 @@ impl Material {
         match self {
             Material::Sandbag => Some(tuning().sandbag_ram_seconds),
             Material::Fence => Some(tuning().fence_ram_seconds),
+            Material::Lamp => Some(tuning().lamp_ram_seconds),
+            Material::Target => Some(tuning().target_ram_seconds),
             Material::Tree | Material::Pine | Material::Scots | Material::Willow => Some(tuning().tree_ram_seconds),
             Material::Spruce => Some(tuning().spruce_ram_seconds),
             Material::Fir | Material::Snag => Some(tuning().sapling_ram_seconds),
@@ -626,6 +707,161 @@ impl Material {
     /// Detonates when destroyed (`Game::apply_blast`).
     pub fn is_explosive(self) -> bool {
         self == Material::Barrel
+    }
+
+    /// A loose object rather than a fixed tile (docs/sandbags-barrels-fences.md
+    /// "Loose barrels"): a dynamic body a hull shoves and a blast throws,
+    /// placed as a cell and identified by the cell it was placed in
+    /// (`Obstacle::home`) wherever it has gone since. It closes no seam, is
+    /// no wall in the nav grid and is drawn from its interpolated pose. A
+    /// barrel.
+    pub fn is_loose(self) -> bool {
+        matches!(self, Material::Barrel | Material::Hay | Material::WoodCrate | Material::Barrier)
+    }
+
+    /// How a hull meets this tile (`Surface`, docs/physics-engine-design.md
+    /// "Hard and soft").
+    pub fn surface(self) -> Surface {
+        match self {
+            Material::Tesla | Material::GunTower | Material::BioSlush | Material::Volcano => Surface::Hardest,
+            Material::Iron | Material::Concrete | Material::Brick | Material::Door => Surface::Hard,
+            Material::Glass => Surface::Brittle,
+            Material::Wood
+            | Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Palm
+            | Material::Barrel => Surface::Firm,
+            Material::Birch | Material::Willow | Material::Snag => Surface::Yielding,
+            Material::Sandbag | Material::Fence | Material::Lamp | Material::Target | Material::Hay => Surface::Soft,
+            Material::Tyres => Surface::Springy,
+            Material::TankTrap => Surface::Hardest,
+            Material::WoodCrate => Surface::Firm,
+            Material::Barrier => Surface::Hard,
+        }
+    }
+
+    /// A loose tile's body (`physics::Physics::spawn_loose`): its mass
+    /// against the standard chassis's 1, its damping, its bounce and the
+    /// ground's friction on it (`Game::sync_loose`); `None` for a fixed
+    /// tile.
+    pub fn loose_body(self, t: &Tuning) -> Option<LooseBody> {
+        match self {
+            Material::Barrel => Some(LooseBody { mass: t.barrel_mass, damping: t.barrel_damping, bounce: t.barrel_bounce, friction: t.barrel_friction }),
+            Material::Hay => Some(LooseBody { mass: t.hay_mass, damping: t.hay_damping, bounce: t.hay_bounce, friction: t.hay_friction }),
+            Material::WoodCrate => Some(LooseBody { mass: t.wood_crate_mass, damping: t.wood_crate_damping, bounce: t.wood_crate_bounce, friction: t.wood_crate_friction }),
+            Material::Barrier => Some(LooseBody { mass: t.barrier_mass, damping: t.barrier_damping, bounce: t.barrier_bounce, friction: t.barrier_friction }),
+            _ => None,
+        }
+    }
+
+    /// The velocity change in one step (px/s) that breaks a loose tile -
+    /// a drum goes off, a crate splinters (`Game::sync_loose`); `None` for
+    /// one no knock breaks.
+    pub fn burst_speed(self, t: &Tuning) -> Option<f32> {
+        match self {
+            Material::Barrel => Some(t.barrel_burst_speed),
+            Material::WoodCrate => Some(t.wood_crate_burst_speed),
+            _ => None,
+        }
+    }
+}
+
+/// A loose tile's body (`Material::loose_body`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LooseBody {
+    pub mass: f32,
+    pub damping: f32,
+    pub bounce: f32,
+    pub friction: f32,
+}
+
+/// How hard a solid thing is to drive into (docs/physics-engine-design.md
+/// "Hard and soft"): what a hull does as it meets it, head on. Only the
+/// contact's normal is touched - a hull sliding along a face slides as it
+/// does along any other, which is the whole of why this is not friction.
+///
+/// - A **hard** face stops the hull flush and, on a hit at
+///   `hull_bounce_min_speed` or more, throws it back (`hard_bounce`,
+///   `hardest_bounce`) - a knock through `combat::knock` with a short skid.
+/// - A **brittle** one (glass) is hard, but a hit at `glass_crack_speed`
+///   cracks the pane instead of throwing the hull.
+/// - A **firm**, **yielding** or **soft** one cushions: the solver lets a
+///   hull coming at it head on close only as fast as `v^2 = 2 a d` allows
+///   at `d` from the face (`firm_cushion_decel`, `yielding_cushion_decel`,
+///   `soft_cushion_decel`), so it slows over the last few px and settles
+///   against the face with no dead stop and no bounce.
+///
+/// `Plain` is what deep water, lava and the bong are: the solver's own stop
+/// and nothing else. The number is what a collider carries in its
+/// `user_data` (`physics::Physics::set_surface`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum Surface {
+    #[default]
+    Plain = 0,
+    /// The towers and a volcano's cone.
+    Hardest = 1,
+    /// Iron, concrete, brick, a training door, the field's edge.
+    Hard = 2,
+    /// Glass.
+    Brittle = 3,
+    /// A timber wall, the firm trees (broadleaf, pine, spruce, Scots pine,
+    /// fir, palm), a drum.
+    Firm = 4,
+    /// A birch, a willow, a snag.
+    Yielding = 5,
+    /// Sandbags, a fence, a lamp post, a range board, a hay bale.
+    Soft = 6,
+    /// A tyre stack: no give, but it throws a hull back off any hit at
+    /// `hull_bounce_min_speed` or more, harder than iron (`tyres_bounce`).
+    Springy = 7,
+}
+
+impl Surface {
+    pub const ALL: [Surface; 8] = [Surface::Plain, Surface::Hardest, Surface::Hard, Surface::Brittle, Surface::Firm, Surface::Yielding, Surface::Soft, Surface::Springy];
+
+    /// The surface a collider's `user_data` names; `Plain` for anything
+    /// else.
+    pub fn from_code(code: u128) -> Surface {
+        Surface::ALL.get(code as usize).copied().unwrap_or(Surface::Plain)
+    }
+
+    /// The share of a hit's speed this face throws a hull back with: 0 for
+    /// everything that is not hard.
+    pub fn bounce(self, t: &Tuning) -> f32 {
+        match self {
+            Surface::Hardest => t.hardest_bounce,
+            Surface::Hard | Surface::Brittle => t.hard_bounce,
+            Surface::Springy => t.tyres_bounce,
+            _ => 0.0,
+        }
+    }
+
+    /// How hard this face brakes a hull coming at it head on, px/s^2: 0
+    /// for a face that stops it where it meets it.
+    pub fn cushion(self, t: &Tuning) -> f32 {
+        match self {
+            Surface::Firm => t.firm_cushion_decel,
+            Surface::Yielding => t.yielding_cushion_decel,
+            Surface::Soft => t.soft_cushion_decel,
+            _ => 0.0,
+        }
+    }
+
+    /// How hard a hit on this face at `tank_speed` jolts the seat's view,
+    /// 0 to 1.
+    pub fn jolt(self, t: &Tuning) -> f32 {
+        match self {
+            Surface::Hardest => t.hardest_jolt,
+            Surface::Hard | Surface::Brittle => t.hard_jolt,
+            Surface::Firm | Surface::Yielding => t.firm_jolt,
+            Surface::Soft | Surface::Springy => t.soft_jolt,
+            Surface::Plain => 0.0,
+        }
     }
 }
 
@@ -824,6 +1060,17 @@ pub struct Obstacle {
     /// (`sync_health`) and the tile dies when too few stand
     /// (`wall_collapse_chunks`). `None` for a tile that breaks whole.
     pub chunks: Option<Chunks>,
+    /// The cell the map placed this tile in. A fixed tile never leaves it;
+    /// a loose one (`Material::is_loose`) is known by it wherever it has
+    /// been shoved (`key_cell`).
+    pub home: (i32, i32),
+    /// A loose tile's body velocity as the step began, px/s: what the
+    /// knock it takes in the step is measured against
+    /// (`Game::sync_loose`). Zero for a fixed tile.
+    pub loose_velocity: Vec2,
+    /// A loose tile's render interpolation (`pose.rs`): drawn from it,
+    /// never read by anything that plays.
+    pub smooth: crate::pose::Smooth,
     /// This obstacle's rapier fixed-body collider, spawned alongside it.
     /// Unlike a tank's `body`, this is never `None` - an obstacle always has
     /// its physics body for its whole life, right up until `Game::update`
@@ -863,6 +1110,9 @@ impl Obstacle {
             edge_mask: 0,
             chunks: material.chunk_health().map(Chunks::new),
             cage: None,
+            home: crate::map::world_to_cell(position),
+            loose_velocity: Vec2::new(0.0, 0.0),
+            smooth: crate::pose::Smooth::default(),
             body,
             destroyed: false,
         }
@@ -1038,13 +1288,23 @@ impl Obstacle {
         self.size() * OBSTACLE_HULL_FRACTION
     }
 
-    /// The grid cell this obstacle sits in (positions are grid-aligned, see
-    /// `map::cell_to_world`).
+    /// The grid cell this obstacle stands on (`map::world_to_cell`, the
+    /// nearest): a fixed tile's position is its cell's exactly, a loose
+    /// drum's wherever it was shoved.
     pub fn cell(&self) -> (i32, i32) {
-        (
-            (self.position.x / OBSTACLE_GRID_SIZE).floor() as i32,
-            (self.position.y / OBSTACLE_GRID_SIZE).floor() as i32,
-        )
+        crate::map::world_to_cell(self.position)
+    }
+
+    /// The cell the round and the wire know this tile by: where it stands
+    /// for a fixed tile, where it was placed for a loose one (`home`).
+    pub fn key_cell(&self) -> (i32, i32) {
+        if self.material.is_loose() { self.home } else { self.cell() }
+    }
+
+    /// Where a painter draws it: its interpolated pose for a loose tile
+    /// (`pose::Smooth::drawn`), where it stands for every other.
+    pub fn drawn_at(&self) -> Position {
+        if self.material.is_loose() { self.smooth.drawn(crate::pose::Pose::at(self.position)).position } else { self.position }
     }
 
     fn row(&self, axis: FenceAxis) -> i32 {
@@ -1066,6 +1326,9 @@ impl Obstacle {
             // embers (`target::fire_shapes`).
             let stage = (self.burn_progress() * TARGET_BURN_STAGES as f32) as i32;
             return TARGET_BURN_COL + stage.clamp(0, TARGET_BURN_STAGES - 1);
+        }
+        if self.burning && self.material == Material::Hay {
+            return crate::PROPS_HAY_BURNT_COL;
         }
         if self.burning {
             return 4 + self.burn_frame;
@@ -1450,7 +1713,8 @@ pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
     let (sheet, row) = look.source(obstacle, axis);
     let src = source_rec(sheet, row, obstacle.col());
     let size = obstacle.sprite_size();
-    let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y + obstacle.burn_sag(), size, size);
+    let at = obstacle.drawn_at();
+    let dest = Rectangle::new(at.x + obstacle.fuse_rock(time), at.y + obstacle.burn_sag(), size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, tint);
 }
@@ -1907,9 +2171,10 @@ pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
     let (sheet, row) = look.source(obstacle, axis);
     let src = source_rec(sheet, row, obstacle.col());
     let size = obstacle.sprite_size();
+    let at = obstacle.drawn_at();
     let dest = Rectangle::new(
-        obstacle.position.x + t.shadow_dir_x * t.obstacle_shadow_offset,
-        obstacle.position.y + t.shadow_dir_y * t.obstacle_shadow_offset,
+        at.x + t.shadow_dir_x * t.obstacle_shadow_offset,
+        at.y + t.shadow_dir_y * t.obstacle_shadow_offset,
         size,
         size,
     );

@@ -85,6 +85,15 @@ use crate::map::Theme;
 use crate::tuning::{tuning, Tuning};
 use crate::{BUSH_DRY_COL, BUSH_TEXTURE_SIZE, BUSH_VARIANTS, GRASS_SPECIES, GRASS_TEXTURE_SIZE, GRASS_VARIANTS, OBSTACLE_GRID_SIZE, Position};
 
+/// What a hull drives through in a cell of undergrowth
+/// (`simulation::Footing::in_brush`): tall grass and reeds, which part, or
+/// a bush, which takes a little more pushing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Brush {
+    Grass,
+    Bush,
+}
+
 /// The kinds of bush a map can place, in `bushes_sheet.png` row order -
 /// soft cover all of them, told apart by look alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

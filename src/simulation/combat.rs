@@ -361,9 +361,12 @@ impl Game {
     /// range crack too - a barrel in range goes off
     /// (`Game::damage_obstacle`). A chip that finishes off a tank pushes
     /// it onto `f.kills`, so it gets its own blast in turn.
+    /// The wreck itself is spared: its own blast does not throw it.
     pub(super) fn apply_explosion(&mut self, f: &mut Frame, center: Position, victim: Owner) {
-        let by = self.world.query::<&Tank>().iter().find(|t| t.owner() == victim).and_then(|t| t.last_hit_by).map(Owner::Player);
-        self.blast(f, center, &BlastParams::tank_wreck(by), &[]);
+        let dead = self.world.query::<(Entity, &Tank)>().iter().find(|(_, t)| t.owner() == victim).map(|(e, t)| (e, t.last_hit_by));
+        let by = dead.and_then(|(_, by)| by).map(Owner::Player);
+        let spared: Vec<Entity> = dead.map(|(e, _)| e).into_iter().collect();
+        self.blast(f, center, &BlastParams::tank_wreck(by), &spared);
     }
 
     /// **The one blast.** Everything `params.radius` reaches from `center`
@@ -399,20 +402,30 @@ impl Game {
             if spared.contains(&entity) {
                 continue;
             }
-            let (dist, at, footing) = {
+            let (dist, at, footing, wreck) = {
                 let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
-                if tank.is_wreck() {
-                    continue;
-                }
                 let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
                 let dist = tank.target_shape().reach_from(center);
-                (dist, tank.position, footing)
+                (dist, tank.position, footing, tank.is_wreck())
             };
             if dist > params.radius {
                 continue;
             }
             let falloff = 1.0 - dist / params.radius;
             let covered = !f.terrain.line_of_fire(center, at);
+            // A wreck is thrown, never hurt, and draws no roll.
+            if wreck {
+                let line = at - center;
+                let len = line.length();
+                let dir = if len > 0.001 { line / len } else { Vec2::new(1.0, 0.0) };
+                let factor = tuning().wreck_blast_factor;
+                if !covered && factor > 0.0 {
+                    let mut q = self.world.query_one::<&mut Tank>(entity);
+                    let tank = q.get().expect("a hull in the blast's walk has a Tank");
+                    knock(&mut self.physics, &mut f.shoves, tank, dir, Knock::blast(&tuning(), params.knockback * falloff * factor), footing);
+                }
+                continue;
+            }
             let dmg = params.roll_damage(&mut f.rng) * falloff;
             if covered || self.hurt_tank(f, entity, Hurt::hit(dmg, HitCause::Blast, params.by, center)).is_some_and(|l| l.killed) {
                 continue;
@@ -485,7 +498,12 @@ impl Game {
             let amount = if params.chains && material.is_explosive() { f32::MAX } else { params.roll_damage(&mut f.rng) * falloff };
             self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
         }
+        // The loose drums round it are thrown (docs/sandbags-barrels-fences.md
+        // "Loose barrels"), the ones it lit among them.
+        let t = tuning();
+        self.throw_loose(center, params.radius * t.barrel_throw_reach, params.knockback * t.barrel_throw_factor);
         self.blast_crates(f, center, params);
+        self.toss_crates(f, center, params.radius);
     }
 
     /// Knock out every lantern on the ground within `reach` of `center`

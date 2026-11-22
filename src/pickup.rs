@@ -402,6 +402,38 @@ pub struct Pickup {
     pub drift: Vec2,
     /// The collapse's slide out (px/s), braking to rest; zero otherwise.
     pub slide: Vec2,
+    /// Seconds a crate a blast tossed (`Game::toss_crates`) has left in the
+    /// air: nobody takes it until it lands. Zero on the ground.
+    pub airborne: f32,
+}
+
+/// A crate in the air after a blast tossed it (docs/CRATES_SPEC.md "Tossed
+/// by a blast"): from where it lay to where it lands, its arc derived from
+/// its age. Presentation the painters read (`Game::crate_tosses`), staged
+/// by the round as it tosses one and by a replica from `Event::CrateTossed`;
+/// the rule - nobody takes it in the air - is `Pickup::airborne`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CrateToss {
+    pub kind: PickupKind,
+    pub from: Position,
+    pub to: Position,
+    pub age: f32,
+    pub total: f32,
+}
+
+impl CrateToss {
+    /// Whether it is still in the air.
+    pub fn flying(&self) -> bool {
+        self.age < self.total
+    }
+
+    /// Where it is over the ground and how high, px: along the line, a
+    /// parabola's hop of `height`.
+    pub fn arc(&self, height: f32) -> (Position, f32) {
+        let p = if self.total > 0.0 { (self.age / self.total).clamp(0.0, 1.0) } else { 1.0 };
+        let ground = Position::new(self.from.x + (self.to.x - self.from.x) * p, self.from.y + (self.to.y - self.from.y) * p);
+        (ground, 4.0 * height * p * (1.0 - p))
+    }
 }
 
 impl Pickup {
@@ -413,7 +445,7 @@ impl Pickup {
     /// A crate that came down at `dropped_at` on the round clock (`None`
     /// for one that stood there from the start), whole.
     pub fn dropped(kind: PickupKind, position: Position, dropped_at: Option<f32>) -> Self {
-        Pickup { kind, position, dropped_at, health: crate::tuning::tuning().crate_hp, burn: None, loose: None, drift: Vec2::zero(), slide: Vec2::zero() }
+        Pickup { kind, position, dropped_at, health: crate::tuning::tuning().crate_hp, burn: None, loose: None, drift: Vec2::zero(), slide: Vec2::zero(), airborne: 0.0 }
     }
 
     /// Side length of this pickup's square: one cell, what a hull touches
@@ -520,6 +552,26 @@ pub fn crate_flames(pickup: &Pickup, time: f32) -> Vec<crate::pyro::Shape> {
     let lean = crate::pyro::smoke_lean(&t, at, time);
     crate::pyro::tongues(&mut out, Position::new(at.x, at.y + 8.0), 12.0, t.ground_fire_height_px, 3, seed, time, lean, 1.0);
     out
+}
+
+/// A tossed crate in the air (`CrateToss`): its shadow on the ground under
+/// it, shrinking as it rises, and the crate `lift` px above.
+pub fn draw_tossed(c: &mut impl Canvas, kind: PickupKind, ground: Position, lift: f32, loose: bool, shadows: bool, t: &crate::tuning::Tuning) {
+    let origin = Vec2::new(CRATE_CELL * 0.5, CRATE_CELL * 0.5);
+    if shadows {
+        let shrink = (1.0 - lift / 60.0).clamp(0.5, 1.0);
+        let size = (CRATE_CELL * shrink / 2.0).round() * 2.0;
+        let dest = Rectangle::new(ground.x + t.shadow_dir_x * t.obstacle_shadow_offset, ground.y + t.shadow_dir_y * t.obstacle_shadow_offset, size, size);
+        let shadow = Color::new(0, 0, 0, (255.0 * t.obstacle_shadow_opacity * shrink) as u8);
+        c.blit(Sheet::Crates, crate_src(kind, CRATE_COL_INTACT), dest, Vec2::new(size * 0.5, size * 0.5), 0.0, shadow);
+    }
+    let at = Position::new(ground.x, crate::pyro::snap(ground.y - lift) as f32);
+    if loose {
+        draw_glyph(c, kind, at, PICKUP_GLYPH_CELL, Color::WHITE);
+        return;
+    }
+    let dest = Rectangle::new(at.x, at.y, CRATE_CELL, CRATE_CELL);
+    c.blit(Sheet::Crates, crate_src(kind, CRATE_COL_INTACT), dest, origin, 0.0, Color::WHITE);
 }
 
 /// One crate standing on its cell in sheet column `col`, its shadow first

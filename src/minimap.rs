@@ -222,7 +222,9 @@ impl Class {
             Material::Iron | Material::Concrete | Material::Door => Class::Iron,
             Material::Wood => Class::Wood,
             Material::Glass => Class::Glass,
-            Material::Sandbag | Material::Barrel | Material::Fence | Material::Target => Class::Prop,
+            Material::Sandbag | Material::Barrel | Material::Fence | Material::Target | Material::Tyres | Material::Hay | Material::WoodCrate => Class::Prop,
+            Material::Barrier => Class::Iron,
+            Material::TankTrap => Class::Iron,
             Material::Tree
             | Material::Pine
             | Material::Spruce

@@ -2031,6 +2031,18 @@ tunables! {
     }
 
     group crates {
+        /// How far round a blast its throw reaches the supply crates, as a
+        /// multiple of its radius (docs/CRATES_SPEC.md "Tossed by a
+        /// blast"): a crate inside is tossed away from it.
+        crate_toss_reach: f32 = 1.6 in 0.0 ..= 5.0;
+        /// How many cells a blast tosses a crate at its centre, falling
+        /// linearly to none at `crate_toss_reach`. A crate stops short of
+        /// deep water, lava, a tile and the field's edge.
+        crate_toss_cells: f32 = 3.0 in 0.0 ..= 10.0;
+        /// Seconds a tossed crate is in the air - nobody takes it until it
+        /// lands - and how high it hops, px.
+        crate_toss_seconds: f32 = 0.5 in 0.05 ..= 3.0;
+        crate_toss_height_px: f32 = 18.0 in 0.0 ..= 120.0;
         /// Seconds from a crate appearing to its landing: the air drop it
         /// comes down in (`crate_fx::drop` - a shadow gathers, the crate
         /// falls into it, squashes and throws a ring of dust). Only the
@@ -2142,11 +2154,15 @@ tunables! {
         /// ground. It takes this share of the hulk's speed off every
         /// second, so what a pushing hull's drive can hold it at falls
         /// with the hulk's weight twice over - a standard hull shoves a
-        /// standard wreck at about 50 px/s, a titan's at about 20 - and a
-        /// blast's shove moves it a few px. Nothing else in the world
-        /// sets damping. At 4 a wreck was pushed at the pusher's own top
-        /// speed.
-        wreck_linear_damping: f32 = 30.0 in 0.0 ..= 200.0;
+        /// standard wreck at a crawl, a titan's at a creep, into place as
+        /// cover - and once let go it slides a few px and stops. A blast
+        /// throws it a short way (`wreck_blast_factor`). Nothing else in
+        /// the world sets damping. At 4 a wreck was pushed at the pusher's
+        /// own top speed, at 30 it hardly moved.
+        wreck_linear_damping: f32 = 16.0 in 0.0 ..= 200.0;
+        /// The share of a blast's knock on a live hull a wreck in it takes
+        /// (`Game::blast`): a dead hull is thrown, not hurt.
+        wreck_blast_factor: f32 = 1.0 in 0.0 ..= 5.0;
         /// Surface friction on a wreck, against rapier's 0.5 default: a
         /// live tank shunting one should bleed energy rather than skid off
         /// it.
@@ -3000,6 +3016,76 @@ tunables! {
         glass_stress_damage: f32 = 1.0 in 0.0 ..= 10.0;
     }
 
+    group surfaces {
+        /// How fast (px/s) a hull has to be going into a hard face, along
+        /// the contact, as the step began for the face to throw it back
+        /// (`obstacle::Surface`, docs/physics-engine-design.md "Hard and
+        /// soft"). Over a driven hull's own push into a face it rests on
+        /// (a step of `tank_accel_force`, 70 to 90 px/s), so only a hit
+        /// bounces, never a hull leaning on a wall.
+        hull_bounce_min_speed: f32 = 130.0 in 0.0 ..= 1000.0;
+        /// The share of a hit's speed a hard face (iron, concrete, brick,
+        /// glass, a training door, the field's edge) throws the hull back
+        /// with. 0 stops it dead.
+        hard_bounce: f32 = 0.38 in 0.0 ..= 1.0;
+        /// The share a tower or a volcano's cone throws back: the hardest
+        /// thing on the field.
+        hardest_bounce: f32 = 0.5 in 0.0 ..= 1.0;
+        /// How long a bounce takes the hull off its tracks (`Tank::skid`),
+        /// seconds, so the throw is seen before the drive takes it back.
+        hull_bounce_skid_seconds: f32 = 0.14 in 0.0 ..= 2.0;
+        /// Seconds after a bounce before the same hull bounces again, or
+        /// reports a hit: a hull still pressed at the wall comes back at it
+        /// under its own drive, and that is not a fresh hit.
+        hull_bounce_rest_seconds: f32 = 0.6 in 0.0 ..= 5.0;
+        /// How hard a soft face (sandbags, a fence, a lamp post, a range
+        /// board) brakes a hull coming at it head on, px/s^2: the hull
+        /// slows over the last `v^2 / 2a` px before the face (about 10 px
+        /// at `tank_speed`) instead of stopping dead on it. 0 is a hard
+        /// stop.
+        soft_cushion_decel: f32 = 2200.0 in 0.0 ..= 100000.0;
+        /// The same for a tree that gives a little - a birch, a willow, a
+        /// snag (about 4 px at `tank_speed`).
+        yielding_cushion_decel: f32 = 5500.0 in 0.0 ..= 100000.0;
+        /// The same for a firm one - a timber wall, a broadleaf, a pine, a
+        /// spruce, a Scots pine, a fir, a palm, a drum (about 2 px).
+        firm_cushion_decel: f32 = 11000.0 in 0.0 ..= 100000.0;
+        /// How fast (px/s) a hull has to hit a pane of glass, along the
+        /// contact, to crack it instead of bouncing off it.
+        glass_crack_speed: f32 = 170.0 in 0.0 ..= 2000.0;
+        /// The damage that crack does to the pane: half a pane's health
+        /// (`wall_max_health`), so the first hit cracks it and the second
+        /// goes through.
+        glass_ram_damage: f32 = 1.0 in 0.0 ..= 500.0;
+        /// How fast (px/s) a hull has to meet a face for the meeting to
+        /// count as a hit (`Event::HullStruck`): the jolt, the dust and the
+        /// chips, a tree's crown shaking.
+        hull_struck_min_speed: f32 = 120.0 in 0.0 ..= 1000.0;
+        /// How hard a hit jolts the seat's own view, 0 to 1 of a full blow
+        /// (`feedback::Feedback`), at `tank_speed`, by what it hit: a tower
+        /// or a cone, a hard face, a firm one, a soft one. A faster hit
+        /// jolts more, a slower one less.
+        hardest_jolt: f32 = 0.9 in 0.0 ..= 1.0;
+        hard_jolt: f32 = 0.55 in 0.0 ..= 1.0;
+        firm_jolt: f32 = 0.25 in 0.0 ..= 1.0;
+        soft_jolt: f32 = 0.08 in 0.0 ..= 1.0;
+        /// How far a tree's crown swings when a hull hits its trunk, px at
+        /// `tank_speed`, and how long the swing takes to die away.
+        tree_shake_px: f32 = 5.0 in 0.0 ..= 30.0;
+        tree_shake_seconds: f32 = 0.8 in 0.05 ..= 5.0;
+        /// Seconds a hull has to push into a lamp post before it snaps and
+        /// goes over, like a fence.
+        lamp_ram_seconds: f32 = 0.12 in 0.05 ..= 5.0;
+        /// Seconds a hull has to push into a range board before it tips
+        /// over.
+        target_ram_seconds: f32 = 0.2 in 0.05 ..= 5.0;
+        /// The share of its top speed and drive a hull keeps in tall grass
+        /// and in reeds, which it parts as it goes.
+        grass_pace: f32 = 0.95 in 0.1 ..= 1.0;
+        /// The share it keeps pushing through a bush.
+        bush_pace: f32 = 0.88 in 0.1 ..= 1.0;
+    }
+
     group props {
         /// Sandbag toughness: hp absorbed over its three visible stages
         /// (intact, torn, collapsed) before it flattens. Baked in at spawn.
@@ -3058,9 +3144,77 @@ tunables! {
         /// Outward shove a barrel blast gives a tank at its centre (px/s,
         /// mass-normalised like a wreck's knockback).
         barrel_blast_knockback_speed: f32 = 140.0 in 0.0 ..= 500.0;
-        /// Damage per second a tank pushing into a barrel deals it - so
-        /// ramming one sets it off in a fraction of a second.
-        barrel_ram_damage_per_second: f32 = 40.0 in 0.0 ..= 500.0;
+        /// A barrel is loose (docs/sandbags-barrels-fences.md "Loose
+        /// barrels"): a dynamic body a hull shoves, a blast throws and a
+        /// wall throws back. Its mass, against the standard chassis's 1.
+        barrel_mass: f32 = 0.35 in 0.05 ..= 5.0 @ Spawn;
+        /// The share of its speed a barrel loses each second sliding on
+        /// the ground (rapier's linear damping), and the speed (px/s) the
+        /// ground's friction takes off it each second on top
+        /// (`Game::sync_loose`): what brings a shoved or thrown drum to
+        /// rest. A drum shoved at a hull's top speed slides about two cells.
+        barrel_damping: f32 = 1.6 in 0.0 ..= 50.0 @ Spawn;
+        barrel_friction: f32 = 140.0 in 0.0 ..= 5000.0;
+        /// How much of its speed a barrel keeps bouncing off a wall, a hull
+        /// or another drum (restitution).
+        barrel_bounce: f32 = 0.45 in 0.0 ..= 1.0 @ Spawn;
+        /// How hard (px/s) a barrel's velocity has to change in one step -
+        /// a hull ramming it, a wall it is thrown at, another drum - for
+        /// the knock to set it off. Over what a hull at its own top speed
+        /// gives a drum (about 1.1 times that speed), so driving into one
+        /// shoves it and a boosted ram, a thrown drum hitting a wall or a
+        /// hull flung into one pops it.
+        barrel_burst_speed: f32 = 300.0 in 0.0 ..= 5000.0;
+        /// The BB-209 props (docs/sandbags-barrels-fences.md "New props").
+        /// Toughness: a tyre stack takes a few shells, a hay bale and a
+        /// wooden crate one or two, a concrete barrier most of a fight, a
+        /// tank trap's steel all of one. Baked in at spawn.
+        tyres_max_health: f32 = 30.0 in 1.0 ..= 500.0 @ Spawn;
+        hay_max_health: f32 = 10.0 in 1.0 ..= 500.0 @ Spawn;
+        wood_crate_max_health: f32 = 6.0 in 1.0 ..= 500.0 @ Spawn;
+        barrier_max_health: f32 = 120.0 in 1.0 ..= 2000.0 @ Spawn;
+        tank_trap_max_health: f32 = 160.0 in 1.0 ..= 2000.0 @ Spawn;
+        /// Odds a projectile passes the prop instead of hitting it: over a
+        /// low tyre stack, a bale, a crate, between a tank trap's beams. A
+        /// barrier stops every shot, as concrete does.
+        tyres_pass_over_chance: f64 = 0.3 in 0.0 ..= 1.0;
+        hay_pass_over_chance: f64 = 0.35 in 0.0 ..= 1.0;
+        wood_crate_pass_over_chance: f64 = 0.3 in 0.0 ..= 1.0;
+        tank_trap_pass_over_chance: f64 = 0.6 in 0.0 ..= 1.0;
+        /// The share of a hit's speed a tyre stack throws a hull back with
+        /// (`Surface::Springy`): more than iron's.
+        tyres_bounce: f32 = 0.7 in 0.0 ..= 1.0;
+        /// A hay bale's loose body (`barrel_mass` and the rows after it):
+        /// twice a drum's weight, soft, slow to slide.
+        hay_mass: f32 = 0.8 in 0.05 ..= 20.0 @ Spawn;
+        hay_damping: f32 = 3.0 in 0.0 ..= 50.0 @ Spawn;
+        hay_bounce: f32 = 0.1 in 0.0 ..= 1.0 @ Spawn;
+        hay_friction: f32 = 220.0 in 0.0 ..= 5000.0;
+        /// A wooden crate's: a drum's weight, a little bounce.
+        wood_crate_mass: f32 = 0.4 in 0.05 ..= 20.0 @ Spawn;
+        wood_crate_damping: f32 = 2.0 in 0.0 ..= 50.0 @ Spawn;
+        wood_crate_bounce: f32 = 0.3 in 0.0 ..= 1.0 @ Spawn;
+        wood_crate_friction: f32 = 180.0 in 0.0 ..= 5000.0;
+        /// The knock (px/s of velocity change in a step) that splinters a
+        /// wooden crate: a hull a little faster than it drives, a crate
+        /// thrown at a wall.
+        wood_crate_burst_speed: f32 = 260.0 in 0.0 ..= 5000.0;
+        /// A concrete barrier's: six times a standard hull's weight and
+        /// braked so hard by the ground that a standard hull's push, held,
+        /// only creeps it, a light one's does not move it and a heavy
+        /// one's shoves it a little faster.
+        barrier_mass: f32 = 6.0 in 0.05 ..= 50.0 @ Spawn;
+        barrier_damping: f32 = 8.0 in 0.0 ..= 50.0 @ Spawn;
+        barrier_bounce: f32 = 0.0 in 0.0 ..= 1.0 @ Spawn;
+        barrier_friction: f32 = 600.0 in 0.0 ..= 5000.0;
+        /// How far past its own radius a blast throws the barrels round it,
+        /// as a multiple of that radius: inside the radius they are lit as
+        /// ever and thrown too, out to this they are only thrown.
+        barrel_throw_reach: f32 = 2.2 in 1.0 ..= 5.0;
+        /// The speed a blast throws a barrel at its centre, as a multiple of
+        /// the blast's knockback on a hull, falling to nothing at
+        /// `barrel_throw_reach`.
+        barrel_throw_factor: f32 = 2.5 in 0.0 ..= 20.0;
         /// Extra shove the blast gives a tank that set a barrel off by
         /// driving into it, as a multiple of the ordinary knockback: the
         /// hull is sitting on the drum, so it should visibly lurch.
@@ -5042,6 +5196,10 @@ tunables! {
         audio_doppler_max: f32 = 1.25 in 1.0 ..= 2.0;
         /// How close (px) a projectile must pass a seat's tank to whoosh by.
         audio_flyby_px: f32 = 48.0 in 0.0 ..= 400.0;
+        /// The speed (px/s) into a face at which a hull's slam
+        /// (`Event::HullStruck`) sounds at its full strength; it starts at
+        /// a third at `hull_struck_min_speed`.
+        audio_slam_full_speed: f32 = 320.0 in 1.0 ..= 2000.0;
         /// An engine's pitch at idle and at top speed, before the chassis's
         /// own offset (section 4.4).
         audio_engine_idle_pitch: f32 = 0.8 in 0.25 ..= 2.0;

@@ -195,3 +195,39 @@ Defaults: `crate_hp` 8 - an oil drum beside a crate breaks it, a missile
 landing on it does, a crate cooking off beside it does, a dying tank's blast
 alone does not. Tests: `simulation/crate_tests.rs` and
 `net::apply::tests::broken_crates_are_the_same_on_the_replica`.
+
+## 6. Tossed by a blast (BB-208, 2026-11-22)
+
+Oto: blasts should toss supply crates. Whatever `crate_breakable` says, every
+blast (`Game::blast`, so a drum, a missile, a grenade, a dying tank, a
+cook-off and air support alike) tosses the pickups round it
+(`simulation/crates.rs`, `toss_crates`):
+
+- **Who**: every pickup on the ground - a whole crate or spilled contents -
+  within `crate_toss_reach` (1.6) times the blast's radius of its centre.
+- **Where**: straight away from the centre, `crate_toss_cells` (3) cells at
+  the centre falling linearly to none at the reach. The landing is searched
+  along that line in 2 px steps and is the last spot every step up to it is
+  clear (`crate_lands_clear`): inside the field by half a cell, on no fixed
+  tile's cell (a loose drum's does not count), in no deep water and on no
+  lava. A crate never lands in a wall, a lake or lava: it stops short. A toss
+  of under 4 px leaves it where it is. No RNG: a seed lands a crate on the
+  same spot every replay.
+- **What it changes**: the crate keeps its slot (`Pickup::position`, what the
+  respawn reads) and lies at its new place from now on (`Pickup::drift`, as
+  a gravity well's pull moves one): the collection, the enemies' seeks
+  (`Tank::wants_pickup`, through `Pickup::at`) and the routes that go round
+  a crate all read it there at once. While it is in the air
+  (`Pickup::airborne`, `crate_toss_seconds` 0.5) nobody takes it.
+- **The show**: `Event::CrateTossed { kind, x, y, to_x, to_y }`; the arc is a
+  `pickup::CrateToss` on `Game::crate_tosses`, aged on the round clock, a
+  parabola of `crate_toss_height_px` (18) with a shadow on the ground that
+  shrinks as it rises (`pickup::draw_tossed`).
+- **The wire** (protocol 38): the event travels; a replica puts the arc up
+  from it (`Game::crate_in_air`) and ages it in `tick_presentation`, and the
+  landing is the crate's drift in `CrateState`'s `dx`/`dy`, as a well's is.
+
+Tests: `simulation/crate_tests.rs` (`a_blast_tosses_a_crate_away_*`,
+`a_tossed_crate_is_taken_where_it_lands_*`,
+`a_tossed_crate_never_lands_in_a_wall_water_or_lava`) and
+`net::apply::tests::a_tossed_crate_hops_on_the_replica_*`.

@@ -169,7 +169,11 @@ pub struct DrawableBong {
 /// blast or a ram change, over its fixed material and variant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawableTile {
+    /// The cell it is known by (`Obstacle::key_cell`): where a loose drum
+    /// was placed, wherever it stands.
     pub cell: (i32, i32),
+    /// Where it stands, quarter px (`quarter_px`).
+    pub at: (i32, i32),
     pub material: Material,
     pub variant: i32,
     /// Health in whole points.
@@ -571,7 +575,8 @@ impl Game {
             .iter()
             .filter(|o| !o.destroyed)
             .map(|o| DrawableTile {
-                cell: o.cell(),
+                cell: o.key_cell(),
+                at: (quarter_px(o.position.x), quarter_px(o.position.y)),
                 material: o.material,
                 variant: o.variant,
                 hp: o.health.round().clamp(0.0, 255.0) as u8,

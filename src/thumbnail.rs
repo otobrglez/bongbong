@@ -219,7 +219,11 @@ mod tests {
     /// The CPU render of every shipped map at the default options, pinned.
     /// Deterministic, so a change here is a real change to what a thumbnail
     /// shows - re-baseline consciously after a deliberate art, map or
-    /// tuning change, never to go green.
+    /// tuning change, never to go green. The carnival's drums are loose
+    /// (BB-206), and the one step a thumbnail is staged on moves a drum
+    /// there that stands against a body. Serpent River, No Man's Land and
+    /// the Scrapyard carry the BB-209 props (docs/sandbags-barrels-fences.md
+    /// "New props").
     #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 24] = [
         ("default", 0xc35e_5595_2de6_4cd3),
@@ -238,12 +242,12 @@ mod tests {
         ("archipelago", 0x457b_7d4e_693d_6d82),
         ("black-gold", 0x5982_660d_ca83_4f36),
         ("harbor-lights", 0x7851_0905_9e3f_ccd2),
-        ("carnival", 0x598d_0c0b_1e33_789e),
+        ("carnival", 0x7ef7_f14f_1d30_7eb2),
         ("jungle-temple", 0xb446_4b07_ae74_0292),
-        ("serpent-river", 0xb8da_3ef0_fe71_2bcb),
-        ("no-mans-land", 0x66c0_b78e_0393_5a8d),
+        ("serpent-river", 0x434b_20b0_1c51_34da),
+        ("no-mans-land", 0x5523_d1fb_fd4e_1951),
         ("glasshouses", 0x2fda_8bc0_d144_e270),
-        ("scrapyard", 0x4103_57a1_4c93_bba9),
+        ("scrapyard", 0xd37f_d36a_0ed7_6dd4),
         ("grand-campaign", 0xee89_f6f6_937d_9311),
         ("boot-camp", 0x973a_9707_e1bf_7b2d),
     ];

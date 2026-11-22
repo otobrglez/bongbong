@@ -623,7 +623,8 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_training(game, &mut findings);
     check_towers(game, &cells, &player_positions, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
-    check_boxed_in(&grid, &cells, &mut findings);
+    let drums: Vec<Position> = game.world.query::<&Obstacle>().iter().filter(|o| o.material.is_loose()).map(|o| o.position).collect();
+    check_boxed_in(&grid, &cells, &drums, &mut findings);
     // Only the band plan places enemies in the border band at init; a
     // waves plan rolls them in through gates, so band capacity is moot.
     if game.map.spawn.kind == SpawnKind::Band {
@@ -639,7 +640,11 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             &mut findings,
         );
     }
-    check_planner_physics(&cells, &physics_boxes(&obstacle_positions, bong_pos), &mut findings);
+    // A loose drum is no wall the planner should see (a hull shoves it), so
+    // the colliders it is held to are the fixed ones.
+    let fixed_positions: Vec<Position> =
+        game.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_loose()).map(|o| o.position).collect();
+    check_planner_physics(&cells, &physics_boxes(&fixed_positions, bong_pos), &mut findings);
     check_narrow_corridors(&cells, &mut findings);
     findings
 }
@@ -1178,14 +1183,20 @@ fn check_disconnected_regions(cells: &Cells, findings: &mut Vec<LintFinding>) {
 }
 
 /// §3.2.2: open cells `Grid::boxed_in` says nothing can route out of.
-fn check_boxed_in(grid: &Grid, cells: &Cells, findings: &mut Vec<LintFinding>) {
+///
+/// A nook a loose drum was placed in is left out: the router may drive
+/// through the drum (docs/sandbags-barrels-fences.md "Loose barrels"), but
+/// a hull knocked into its nook meets the drum there, so it is no trap.
+fn check_boxed_in(grid: &Grid, cells: &Cells, drums: &[Position], findings: &mut Vec<LintFinding>) {
+    let reach = crate::OBSTACLE_GRID_SIZE;
     for row in 0..cells.rows {
         for col in 0..cells.cols {
             if !cells.is_open(col as isize, row as isize) {
                 continue;
             }
             let center = cells.center(col, row);
-            if grid.boxed_in(center) {
+            let drum_nook = drums.iter().any(|d| (d.x - center.x).abs() <= reach && (d.y - center.y).abs() <= reach);
+            if grid.boxed_in(center) && !drum_nook {
                 let message = format!(
                     "grid cell ({col},{row}) around ({:.0},{:.0}) is open but every neighbor is blocked - unusable, and a trap for knocked-back tanks",
                     center.x, center.y

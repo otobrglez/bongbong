@@ -810,8 +810,16 @@ impl Game {
         let cull = c.cull();
         let t = crate::tuning::tuning();
         for pickup in self.world.query::<&Pickup>().iter() {
-            if !culled(cull, pickup.at()) {
-                draw_pickup(c, pickup, self.time, self.shadows_enabled, &t);
+            if culled(cull, pickup.at()) {
+                continue;
+            }
+            // Tossed by a blast and still in the air: drawn on its arc.
+            match self.crate_toss_to(pickup.at()) {
+                Some(toss) => {
+                    let (ground, lift) = toss.arc(t.crate_toss_height_px);
+                    crate::pickup::draw_tossed(c, pickup.kind, ground, lift, pickup.loose.is_some(), self.shadows_enabled, &t);
+                }
+                None => draw_pickup(c, pickup, self.time, self.shadows_enabled, &t),
             }
         }
 
@@ -963,8 +971,9 @@ impl Game {
             );
             let cutaway = crate::obstacle::canopy_cutaway(&trees, &seats, t.canopy_cutaway_cover);
             for (tree, &see_through) in trees.iter().zip(&cutaway) {
-                // A sonic wave passing sways the crown away from its pivot.
-                let lean = tree_lean(tree, &movers, &t) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t);
+                // A sonic wave passing sways the crown away from its pivot;
+                // a hull's hit on the trunk shakes it.
+                let lean = tree_lean(tree, &movers, &t) + crate::sonic::tree_push(tree.position, &self.sonic_waves, &t) + self.tree_shake_lean(tree.cell(), &t);
                 let alpha = if see_through { t.canopy_cutaway_alpha } else { 1.0 };
                 paint_tree(c, tree, lean, alpha, self.shadows_enabled, self.time, &t);
             }

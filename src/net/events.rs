@@ -157,7 +157,6 @@ pub enum WireEvent {
     Hit { target: WireHitTarget, damage: f32, killed: bool, x: i16, y: i16, cause: HitCause },
     Wreck { slot: u16, x: i16, y: i16 },
     Ram { slot: u16, other_slot: u16, damage: f32 },
-    Slam { slot: u16, x: i16, y: i16, strength: u8 },
     PickupCollected { slot: u16, kind: PickupKind, x: i16, y: i16, spilled: bool },
     CrateBroken { kind: PickupKind, x: i16, y: i16, cooked: bool },
     PickupRespawned { kind: PickupKind, x: i16, y: i16 },
@@ -308,6 +307,12 @@ pub enum WireEvent {
     AircraftDowned { id: u16, x: i16, y: i16, height: i16, by: crate::air::AirStrike },
     /// Air support `id` is done; `Event::AirSupportLeft`.
     AirSupportLeft { id: u16 },
+    /// A blast tossed a crate; `Event::CrateTossed`.
+    CrateTossed { kind: PickupKind, x: i16, y: i16, to_x: i16, to_y: i16 },
+    /// The loose drum placed at (`col`, `row`) is gone; `Event::LooseGone`.
+    LooseGone { col: u8, row: u8 },
+    /// Seat or enemy `slot`'s hull hit a fixed face; `Event::HullStruck`.
+    HullStruck { slot: u16, material: Option<Material>, surface: crate::obstacle::Surface, x: i16, y: i16, nx: f32, ny: f32, speed: f32, bounced: bool },
 }
 
 /// `WireEvent::AirSupportCalled::arrive` for a call waiting behind another.
@@ -365,11 +370,11 @@ impl WireEvent {
                 WireEvent::Hit { target: target.into(), damage, killed, x: q(x), y: q(y), cause }
             }
             Event::Wreck { slot, x, y } => WireEvent::Wreck { slot: slot_u16(slot), x: q(x), y: q(y) },
-            Event::Slam { slot, x, y, strength } => {
-                WireEvent::Slam { slot: slot_u16(slot), x: q(x), y: q(y), strength: (strength.clamp(0.0, 1.0) * 255.0).round() as u8 }
-            }
             Event::Ram { slot, other_slot, damage } => {
                 WireEvent::Ram { slot: slot_u16(slot), other_slot: slot_u16(other_slot), damage }
+            }
+            Event::HullStruck { slot, material, surface, x, y, nx, ny, speed, bounced } => {
+                WireEvent::HullStruck { slot: slot_u16(slot), material, surface, x: q(x), y: q(y), nx, ny, speed, bounced }
             }
             Event::PickupCollected { slot, kind, x, y, spilled } => WireEvent::PickupCollected { slot: slot_u16(slot), kind, x: q(x), y: q(y), spilled },
             Event::CrateBroken { kind, x, y, cooked } => WireEvent::CrateBroken { kind, x: q(x), y: q(y), cooked },
@@ -416,6 +421,10 @@ impl WireEvent {
                     dir: dir_index(dir),
                     fade,
                 }
+            }
+            Event::CrateTossed { kind, x, y, to_x, to_y } => WireEvent::CrateTossed { kind, x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) },
+            Event::LooseGone { home } => {
+                WireEvent::LooseGone { col: home.0.clamp(0, u8::MAX as i32) as u8, row: home.1.clamp(0, u8::MAX as i32) as u8 }
             }
             Event::GrassTrampled { cell } => {
                 WireEvent::GrassTrampled { col: cell.0.clamp(0, u8::MAX as i32) as u8, row: cell.1.clamp(0, u8::MAX as i32) as u8 }
@@ -620,9 +629,11 @@ impl WireEvent {
                 Event::Hit { target: target.into(), damage, killed, x: d(x), y: d(y), cause }
             }
             WireEvent::Wreck { slot, x, y } => Event::Wreck { slot: slot as usize, x: d(x), y: d(y) },
-            WireEvent::Slam { slot, x, y, strength } => Event::Slam { slot: slot as usize, x: d(x), y: d(y), strength: strength as f32 / 255.0 },
             WireEvent::Ram { slot, other_slot, damage } => {
                 Event::Ram { slot: slot as usize, other_slot: other_slot as usize, damage }
+            }
+            WireEvent::HullStruck { slot, material, surface, x, y, nx, ny, speed, bounced } => {
+                Event::HullStruck { slot: slot as usize, material, surface, x: d(x), y: d(y), nx, ny, speed, bounced }
             }
             WireEvent::PickupCollected { slot, kind, x, y, spilled } => Event::PickupCollected { slot: slot as usize, kind, x: d(x), y: d(y), spilled },
             WireEvent::CrateBroken { kind, x, y, cooked } => Event::CrateBroken { kind, x: d(x), y: d(y), cooked },
@@ -653,6 +664,8 @@ impl WireEvent {
                 Event::OilPrinted { cell: (col as i32, row as i32), dir: dir_from_index(dir).unwrap_or(Dir::Up).name(), fade }
             }
             WireEvent::GrassTrampled { col, row } => Event::GrassTrampled { cell: (col as i32, row as i32) },
+            WireEvent::LooseGone { col, row } => Event::LooseGone { home: (col as i32, row as i32) },
+            WireEvent::CrateTossed { kind, x, y, to_x, to_y } => Event::CrateTossed { kind, x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) },
             WireEvent::Blast { x, y, chained, drum } => Event::Blast { x: d(x), y: d(y), chained, drum },
             WireEvent::LavaBombLaunched { x, y, to_x, to_y } => {
                 Event::LavaBombLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
@@ -841,7 +854,6 @@ mod tests {
             },
             Event::Wreck { slot: 3, x: 64.0, y: 96.75 },
             Event::Ram { slot: 0, other_slot: 5, damage: 3.25 },
-            Event::Slam { slot: 1, x: 40.0, y: 72.0, strength: 0.6 },
             Event::PickupCollected { slot: 1, kind: PickupKind::BongHealth, x: 48.0, y: 80.0, spilled: false },
             Event::CrateBroken { kind: PickupKind::Ammo, x: 112.0, y: 80.0, cooked: true },
             Event::PickupRespawned { kind: PickupKind::Shield, x: 32.0, y: 32.0 },
@@ -862,6 +874,8 @@ mod tests {
             Event::EmberFlew { x: 96.0, y: 64.0, to_x: 160.0, to_y: 80.0 },
             Event::OilPrinted { cell: (12, 6), dir: "right", fade: 6 },
             Event::GrassTrampled { cell: (12, 7) },
+            Event::LooseGone { home: (12, 0) },
+            Event::CrateTossed { kind: PickupKind::Ammo, x: 96.0, y: 64.0, to_x: 160.25, to_y: 64.0 },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0, drum: Drum::Oil },
             Event::SonicBlast { slot: 3, x: 128.0, y: 160.0, dir: "left" },
@@ -901,6 +915,7 @@ mod tests {
             Event::GrenadeBlast { slot: 0, x: 200.0, y: 96.0 },
             Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue", seat: 1, leg: 1, portal: true },
             Event::Shoved { seat: 0, vx: 120.0, vy: -40.0, skid: 0.6 },
+            Event::HullStruck { slot: 3, material: Some(Material::Birch), surface: crate::obstacle::Surface::Yielding, x: 96.0, y: 64.0, nx: 0.0, ny: -1.0, speed: 205.5, bounced: true },
             Event::Placed { seat: 2, x: 320.0, y: 160.0, rotation: 90.0 },
             Event::Teleported { slot: 1, x: 64.0, y: 64.0, to_x: 960.0, to_y: 480.0 },
             Event::ShotTeleported { id: Some(41), x: 320.0, y: 362.25, to_x: 960.0, to_y: 362.25 },
@@ -951,7 +966,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 86, "one sample per Event variant");
+        assert_eq!(seen.len(), 88, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

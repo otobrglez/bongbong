@@ -228,7 +228,7 @@ pub(crate) fn tile_half_extent(
     gy: i32,
     base: f32,
 ) -> Position {
-    if material.is_tree() || material == Material::Lamp {
+    if material.is_tree() || material == Material::Lamp || material.is_loose() {
         return Position::new(base, base);
     }
     tile_hull_half_extent(cells, gx, gy, base)
@@ -266,7 +266,8 @@ pub fn wall_rects(width: f32, height: f32) -> [(Position, Position); 4] {
 /// rendered and never removed.
 pub fn spawn_walls(physics: &mut Physics, width: f32, height: f32) {
     for (center, half) in wall_rects(width, height) {
-        physics.spawn_static(center, half);
+        let body = physics.spawn_static(center, half);
+        physics.set_surface(body, crate::obstacle::Surface::Hard);
     }
 }
 
@@ -487,7 +488,7 @@ pub fn spawn_from_map(
     // outcome, not a seam bug.
     let mut solid_cells: HashSet<(i32, i32)> = map
         .iter_cells()
-        .filter(|(_, _, obj)| obj.is_solid() && !obj.material().is_some_and(|m| m.is_tree() || m == Material::Lamp))
+        .filter(|(_, _, obj)| obj.is_solid() && !obj.material().is_some_and(|m| m.is_tree() || m == Material::Lamp || m.is_loose()))
         .map(|(col, row, _)| (col, row))
         .collect();
     // A volcano's cone is one slab: every cell under it closes its seams
@@ -523,6 +524,7 @@ pub fn spawn_from_map(
                     pos,
                     tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
                 );
+                physics.set_surface(body, material.surface());
                 obstacle_positions.push(pos);
                 wall_positions.push(pos);
                 world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
@@ -531,6 +533,11 @@ pub fn spawn_from_map(
             | CellObject::Barrel { .. }
             | CellObject::Fence
             | CellObject::Target
+            | CellObject::Tyres
+            | CellObject::Hay
+            | CellObject::WoodCrate
+            | CellObject::Barrier
+            | CellObject::TankTrap
             | CellObject::Tree
             | CellObject::Pine
             | CellObject::Spruce
@@ -554,10 +561,13 @@ pub fn spawn_from_map(
                 let dry = material.is_dry(map.theme);
                 let chance = material.flammable_chance(dry);
                 let flammable = chance > 0.0 && rng.random_bool(chance);
-                let body = physics.spawn_static(
-                    pos,
-                    tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
-                );
+                let body = if let Some(loose) = material.loose_body(&crate::tuning::tuning()) {
+                    physics.spawn_loose(pos, obstacle_half_extent, loose.mass, loose.damping, loose.bounce)
+                } else {
+                    let body = physics.spawn_static(pos, tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent));
+                    physics.set_surface(body, material.surface());
+                    body
+                };
                 obstacle_positions.push(pos);
                 let mut tile = Obstacle::new(material, variant, pos, flammable, body);
                 tile.dry = dry;
@@ -573,6 +583,7 @@ pub fn spawn_from_map(
                     pos,
                     tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
                 );
+                physics.set_surface(body, material.surface());
                 obstacle_positions.push(pos);
                 world.spawn((Obstacle::new(material, crate::tower::side_variant(side), pos, false, body),));
             }
@@ -583,6 +594,7 @@ pub fn spawn_from_map(
                 for &(c, r) in cone_cells.iter().filter(|&&(c, r)| crate::volcano::in_footprint(col, row, c, r)) {
                     let at = cell_to_world(c, r);
                     let body = physics.spawn_static(at, tile_half_extent(Material::Volcano, &solid_cells, c, r, obstacle_half_extent));
+                    physics.set_surface(body, Material::Volcano.surface());
                     obstacle_positions.push(at);
                     world.spawn((Obstacle::new(Material::Volcano, 0, at, false, body),));
                 }
@@ -591,6 +603,7 @@ pub fn spawn_from_map(
             // opens it (docs/training-stage.md).
             CellObject::Door { beat } => {
                 let body = physics.spawn_static(pos, tile_half_extent(Material::Door, &solid_cells, col, row, obstacle_half_extent));
+                physics.set_surface(body, Material::Door.surface());
                 obstacle_positions.push(pos);
                 world.spawn((Obstacle::new(Material::Door, beat as i32, pos, false, body),));
             }
@@ -599,6 +612,7 @@ pub fn spawn_from_map(
             // A lamp post draws no roll either: one look, never alight.
             CellObject::Lamp => {
                 let body = physics.spawn_static(pos, tile_half_extent(Material::Lamp, &solid_cells, col, row, obstacle_half_extent));
+                physics.set_surface(body, Material::Lamp.surface());
                 obstacle_positions.push(pos);
                 world.spawn((Obstacle::new(Material::Lamp, 0, pos, false, body),));
             }

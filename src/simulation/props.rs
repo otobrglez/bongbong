@@ -45,9 +45,10 @@ pub(super) struct DeadTile {
 }
 
 /// Whether a tile of `material` closes a seam with a neighbour
-/// (`battlefield::tile_half_extent`): all but a tree and a lamp post.
+/// (`battlefield::tile_half_extent`): all but a tree, a lamp post and a
+/// loose drum.
 fn closes_seam(material: Material) -> bool {
-    !material.is_tree() && material != Material::Lamp
+    !material.is_tree() && material != Material::Lamp && !material.is_loose()
 }
 
 /// Whether `o` stands and closes a seam with a neighbour (`closes_seam`).
@@ -1254,9 +1255,9 @@ impl Game {
     /// along a prop's face does not count - accumulates `ram_timer` and
     /// collapses at its
     /// `Material::ram_seconds` - a sandbag slows the tank for a moment,
-    /// a fence barely at all - while a barrel takes
-    /// `barrel_ram_damage_per_second` and pops in the rammer's face. The
-    /// timer decays while nothing pushes, so nudging a sandbag twice
+    /// a fence barely at all. A loose drum is not rammed here: a hull
+    /// shoves it, and only a hard enough knock sets it off (`sync_loose`).
+    /// The timer decays while nothing pushes, so nudging a sandbag twice
     /// doesn't add up. No RNG.
     pub(super) fn ram_props(&mut self, f: &mut Frame) {
         let pushers: Vec<(RigidBodyHandle, Position, Vec2)> = self
@@ -1270,39 +1271,98 @@ impl Game {
         // Coarse distance cull before asking the narrow phase.
         let reach = OBSTACLE_GRID_SIZE * 2.0;
         let mut collapsed = Vec::new();
-        let mut barrel_hits = Vec::new();
         for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
             if o.destroyed || o.fuse.is_some() {
                 continue;
             }
             // Only what ramming can actually do something to: a prop that
-            // collapses, a tree that goes over, or a barrel that pops.
-            if o.material.ram_seconds().is_none() && !o.material.is_explosive() {
+            // collapses or a tree that goes over.
+            if o.material.ram_seconds().is_none() {
                 continue;
             }
             let pushed = pushers.iter().any(|&(body, pos, velocity)| {
                 pos.distance_to(o.position) < reach && self.physics.contact_normal(body, o.body).is_some_and(|into| velocity.dot(into) >= min_speed)
             });
-            match o.material.ram_seconds() {
-                Some(limit) => {
-                    o.ram_timer = if pushed { o.ram_timer + f.dt } else { (o.ram_timer - f.dt).max(0.0) };
-                    if pushed && o.ram_timer >= limit {
-                        collapsed.push((super::cell_order(o.position), entity));
-                    }
+            if let Some(limit) = o.material.ram_seconds() {
+                o.ram_timer = if pushed { o.ram_timer + f.dt } else { (o.ram_timer - f.dt).max(0.0) };
+                if pushed && o.ram_timer >= limit {
+                    collapsed.push((super::cell_order(o.position), entity));
                 }
-                None if pushed && o.material.is_explosive() => barrel_hits.push((super::cell_order(o.position), entity)),
-                None => {}
             }
         }
         // In cell order: a tile that dies queues what it leaves.
         collapsed.sort();
-        barrel_hits.sort();
         for (_, entity) in collapsed {
             self.damage_obstacle(f, entity, f32::MAX, DamageCause::Ram);
         }
-        let ram_damage = tuning().barrel_ram_damage_per_second * f.dt;
-        for (_, entity) in barrel_hits {
-            self.damage_obstacle(f, entity, ram_damage, DamageCause::Ram);
+    }
+
+    /// The loose drums after the step (docs/sandbags-barrels-fences.md
+    /// "Loose barrels"): each one's position read back from its body, and
+    /// one whose velocity the step changed by `barrel_burst_speed` or more
+    /// - a hull rammed it harder than a hull drives, it was thrown into a
+    /// wall or another drum, a hull was flung into it - set off as a ram
+    /// sets one off. A lit drum is left to its fuse. Then the ground's
+    /// friction (`barrel_friction`) takes its share of the drum's speed, so
+    /// it comes to rest. In home-cell order; no RNG.
+    pub(super) fn sync_loose(&mut self, f: &mut Frame) {
+        let t = tuning();
+        let mut bursts = Vec::new();
+        for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
+            let Some(body) = o.material.loose_body(&t).filter(|_| !o.destroyed) else { continue };
+            o.position = self.physics.position(o.body);
+            let v = self.physics.velocity(o.body);
+            let knock = (v - o.loose_velocity).length();
+            if o.material.burst_speed(&t).is_some_and(|burst| burst > 0.0 && knock >= burst) && o.fuse.is_none() && !o.burning {
+                bursts.push((o.home, entity));
+            }
+            let friction = body.friction * f.dt;
+            // The ground's friction: a steady fall to rest.
+            let speed = v.length();
+            if speed > 0.0 && friction > 0.0 {
+                let left = (speed - friction).max(0.0);
+                self.physics.set_velocity(o.body, v * (left / speed));
+            }
+        }
+        bursts.sort_by_key(|&((c, r), _)| (r, c));
+        for (_, entity) in bursts {
+            self.damage_obstacle(f, entity, f32::MAX, DamageCause::Ram);
+        }
+    }
+
+    /// Throw every loose tile within `reach` of a blast at `center` away
+    /// from it, at `speed` px/s at the centre falling linearly to nothing at
+    /// `reach` (`Game::blast`) - for a drum's weight; a heavier one goes as
+    /// much slower as it outweighs a drum (`Material::loose_body`). A drum
+    /// the blast lit is thrown too and goes off where its fuse runs out. In
+    /// home-cell order; no RNG.
+    pub(super) fn throw_loose(&mut self, center: Position, reach: f32, speed: f32) {
+        if reach <= 0.0 || speed <= 0.0 {
+            return;
+        }
+        let t = tuning();
+        let drum = t.barrel_mass.max(0.01);
+        let mut thrown: Vec<((i32, i32), RigidBodyHandle, Vec2)> = self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| !o.destroyed)
+            .filter_map(|o| {
+                let body = o.material.loose_body(&t)?;
+                let line = o.position - center;
+                let dist = line.length();
+                if dist > reach {
+                    return None;
+                }
+                let dir = if dist > 0.001 { line / dist } else { Vec2::new(0.0, -1.0) };
+                let heft = (drum / body.mass.max(0.01)).min(1.0);
+                Some((o.home, o.body, dir * (speed * heft * (1.0 - dist / reach))))
+            })
+            .collect();
+        thrown.sort_by_key(|&((c, r), _, _)| (r, c));
+        for (_, body, dv) in thrown {
+            let v = self.physics.velocity(body);
+            self.physics.set_velocity(body, Position::new(v.x + dv.x, v.y + dv.y));
         }
     }
 

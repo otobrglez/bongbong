@@ -5,7 +5,7 @@ the range board's. See docs/PROPS_SPEC.md for the full sheet maps and
 docs/sandbags-barrels-fences.md and docs/range-target-prd.md for the
 features.
 
-props_sheet.png: 128x320, 4 cols x 10 rows of 32x32 cells.
+props_sheet.png: 128x480, 4 cols x 15 rows of 32x32 cells.
     rows 0-2  Sandbag  cols 0-2: straight row / staggered wall / heaped pile
                                  x intact/torn/collapsed
     rows 3-4  Barrel   cols 0-3: two drum liveries x intact/dented/critical,
@@ -17,6 +17,12 @@ props_sheet.png: 128x320, 4 cols x 10 rows of 32x32 cells.
                                  ground cell (map `kind = "oil"`) - not an
                                  obstacle, drawn under everything, picked
                                  by position hash (obstacle::draw_oil_cell)
+    row 10    Tyres    cols 0-1: a stack of three tyres, intact/slumped
+    row 11    Hay      cols 0-1: a square bale, intact/torn; col 3 burnt
+    row 12    Crate    cols 0-1: a wooden crate, intact/split
+    row 13    Barrier  cols 0-2: a concrete jersey barrier,
+                                 intact/chipped/cracked to the rebar
+    row 14    Trap     cols 0-1: a steel tank trap, intact/bent
 Cells outside those ranges are blank and never sampled.
 
 target_sheet.png: 308x44, 7 cols x 1 row of 44x44 cells - the range board
@@ -48,11 +54,11 @@ from punypalette import (BLACK, WHITE, STONE_PALE, STONE_LT, STONE_MD, STONE_DK,
                          WOOD_PALE, WOOD_LT, WOOD_MD, WOOD_DK, WOOD_DEEPER,
                          WOOD_DARKEST, RED_BRIGHT, RED_MD, RED_DEEP, RED_DK,
                          RED_DARKEST, TEAL_MD, TEAL_DK, BLUE_DK, GOLD_BRIGHT,
-                         GOLD_MD, snap)
+                         GOLD_MD, GOLD_PALE, snap)
 
 S = 16            # macro canvas: one drawn pixel = a 2x2 block in the 32px cell
 CELL = 32
-COLS, ROWS = 4, 10
+COLS, ROWS = 4, 15
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
 os.makedirs(OUT, exist_ok=True)
 
@@ -558,6 +564,163 @@ def draw_target_burn(step, rng):
     return img
 
 
+# ------------------------------------------------- the BB-209 props
+# docs/sandbags-barrels-fences.md "New props". Objects, not grass: no green.
+def tyre(img, cx, cy, r=3.4):
+    """One tyre seen from above: a black ring, a lit upper-left arc, the
+    ground showing through the dark hole."""
+    disc(img, cx, cy, r, C(BLACK))
+    for a in range(0, 360, 20):
+        t = math.radians(a)
+        if 150 <= a <= 260:
+            px(img, cx + math.cos(t) * (r - 0.6), cy + math.sin(t) * (r - 0.6), C(STONE_DARKEST))
+    disc(img, cx, cy, r * 0.45, C(STONE_DARKEST))
+    px(img, cx - 1, cy - r + 1, C(STONE_DK))
+
+
+def draw_tyres(stage, rng):
+    img = blank()
+    if stage == 0:
+        # Three stacked: the bottom two side by side, the top over them.
+        tyre(img, 4.5, 10.0)
+        tyre(img, 11.0, 10.0)
+        tyre(img, 7.8, 6.0, 3.8)
+    else:
+        # Slumped: the top one rolled off, one lying flat and squashed.
+        tyre(img, 4.5, 10.5)
+        ellipse(img, 11.0, 11.0, 3.6, 2.6, C(BLACK))
+        ellipse(img, 11.0, 11.0, 1.4, 0.9, C(STONE_DARKEST))
+        tyre(img, 12.0, 4.5, 3.0)
+        crack(img, 3, 9, 6, 12, C(STONE_DK), rng)
+    front_strip(img, C(STONE_DARKEST))
+    declutter(img, 2)
+    return img
+
+
+HAY_TOP, HAY_LIT, HAY_BODY, HAY_LOW = C(GOLD_PALE), C(SAND_PALE), C(SAND_LT), C(SAND_MD)
+
+
+def draw_hay(stage, rng):
+    img = blank()
+    if stage == 3:
+        # Burnt: a blackened bale glowing through its seams.
+        rect(img, 2, 4, 13, 12, C(BLACK))
+        rect(img, 3, 4, 12, 4, C(STONE_DARKEST))
+        for _ in range(7):
+            px(img, rng.randint(3, 12), rng.randint(5, 11), C(RED_DEEP))
+        for _ in range(4):
+            px(img, rng.randint(3, 12), rng.randint(5, 11), C(GOLD_BRIGHT))
+        rect(img, 2, 7, 13, 7, C(RED_DK))
+        front_strip(img, C(STONE_DARKEST))
+        return img
+    rect(img, 2, 4, 13, 12, HAY_BODY)
+    rect(img, 2, 4, 13, 5, HAY_TOP)
+    rect(img, 2, 11, 13, 12, HAY_LOW)
+    # Straw texture: short strokes of the lit and the shade.
+    for _ in range(14):
+        x, y = rng.randint(3, 12), rng.randint(6, 10)
+        px(img, x, y, HAY_LIT if rng.random() < 0.5 else HAY_LOW)
+    # Two twine bands.
+    for x in (5, 10):
+        rect(img, x, 4, x, 12, C(WOOD_DK))
+    if stage == 1:
+        # Torn: a corner pulled away, straw spilling on the ground.
+        clear(img, 11, 4, 13, 6)
+        rect(img, 11, 7, 11, 7, HAY_LOW)
+        for _ in range(8):
+            px(img, rng.randint(9, 15), rng.randint(12, 15), HAY_LIT if rng.random() < 0.5 else HAY_BODY)
+        rect(img, 10, 4, 10, 6, HAY_BODY)
+    front_strip(img, C(SAND_DK))
+    declutter(img, 2)
+    return img
+
+
+def draw_wood_crate(stage, rng):
+    img = blank()
+    rect(img, 2, 3, 13, 13, C(WOOD_MD))
+    # Frame and the X brace of a shipping crate.
+    rect(img, 2, 3, 13, 3, C(WOOD_LT))
+    rect(img, 2, 13, 13, 13, C(WOOD_DK))
+    rect(img, 2, 3, 2, 13, C(WOOD_DK))
+    rect(img, 13, 3, 13, 13, C(WOOD_DEEPER))
+    for i in range(10):
+        px(img, 3 + i, 4 + i, C(WOOD_DEEPER))
+        px(img, 12 - i, 4 + i, C(WOOD_DEEPER))
+    rect(img, 3, 8, 12, 8, C(WOOD_DK))
+    px(img, 3, 4, C(WOOD_PALE))
+    if stage == 1:
+        # Split: a plank gone from the lid, splinters on the ground.
+        clear(img, 6, 3, 9, 6)
+        rect(img, 6, 6, 9, 6, C(WOOD_DARKEST))
+        crack(img, 10, 9, 13, 13, C(WOOD_DARKEST), rng)
+        for _ in range(5):
+            px(img, rng.randint(1, 14), rng.randint(14, 15), C(WOOD_LT))
+    front_strip(img, C(WOOD_DARKEST))
+    declutter(img, 2)
+    return img
+
+
+def draw_barrier(stage, rng):
+    img = blank()
+    # A jersey barrier seen from above, lying east-west: a narrow top
+    # ridge, sloping faces either side, a broad dark foot.
+    rect(img, 0, 5, 15, 11, C(STONE_DK))
+    rect(img, 0, 6, 15, 10, C(STONE_MD))
+    rect(img, 0, 7, 15, 8, C(STONE_LT))
+    rect(img, 0, 7, 15, 7, C(STONE_PALE))
+    # Lifting slots and the joint at each end.
+    for x in (4, 11):
+        px(img, x, 8, C(STONE_DARKEST))
+    rect(img, 0, 5, 0, 11, C(STONE_DARKEST))
+    rect(img, 15, 5, 15, 11, C(STONE_DARKEST))
+    if stage >= 1:
+        # Chipped: bites out of the ridge and the foot.
+        for (x0, y0, x1, y1) in ((2, 5, 3, 6), (9, 10, 11, 11), (13, 6, 14, 7)):
+            rect(img, x0, y0, x1, y1, C(STONE_MD))
+        for _ in range(3):
+            px(img, rng.randint(1, 14), rng.randint(12, 13), C(STONE_MD))
+    if stage >= 2:
+        # Cracked through to the rebar.
+        crack(img, 5, 5, 8, 11, C(STONE_DARKEST), rng)
+        rect(img, 6, 8, 8, 8, C(RED_DEEP))
+        px(img, 7, 7, C(RED_DARKEST))
+    front_strip(img, C(STONE_DARKEST))
+    declutter(img, 2)
+    return img
+
+
+def beam(img, x0, y0, x1, y1, c, lit):
+    steps = int(max(abs(x1 - x0), abs(y1 - y0))) + 1
+    for i in range(steps + 1):
+        t = i / max(1, steps)
+        x, y = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+        rect(img, x, y, x + 1, y + 1, c)
+        px(img, x, y, lit)
+
+
+def draw_tank_trap(stage, rng):
+    img = blank()
+    # A steel hedgehog from above: two angle beams crossed in an X and a
+    # third standing up at the crossing, rust on the steel.
+    beam(img, 2, 2, 12, 12, C(STONE_DARKEST), C(STONE_DK))
+    if stage == 0:
+        beam(img, 12, 2, 2, 12, C(STONE_DARKEST), C(STONE_DK))
+    else:
+        # Bent: the second beam kinked at the crossing.
+        beam(img, 12, 2, 8, 7, C(STONE_DARKEST), C(STONE_DK))
+        beam(img, 8, 7, 4, 13, C(STONE_DARKEST), C(STONE_DK))
+    disc(img, 7.5, 7.5, 1.8, C(STONE_DARKEST))
+    px(img, 7, 7, C(STONE_MD))
+    for _ in range(4):
+        px(img, rng.randint(2, 13), rng.randint(2, 13), C(RED_DEEP) if get(img, 0, 0)[3] == 0 else None)
+    for (x, y) in ((3, 3), (11, 4), (5, 11)):
+        if get(img, x, y)[3]:
+            px(img, x, y, C(RED_DEEP))
+    front_strip(img, C(BLACK))
+    declutter(img, 2)
+    return img
+
+
 # ---------------------------------------------------------------- sheet
 def seed(row, col):
     return random.Random(500 + row * 31 + col * 7)
@@ -574,6 +737,11 @@ ROW_DRAWERS = [
     (7, lambda c: draw_wire_fence(c, seed(7, c)) if c < 2 else None),
     (8, lambda c: transpose(draw_wire_fence(c, seed(7, c))) if c < 2 else None),
     (9, lambda c: draw_oil(c, seed(9, c))),
+    (10, lambda c: draw_tyres(c, seed(10, c)) if c < 2 else None),
+    (11, lambda c: draw_hay(c, seed(11, c)) if c in (0, 1, 3) else None),
+    (12, lambda c: draw_wood_crate(c, seed(12, c)) if c < 2 else None),
+    (13, lambda c: draw_barrier(c, seed(13, c)) if c < 3 else None),
+    (14, lambda c: draw_tank_trap(c, seed(14, c)) if c < 2 else None),
 ]
 
 sheet = Image.new('RGBA', (CELL * COLS, CELL * ROWS), (0, 0, 0, 0))

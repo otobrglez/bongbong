@@ -632,7 +632,7 @@ layers = [
   | `Wreck` gains its cause | a different death for a burn-out, a ram or a blast |
   | `Ricochet` gains the surface and the shot kind | a bullet glancing off a hull against a shell off iron |
   | `Ram` gains the closing speed | the crash tier online |
-  | `Slam { slot, x, y, strength }` is added, and sent | slams and crashes online, where a client has no physics |
+  | a hull's slam into a fixed face, sent (built: `HullStruck`, BB-205) | slams and crashes online, where a client has no physics |
   | `BongBite` gains its position | a bite placed in space |
   | `RoundEnded` gains its reason | the right ending stinger |
   | `ObstacleDestroyed` gains its cause | a hammer throw against a destruction |
@@ -857,8 +857,10 @@ Where the build departs from the text:
   global was needed.
 - **Settings:** mute is the HUD's sound button and the M key, kept beside the progress. There are
   no volume sliders yet: the levels are the `audio` tuning group's.
-- **Slams online** are a new `Event::Slam`, sent (`PROTOCOL_VERSION` 36). The other payload
-  changes of §4.10 are still to do: `Hit`'s shooter, `Wreck`'s cause, `Ricochet`'s surface,
+- **Slams online** are `Event::HullStruck` (BB-205), which is sent and carries the face's
+  material, `Surface` and speed: the slam's cue follows the surface (`source::slam_cue`) and its
+  strength the speed (`audio_slam_full_speed`). The sound adds nothing to the wire. The other
+  payload changes of §4.10 are still to do: `Hit`'s shooter, `Wreck`'s cause, `Ricochet`'s surface,
   `Ram`'s speed, `BongBite`'s position, `RoundEnded`'s reason, `ObstacleDestroyed`'s cause.
 - **Takes are pre-picked by measurement** (`tools/audio/process.py`) and reviewed by the owner on
   the audition page. The real charge is about 3.3 credits a second of audio per take, a third of

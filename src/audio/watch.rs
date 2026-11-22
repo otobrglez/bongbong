@@ -67,7 +67,7 @@ pub const WATCHERS: &[WatcherSpec] = &[
     WatcherSpec { id: "wreck", entity: "wreck", reads: "burning wrecks, inside the fire clusters", cues: &["world.fire"], online: "the same" },
     WatcherSpec { id: "sky", entity: "weather", reads: "Game::look (rain, sand, snow)", cues: &["world.rain", "world.wind", "world.wind.soft", "world.night"], online: "the same: the sky is the map's" },
     WatcherSpec { id: "place", entity: "map", reads: "the map's theme and biome", cues: &["bed.grass", "bed.desert", "bed.valley", "bed.floodplain", "bed.karst"], online: "the same" },
-    WatcherSpec { id: "scrape", entity: "tank", reads: "Game::contacts held against a wall", cues: &["vehicle.scrape"], online: "silent: a client steps no physics (a slam is `Event::Slam`, which is sent)" },
+    WatcherSpec { id: "scrape", entity: "tank", reads: "Game::contacts held against a wall", cues: &["vehicle.scrape"], online: "silent: a client steps no physics (a slam is `Event::HullStruck`, which is sent)" },
     WatcherSpec { id: "aircraft", entity: "aircraft", reads: "Game::aircraft", cues: &["air.heli", "air.jet"], online: "the same" },
     WatcherSpec { id: "flyby", entity: "shell, bullet", reads: "projectiles' closest approach to a seat's own tank", cues: &["flyby.shell", "flyby.bullet"], online: "the same: projectiles replicate" },
     WatcherSpec { id: "thunder", entity: "weather", reads: "weather::lightning on the round clock: a flash's rising edge", cues: &["world.thunder"], online: "the same: the clock is the round's" },
@@ -292,7 +292,7 @@ impl Watchers {
     }
 
     /// A hull held against a wall scrapes; its slam into it is
-    /// `Event::Slam`, which `bind.rs` plays.
+    /// `Event::HullStruck`, which `bind.rs` plays.
     fn scrapes(&mut self, game: &Game, t: &Tuning, wishes: &mut Vec<Wish>) {
         for (slot, at, impulse, _) in game.contacts() {
             if impulse >= t.contact_fx_min_impulse * 4.0 && impulse < t.ram_fx_min_impulse {

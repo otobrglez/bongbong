@@ -380,7 +380,7 @@ fn remove_tiles(game: &mut Game, dead: &BTreeSet<u16>, cols: u16) {
         .world
         .query::<(Entity, &Obstacle)>()
         .iter()
-        .filter(|(_, o)| dead.contains(&cell_index(cols, o.cell())))
+        .filter(|(_, o)| dead.contains(&cell_index(cols, o.key_cell())))
         .map(|(e, o)| (e, o.body, o.material, o.position))
         .collect();
     let removed = !gone.is_empty();
@@ -434,6 +434,7 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_zones(game, s, cols);
     apply_air(game, s);
     apply_well_drums(game, s, cols);
+    apply_loose(game, s, cols);
     apply_craters(game, s, cols);
     apply_rubble(game, s, cols);
     apply_volcano_shifts(game, s);
@@ -735,6 +736,12 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presse
     let mut dead = BTreeSet::new();
     for (i, event) in s.events.iter().enumerate() {
         match *event {
+            // A loose drum may have gone off anywhere: it is known by the
+            // cell it was placed in (`Event::LooseGone`).
+            WireEvent::LooseGone { col, row } => {
+                dead.insert(cell_index(cols, (col as i32, row as i32)));
+            }
+            WireEvent::ObstacleDestroyed { material, .. } if material.is_loose() => {}
             WireEvent::ObstacleDestroyed { x, y, .. } => {
                 let at = Position::new(dequantise_pos(x), dequantise_pos(y));
                 dead.insert(cell_index(cols, map::world_to_cell(at)));
@@ -743,6 +750,16 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presse
                 let from = Position::new(dequantise_pos(x), dequantise_pos(y));
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
                 game.drum_in_flight(from, to, drum as i32);
+            }
+            // A crate a blast tossed hops to where it lands on the replica too.
+            WireEvent::CrateTossed { kind, x, y, to_x, to_y } if show.drawn() => {
+                let from = Position::new(dequantise_pos(x), dequantise_pos(y));
+                let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
+                game.crate_in_air(kind, from, to);
+            }
+            // A tree a hull hit shakes its crown on the replica too.
+            WireEvent::HullStruck { material: Some(m), x, y, nx, ny, speed, .. } if show.drawn() && m.is_tree() => {
+                game.shake_tree(Position::new(dequantise_pos(x), dequantise_pos(y)), Position::new(nx, ny), speed);
             }
             // A print is the room's oil from now on, drawn or not: a flame
             // the room lights there is a fire the snapshots list.
@@ -815,7 +832,7 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
         .query::<(Entity, &Obstacle)>()
         .iter()
         .filter(|(_, o)| !o.destroyed)
-        .map(|(e, o)| (e, cell_index(cols, o.cell())))
+        .map(|(e, o)| (e, cell_index(cols, o.key_cell())))
         .collect();
     let mut refit = Vec::new();
     for (entity, cell) in live {
@@ -1341,6 +1358,30 @@ fn apply_orbs(game: &mut Game, s: &Snapshot) {
     }
     orbs.sort_by_key(|o| o.id);
     game.orbs = orbs;
+}
+
+/// The loose drums where the snapshot has them (`LooseState`): one listed
+/// stands where it says, one not listed on its own cell's centre, body
+/// and all - the prediction sandbox's hull meets them where the room's
+/// did. A replica's drum is never stepped, so its velocity is nothing.
+fn apply_loose(game: &mut Game, s: &Snapshot, cols: u16) {
+    let at: BTreeMap<u16, Position> = s.loose.iter().map(|d| (d.home, Position::new(dequantise_pos(d.x), dequantise_pos(d.y)))).collect();
+    let moved: Vec<(rapier2d::prelude::RigidBodyHandle, Position)> = game
+        .world
+        .query::<&mut Obstacle>()
+        .iter()
+        .filter(|o| o.material.is_loose() && !o.destroyed)
+        .filter_map(|o| {
+            let to = at.get(&cell_index(cols, o.home)).copied().unwrap_or_else(|| map::cell_to_world(o.home.0, o.home.1));
+            (o.position != to).then(|| {
+                o.position = to;
+                (o.body, to)
+            })
+        })
+        .collect();
+    for (body, to) in moved {
+        game.physics_mut().set_position(body, to);
+    }
 }
 
 /// The drums the wells hold as the snapshot has them: where each is is
@@ -2545,6 +2586,54 @@ mod tests {
         assert!(flash.distance_to(lens) < 0.5, "the flash is the lens's: {flash:?} vs {lens:?}");
     }
 
+    /// A loose drum the room shoves stands where the room has it on the
+    /// replica, to the wire's quarter pixel, known by the cell it was
+    /// placed in; set off where it went, it is gone on the replica too.
+    #[test]
+    fn a_shoved_drum_stands_where_the_room_has_it_and_goes_off_there() {
+        let map = "version = 1\ntanks = 0\ncells.\"2,2\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"barrel\", drum = \"oil\" }\n";
+        let mut game = quiet_round(map, 7, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        let drum = |g: &Game| g.world.query::<&Obstacle>().iter().find(|o| o.material.is_loose() && !o.destroyed).map(|o| (o.home, o.position, o.body));
+        let (_, _, body) = drum(&game).expect("the drum stands");
+        game.physics_mut().set_velocity(body, Position::new(150.0, 0.0));
+        for _ in 0..40 {
+            step_and_apply(&mut game, &mut replica);
+        }
+        let (home, room, _) = drum(&game).expect("the room's drum");
+        let (on_replica, shown, _) = drum(&replica).expect("the replica's drum");
+        assert_eq!((home, on_replica), ((10, 10), (10, 10)), "known by where it was placed");
+        assert!(room.x - map::cell_to_world(10, 10).x > 24.0, "shoved east: {room:?}");
+        assert!(room.distance_to(shown) <= 0.25, "the replica's stands where the room's does: {shown:?} for {room:?}");
+        game.debug_detonate(room).expect("a drum stands there");
+        for _ in 0..4 {
+            step_and_apply(&mut game, &mut replica);
+        }
+        assert!(drum(&game).is_none() && drum(&replica).is_none(), "gone on both");
+    }
+
+    /// A crate a blast tosses hops on the replica from where it lay to
+    /// where the room lands it, and lies there afterwards.
+    #[test]
+    fn a_tossed_crate_hops_on_the_replica_and_lies_where_the_room_landed_it() {
+        let map = "version = 1\ntanks = 0\ncells.\"2,2\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"barrel\", drum = \"oil\" }\ncells.\"13,10\" = { kind = \"pickup\", pickup = \"ammo\" }\n";
+        let mut game = quiet_round(map, 7, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_detonate(map::cell_to_world(10, 10)).expect("the drum");
+        step_and_apply(&mut game, &mut replica);
+        let lies = |g: &Game| g.world.query::<&Pickup>().iter().map(|p| p.at()).next().expect("the crate");
+        let to = lies(&game);
+        assert!(to.x > map::cell_to_world(13, 10).x + 24.0, "tossed: {to:?}");
+        assert!(replica.crate_toss_to(lies(&replica)).is_some(), "in the air on the replica");
+        // The arc runs on the replica's own clock between snapshots.
+        for _ in 0..40 {
+            step_and_apply(&mut game, &mut replica);
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(replica.crate_toss_to(lies(&replica)).is_none(), "landed");
+        assert!(lies(&replica).distance_to(to) <= 0.25, "where the room landed it: {:?} for {to:?}", lies(&replica));
+    }
+
     #[test]
     fn a_launched_drum_flies_on_the_replica() {
 
@@ -3135,6 +3224,7 @@ cells."16,10" = { kind = "tall_grass" }
             v
         };
         let (mut puffs, mut bursts) = (0, 0);
+        let mut seen_missiles = std::collections::BTreeSet::new();
         for frame in 0..240 {
             let fire = Intent { fire: frame == 0, ..Intent::default() };
             let before = replica.muzzle_flashes.len();
@@ -3143,8 +3233,16 @@ cells."16,10" = { kind = "tall_grass" }
             snapshot(&mut replica, &snap);
             let launched = game.muzzle_flashes.iter().filter(|m| m.time == 0.0).count();
             let drawn = replica.muzzle_flashes.len() - before;
-            puffs += launched;
-            assert_eq!(drawn, launched, "frame {frame}: a puff per missile launched");
+            let tubes = game.world.query::<&Missile>().iter().filter(|m| !seen_missiles.contains(&m.id)).count();
+            seen_missiles.extend(game.world.query::<&Missile>().iter().map(|m| m.id));
+            puffs += tubes;
+            // An enemy's gun on the same frame is not the volley's: a
+            // minigun's spin-up flashes on the replica on its `Fired` and on
+            // the room with its first round.
+            let enemy_fired = game.events().iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot, .. } if *slot != 0));
+            if !enemy_fired && launched == tubes {
+                assert_eq!(drawn, launched, "frame {frame}: a puff per missile launched");
+            }
             if game.events().iter().any(|e| matches!(e, crate::simulation::Event::MissileBlast { .. })) {
                 bursts += 1;
                 let (client, server) = (fresh_blasts(&replica), fresh_blasts(&game));
