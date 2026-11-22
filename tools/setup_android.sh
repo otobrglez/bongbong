@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-time: the Android SDK pieces the port needs (command-line tools, the
 # NDK, a platform, an arm64 system image, the `bongbong` virtual device),
-# cargo-ndk, and raylib 6.0 (the tree vendored in the sola-raylib-sys crate)
+# cargo-ndk, and raylib (the tree vendored in the sola-raylib-sys crate)
 # built for Android - PLATFORM=Android, OpenGL ES 2.0, the NDK's
 # native_app_glue compiled in - installed under $BONGBONG_ANDROID_LIBS.
 # android/build.rs links the game against that prefix. See
@@ -102,12 +102,11 @@ fi
 RL_SYS_VERSION="$(awk '/^name = "sola-raylib-sys"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)"
 RL_VENDORED="$(ls -d "$HOME"/.cargo/registry/src/*/sola-raylib-sys-"$RL_SYS_VERSION"/raylib 2>/dev/null | head -1 || true)"
 [[ -d "$RL_VENDORED" ]] || { echo "[setup-android] sola-raylib-sys-$RL_SYS_VERSION is not in the cargo registry; run 'cargo fetch' first" >&2; exit 1; }
-# A fresh copy of the vendored tree (the registry is never edited) with
-# raylib master's relaunch fix on top (tools/android/raylib-android-relaunch.patch).
+# A fresh copy of the vendored tree, so the build never writes into the
+# registry.
 RL="$SRC/raylib"
 rm -rf "$RL"
 cp -R "$RL_VENDORED" "$RL"
-patch -p1 -d "$RL" --silent < tools/android/raylib-android-relaunch.patch
 PREFIX="$BONGBONG_ANDROID_LIBS/$ANDROID_ABI"
 rm -rf "$BUILD/raylib-$ANDROID_ABI"
 cmake -S "$RL" -B "$BUILD/raylib-$ANDROID_ABI" -G "Unix Makefiles" \

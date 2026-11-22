@@ -6,7 +6,7 @@
 
 use clap::Parser as _;
 use std::ffi::{c_char, c_int, c_void};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::OnceLock;
 
 #[repr(C)]
@@ -37,6 +37,7 @@ unsafe extern "C" {
     fn SDL_GetWindowSafeArea(window: *mut c_void, rect: *mut SdlRect) -> bool;
     fn SDL_GetWindowSizeInPixels(window: *mut c_void, w: *mut c_int, h: *mut c_int) -> bool;
     fn SDL_GetPreferredLocales(count: *mut c_int) -> *mut *mut SdlLocale;
+    fn SDL_GetWindows(count: *mut c_int) -> *mut *mut c_void;
     fn SDL_free(mem: *mut c_void);
     /// UIKit's Reduce Motion (Settings > Accessibility > Motion): a plain
     /// C function returning a `BOOL`, one byte on arm64. UIKit is linked
@@ -56,6 +57,33 @@ static REAL_BIND_FRAMEBUFFER: OnceLock<BindFn> = OnceLock::new();
 static REAL_BIND_RENDERBUFFER: OnceLock<BindFn> = OnceLock::new();
 static SCREEN_FRAMEBUFFER: AtomicU32 = AtomicU32::new(0);
 static SCREEN_RENDERBUFFER: AtomicU32 = AtomicU32::new(0);
+static WINDOW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The `SDL_Window` raylib opened, asked of SDL itself: raylib's
+/// `GetWindowHandle` names the platform's native window (an `NSWindow` on
+/// Apple's platforms), and an iOS app has none, so it answers null there.
+/// The handle is the proof that InitWindow ran; raylib opens one window
+/// and keeps it, so the first answer is kept. Null if SDL has none.
+fn sdl_window(_rl: &sola_raylib::RaylibHandle) -> *mut c_void {
+    let kept = WINDOW.load(Ordering::Relaxed);
+    if !kept.is_null() {
+        return kept;
+    }
+    // SAFETY: main thread; SDL_GetWindows returns a null-terminated array
+    // of `count` live windows that is ours to SDL_free, read before that.
+    let window = unsafe {
+        let mut count: c_int = 0;
+        let list = SDL_GetWindows(&mut count);
+        if list.is_null() {
+            return std::ptr::null_mut();
+        }
+        let first = if count > 0 { *list } else { std::ptr::null_mut() };
+        SDL_free(list as *mut c_void);
+        first
+    };
+    WINDOW.store(window, Ordering::Relaxed);
+    window
+}
 
 unsafe extern "C" fn bind_framebuffer_routed(target: u32, id: u32) {
     let id = if id == 0 { SCREEN_FRAMEBUFFER.load(Ordering::Relaxed) } else { id };
@@ -89,7 +117,7 @@ pub fn route_default_framebuffer(rl: &mut sola_raylib::RaylibHandle) {
     // SAFETY: main thread, right after InitWindow; the glad table is
     // loaded and nothing else writes it.
     unsafe {
-        let props = SDL_GetWindowProperties(rl.get_window_handle());
+        let props = SDL_GetWindowProperties(sdl_window(rl));
         let fbo = SDL_GetNumberProperty(props, c"SDL.window.uikit.opengl.framebuffer".as_ptr(), 0);
         let rbo = SDL_GetNumberProperty(props, c"SDL.window.uikit.opengl.renderbuffer".as_ptr(), 0);
         if fbo <= 0 || rbo <= 0 {
@@ -234,7 +262,7 @@ pub fn set_hints() {
 pub fn log_screen_geometry(rl: &mut sola_raylib::RaylibHandle) {
     // SAFETY: main thread, after InitWindow; the out-parameters are ours.
     unsafe {
-        let window = rl.get_window_handle();
+        let window = sdl_window(rl);
         let (mut pw, mut ph) = (0, 0);
         SDL_GetWindowSizeInPixels(window, &mut pw, &mut ph);
         let mut safe = SdlRect { x: 0, y: 0, w: 0, h: 0 };
@@ -262,7 +290,7 @@ pub fn log_screen_geometry(rl: &mut sola_raylib::RaylibHandle) {
 pub fn safe_area_insets(rl: &mut sola_raylib::RaylibHandle) -> Option<crate::hud::Insets> {
     // SAFETY: main thread, after InitWindow; the rect is ours.
     let safe = unsafe {
-        let window = rl.get_window_handle();
+        let window = sdl_window(rl);
         let mut safe = SdlRect { x: 0, y: 0, w: 0, h: 0 };
         if window.is_null() || !SDL_GetWindowSafeArea(window, &mut safe) || safe.w <= 0 || safe.h <= 0 {
             return None;

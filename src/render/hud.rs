@@ -213,7 +213,7 @@ pub(crate) fn draw_cluster_plate(d: &mut impl RaylibDraw, r: Rectangle, a: f32) 
 /// loupe's: the dark fill and an edge in `edge`.
 pub(crate) fn draw_plate(d: &mut impl RaylibDraw, r: Rectangle, edge: Color, a: f32) {
     d.draw_rectangle_rounded(r, 0.12, 6, faded(PLATE_FILL, a));
-    d.draw_rectangle_rounded_lines_ex(r, 0.12, 6, 1.5, faded(edge, a));
+    crate::render::shapes::rounded_outline(d, r, 0.12, 6, 1.5, faded(edge, a));
 }
 
 /// One seat's vitals along the first `row_h` of `block`, centred on that
@@ -623,7 +623,7 @@ pub fn draw_panel(d: &mut impl RaylibDraw, panel: Rectangle) {
     let shadow = Rectangle::new(panel.x + PANEL_SHADOW_PT, panel.y + PANEL_SHADOW_PT, panel.width, panel.height);
     d.draw_rectangle_rounded(shadow, roundness, 8, PANEL_SHADOW);
     d.draw_rectangle_rounded(panel, roundness, 8, PANEL_FILL);
-    d.draw_rectangle_rounded_lines_ex(panel, roundness, 8, 1.5, PANEL_EDGE);
+    crate::render::shapes::rounded_outline(d, panel, roundness, 8, 1.5, PANEL_EDGE);
 }
 
 /// A panel's corners' radius, in points.
@@ -657,7 +657,7 @@ fn draw_faded_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, colo
     if let Some(fill) = fill {
         d.draw_rectangle_rounded(rect, 0.2, 8, faded(fill, a));
     }
-    d.draw_rectangle_rounded_lines_ex(rect, 0.2, 8, 2.0, faded(color, a));
+    crate::render::shapes::rounded_outline(d, rect, 0.2, 8, 2.0, faded(color, a));
     let w = width(label, HUD_TEXT_SIZE);
     d.draw_text(label, (rect.x + (rect.width - w as f32) / 2.0) as i32, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, faded(color, a));
 }

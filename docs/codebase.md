@@ -2069,7 +2069,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   builds (the web, iOS, Android; ES 2's own is 2048), loaded after the window opens and held by
   `app.rs`'s `App`. `render/shapes.rs` is the walls sheet's texture with the white block raylib draws
   its shapes from (`SetShapesTexture`), so a rectangle and a wall sprite share a batch - a wall
-  piece is a shadow rectangle then its sprite. The texture is the sheet at the origin of one twice
+  piece is a shadow rectangle then its sprite. Its `rounded_outline` is the one way a rounded
+  outline is drawn (HUD panels and buttons, the lobby, the level select, the builder): a band
+  outside the rectangle, which raylib 6.2 draws for a negative thickness - a positive one goes
+  inside and shrinks every box it rings. The texture is the sheet at the origin of one twice
   as tall and no wider: halving a texture coordinate loses no bit, so every sample lands on the
   texel it did. **No sheet is packed into an atlas at an offset or another size**: a turned
   sprite's samples then round onto other texels (measured: 1 to 20 pixels a frame on the default

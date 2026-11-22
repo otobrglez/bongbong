@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time: build the iOS *simulator* slice of SDL3 (static) and of raylib
-# 6.0 (the tree vendored in the sola-raylib-sys crate) with raylib's SDL
+# (the tree vendored in the sola-raylib-sys crate) with raylib's SDL
 # backend and the OpenGL ES 2.0 renderer, and install both under
 # $IOS_PREFIX (default ~/.local/share/bongbong-ios/sim). build.rs links the
 # game against that prefix when the target is aarch64-apple-ios-sim. See
