@@ -71,8 +71,10 @@ pub struct Air<'a> {
 /// in it. The ground pass's patches - the same noise, more of it as
 /// `snow_cover` rises, in three hard steps - in one flake colour, since
 /// the ground's own relief under it is the pass's alone. Nothing under a
-/// sky without snow.
-pub fn snow_cover(look: &Look, view: Rectangle, t: &Tuning, out: &mut Vec<Block>) {
+/// sky without snow. Water (`water`, the tiles' own shapes) takes no snow:
+/// under rules that froze it (`frozen`) it is ice, the ground pass's pale
+/// blue, and otherwise it shows as it is.
+pub fn snow_cover(look: &Look, view: Rectangle, t: &Tuning, frozen: bool, water: impl Fn(Vec2) -> bool, out: &mut Vec<Block>) {
     let s = (look.snow * t.snow_cover).clamp(0.0, 1.0);
     if s <= 0.0 {
         return;
@@ -81,10 +83,16 @@ pub fn snow_cover(look: &Look, view: Rectangle, t: &Tuning, out: &mut Vec<Block>
     // ground's flake for every tile.
     let flake = [0.92 * 0.97, 0.95 * 0.97, 0.97];
     tiles(view, out, |p| {
+        if water(p) {
+            return if frozen { color(ICE, 1.0) } else { Color::new(0, 0, 0, 0) };
+        }
         let cover = smoothstep(0.62 - 0.5 * s, 0.8 - 0.5 * s, fbm(p.x * 0.035, p.y * 0.035));
         color(flake, steps(cover, 3.0) * 0.86)
     });
 }
+
+/// Ice over frozen water, the ground pass's own (`weather_ground.fs`).
+const ICE: Rgb = [0.72, 0.86, 0.95];
 
 /// The air over the finished field in `view` (world px): fog, blowing
 /// sand, rain and snow, in the sky pass's order, every block touching the
@@ -396,7 +404,7 @@ mod tests {
         let look = Look::of(weather, &t);
         let air_now = Air { look: &look, time, ambient: look.ambient, seats, gust: None };
         let (mut ground, mut sky) = (Vec::new(), Vec::new());
-        snow_cover(&look, VIEW, &t, &mut ground);
+        snow_cover(&look, VIEW, &t, false, |_| false, &mut ground);
         air(&air_now, VIEW, &t, &mut sky);
         (ground, sky)
     }

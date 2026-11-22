@@ -449,6 +449,32 @@ fn tile_px(tile: i32, sx: usize, sy: usize) -> FloorPx {
     }
 }
 
+/// How many tile shapes `SHAPE_ATLAS` holds: one per road and water tile.
+pub const SHAPE_COUNT: usize = crate::ground_mask::TILE_MASKS.len();
+
+/// Every road and water tile's shape side by side, for the weather's
+/// ground pass (`static/weather_ground.fs`): `SHAPE_COUNT * 16` texels
+/// across and 16 down, RGBA8 row by row, tile `k` of `ground_mask` from
+/// column `16 * k`. Red is what the source pixel is: 0 plain ground, 85 a
+/// bank, 170 water, 255 a road's dirt. A cell names its tile's shape in
+/// the cell mask (`GroundGrid::shape_index`), so the pass reads water and
+/// dirt off the tiles' shapes, as `floor_px` does, rather than off their
+/// colour.
+pub fn shape_atlas() -> (usize, usize, Vec<u8>) {
+    let (w, h) = (SHAPE_COUNT * 16, 16);
+    let mut bytes = vec![0u8; w * h * 4];
+    for (k, (_, rows)) in crate::ground_mask::TILE_MASKS.iter().enumerate() {
+        for (sy, row) in rows.iter().enumerate() {
+            for sx in 0..16 {
+                let i = (sy * w + k * 16 + sx) * 4;
+                bytes[i] = ((row >> (2 * sx)) & 0b11) as u8 * 85;
+                bytes[i + 3] = 255;
+            }
+        }
+    }
+    (w, h, bytes)
+}
+
 /// Names every floor shade `build` bakes, so a GPU copy of one is never
 /// taken for another's (`render::canvas::BlockTexture`).
 static NEXT_SHADE_STAMP: AtomicU64 = AtomicU64::new(1);
@@ -555,6 +581,15 @@ impl GroundGrid {
     /// The plank decks the biome draws (`Deck`), none with no biome.
     pub fn decks(&self) -> &[Deck] {
         &self.decks
+    }
+
+    /// Which shape of `shape_atlas` the tile drawn at world cell (`col`,
+    /// `row`) has, counted from 1; 0 for a tile that is neither road nor
+    /// water (grass, a drift) and off the grid.
+    pub fn shape_index(&self, col: i32, row: i32) -> u8 {
+        let Some(i) = self.idx(col - self.layout.origin.0, row - self.layout.origin.1) else { return 0 };
+        let tile = self.tiles[i][0];
+        crate::ground_mask::TILE_MASKS.binary_search_by_key(&tile, |(id, _)| *id).map_or(0, |k| k as u8 + 1)
     }
 
     /// The water in map cell (`col`, `row`) as the weather's ground pass

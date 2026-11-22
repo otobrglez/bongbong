@@ -184,8 +184,20 @@ island, and they cluster there more.
    tileset (`Game::paint_ground`, into its own target) drawn onto the
    field with the sky's mark on it - snow cover in three steps, ice over
    the water, wet earth, puddles on the road cells, splashes and rings on
-   the water. Water is the cell mask's word and the pixel's own blue
-   together, so a shore's grass in a water cell is ground. Everything else
+   the water. Water and a road's dirt are read off the shape of the tile
+   drawn under the pixel, as the game reads them (`GroundGrid::floor_px`):
+   the cell mask's blue names each cell's tile (`GroundGrid::shape_index`)
+   and a small atlas holds every road and water tile's 16 x 16 shape
+   (`ground::shape_atlas`, uploaded once with the passes). So a shore's
+   grass is ground, and a lake's corner rounded into a grass cell is water
+   that freezes and takes the rain with the rest. Water must also be blue,
+   so a biome's deck planks laid over the water under them stay dry; a
+   cell whose tile has no shape (plain grass) falls back to the cell
+   mask's water and the pixel's own blue. On a field drawn in a biome
+   (`materialWet`, docs/biomes.md) each material takes the rain its own
+   way - pale stone darkens least, earth (silt, a packed shoulder, a
+   road's dirt) most - and the puddles, only on a road's dirt, are fewer,
+   smaller and lighter. Everything else
    on the floor - tread marks, scorches, rubble, oil, portals
    (`Game::paint_floor_marks`) - lies over it, so a tank leaves its
    tracks in the snow, and the walls and hulls drawn later stay dry. The
@@ -238,7 +250,9 @@ on stderr, and every sky is then drawn plainly, straight into
 
 1. **The snow on the ground**, under a snowy sky: the bare ground tileset,
    then `plain::snow_cover`'s blocks - the ground pass's patches from the
-   same noise, in three hard steps, one flake colour - then the marks, the
+   same noise, in three hard steps, one flake colour, and over the water,
+   by the tiles' shapes (`StagePainter::water_at`), the pass's pale ice
+   where the rules froze it and nothing otherwise - then the marks, the
    tiles and everything standing, so tracks still show dark in the snow.
 2. **The light**: the light map is drawn as ever - it is a fan of
    coloured triangles, which needs no shader - and multiplied onto the
@@ -258,8 +272,8 @@ than per 2 px block, stepped hard rather than dithered, and a run of
 equal tiles along a row is one rectangle - a few hundred to a few
 thousand a frame. The light's bands, the moonlit grey, the dusk sun, the
 vignette, the heat haze, fog and rain lit by a lamp, and the ground's wet
-sheen, puddles and ice are the passes' alone; frozen water lies under the
-snow cover rather than as ice. The `weather_without_shaders` knob draws
+sheen and puddles are the passes' alone; frozen water is one flat ice
+tone, per tile. The `weather_without_shaders` knob draws
 every sky this way where the shaders do work, and the dev server's
 `weather` reply and `status.weather` carry `without_shaders`, true for
 either reason.

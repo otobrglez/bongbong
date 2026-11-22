@@ -16,8 +16,13 @@
 # than the broadleaf - a willow takes 10 to fell, a birch 8 and goes over
 # quicker under a ram - that hide a hull just the same. Long sight lines down the river
 # for the longbow; laser and missiles on the far bank's hills.
+#
+# A valley climate: the round's seed picks clear, dusk, rain, fog or snow.
+# Rain halves every hull's grip, fog shortens the enemies' sight, and snow
+# freezes the river, so the whole of it becomes open ground.
 
 version = 1
+weather = ["clear", "dusk", "rain", "fog", "snow"]
 bong = "oggle"
 enemy_bong = "fuzz"
 size = [62, 31]

@@ -77,9 +77,8 @@ water tile that says, for each of its 16 x 16 source pixels, whether it is
 water, bank, road dirt or plain ground; `GroundGrid::floor_px` answers for
 any field pixel through the tile drawn there. A painted water cell is not
 all water - a lake's shore runs half a cell inside its outline - so a cell
-test would put gravel in the river. The rain shader still tells water by
-colour (`static/weather_ground.fs`); moving it onto the mask is stage 4
-(BB-196).
+test would put gravel in the river. The weather's ground pass reads the
+same shapes (stage 4, below).
 
 Everything is hashed from position with no seed: a map draws the same in
 every round, in the builder and in its thumbnail. The noise is plain
@@ -109,8 +108,7 @@ they share one colour).
 - **What follows it.** The current marks take the ripple tone, the spray
   the ripple and water tones (`fx::water_tints`), the minimap its light
   and open-water tones (`minimap::Class::color_in`). Foam stays white. The
-  rain and ice shaders still tell water by colour, and every valley water
-  tone passes their test; moving them onto the tile mask is stage 4.
+  rain and ice read water off the tiles' shapes (stage 4, below).
 
 ### Decks (stage 2, BB-194)
 
@@ -152,10 +150,34 @@ rules are BB-62.
   look, which need new rows on the walls sheet through every damage state
   (BB-203).
 
+### Weather (stage 4, BB-196)
+
+- **Water by the tiles' shapes.** The ground pass reads water and a road's
+  dirt off the shape of the tile under each pixel (the cell mask's blue
+  names it, `ground::shape_atlas` holds the shapes), not off its colour:
+  rain rings land only on real water, puddles only on a road's dirt, and
+  ice covers exactly the water drawn - a deck's planks stay dry, and a
+  lake corner rounded into a grass cell freezes with the rest (BB-200,
+  which this fixes on every map). The shader-free fallback lays ice on the
+  water by the same shapes instead of snow.
+- **Rain by material.** With a biome each material takes the rain its own
+  way: pale gravel darkens least, earth - damp silt, a packed shoulder, a
+  road's dirt - most; puddles are fewer, smaller and lighter.
+- **Snow over the materials.** Gravel, silt and shoulders take snow like
+  the grass round them, from the same noise. A dark seam at the bank was
+  considered and left out: the ice's own pale blue and the shore outline
+  already mark where it begins, and a dark line round frozen water would
+  read as open water on ice a hull can drive. What shows through the snow
+  in patches is the ground under it, here as on any map.
+- **Serpent River's skies**: `weather = ["clear", "dusk", "rain", "fog",
+  "snow"]`, the round's seed picking one. The rules come with them: rain
+  halves grip, fog shortens the enemies' sight, snow freezes the river so
+  the whole of it is open ground. This is level design, live whatever the
+  biome switch says.
+
 ### Later stages
 
-Weather on the new ground and
-Serpent River's skies (BB-196), the whole map with its margins, minimap,
+The whole map with its margins, minimap,
 thumbnail and tread marks (BB-197), the other two biomes and the builder's
 LOOK row (BB-198). The floor past an arena's field (`GroundGrid::beyond`)
 carries no materials yet: a block layer starts at the field's corner.

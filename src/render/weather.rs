@@ -178,6 +178,9 @@ struct GroundLocs {
     snow: i32,
     frozen: i32,
     cell_mask: i32,
+    shapes: i32,
+    shape_count: i32,
+    material_wet: i32,
 }
 
 struct SkyLocs {
@@ -215,6 +218,9 @@ struct PassShaders {
     light_locs: LightLocs,
     ground: Shader,
     ground_locs: GroundLocs,
+    /// Every road and water tile's shape (`ground::shape_atlas`), which
+    /// the ground pass reads a pixel's water and dirt from.
+    shapes: Texture2D,
     sky: Shader,
     sky_locs: SkyLocs,
 }
@@ -438,6 +444,9 @@ pub struct WeatherFrame {
     gust: Option<(f32, Vector2)>,
     /// The rules froze the round's water (`WaterLayout::is_frozen`).
     frozen: bool,
+    /// The field is drawn in a biome (docs/biomes.md): the rain wets its
+    /// materials each in its own way.
+    materials: bool,
     /// Drawn without the shaders (`weather::plain`): the light map
     /// multiplied in by a blend mode, the snow and the air as blocks.
     pub plain: bool,
@@ -461,8 +470,8 @@ impl WeatherFrame {
 
     /// The snow lying on the ground over the view, as plain blocks
     /// (`weather::plain::snow_cover`); none under a sky without snow.
-    pub fn plain_snow_cover(&self, out: &mut Vec<Block>) {
-        self.plain_snow_cover_over(self.view(), out);
+    pub fn plain_snow_cover(&self, water: impl Fn(Vec2) -> bool, out: &mut Vec<Block>) {
+        self.plain_snow_cover_over(self.view(), water, out);
     }
 
     /// The air over the view, as plain blocks (`weather::plain::air`).
@@ -472,8 +481,9 @@ impl WeatherFrame {
 
     /// `plain_snow_cover` over the world rectangle `view` rather than the
     /// camera's: a target of another view (`render::margin`).
-    pub fn plain_snow_cover_over(&self, view: Rectangle, out: &mut Vec<Block>) {
-        plain::snow_cover(&self.look, view, &self.tuning, out);
+    /// `water` says where a field point is water (`GroundGrid::floor_px`).
+    pub fn plain_snow_cover_over(&self, view: Rectangle, water: impl Fn(Vec2) -> bool, out: &mut Vec<Block>) {
+        plain::snow_cover(&self.look, view, &self.tuning, self.frozen, water, out);
     }
 
     /// `plain_air` over the world rectangle `view`.
@@ -534,6 +544,7 @@ pub fn margin_mask_bytes(scene: &Scene, grid: &crate::ground::GroundGrid) -> (i3
                     Depth::Deep | Depth::Ice => 255,
                 };
             }
+            bytes[i + 2] = grid.shape_index(wc, wr);
             bytes[i + 3] = 255;
         }
     }
@@ -733,6 +744,9 @@ impl PassShaders {
             snow: ground.get_shader_location("snow"),
             frozen: ground.get_shader_location("frozen"),
             cell_mask: ground.get_shader_location("cellMask"),
+            shapes: ground.get_shader_location("tileShapes"),
+            shape_count: ground.get_shader_location("shapeCount"),
+            material_wet: ground.get_shader_location("materialWet"),
         };
         let sky_locs = SkyLocs {
             view_origin: sky.get_shader_location("viewOrigin"),
@@ -764,7 +778,11 @@ impl PassShaders {
             gust_len: sky.get_shader_location("gustLen"),
             light_map: sky.get_shader_location("lightMap"),
         };
-        Ok(PassShaders { light, light_locs, ground, ground_locs, sky, sky_locs })
+        let (w, h, bytes) = crate::ground::shape_atlas();
+        let image = Image::gen_image_color(w as i32, h as i32, Color::BLACK);
+        let mut shapes = rl.load_texture_from_image(thread, &image).map_err(|e| format!("tile shapes: {e}"))?;
+        shapes.update_texture(&bytes).map_err(|e| format!("tile shapes: {e}"))?;
+        Ok(PassShaders { light, light_locs, ground, ground_locs, shapes, sky, sky_locs })
     }
 }
 
@@ -840,6 +858,7 @@ impl WeatherFx {
             seat_count,
             gust,
             frozen: scene.frozen,
+            materials: scene.ground.biome().is_some(),
             plain,
             tuning: t,
         })
@@ -896,7 +915,8 @@ impl WeatherFx {
 }
 
 /// The ground pass's per-cell facts about `scene`'s field, RGBA8 row by row:
-/// red the water's depth (0 dry, 128 a ford, 255 deep), green road. The
+/// red the water's depth (0 dry, 128 a ford, 255 deep), green road, blue
+/// the shape of the tile drawn there (`GroundGrid::shape_index`). The
 /// grid is the ground layer's: cell `(c, r)` centred on `(c, r) * 32`, one
 /// more column and row than the field is wide and tall.
 fn mask_bytes(scene: &Scene) -> (i32, i32, Vec<u8>) {
@@ -912,6 +932,7 @@ fn mask_bytes(scene: &Scene) -> (i32, i32, Vec<u8>) {
                 Depth::Shallow => 128,
                 Depth::Deep | Depth::Ice => 255,
             };
+            bytes[i + 2] = scene.ground.shape_index(c, r);
             bytes[i + 3] = 255;
         }
     }
@@ -1211,6 +1232,11 @@ pub trait StagePainter {
     /// What shines by itself, over the lit field; `day_pools` is
     /// `WeatherFrame::day_light_pools`.
     fn glowing<D: RaylibDraw>(&mut self, d: &mut D, day_pools: f32);
+
+    /// Whether field point `p` is water, by the tile drawn there
+    /// (`GroundGrid::floor_px`): where the snow drawn without the shaders
+    /// lays ice instead.
+    fn water_at(&self, p: Vec2) -> bool;
 }
 
 /// Pass 1 under `frame`'s sky into `target`, the size of the frame's view
@@ -1244,7 +1270,7 @@ pub fn run_stages(
         rl.draw_texture_mode(thread, crate::frame_stages::target(target), |mut d| {
             d.clear_background(Color::WHITE);
             d.draw_mode2D(in_target, |mut d, _| {
-                frame.plain_snow_cover(&mut blocks);
+                frame.plain_snow_cover(|p| painter.water_at(p), &mut blocks);
                 let snowed = !blocks.is_empty();
                 if snowed {
                     painter.ground(&mut d);
@@ -1325,12 +1351,19 @@ impl PassShaders {
         s.set_shader_value(l.splash_rate, t.rain_splash_rate);
         s.set_shader_value(l.snow, (frame.look.snow * t.snow_cover).clamp(0.0, 1.0));
         s.set_shader_value(l.frozen, if frame.frozen { 1.0f32 } else { 0.0 });
+        s.set_shader_value(l.shape_count, crate::ground::SHAPE_COUNT as f32);
+        s.set_shader_value(l.material_wet, if frame.materials { 1.0f32 } else { 0.0 });
         let (raw, mask_loc, mask_tex) = (*s.as_ref(), l.cell_mask, mask.texture);
+        let (shapes_loc, shapes_tex) = (l.shapes, *self.shapes.as_ref());
         d.draw_shader_mode(crate::frame_stages::shader(s), |mut sd| {
-            // SAFETY: a copy of the bound shader's handle and a live
-            // texture; raylib binds the sampler for this batch (it has to
-            // be set inside the shader mode, which resets the extra units).
-            unsafe { sola_raylib::ffi::SetShaderValueTexture(raw, mask_loc, mask_tex) };
+            // SAFETY: copies of the bound shader's handle and of live
+            // textures; raylib binds the samplers for this batch (they have
+            // to be set inside the shader mode, which resets the extra
+            // units).
+            unsafe {
+                sola_raylib::ffi::SetShaderValueTexture(raw, mask_loc, mask_tex);
+                sola_raylib::ffi::SetShaderValueTexture(raw, shapes_loc, shapes_tex);
+            }
             copy_over(&mut sd, source, at);
         });
     }

@@ -296,6 +296,10 @@ impl crate::render::weather::StagePainter for RoundStages<'_> {
     fn glowing<D: RaylibDraw>(&mut self, d: &mut D, day_pools: f32) {
         self.game.paint_field_glowing(d, self.textures, self.shots.as_deref_mut(), self.fx, day_pools, self.camera, self.ammo_seats);
     }
+
+    fn water_at(&self, p: crate::math::Vec2) -> bool {
+        self.game.ground.floor_px(p.x as i32, p.y as i32).is_water()
+    }
 }
 
 impl Game {

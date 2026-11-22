@@ -178,7 +178,7 @@ impl MarginFx {
                     d.clear_background(backdrop);
                     d.draw_mode2D(world, |mut d, _| {
                         floor.ground(&mut d);
-                        sky.plain_snow_cover_over(reach, &mut blocks);
+                        sky.plain_snow_cover_over(reach, |p| margin.ground.floor_px(p.x as i32, p.y as i32).is_water(), &mut blocks);
                         weather::draw_blocks(&mut d, &blocks);
                         floor.shade(&mut d);
                     });
