@@ -1171,6 +1171,10 @@ pub struct Tank {
     /// whatever a tile or another hull stopped. What a prop is rammed
     /// with (`Game::ram_props`).
     pub ram_velocity: Vec2,
+    /// The hardest contact this hull had with a wall or a tile last step
+    /// (`Game::record_slams`), and the frame of its last slam.
+    pub slam_impulse: f32,
+    pub slam_frame: Option<u64>,
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
@@ -1283,6 +1287,8 @@ impl Default for Tank {
             tread_press: 1.0,
             velocity: Vec2::new(0.0, 0.0),
             ram_velocity: Vec2::new(0.0, 0.0),
+            slam_impulse: 0.0,
+            slam_frame: None,
             body: None,
 
             owner: Owner::Player(0),

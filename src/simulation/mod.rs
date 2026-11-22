@@ -626,6 +626,13 @@ pub enum Event {
     /// than pretending to report an outcome. Sum it for "how hard the pack is
     /// shoving itself", never for "damage dealt".
     Ram { slot: usize, other_slot: usize, damage: f32 },
+    /// A hull slammed into a wall, a tile or the field's edge: its hardest
+    /// contact rose past `ram_fx_min_impulse`, `ram_fx_rise` times its last
+    /// step's, `ram_fx_gap_seconds` after its last slam. `strength` is 0.3
+    /// to 1 (`ram_fx_full_impulse` and up). A tank-on-tank blow is a `Ram`.
+    /// Told so a client, which steps no physics, hears it too
+    /// (docs/sound-system-prd.md section 4.10).
+    Slam { slot: usize, x: f32, y: f32, strength: f32 },
     /// `slot` took a `kind` pickup at (`x`, `y`) - where its opening plays
     /// (`fx::CrateOpen`). `spilled`: it was a broken crate's contents lying
     /// loose (`Pickup::loose`), so there was no crate left to open.
@@ -2426,6 +2433,7 @@ impl Game {
             drop(stage);
             let stage = crate::frame_stages::stage("sim.rams");
             self.sync_tanks_and_ram(&mut f);
+            self.record_slams(&mut f);
             self.print_oil(&mut f);
             self.trample_grass(&mut f);
             self.ram_props(&mut f);
@@ -4987,6 +4995,34 @@ impl Game {
     /// touching a player (`ram` gates on both cooldowns, so a player takes
     /// at most one ram hit per frame), then for the two players against
     /// each other, then enemy against enemy.
+    /// Every hull that slammed into something this step, as `Event::Slam`,
+    /// in owner-slot order. Reads the contacts the physics step left and the
+    /// hull's own last contact; draws no RNG.
+    fn record_slams(&mut self, f: &mut Frame) {
+        let t = tuning();
+        let gap = (t.ram_fx_gap_seconds / PHYSICS_FIXED_DT).round() as u64;
+        let frame = self.frame;
+        let hulls: Vec<(Entity, usize)> = ordered(self.world.query::<(Entity, &Tank)>().iter(), |(_, tank)| tank.owner_slot())
+            .into_iter()
+            .map(|(e, tank)| (e, tank.owner_slot()))
+            .collect();
+        for (entity, slot) in hulls {
+            let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { continue };
+            let Some(body) = tank.body else { continue };
+            let stats = self.physics.contact_stats(body);
+            let impulse = if stats.touching_static { stats.max_impulse } else { 0.0 };
+            let rested = tank.slam_frame.is_none_or(|last| frame.saturating_sub(last) >= gap);
+            if !stats.touching_tank && impulse >= t.ram_fx_min_impulse && tank.slam_impulse * t.ram_fx_rise <= impulse && rested {
+                let span = (t.ram_fx_full_impulse - t.ram_fx_min_impulse).max(1.0);
+                let strength = (0.3 + 0.7 * (impulse - t.ram_fx_min_impulse) / span).clamp(0.3, 1.0);
+                let at = stats.contact.unwrap_or(tank.position);
+                f.events.push(Event::Slam { slot, x: at.x, y: at.y, strength });
+                tank.slam_frame = Some(frame);
+            }
+            tank.slam_impulse = impulse;
+        }
+    }
+
     fn sync_tanks_and_ram(&mut self, f: &mut Frame) {
         let players: Vec<(Entity, Position)> = self
             .seats_on_field()

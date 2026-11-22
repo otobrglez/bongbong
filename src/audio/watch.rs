@@ -67,7 +67,7 @@ pub const WATCHERS: &[WatcherSpec] = &[
     WatcherSpec { id: "wreck", entity: "wreck", reads: "burning wrecks, inside the fire clusters", cues: &["world.fire"], online: "the same" },
     WatcherSpec { id: "sky", entity: "weather", reads: "Game::look (rain, sand, snow)", cues: &["world.rain", "world.wind", "world.wind.soft", "world.night"], online: "the same: the sky is the map's" },
     WatcherSpec { id: "place", entity: "map", reads: "the map's theme and biome", cues: &["bed.grass", "bed.desert", "bed.valley", "bed.floodplain", "bed.karst"], online: "the same" },
-    WatcherSpec { id: "slam", entity: "tank", reads: "Game::contacts impulse spikes", cues: &["vehicle.slam", "vehicle.scrape"], online: "silent: a client steps no physics (BB-214 adds Slam)" },
+    WatcherSpec { id: "scrape", entity: "tank", reads: "Game::contacts held against a wall", cues: &["vehicle.scrape"], online: "silent: a client steps no physics (a slam is `Event::Slam`, which is sent)" },
     WatcherSpec { id: "aircraft", entity: "aircraft", reads: "Game::aircraft", cues: &["air.heli", "air.jet"], online: "the same" },
     WatcherSpec { id: "flyby", entity: "shell, bullet", reads: "projectiles' closest approach to a seat's own tank", cues: &["flyby.shell", "flyby.bullet"], online: "the same: projectiles replicate" },
     WatcherSpec { id: "thunder", entity: "weather", reads: "weather::lightning on the round clock: a flash's rising edge", cues: &["world.thunder"], online: "the same: the clock is the round's" },
@@ -99,8 +99,6 @@ pub struct Watchers {
     /// The last frame's lightning, for a flash's rising edge.
     lightning: f32,
     flashes: u64,
-    impulse: HashMap<usize, f32>,
-    last_slam: HashMap<usize, f64>,
 }
 
 const ENGINE: u64 = 1 << 56;
@@ -143,7 +141,7 @@ impl Watchers {
         self.flames(game, own, wishes);
         self.fires(game, wishes);
         self.beds(game, t, wishes);
-        self.slams(game, now, t, wishes, plays);
+        self.scrapes(game, t, wishes);
         self.aircraft(game, wishes);
         self.flybys(game, own, t, plays);
         self.thunder(game, t, plays);
@@ -293,17 +291,11 @@ impl Watchers {
         wishes.push(Wish { key: PLACE, cue: place, at: None, velocity: Vec2::new(0.0, 0.0), gain: 1.0, pitch: 1.0, own: false });
     }
 
-    /// A hull slamming into something: an impulse spike, as `Fx::watch_slams`
-    /// reads it; a held contact scrapes.
-    fn slams(&mut self, game: &Game, now: f64, t: &Tuning, wishes: &mut Vec<Wish>, plays: &mut Vec<Play>) {
-        for (slot, at, impulse, touching_tank) in game.contacts() {
-            let before = self.impulse.insert(slot, impulse).unwrap_or(0.0);
-            let rose = impulse >= t.ram_fx_min_impulse && impulse >= t.ram_fx_rise * before.max(1.0);
-            let rested = self.last_slam.get(&slot).is_none_or(|&last| now - last >= t.ram_fx_gap_seconds as f64);
-            if rose && rested && !touching_tank {
-                self.last_slam.insert(slot, now);
-                plays.push(Play::new(ids::SLAM.0, At::Point(at)).strength(crate::fx::slam_strength(impulse, t)).source(slot as u64));
-            } else if impulse >= t.contact_fx_min_impulse * 4.0 {
+    /// A hull held against a wall scrapes; its slam into it is
+    /// `Event::Slam`, which `bind.rs` plays.
+    fn scrapes(&mut self, game: &Game, t: &Tuning, wishes: &mut Vec<Wish>) {
+        for (slot, at, impulse, _) in game.contacts() {
+            if impulse >= t.contact_fx_min_impulse * 4.0 && impulse < t.ram_fx_min_impulse {
                 let gain = (impulse / 200.0).clamp(0.2, 1.0);
                 wishes.push(Wish { key: SCRAPE | slot as u64, cue: ids::SCRAPE.0, at: Some(at), velocity: Vec2::new(0.0, 0.0), gain, pitch: 1.0, own: false });
             }

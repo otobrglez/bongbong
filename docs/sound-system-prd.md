@@ -841,6 +841,31 @@ Open:
 
 1. **The web fallback executor.** It is decided only if the P0 spike shows crackle, because it changes the CLAUDE.md rule that the page talks to the game only one way.
 
+## 8b. As built (2026-11-22)
+
+Where the build departs from the text:
+
+- **The catalogue** is `audio/interactions.json`, not TOML: BB-199's map in its own schema, each cue
+  given `manifest: {cue, proposed, fit}`. That is 108 exact, 55 covered and 156 missing at seeding.
+- **The engine** resamples linearly, not cubically: cheaper on wasm and inaudible at these pitches.
+  The FDN reverb is not built yet, and neither are the voice's reverb send or the path-based
+  propagation of §4.3; occlusion is the straight-line cell walk.
+- **The driver** is the pull path from the start: the engine lives behind a lock the raylib stream's
+  callback takes, so a main-thread hitch never starves the device. The web takes the same path
+  (D4), verified in the release build: no ASYNCIFY, no `emscripten_sleep`, a ScriptProcessorNode.
+- **Hidden tab:** the page itself suspends miniaudio's contexts (`runtime.ts`), so no `bbHidden`
+  global was needed.
+- **Settings:** mute is the HUD's sound button and the M key, kept beside the progress. There are
+  no volume sliders yet: the levels are the `audio` tuning group's.
+- **Slams online** are a new `Event::Slam`, sent (`PROTOCOL_VERSION` 36). The other payload
+  changes of §4.10 are still to do: `Hit`'s shooter, `Wreck`'s cause, `Ricochet`'s surface,
+  `Ram`'s speed, `BongBite`'s position, `RoundEnded`'s reason, `ObstacleDestroyed`'s cause.
+- **Takes are pre-picked by measurement** (`tools/audio/process.py`) and reviewed by the owner on
+  the audition page. The real charge is about 3.3 credits a second of audio per take, a third of
+  `estimate_only`'s figure.
+- **Still to make:** every planned sample after the first batch, the bong's babble, the announcer,
+  and music.
+
 ## 9. References
 
 - **Issues:**

@@ -180,6 +180,7 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         Event::Swallowed { what, x, y } => one(Play::new(source::swallow_cue(what), point(x, y))),
         Event::OrbFizzled { x, y, .. } => one(Play::new("weapon.gravity_well.fizzle", point(x, y))),
         Event::Wreck { slot, x, y } => one(Play::new("explosion.wreck", point(x, y)).source(slot as u64)),
+        Event::Slam { slot, x, y, strength } => one(Play::new(ids::SLAM.0, point(x, y)).strength(strength.max(0.3)).source(slot as u64)),
         Event::Ram { slot, damage, .. } => one(Play::new(ids::RAM.0, At::Slot(slot)).strength((0.6 + damage / 8.0).clamp(0.6, 1.3)).source(slot as u64)),
         Event::PickupCollected { kind, x, y, .. } => one(Play::new(source::pickup_cue(kind), point(x, y))),
         Event::CrateBroken { cooked, x, y, .. } => one(Play::new(if cooked { "pickup.crate.cookoff" } else { "pickup.crate.break" }, point(x, y))),

@@ -117,7 +117,7 @@ audio { height: 28px; width: 14rem; max-width: 100%; }
   function matches(text) { return !state.q || String(text).toLowerCase().indexOf(state.q) >= 0; }
   function takes(sample) {
     if (!sample) return "";
-    return (sample.takes || []).filter(function (t) { return t.exists; }).map(function (t) { return '<audio controls preload=none src="../../static/audio/' + esc(t.file) + '"></audio>'; }).join("");
+    return (sample.takes || []).filter(function (t) { return t.exists; }).map(function (t) { return '<audio controls preload=none src="' + esc(D.audio_base) + esc(t.file) + '"></audio>'; }).join("");
   }
   function needed() {
     var rows = D.needed.filter(function (n) { return state.status[n.status] && matches(n.cue + " " + (n.descriptions || []).join(" ") + " " + (n.manifest || "") + " " + (n.proposed || "")); });

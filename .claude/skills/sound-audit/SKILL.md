@@ -91,5 +91,9 @@ Rebuild the map: `just sound-map` (writes `target/soundmap/index.html`).
 Tell the user how many interactions, cues and gaps were added, changed or
 retired; the new critical and high cues; the issues filed; and what
 `sound-gen` would make next, priced at 3.3 credits a second of audio times
-the takes. If the user wants a link, publish `target/soundmap/index.html` as
-an artifact (update the existing Sound Map artifact by its URL).
+the takes. If the user wants a link, update the published map
+(`https://claude.ai/artifact/M7rPUDzeCmDtk7keh34WEP`, read it first): build
+it with `--audio-base audio/ --html <scratchpad>/sound-map.html`, strip the
+`<!doctype>`, `<html><head>`, `</head><body>` and `</body></html>` wrapper
+lines (the Artifact tool adds its own), and publish with `files` mapping each
+`audio/<bus>/<file>.ogg` to `static/audio/...` (`contentType: audio/ogg`).

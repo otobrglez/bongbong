@@ -157,6 +157,7 @@ pub enum WireEvent {
     Hit { target: WireHitTarget, damage: f32, killed: bool, x: i16, y: i16, cause: HitCause },
     Wreck { slot: u16, x: i16, y: i16 },
     Ram { slot: u16, other_slot: u16, damage: f32 },
+    Slam { slot: u16, x: i16, y: i16, strength: u8 },
     PickupCollected { slot: u16, kind: PickupKind, x: i16, y: i16, spilled: bool },
     CrateBroken { kind: PickupKind, x: i16, y: i16, cooked: bool },
     PickupRespawned { kind: PickupKind, x: i16, y: i16 },
@@ -364,6 +365,9 @@ impl WireEvent {
                 WireEvent::Hit { target: target.into(), damage, killed, x: q(x), y: q(y), cause }
             }
             Event::Wreck { slot, x, y } => WireEvent::Wreck { slot: slot_u16(slot), x: q(x), y: q(y) },
+            Event::Slam { slot, x, y, strength } => {
+                WireEvent::Slam { slot: slot_u16(slot), x: q(x), y: q(y), strength: (strength.clamp(0.0, 1.0) * 255.0).round() as u8 }
+            }
             Event::Ram { slot, other_slot, damage } => {
                 WireEvent::Ram { slot: slot_u16(slot), other_slot: slot_u16(other_slot), damage }
             }
@@ -616,6 +620,7 @@ impl WireEvent {
                 Event::Hit { target: target.into(), damage, killed, x: d(x), y: d(y), cause }
             }
             WireEvent::Wreck { slot, x, y } => Event::Wreck { slot: slot as usize, x: d(x), y: d(y) },
+            WireEvent::Slam { slot, x, y, strength } => Event::Slam { slot: slot as usize, x: d(x), y: d(y), strength: strength as f32 / 255.0 },
             WireEvent::Ram { slot, other_slot, damage } => {
                 Event::Ram { slot: slot as usize, other_slot: other_slot as usize, damage }
             }
@@ -836,6 +841,7 @@ mod tests {
             },
             Event::Wreck { slot: 3, x: 64.0, y: 96.75 },
             Event::Ram { slot: 0, other_slot: 5, damage: 3.25 },
+            Event::Slam { slot: 1, x: 40.0, y: 72.0, strength: 0.6 },
             Event::PickupCollected { slot: 1, kind: PickupKind::BongHealth, x: 48.0, y: 80.0, spilled: false },
             Event::CrateBroken { kind: PickupKind::Ammo, x: 112.0, y: 80.0, cooked: true },
             Event::PickupRespawned { kind: PickupKind::Shield, x: 32.0, y: 32.0 },
@@ -945,7 +951,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 85, "one sample per Event variant");
+        assert_eq!(seen.len(), 86, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

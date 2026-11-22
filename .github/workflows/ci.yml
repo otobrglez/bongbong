@@ -126,6 +126,12 @@ jobs:
       - name: cargo test -p bongbong-server
         run: cargo test -p bongbong-server
 
+      # The sound map's guard (docs/sound-system-prd.md section 4.11): every
+      # cue the code, the catalogue and the watchers name resolves in the
+      # manifest, and every approved sample has its files.
+      - name: sound map check
+        run: cargo run --bin soundmap --no-default-features -- --check
+
       # A three-wave round on the shipped map through the public API
       # (`cargo test --lib` runs no integration test). Headless, like the
       # probe below.

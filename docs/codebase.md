@@ -2107,6 +2107,54 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   sprite's samples then round onto other texels (measured: 1 to 20 pixels a frame on the default
   arena with only the tanks' sheet padded to 4096 px), so an atlas changes the picture.
 
+## Sound
+
+docs/sound-system-prd.md is the design; this is what each part owns.
+
+- `audio/mod.rs` — `Audio`, the director, owned by `app.rs` beside `Fx`. `observe_events` reads
+  each step's events (deduped on `Game::frame`, reset on a new seed or a rewind) and turns each
+  into the sounds `bind.rs` gives it; `observe` runs once a frame: the listeners
+  (`space::View` per view on the window), the watchers' loops, the one-shots asked for since,
+  the mix policy (each cue's polyphony, cooldown and steal; the HDR window; the voice budget;
+  ducking) and the bus and master levels, written as `dsp::Command`s. Variation (which take,
+  pitch and level jitter) is hashed from the cue, the frame and the source, never drawn. Online,
+  `set_predicted_seat` and `own_press` sound the own seat's presses at once and skip the room's
+  late copies (`room_copy_of_own_press`). `Settings` (volumes, mute, mono) are the player's,
+  kept by `app.rs` beside the progress (`audio.json`, `bongbong.audio` on the web).
+- `audio/bind.rs` — `bind(&Event, &Game) -> Binding`: an exhaustive match with no wildcard, each
+  arm a `Play` (cue, place, strength, pitch, delay, source), `Watched(watcher)` or
+  `Silent(reason)`.
+- `audio/source.rs` — one exhaustive match per enumeration a sound depends on: chassis to engine
+  family and pitch, weapons, materials to surface families, pickups, towers, skies, themes and
+  biomes, tread surfaces, bong kinds.
+- `audio/watch.rs` — the state watchers (`WATCHERS` lists them for the sound map): engines and
+  tracks (speed from position over sim time, so a replica revs too), the minigun (new bullet ids),
+  flames, charges, wind-up tells, fire clusters (4 x 4 cells a loop), sky and place beds,
+  scrapes, aircraft, fly-bys, thunder (the round clock's lightning), tesla towers, fuses,
+  portals, the volcano.
+- `audio/space.rs` — listeners at a height above the field, distance (audibility classes),
+  pan, air absorption, occlusion (`Occlusion`: one byte a cell from `Material::sound_transmission`,
+  rebuilt when a tile dies), propagation delay, doppler.
+- `audio/cues.rs` — the manifest (`audio/cues.toml`, embedded): samples and their takes, cues and
+  their layers by distance; `resolve` falls a dotted id back to its nearest ancestor; `ids` the
+  cue ids code names.
+- `audio/bank.rs` — samples decoded on first use (`lewton`), and a dev build's placeholder for a
+  sample with no file.
+- `audio/dsp/` — the engine: voices (linear resampler, SVF high-cut, gain and pan ramps, delayed
+  start, fades), nine buses with ducks and pauses, master gain, mono, a watchdog that fades the
+  mix when the director stops beating, a lookahead limiter at -1 dBFS; `wav.rs` for offline
+  renders. Pure Rust, `Send`, `libm` for its transcendentals.
+- `audio/offline.rs` — `Recorder`: the director and the engine stepped beside a headless round
+  (`probe --audio-out`).
+- `render/audio.rs` — `AudioOut`: the device and one 48 kHz float stereo `AudioStream` whose
+  raylib callback applies the queued commands and mixes, on the audio thread natively and from
+  miniaudio's ScriptProcessorNode on the web.
+- `bin/soundmap.rs` — the sound map: the code's maps and watchers, the manifest with its files,
+  and the catalogue (`audio/interactions.json`) joined into JSON and a viewer
+  (`tools/audio/soundmap/template.html`); `--check` is CI's guard.
+- Simulation side: `Event::Slam` (`Game::record_slams`) tells a hull's slam so a client hears it;
+  `OnlineRound::take_press_sounds` hands the window its own presses.
+
 ## HUD and chrome
 
 - `hud.rs` (docs/hud-and-builder-layout-design.md, docs/large-maps-follow-camera.md §8) — the HUD,

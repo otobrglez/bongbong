@@ -37,12 +37,14 @@ fn main() {
     let mut json_out: Option<PathBuf> = None;
     let mut html_out: Option<PathBuf> = None;
     let mut check = false;
+    let mut audio_base = String::from("../../static/audio/");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--json" => json_out = args.next().map(PathBuf::from),
             "--html" => html_out = args.next().map(PathBuf::from),
             "--check" => check = true,
+            "--audio-base" => audio_base = args.next().unwrap_or_default(),
             other => {
                 eprintln!("soundmap: unknown argument {other}");
                 std::process::exit(2);
@@ -184,6 +186,7 @@ fn main() {
     let sample_list: Vec<Value> = samples.into_values().collect();
     let out = json!({
         "commit": git_head(),
+        "audio_base": audio_base,
         "stats": {
             "manifest_cues": cue_list.len(),
             "cues_done": count(&cue_list, "status", "done"),
