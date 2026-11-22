@@ -4188,11 +4188,13 @@ tunables! {
         /// means fewer, bigger drifts.
         ground_drift_scale: f32 = 5.0 in 1.0 ..= 20.0 @ Restart;
         /// The biome drawn over every local round (docs/biomes.md): -1
-        /// follows the map's `biome` key, 0 draws none, 1 the valley. A
-        /// look only - gravel, silt and meadow laid over the tiles - so a
-        /// round plays the same under any of them. Read when the ground is
-        /// built, so a change shows from the next round.
-        biome_override: i32 = (-1) in -1 ..= 1 @ Restart;
+        /// follows the map's `biome` key, 0 draws none, 1 the valley, 2
+        /// the floodplain, 3 the karst (`biome::Biome::ALL`). A look only,
+        /// so a round plays the same under any of them; each is made for
+        /// one theme (`Biome::theme`), and over a map of the other its
+        /// ground will not match the trees. Read when the ground is built,
+        /// so a change shows from the next round.
+        biome_override: i32 = (-1) in -1 ..= 3 @ Restart;
         /// Seconds each of the pack's four water frames stays up
         /// (`ground::WATER_FRAMES`): the shimmer on shores and streams.
         /// The pack's own timing is 0.1.

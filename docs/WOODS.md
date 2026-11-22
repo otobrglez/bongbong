@@ -89,6 +89,10 @@ map places.
   (docs/biomes.md) an open bank with no tree near grows them too, in
   clumps with open bank between and never beside a road
   (`sheltered_reeds`); a map with no trees then still has undergrowth.
+- **Shelter (the karst):** under a biome whose look has scrub
+  (`BiomeLook::scrub`, docs/biomes.md), an open cell beside a wall with no
+  tree, water or road round it grows a bush or a juniper - drawn dry, the
+  desert's way - in clumps, about a third of 3 x 3 cell blocks (`scrub`).
 - **Interior:** one tree in five whose eight neighbours are all trees has
   a fern rooted in its own cell, under the crowns.
 - **Never** on water, a trail or a cell beside one, or a cell the map put

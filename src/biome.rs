@@ -7,24 +7,29 @@
 //! every local round to compare (`in_force`). A biome is separate from the
 //! map's `theme`, which also decides whether its trees are dry.
 //!
-//! What a biome draws today is its **materials**: a layer of 2 px blocks
-//! baked once over the floor tiles (`bake`) - damp silt along every bank,
-//! where it also covers the tileset's olive shore outline, broad shelves of
-//! gravel by the water, packed earth on a road's shoulders, and patches of
-//! two neighbouring greens across the open meadow. It is placed by rules
-//! read from the tiles themselves (`ground::GroundGrid::floor_px`, the mask
-//! `tools/ground_mask.py` generates), hashed from position with no seed and
-//! no RNG, so a map draws the same in every round, in the builder and in a
-//! thumbnail. `ground::draw` lays it right over the tiles, so the floor
-//! shade, the forest floor, the marks and the weather's snow and puddles
-//! all fall on top of it. A biome's water colours (`WaterRamp`) are part of
-//! its look already; the tiles take them in a later stage (BB-194).
+//! There are three - the valley, the floodplain and the karst - each made
+//! for one theme (`Biome::theme`): its tileset is that theme's retint with
+//! its own water and banks (`tools/retint_ground.py`).
+//!
+//! Over the tiles a biome draws its **materials**: a layer of 2 px blocks
+//! baked once (`bake`) - damp ground along every bank, where it also covers
+//! the tileset's shore outline, a band of gravel or sedge by the water,
+//! packed earth on a road's shoulders, the karst's limestone plates, and
+//! patches of two neighbouring tones across the open ground - and what it
+//! dresses by rule (`places`): a mill race, furrows, a floodwork apron. It
+//! is placed by rules read from the tiles themselves
+//! (`ground::GroundGrid::floor_px`, the mask `tools/ground_mask.py`
+//! generates), hashed from position with no seed and no RNG, so a map draws
+//! the same in every round, in the builder and in a thumbnail.
+//! `ground::draw` lays it right over the tiles, so the floor shade, the
+//! forest floor, the marks and the weather's snow and puddles all fall on
+//! top of it.
 
 use serde::{Deserialize, Serialize};
 
 use crate::canvas::BlockImage;
 use crate::ground::{Deck, FloorPx};
-use crate::map::{CellObject, MapFile};
+use crate::map::{CellObject, MapFile, Theme};
 use crate::obstacle::Material;
 use crate::math::Color;
 use crate::tuning::Tuning;
@@ -36,17 +41,27 @@ pub enum Biome {
     /// The Soča gravel valley: clear alpine water, gravel by the banks,
     /// earth on the road's shoulders, a meadow in broad patches.
     Valley,
+    /// A reclaimed floodplain: slate still water with a lighter submerged
+    /// margin, sedge on the wet banks, peat at the shore, an old floodwork
+    /// apron of paving round a tower that stands by the water.
+    Floodplain,
+    /// A dry karst frontier, on the desert's dust: warm hardpan, flat
+    /// limestone plates with hairline fissures, dark pools with a damp
+    /// seam, dry scrub in the shelter of walls.
+    Karst,
 }
 
 impl Biome {
     /// Every biome, in the order the `biome_override` knob counts them
     /// from 1.
-    pub const ALL: [Biome; 1] = [Biome::Valley];
+    pub const ALL: [Biome; 3] = [Biome::Valley, Biome::Floodplain, Biome::Karst];
 
     /// The TOML spelling, also the dev server's.
     pub fn name(self) -> &'static str {
         match self {
             Biome::Valley => "valley",
+            Biome::Floodplain => "floodplain",
+            Biome::Karst => "karst",
         }
     }
 
@@ -60,6 +75,19 @@ impl Biome {
     pub fn ground_texture_path(self) -> &'static str {
         match self {
             Biome::Valley => "static/punyworld/punyworld-overworld-tileset-valley.png",
+            Biome::Floodplain => "static/punyworld/punyworld-overworld-tileset-floodplain.png",
+            Biome::Karst => "static/punyworld/punyworld-overworld-tileset-karst.png",
+        }
+    }
+
+    /// The theme the biome is made for: its tileset is that theme's
+    /// retint (`tools/retint_ground.py`'s `base`), so on a map of another
+    /// theme its ground would not match the trees and the grass. The
+    /// builder's LOOK row offers only the biomes of the map's theme.
+    pub fn theme(self) -> Theme {
+        match self {
+            Biome::Valley | Biome::Floodplain => Theme::Grass,
+            Biome::Karst => Theme::Desert,
         }
     }
 
@@ -67,6 +95,8 @@ impl Biome {
     pub fn look(self) -> &'static BiomeLook {
         match self {
             Biome::Valley => &VALLEY,
+            Biome::Floodplain => &FLOODPLAIN,
+            Biome::Karst => &KARST,
         }
     }
 
@@ -111,25 +141,74 @@ pub struct WaterRamp {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BiomeLook {
     pub water: WaterRamp,
-    /// Pale, middle and dark stones of a gravel shelf.
+    /// The pale, middle and dark tones of the band along the water past
+    /// the silt (`shore`): a gravel shelf's stones, or a sedge bed's stems.
     pub gravel: [Color; 3],
-    /// Damp silt along a bank: the step away from the water, then the
-    /// darker one beside it.
+    /// What that band is.
+    pub shore: Shore,
+    /// Damp ground along a bank - silt, peat, a damp seam: the step away
+    /// from the water, then the darker one beside it.
     pub silt: [Color; 2],
     /// Packed earth on a road's shoulders.
     pub shoulder: [Color; 2],
-    /// The meadow's darker and lighter patches: a green laid over the
-    /// grass at a low opacity, so the grass tiles' own specks show through.
+    /// The open ground's darker and lighter patches, laid over the floor
+    /// at a low opacity so the tiles' own specks show through: on grass a
+    /// meadow's two greens, on the karst's dust warm hardpan and pale dust.
     pub meadow_dark: Color,
     pub meadow_light: Color,
-    /// How far gravel reaches from the water, px: `gravel_reach.0` where a
-    /// shelf is thin and up to `.0 + .1` where it is broad.
+    /// How far the shore band reaches from the water, px: `.0` where it is
+    /// thin and up to `.0 + .1` where it is broad.
     pub gravel_reach: (f32, f32),
     /// How far packed earth reaches from a road's dirt, px, the same way.
     pub shoulder_reach: (f32, f32),
     /// A plank deck over water (`ground::Deck`): its rails, the seams
     /// between planks, and the planks' two tones.
     pub deck: [Color; 4],
+    /// Flat limestone plates across the open ground, where the look has
+    /// them.
+    pub plates: Option<Plates>,
+    /// A floodwork apron's paving round a tower by the water
+    /// (`Places::aprons`), where the look lays one.
+    pub apron: Option<Apron>,
+    /// Whether dry scrub grows in the shelter of a wall
+    /// (`woods::Woods::undergrowth`), picture only.
+    pub scrub: bool,
+    /// Whether the look works the land (`Places`): a mill race from a
+    /// timber building by the water, furrows on tall grass by a fence.
+    pub farms: bool,
+}
+
+/// The band a look lays along its water, past the damp seam.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shore {
+    /// Shelves of stones that come and go along the bank.
+    Gravel,
+    /// A bed of sedge: upright stems a block wide and three tall, lit at
+    /// the tip, the grass showing between them.
+    Sedge,
+}
+
+/// Limestone plates (`BiomeLook::plates`): pale patches of flat stone
+/// with hairline fissures across them. Flat ground paint - no edge or
+/// line on them may read as a ledge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Plates {
+    /// The stone's two faces, a broad noise choosing between them.
+    pub face: [Color; 2],
+    /// A fissure: a broken hairline a block wide, a step darker.
+    pub fissure: Color,
+}
+
+/// The paving of a floodwork apron (`BiomeLook::apron`): flat slabs in a
+/// running bond.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Apron {
+    /// A slab's two tones, hashed per slab.
+    pub slab: [Color; 2],
+    /// The seams between slabs.
+    pub seam: Color,
+    /// A slab the water beside it has stained.
+    pub wet: Color,
 }
 
 /// The Soča gravel valley, in the steps chosen on the palette card
@@ -157,6 +236,86 @@ pub const VALLEY: BiomeLook = BiomeLook {
     shoulder_reach: (3.0, 7.0),
     // Weathered timber, greyer than the orange of a timber wall.
     deck: [Color::new(0x3A, 0x2A, 0x1C, 255), Color::new(0x4E, 0x3A, 0x28, 255), Color::new(0x8A, 0x6A, 0x48, 255), Color::new(0x7A, 0x5C, 0x3D, 255)],
+    shore: Shore::Gravel,
+    plates: None,
+    apron: None,
+    scrub: false,
+    farms: true,
+};
+
+/// The reclaimed floodplain (BB-198): slate water, sedge, peat, a paved
+/// apron. Picked by measurement against the same rules as the valley.
+pub const FLOODPLAIN: BiomeLook = BiomeLook {
+    water: WaterRamp {
+        edge: Color::new(0x26, 0x40, 0x4F, 255),
+        dark: Color::new(0x3A, 0x5D, 0x6E, 255),
+        fill: Color::new(0x4A, 0x73, 0x83, 255),
+        // The submerged margin: a still lighter slate where it shallows.
+        light: Color::new(0x6A, 0x93, 0xA0, 255),
+        ripple: Color::new(0x9A, 0xB9, 0xBE, 255),
+        glint: Color::new(0xCF, 0xE0, 0xDF, 255),
+        deep: Color::new(0x33, 0x53, 0x6A, 255),
+        deep_dark: Color::new(0x2A, 0x46, 0x5A, 255),
+        // Weed on the bed rather than a pebble.
+        bed: Color::new(0x5A, 0x7B, 0x6C, 255),
+    },
+    // Straw sedge: a pale lit tip, the stem, its dark foot.
+    gravel: [Color::new(0xC9, 0xB2, 0x7C, 255), Color::new(0xA8, 0x92, 0x5F, 255), Color::new(0x7F, 0x6C, 0x46, 255)],
+    shore: Shore::Sedge,
+    // Peat.
+    silt: [Color::new(0x4C, 0x3C, 0x2E, 255), Color::new(0x3A, 0x2E, 0x24, 255)],
+    // Trodden mud.
+    shoulder: [Color::new(0x8E, 0x77, 0x59, 255), Color::new(0x73, 0x5F, 0x47, 255)],
+    // A damper meadow: the dark patches deeper than the valley's.
+    meadow_dark: Color::new(0x1C, 0x4C, 0x33, 46),
+    meadow_light: Color::new(0x7F, 0xB1, 0x5A, 30),
+    gravel_reach: (8.0, 18.0),
+    shoulder_reach: (3.0, 6.0),
+    // Wet timber, darker than the valley's.
+    deck: [Color::new(0x2E, 0x24, 0x1B, 255), Color::new(0x3E, 0x31, 0x25, 255), Color::new(0x7A, 0x60, 0x46, 255), Color::new(0x6A, 0x53, 0x3D, 255)],
+    plates: None,
+    apron: Some(Apron {
+        slab: [Color::new(0xA3, 0x9E, 0x8E, 255), Color::new(0x95, 0x90, 0x80, 255)],
+        seam: Color::new(0x86, 0x82, 0x74, 255),
+        wet: Color::new(0x73, 0x70, 0x64, 255),
+    }),
+    scrub: false,
+    farms: false,
+};
+
+/// The dry karst frontier (BB-198), on the desert's dust.
+pub const KARST: BiomeLook = BiomeLook {
+    water: WaterRamp {
+        edge: Color::new(0x0F, 0x3F, 0x3E, 255),
+        dark: Color::new(0x16, 0x52, 0x4F, 255),
+        fill: Color::new(0x1F, 0x6A, 0x64, 255),
+        light: Color::new(0x2C, 0x7D, 0x74, 255),
+        ripple: Color::new(0x5F, 0xA5, 0x9A, 255),
+        glint: Color::new(0xA8, 0xD6, 0xCB, 255),
+        deep: Color::new(0x15, 0x4A, 0x49, 255),
+        deep_dark: Color::new(0x10, 0x3D, 0x3C, 255),
+        bed: Color::new(0x3E, 0x7A, 0x6A, 255),
+    },
+    // Loose limestone grit round a pool.
+    gravel: [Color::new(0xE8, 0xD7, 0xB0, 255), Color::new(0xCD, 0xBB, 0x93, 255), Color::new(0xA8, 0x95, 0x6E, 255)],
+    shore: Shore::Gravel,
+    // The damp seam, drying outward.
+    silt: [Color::new(0x95, 0x7A, 0x57, 255), Color::new(0x7A, 0x62, 0x45, 255)],
+    // Worn dust beside a track.
+    shoulder: [Color::new(0xB9, 0x9D, 0x72, 255), Color::new(0xA6, 0x8B, 0x62, 255)],
+    // Warm hardpan and pale dust over the dust fill #CCB385.
+    meadow_dark: Color::new(0xA0, 0x7D, 0x52, 90),
+    meadow_light: Color::new(0xE2, 0xCF, 0xA4, 80),
+    gravel_reach: (4.0, 10.0),
+    shoulder_reach: (3.0, 7.0),
+    deck: VALLEY.deck,
+    plates: Some(Plates {
+        face: [Color::new(0xDE, 0xD0, 0xAE, 255), Color::new(0xD6, 0xC6, 0xA2, 255)],
+        fissure: Color::new(0xA8, 0x8F, 0x69, 255),
+    }),
+    apron: None,
+    scrub: true,
+    farms: false,
 };
 
 /// A 32-bit hash of a lattice point and a salt (SplitMix64's finaliser):
@@ -228,11 +387,17 @@ fn distance(w: usize, h: usize, near: impl Fn(usize) -> bool) -> Vec<u16> {
 /// See the module comment for what goes where.
 pub fn bake(look: &BiomeLook, w: usize, h: usize, class: &[FloorPx], decks: &[Deck], places: &Places, stamp: u64) -> BlockImage {
     let mut texels = lay(look, (0, 0), w, h, class);
-    for &(cell, across) in &places.fields {
-        lay_furrows(look, cell, across, w, h, class, &mut texels);
+    if look.farms {
+        for &(cell, across) in &places.fields {
+            lay_furrows(look, cell, across, w, h, class, &mut texels);
+        }
+        for &(from, to) in &places.races {
+            lay_race(look, from, to, w, h, class, &mut texels);
+        }
     }
-    for &(from, to) in &places.races {
-        lay_race(look, from, to, w, h, class, &mut texels);
+    if let Some(apron) = &look.apron {
+        let to_water = distance(w, h, |i| class[i].is_water());
+        lay_apron(apron, &places.aprons, w, h, class, &to_water, &mut texels);
     }
     for deck in decks {
         lay_deck(look, deck, w, h, class, &mut texels);
@@ -297,6 +462,8 @@ fn lay(look: &BiomeLook, at: (i32, i32), w: usize, h: usize, class: &[FloorPx]) 
                     stone
                 } else if let Some(earth) = shoulder(look, x, y, dirt, threshold) {
                     earth
+                } else if let Some(stone) = look.plates.as_ref().and_then(|p| plate(p, x, y, wet, dirt)) {
+                    stone
                 } else {
                     let n = noise(x, y, 220.0, 5);
                     if n < 0.38 && (0.38 - n) * 10.0 >= threshold {
@@ -365,7 +532,21 @@ pub struct Places {
     /// Ploughed cells behind a fence, and whether their furrows run
     /// east-west (along a fence that does).
     pub fields: Vec<((i32, i32), bool)>,
+    /// The cells of a floodwork apron, in cell order: round every tower
+    /// that stands by the water, and joined between two of them that guard
+    /// one way in. Only a look with an `Apron` paves them.
+    pub aprons: Vec<(i32, i32)>,
 }
+
+/// How near the water a tower stands for an apron, in cells.
+const APRON_WATER: i32 = 2;
+
+/// How far an apron reaches round its tower, in cells.
+const APRON_REACH: i32 = 2;
+
+/// How far apart, on one row or column, two towers by the water may stand
+/// for one apron to join them, in cells.
+const APRON_PAIR: i32 = 8;
 
 /// How far a timber building may stand from the water and still have a
 /// race, in cells.
@@ -434,6 +615,28 @@ pub fn places(map: &MapFile) -> Places {
     // with two field cells among its eight neighbours.
     let field: BTreeSet<(i32, i32)> = places.fields.iter().map(|(c, _)| *c).collect();
     places.fields.retain(|&((c, r), _)| (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (c + dx, r + dy))).filter(|n| *n != (c, r) && field.contains(n)).count() >= 2);
+    // Floodwork aprons: round each tower by the water, and across the way
+    // two of them guard together.
+    let towers: Vec<(i32, i32)> = cells.iter().filter(|(_, o)| o.tower().is_some()).map(|(c, _)| *c).filter(|&t| water.iter().any(|&wet| chebyshev(t, wet) <= APRON_WATER)).collect();
+    let mut apron = BTreeSet::new();
+    let mut pave = |cols: std::ops::RangeInclusive<i32>, rows: std::ops::RangeInclusive<i32>| {
+        for r in rows {
+            for c in cols.clone() {
+                apron.insert((c, r));
+            }
+        }
+    };
+    for (k, &(c, r)) in towers.iter().enumerate() {
+        pave(c - APRON_REACH..=c + APRON_REACH, r - APRON_REACH..=r + APRON_REACH);
+        for &(c2, r2) in &towers[k + 1..] {
+            if r2 == r && (c2 - c).abs() <= APRON_PAIR {
+                pave(c.min(c2)..=c.max(c2), r - APRON_REACH..=r + APRON_REACH);
+            } else if c2 == c && (r2 - r).abs() <= APRON_PAIR {
+                pave(c - APRON_REACH..=c + APRON_REACH, r.min(r2)..=r.max(r2));
+            }
+        }
+    }
+    places.aprons = apron.into_iter().collect();
     places
 }
 
@@ -525,21 +728,110 @@ fn lay_deck(look: &BiomeLook, deck: &Deck, w: usize, h: usize, class: &[FloorPx]
     }
 }
 
-/// The stone of a gravel shelf at field px (`x`, `y`), `wet` px from the
-/// water, if one lies there: shelves come and go along a bank in a noise
-/// about a cell and a half across, broad where it is high, and fray into
-/// the meadow over their last 8 px.
+/// The shore band at field px (`x`, `y`), `wet` px from the water, if it
+/// lies there: it comes and goes along a bank in a noise about a cell and
+/// a half across, broad where it is high, and frays into the ground over
+/// its last 8 px. Gravel is stones of three tones; sedge is upright stems
+/// (`Shore::Sedge`) with the grass between.
 fn gravel(look: &BiomeLook, x: f32, y: f32, wet: f32, threshold: f32) -> Option<Color> {
     if wet > look.gravel_reach.0 + look.gravel_reach.1 {
         return None;
     }
-    let shelf = noise(x, y, 44.0, 7);
-    let reach = look.gravel_reach.0 + look.gravel_reach.1 * shelf;
-    if shelf <= 0.5 || wet > reach || (reach - wet) / 8.0 < threshold {
+    match look.shore {
+        Shore::Gravel => {
+            let shelf = noise(x, y, 44.0, 7);
+            let reach = look.gravel_reach.0 + look.gravel_reach.1 * shelf;
+            if shelf <= 0.5 || wet > reach || (reach - wet) / 8.0 < threshold {
+                return None;
+            }
+            let grain = noise(x, y, 6.0, 11);
+            Some(look.gravel[if grain > 0.72 { 2 } else if grain > 0.3 { 0 } else { 1 }])
+        }
+        Shore::Sedge => {
+            // Three blocks in five a stem, three blocks tall - tip, stem,
+            // foot - each column's stems lifted by its own hash so the
+            // tips never line up. The bed's extent is read at the stem's
+            // tip, so the noise never cuts a stem in two; no dither, which
+            // would.
+            let (bx, by) = ((x / 2.0) as i32, (y / 2.0) as i32);
+            let lifted = by + (hash(bx, 0, 31) % 3) as i32;
+            if hash(bx, lifted.div_euclid(3), 29) % 5 >= 3 {
+                return None;
+            }
+            let k = lifted.rem_euclid(3);
+            let shelf = noise(x, y - k as f32 * 2.0, 44.0, 7);
+            let reach = look.gravel_reach.0 + look.gravel_reach.1 * shelf;
+            if shelf <= 0.5 || wet > reach {
+                return None;
+            }
+            Some(look.gravel[k as usize])
+        }
+    }
+}
+
+/// A limestone plate at field px (`x`, `y`), if one lies there (`Plates`):
+/// pale patches in a noise about two cells across, kept off the water's
+/// grit and a track's shoulder, their rim crisp so a plate reads as a flat
+/// face rather than a fade, and hairline fissures - a contour of a finer
+/// noise, broken every few blocks - across them.
+fn plate(p: &Plates, x: f32, y: f32, wet: f32, dirt: f32) -> Option<Color> {
+    if wet < 16.0 || dirt < 8.0 || noise(x, y, 64.0, 37) < 0.64 {
         return None;
     }
-    let grain = noise(x, y, 6.0, 11);
-    Some(look.gravel[if grain > 0.72 { 2 } else if grain > 0.3 { 0 } else { 1 }])
+    let (bx, by) = ((x / 2.0) as i32, (y / 2.0) as i32);
+    let crack = noise(x, y, 20.0, 41);
+    if (crack - 0.5).abs() < 0.035 && hash(bx.div_euclid(3), by.div_euclid(3), 43) % 4 != 0 {
+        return Some(p.fissure);
+    }
+    Some(p.face[usize::from(noise(x, y, 140.0, 47) > 0.5)])
+}
+
+/// The paving of a floodwork apron over `cells` (`Places::aprons`): slabs
+/// 16 x 12 px in a running bond on the field's own grid, so neighbouring
+/// cells line up; slabs lifted long ago, where the grass shows - a few in
+/// the middle, most at the apron's rim, so it frays into the meadow rather
+/// than stopping at a cell's edge; stained by the water within 12 px of it
+/// and in damp patches. Only on open ground: the water, the bank and a
+/// road keep their tiles.
+fn lay_apron(apron: &Apron, cells: &[(i32, i32)], w: usize, h: usize, class: &[FloorPx], to_water: &[u16], texels: &mut [Color]) {
+    const SLAB: (i32, i32) = (8, 6);
+    let set: std::collections::BTreeSet<(i32, i32)> = cells.iter().copied().collect();
+    for &(c, r) in cells {
+        // How many of the eight cells round it are apron: fewer at the rim.
+        let kept = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (c + dx, r + dy))).filter(|n| set.contains(n)).count();
+        let lifted = match kept {
+            9 => 8,
+            7 | 8 => 4,
+            _ => 2,
+        };
+        let (bx0, by0) = (c * 16 - 8, r * 16 - 8);
+        for ly in 0..16 {
+            for lx in 0..16 {
+                let (bx, by) = (bx0 + lx, by0 + ly);
+                if bx < 0 || by < 0 || bx as usize >= w || by as usize >= h {
+                    continue;
+                }
+                let i = by as usize * w + bx as usize;
+                if class[i] != FloorPx::Land {
+                    continue;
+                }
+                let row = by.div_euclid(SLAB.1);
+                let sx = bx + if row.rem_euclid(2) == 1 { SLAB.0 / 2 } else { 0 };
+                let col = sx.div_euclid(SLAB.0);
+                if hash(col, row, 53) % lifted == 0 {
+                    continue;
+                }
+                let (x, y) = (bx as f32 * 2.0, by as f32 * 2.0);
+                texels[i] = if sx.rem_euclid(SLAB.0) == 0 || by.rem_euclid(SLAB.1) == 0 {
+                    apron.seam
+                } else if to_water[i] <= 6 || noise(x, y, 30.0, 59) > 0.68 {
+                    apron.wet
+                } else {
+                    apron.slab[(hash(col, row, 61) % 2) as usize]
+                };
+            }
+        }
+    }
 }
 
 /// The packed earth on a road's shoulder at field px (`x`, `y`), `dirt` px
@@ -640,11 +932,16 @@ mod tests {
         ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
     }
 
-    /// A translucent meadow tone as it lands on the grass fill.
-    fn over_grass(c: Color) -> Color {
-        let (a, grass) = (c.a as f32 / 255.0, Color::new(0x61, 0x95, 0x41, 255));
+    /// A translucent patch tone as it lands on `biome`'s floor: the grass
+    /// fill, or the desert's dust.
+    fn over_floor(biome: Biome, c: Color) -> Color {
+        let floor = match biome.theme() {
+            Theme::Grass => Color::new(0x61, 0x95, 0x41, 255),
+            Theme::Desert => Color::new(0xCC, 0xB3, 0x85, 255),
+        };
+        let a = c.a as f32 / 255.0;
         let mix = |g: u8, v: u8| (g as f32 * (1.0 - a) + v as f32 * a).round() as u8;
-        Color::new(mix(grass.r, c.r), mix(grass.g, c.g), mix(grass.b, c.b), 255)
+        Color::new(mix(floor.r, c.r), mix(floor.g, c.g), mix(floor.b, c.b), 255)
     }
 
     /// The least colour difference a material may have from anything a
@@ -668,8 +965,17 @@ mod tests {
             materials.extend(look.silt.iter().map(|c| ("silt", *c)));
             materials.extend(look.shoulder.iter().map(|c| ("shoulder", *c)));
             materials.extend(look.deck[2..].iter().map(|c| ("deck plank", *c)));
-            materials.push(("dark meadow", over_grass(look.meadow_dark)));
-            materials.push(("light meadow", over_grass(look.meadow_light)));
+            materials.push(("dark patch", over_floor(biome, look.meadow_dark)));
+            materials.push(("light patch", over_floor(biome, look.meadow_light)));
+            if let Some(p) = &look.plates {
+                materials.extend(p.face.iter().map(|c| ("plate", *c)));
+                materials.push(("fissure", p.fissure));
+            }
+            if let Some(a) = &look.apron {
+                materials.extend(a.slab.iter().map(|c| ("slab", *c)));
+                materials.push(("seam", a.seam));
+                materials.push(("wet slab", a.wet));
+            }
             for (name, material) in &materials {
                 for (thing, colour) in &things {
                     let d = delta_e(*material, *colour);
@@ -707,15 +1013,30 @@ mod tests {
     }
 
     #[test]
-    fn a_meadow_patch_stays_green() {
-        // The de-green rule (docs/PALETTE.md): the meadow stays green -
-        // green the strongest channel - and never turns toward khaki.
+    fn a_meadow_patch_stays_green_and_a_patch_of_dust_stays_earth() {
+        // The de-green rule (docs/PALETTE.md): large areas stay deep green
+        // or earth tan, never olive or yellow-khaki. On grass a patch keeps
+        // green its strongest channel; on the desert's dust it stays a warm
+        // earth, red over green by a clear step and both over blue.
         for biome in Biome::ALL {
             let look = biome.look();
-            for c in [over_grass(look.meadow_dark), over_grass(look.meadow_light)] {
-                assert!(c.g > c.r && c.g > c.b && c.r < c.g - 40, "{}: meadow patch {c:?} is not green", biome.name());
+            for c in [over_floor(biome, look.meadow_dark), over_floor(biome, look.meadow_light)] {
+                match biome.theme() {
+                    Theme::Grass => assert!(c.g > c.r && c.g > c.b && c.r < c.g - 40, "{}: meadow patch {c:?} is not green", biome.name()),
+                    Theme::Desert => assert!(c.r >= c.g + 12 && c.g > c.b + 20, "{}: patch {c:?} is not earth", biome.name()),
+                }
             }
         }
+    }
+
+    #[test]
+    fn every_biome_has_its_own_tileset_made_from_its_theme() {
+        for biome in Biome::ALL {
+            let path = biome.ground_texture_path();
+            assert!(std::path::Path::new(path).exists(), "{}: {path} is missing (tools/retint_ground.py)", biome.name());
+            assert_ne!(path, biome.theme().ground_texture_path(), "{} draws its own sheet", biome.name());
+        }
+        assert_eq!(Biome::Karst.theme(), Theme::Desert, "the karst is the desert's dust");
     }
 
     #[test]
@@ -727,6 +1048,12 @@ mod tests {
         assert_eq!(in_force(Some(Biome::Valley), &t), None);
         t.biome_override = 1;
         assert_eq!(in_force(None, &t), Some(Biome::Valley));
+        for (k, biome) in Biome::ALL.into_iter().enumerate() {
+            t.biome_override = k as i32 + 1;
+            assert_eq!(in_force(Some(Biome::Valley), &t), Some(biome));
+        }
+        let range = Tuning::SCHEMA.iter().find(|r| r.name == "biome_override").map(|r| r.max);
+        assert_eq!(range, Some(Biome::ALL.len() as f64), "the knob reaches every biome");
     }
 
     /// A field 8 cells square: water down columns 3 and 4, road along
@@ -758,6 +1085,61 @@ mod tests {
             let bank = at(162, y);
             assert!(VALLEY.silt.contains(&bank), "the bank at y {y} is {bank:?}, not silt");
         }
+    }
+
+    #[test]
+    fn a_sedge_bed_stands_in_stems_with_the_grass_between() {
+        let image = bake(&FLOODPLAIN, 128, 128, &tiny_blocks(), &[], &Places::default(), 1);
+        let [tip, stem, foot] = FLOODPLAIN.gravel;
+        let at = |x: usize, y: usize| image.texels[y * 128 + x];
+        let mut tips = 0;
+        for y in 0..126 {
+            for x in 0..128 {
+                if at(x, y) == tip {
+                    tips += 1;
+                    assert_eq!(at(x, y + 1), stem, "a stem at block ({x}, {y}) stands on its tip");
+                }
+            }
+        }
+        assert!(tips > 30, "the banks grow sedge: {tips} stems");
+        let band = image.texels.iter().filter(|t| [tip, stem, foot].contains(t)).count();
+        assert!(band < 128 * 128 / 10, "a bed, not a mat: {band} blocks");
+    }
+
+    #[test]
+    fn the_karst_lays_flat_plates_away_from_the_water_and_none_on_the_valley() {
+        let image = bake(&KARST, 128, 128, &tiny_blocks(), &[], &Places::default(), 1);
+        let p = KARST.plates.unwrap();
+        let plate = |c: &Color| p.face.contains(c) || *c == p.fissure;
+        let stones: Vec<usize> = (0..image.texels.len()).filter(|&i| plate(&image.texels[i])).collect();
+        assert!(stones.len() > 300, "plates on the open ground: {}", stones.len());
+        assert!(stones.iter().any(|&i| image.texels[i] == p.fissure), "fissures cross them");
+        for &i in &stones {
+            // Water down x 96..160 px and its bank to 166: no plate within
+            // 16 px of the water, 8 blocks.
+            let x = (i % 128) as i32 * 2;
+            assert!(!(82..174).contains(&x), "a plate at x {x} px sits in the water's grit");
+        }
+        let valley = bake(&VALLEY, 128, 128, &tiny_blocks(), &[], &Places::default(), 1);
+        assert!(!valley.texels.iter().any(plate), "the valley has no plates");
+    }
+
+    #[test]
+    fn lotus_lagoons_towers_by_the_water_get_one_apron_between_them() {
+        let map = MapFile::load(std::path::Path::new("maps/lotus-lagoon.toml")).unwrap();
+        let places = places(&map);
+        // The two tesla towers at (21, 13) and (27, 13) guard the way in.
+        for cell in [(21, 13), (24, 13), (27, 13), (19, 11), (29, 15)] {
+            assert!(places.aprons.contains(&cell), "{cell:?} is paved");
+        }
+        assert!(!places.aprons.contains(&(18, 13)) && !places.aprons.contains(&(24, 16)), "and no further");
+        assert!(places.aprons.windows(2).all(|w| w[0] < w[1]), "in cell order, once each");
+        // A look with no apron paves nothing.
+        let none = bake(&VALLEY, 64, 64, &vec![FloorPx::Land; 64 * 64], &[], &Places { aprons: vec![(1, 1)], ..Places::default() }, 1);
+        let paved = bake(&FLOODPLAIN, 64, 64, &vec![FloorPx::Land; 64 * 64], &[], &Places { aprons: vec![(1, 1)], ..Places::default() }, 1);
+        let slab = |c: &Color| FLOODPLAIN.apron.unwrap().slab.contains(c);
+        assert!(!none.texels.iter().any(slab));
+        assert!(paved.texels.iter().any(slab));
     }
 
     #[test]

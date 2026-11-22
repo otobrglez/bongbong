@@ -27,6 +27,9 @@ by bongbong's own generators.
   original kept at `_original/punyworld-overworld-tileset.png`: `grass`
   (deeper grass, muted dirt) and `desert` (pale dust, packed-earth roads,
   hardpan drifts); see `docs/GROUND_SPEC.md` §1 and `docs/desert-theme.md`.
+  `-valley.png`, `-floodplain.png` and `-karst.png` are the biomes' own
+  copies, one of those two retints with its water and banks recoloured
+  (`docs/biomes.md`).
   `_original/` is the untouched third-party art; keep it pristine and rerun
   the script to regenerate the live copies.
 - **Composed water tiles**: ids 602-615 and the three rows below them

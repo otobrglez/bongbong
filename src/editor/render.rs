@@ -2481,6 +2481,10 @@ impl MapField {
             MapField::Growth => auto(s.growth.map(|n| n.to_string()), true),
             MapField::TierStart => auto(s.tier_start.map(|tier| t.named("tier", tier.name())), false),
             MapField::TierEnd => auto(s.tier_end.map(|tier| t.named("tier", tier.name())), false),
+            MapField::Look => match s.biome {
+                Some(biome) => t.named("biome", biome.name()),
+                None => t.get(keys::SETTINGS_LOOK_NONE),
+            },
             MapField::Width => cells_text(size.0),
             MapField::Height => cells_text(size.1),
             MapField::Mission | MapField::Spawn | MapField::Theme | MapField::Anchor | MapField::Sky(_) => String::new(),
@@ -2504,6 +2508,8 @@ impl MapField {
             MapField::TierEnd => o.tier_end,
             // No CLI flag names a theme: the map is the only source.
             MapField::Theme => false,
+            // The `biome_override` knob outranks every map's look.
+            MapField::Look => crate::tuning::tuning().biome_override >= 0,
             // `--weather` (and the web page's `?weather=`) is the
             // `weather_override` knob, which outranks every map's sky.
             MapField::Sky(_) => crate::tuning::tuning().weather_override >= 0,

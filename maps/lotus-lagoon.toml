@@ -14,6 +14,10 @@
 # Huts of wood and glass on both flanks, a pine wood in the south-west,
 # tall grass to hide in, a road along the south edge, pickups on both flanks
 # and the bong health inside the pavilion's gate.
+#
+# Drawn as a reclaimed floodplain (`biome`, docs/biomes.md): slate still
+# water, sedge and peat at the banks, and an old floodwork apron paved round
+# the two towers at the island's mouth. A look only.
 
 
 version = 1
@@ -22,6 +26,7 @@ tanks = 5
 tank = "glacier"
 tank2 = "scout"
 weather = "random"
+biome = "floodplain"
 size = [
     48.0,
     24.0,

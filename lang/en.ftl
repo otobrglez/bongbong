@@ -397,6 +397,10 @@ settings-growth = GROWTH
 settings-tier-start = TIER START
 settings-tier-end = TIER END
 settings-theme = THEME
+# The kind of place a map is drawn as (docs/biomes.md), and its value
+# when it is drawn plain.
+settings-look = LOOK
+settings-look-none = NONE
 # The map's size in cells, and where the old map sits when it changes.
 settings-width = WIDTH
 settings-height = HEIGHT
@@ -594,6 +598,9 @@ tool-short-bio_slush_enemy = E.BIO
 
 theme-grass = grass
 theme-desert = desert
+biome-valley = valley
+biome-floodplain = floodplain
+biome-karst = karst
 weather-clear = clear
 weather-night = night
 weather-dusk = dusk

@@ -1426,19 +1426,23 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`GroundGrid::bridge`, `Deck`): the tiles round it are resolved as if it were water, roads keep the
   rules' reading, and the materials lay a plank deck - picture only; `layout`, `depth` and
   `WaterLayout` stay the map's.
-- `biome.rs` (docs/biomes.md) — what kind of place a map is: `Biome` (the map's `biome` key, absent
-  draws the plain tiles; `biome_override` puts one over every local round, `in_force`), its
-  `BiomeLook` (water ramp, gravel, silt, shoulder, meadow tones) and `bake`, the materials layer of 2 px
-  blocks placed by `floor_px` and hashed from position - silt on every bank, gravel shelves by the water,
-  packed earth on road shoulders, meadow patches; and `places`, what it dresses by rule (`Places`: a mill
-  race from a timber building near water, furrows on tall grass by a fence), which `GroundGrid::set_places`
-  holds for the bake. `bake_beyond` lays the same layer from any world block, which the floor carried
+- `biome.rs` (docs/biomes.md) — what kind of place a map is: `Biome` - the valley, the floodplain, the
+  karst - (the map's `biome` key, absent draws the plain tiles; `biome_override` puts one over every
+  local round, `in_force`; `theme`, the theme its tileset is retinted from, which the builder's LOOK row
+  keeps it to), its `BiomeLook` (water ramp, the shore band - gravel or sedge -, silt, shoulder, the
+  open ground's patches, plates, an apron, scrub, farms) and `bake`, the materials layer of 2 px blocks
+  placed by `floor_px` and hashed from position - silt on every bank, the shore band by the water,
+  packed earth on road shoulders, the karst's limestone plates, the open ground's patches; and `places`,
+  what it dresses by rule (`Places`: a mill race from a timber building near water and furrows on tall
+  grass by a fence where the look farms, a floodwork apron round towers by the water where it paves),
+  which `GroundGrid::set_places` holds for the bake. `bake_beyond` lays the same layer from any world block, which the floor carried
   past an arena (`GroundGrid::beyond`) uses to run the materials into its margins, thinned away by
   `ground::BEYOND_MATERIAL_CELLS`; `BiomeLook::floor_of` reads a texel back as a `Floor` (meadow,
   gravel, silt, earth), which `GroundGrid::floor_material` hands the tread marks' bake
   (`wear::BiomeFloor`); `BiomeLook::minimap_ground` dresses the minimap's open ground in the shelves
   and the meadow's patches. A look only: nothing that plays reads it. Its tests
-  hold every material ΔE 20 from every seat colour, crate and shell, and every meadow patch green.
+  hold every material ΔE 20 from every seat colour, crate and shell, every water ΔE 20 from every seat,
+  the teal hull and glass, and every patch green on grass and earth on dust.
   `dry_cell_near` moves a centre-fallback start out of a lake. `GroundGrid` keeps its `Layout`, seed
   and `Drifts`, so `repaint(&[(col, row, CellFloor)])` re-resolves only the tiles an edit can
   change, matching the walls it adds and removes in one pass, and lands where `build` would
