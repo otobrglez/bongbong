@@ -345,11 +345,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `cleared_par`), and `hostable()` is a shipped map as it ships or one carrying a valid stamp.
   `SHIPPED_MAPS` (default, default-desert, hunt-basic, waves-basic, portals, towers, `longwater` -
   the 112 x 63 free-play field the follow camera is for, a lake across the map with a fort on its
-  south shore, waves through six gates north of the water -, `armory` - the 40 x 22 arena every
+  south shore, waves through six gates north of the water -, `wildwood` - 224 x 126, twice
+  longwater a side, a Hunt across a forest to the enemy's moated keep, its weapons hidden in a maze,
+  a sealed crypt, a grove, forest hollows and an island only the portal ring reaches; written by
+  `tools/gen_wildwood.py`, which models the nav grid to seal every pocket the router could not
+  reach -, `armory` - the 40 x 22 arena every
   special weapon is tried on, the one shipped arena (docs/sonic-hammer.md) -, then the fifteen
   hand-authored levels from `lotus-lagoon` (and `vulkan`, the volcano level) to `grand-campaign`,
   each file's header saying how it plays, their crates meeting every weapon on the way
-  (docs/levels.md, "The weapons along the way"); every one a field map, 48 x 24 to 67 x 34 and longwater,
+  (docs/levels.md, "The weapons along the way"); every one a field map, 48 x 24 to 67 x 34, longwater and wildwood,
   since they were scaled up by 40 % a side with their layouts - `tools/scale_map.py`: lines kept one
   cell thick, single things single, two-wide fords two wide; then checked with the linter, since its
   reaches are in pixels) are embedded - all the web build can list, what the lobby's map stepper

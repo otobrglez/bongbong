@@ -1435,6 +1435,7 @@ mod map_lint_tests {
         "maps/default-desert.toml",
         "maps/towers.toml",
         "maps/longwater.toml",
+        "maps/wildwood.toml",
         "maps/armory.toml",
         "maps/lotus-lagoon.toml",
         "maps/vulkan.toml",
