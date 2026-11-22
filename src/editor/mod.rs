@@ -1560,6 +1560,12 @@ impl MapEditor {
         self.still.get_or_init(|| Still::build(&self.map, self.cell_index().cells(), &self.look))
     }
 
+    /// The biome the canvas is drawn in (its ground's): its tileset and
+    /// materials.
+    pub fn biome(&self) -> Option<crate::biome::Biome> {
+        self.ground.biome()
+    }
+
     /// Every baked image the canvas draws from, for the window's GPU
     /// copies: the floor shade, the biome's materials where the map has a
     /// biome, then the forest floor where the canvas has trees.
