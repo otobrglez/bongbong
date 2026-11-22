@@ -23,8 +23,6 @@ export interface EmscriptenModule {
   totalDependencies?: number;
   /** Exported by the glue once the runtime is up (`-sEXPORTED_RUNTIME_METHODS`). */
   ccall?(name: string, ret: CType, argTypes: CType[], args: unknown[]): unknown;
-  /** Reserved for when audio arrives (docs: "Audio: none yet"). */
-  audioContext?: AudioContext;
   /** `_bb_*` and everything else the glue attaches. */
   [key: string]: unknown;
 }
@@ -51,19 +49,39 @@ export function installModule(
     },
   };
   window.Module = module;
-  resumeAudioOnFirstClick(module);
+  keepAudioWithThePage();
   return module;
 }
 
-// Browsers keep an AudioContext created before any user gesture suspended;
-// the first click is the gesture that lets it run.
-function resumeAudioOnFirstClick(module: EmscriptenModule): void {
-  window.addEventListener(
-    "click",
-    () => {
-      const ctx = module.audioContext;
-      if (ctx && ctx.state === "suspended") void ctx.resume();
-    },
-    { once: true },
-  );
+/** The Web Audio contexts raylib's audio (miniaudio) plays the game's sound
+ *  through (docs/sound-system-prd.md D4); miniaudio keeps them on
+ *  `window.miniaudio`. */
+function audioContexts(): AudioContext[] {
+  const ma = (window as unknown as { miniaudio?: { devices?: ({ webaudio?: AudioContext } | null)[] } }).miniaudio;
+  return (ma?.devices ?? []).flatMap((device) => (device?.webaudio ? [device.webaudio] : []));
+}
+
+// Browsers hold an AudioContext suspended until a user gesture. miniaudio
+// resumes its own on a click or a touch; a key press - the keyboard plays the
+// game - is a gesture too, so it resumes them here. Every gesture is heard,
+// not just the first: the device opens once the wasm has loaded, which can
+// be after the first press. A hidden tab suspends the sound (the game stops
+// drawing there) and a shown one brings it back.
+function keepAudioWithThePage(): void {
+  let unlocked = false;
+  const resume = () => {
+    unlocked = true;
+    for (const ctx of audioContexts()) {
+      if (ctx.state === "suspended") void ctx.resume();
+    }
+  };
+  for (const type of ["keydown", "pointerdown", "touchend"]) {
+    window.addEventListener(type, resume, { capture: true });
+  }
+  document.addEventListener("visibilitychange", () => {
+    for (const ctx of audioContexts()) {
+      if (document.hidden) void ctx.suspend();
+      else if (unlocked) void ctx.resume();
+    }
+  });
 }

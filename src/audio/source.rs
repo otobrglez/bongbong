@@ -49,7 +49,7 @@ pub fn engine_family(kind: TankKind) -> EngineFamily {
 /// A chassis's engine pitch against its family's sample: heavier is lower.
 /// `mass_factor` is the chassis's `tank_mass_factor` (0.77 to 1.89).
 pub fn engine_pitch(mass_factor: f32) -> f32 {
-    (1.0 / mass_factor.max(0.1)).powf(0.35)
+    libm::powf(1.0 / mass_factor.max(0.1), 0.35)
 }
 
 /// How a cannon sounds by calibre (`tank_damage_factor`).

@@ -183,11 +183,11 @@ impl Watchers {
         let positions: HashMap<usize, Vec2> = game.world.query::<&Tank>().iter().map(|t| (t.owner_slot(), t.position)).collect();
         let mut firing = HashSet::new();
         for (&slot, &at) in &self.last_round {
-            if now - at < 0.15 {
-                if let Some(&pos) = positions.get(&slot) {
-                    firing.insert(slot);
-                    wishes.push(Wish { key: MINIGUN | slot as u64, cue: ids::MINIGUN_LOOP.0, at: Some(pos), velocity: Vec2::new(0.0, 0.0), gain: 1.0, pitch: 1.0, own: own.contains(&slot) });
-                }
+            if now - at < 0.15
+                && let Some(&pos) = positions.get(&slot)
+            {
+                firing.insert(slot);
+                wishes.push(Wish { key: MINIGUN | slot as u64, cue: ids::MINIGUN_LOOP.0, at: Some(pos), velocity: Vec2::new(0.0, 0.0), gain: 1.0, pitch: 1.0, own: own.contains(&slot) });
             }
         }
         for &slot in self.spinning.difference(&firing) {
@@ -227,7 +227,7 @@ impl Watchers {
         let mut add = |p: Vec2| {
             let b = ((p.x / cluster).floor() as i32, (p.y / cluster).floor() as i32);
             let e = buckets.entry(b).or_insert((Vec2::new(0.0, 0.0), 0));
-            e.0 = e.0 + p;
+            e.0 += p;
             e.1 += 1;
         };
         for (p, _, _) in game.burning_cells() {

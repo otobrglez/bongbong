@@ -194,11 +194,11 @@ impl Engine {
                 }
             }
             Command::Duck { bus, gain, release } => {
-                if let Some(b) = self.buses.get_mut(bus) {
-                    if gain < b.duck {
-                        b.duck = gain.max(0.0);
-                        b.duck_release = release.max(0.01);
-                    }
+                if let Some(b) = self.buses.get_mut(bus)
+                    && gain < b.duck
+                {
+                    b.duck = gain.max(0.0);
+                    b.duck_release = release.max(0.01);
                 }
             }
             Command::Master { gain, mono } => {

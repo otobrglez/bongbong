@@ -104,7 +104,7 @@ pub fn placeholder(bus: Bus, looped: bool, id: &str) -> Arc<Pcm> {
     let mut noise = Noise(id.bytes().fold(0x9E37_79B9_7F4A_7C15u64, |h, b| h.rotate_left(5) ^ b as u64));
     let rate = RATE as f32;
     let tone = |freq: f32, i: usize| libm::sinf(2.0 * std::f32::consts::PI * freq * i as f32 / rate);
-    let (seconds, f): (f32, Box<dyn Fn(usize, f32, &mut Noise) -> f32>) = if looped {
+    let (seconds, f): (f32, Shape<'_>) = if looped {
         (0.5, Box::new(move |i, _, n| 0.15 * tone(70.0, i) + 0.05 * n.next()))
     } else {
         match bus {
@@ -128,6 +128,9 @@ pub fn placeholder(bus: Bus, looped: bool, id: &str) -> Arc<Pcm> {
         .collect();
     Pcm::new(RATE, 1, data)
 }
+
+/// A placeholder's waveform: frame index, seconds, noise source to sample.
+type Shape<'a> = Box<dyn Fn(usize, f32, &mut Noise) -> f32 + 'a>;
 
 struct Noise(u64);
 

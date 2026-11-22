@@ -29,10 +29,12 @@ rustflags = [
     "-C", "link-arg=--preload-file",
     "-C", "link-arg=static@/static",
     # No `-sASYNCIFY=1` (docs/online-coop-prd.md decision 19): the loop runs
-    # through emscripten_set_main_loop_arg and never yields mid-frame, there
-    # is no audio, and asyncify instruments every function in the binary,
-    # which roughly halved the web client's speed. Adding `InitAudioDevice`
-    # is what would bring it back.
+    # through emscripten_set_main_loop_arg and never yields mid-frame, and
+    # asyncify instruments every function in the binary, which roughly
+    # halved the web client's speed. The game's sound needs none either:
+    # raylib's miniaudio plays through a ScriptProcessorNode unless
+    # MA_ENABLE_AUDIO_WORKLETS is set, which nothing sets, and only that
+    # worklet path sleeps (docs/sound-system-prd.md D4).
     # The wasm shadow stack. emscripten's default is 64 KB, which `app::run`
     # (a ~20 KB frame: every texture handle, the session and the loop closure
     # are its locals) plus raylib's PNG decoder already exceed. An overflow

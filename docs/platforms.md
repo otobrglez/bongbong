@@ -318,8 +318,11 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   every shader is compiled from a source in the binary, the twin on the embedded platforms
   (`crate::EMBEDDED`). Change both by hand: `the_web_twins_are_the_desktop_shaders` fails a pair
   whose bodies differ.
-- Audio: none yet. Adding `InitAudioDevice` needs `-sASYNCIFY=1` back in the rustflags, and with it
-  the speed cost decision 19 removed.
+- Audio (docs/sound-system-prd.md D4): raylib's miniaudio plays the game's one `AudioStream`
+  through a ScriptProcessorNode on the main thread, with no `-sASYNCIFY` (only its AudioWorklet
+  path sleeps, and `MA_ENABLE_AUDIO_WORKLETS` is never set). The sound files ride the preload
+  with the rest of `static/`. `site/src/scripts/runtime.ts` resumes miniaudio's contexts on a key
+  press, a pointer press or a touch, and suspends them while the tab is hidden.
 - **CI**: `.github/actions/build-web/action.yml` is the shared build (version pins as input defaults -
   keep in sync with `devenv.nix` and `tools/setup_emscripten.sh`); it builds `--bin bongbong` alone,
   and ci.yml's `web-cache` job builds it on every push to master, because a run reads only caches

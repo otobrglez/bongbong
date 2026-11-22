@@ -1,0 +1,296 @@
+<title>Bongbong Sound Audition</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one listening column - a masthead naming the batch, the round as
+   the game hears it, then one card per sample with its takes as rows -
+   in the Puny Palette and the type of the other BB-102 pages. */
+:root {
+  --bg: #F0F0EE;
+  --panel: #FBFBFA;
+  --sunk: #E4E4E0;
+  --ink: #252525;
+  --muted: #5B5B57;
+  --rule: #C9C9C4;
+  --accent: #9C3527;
+  --mark: #E4421A;
+  --ok: #3E6F2E; --ok-bg: #E2EDDC;
+  --warn: #8A5A12; --warn-bg: #F4E6CC;
+  --bad: #9C3527; --bad-bg: #F5DDD7;
+  --display: "Silkscreen", "Courier New", monospace;
+  --body: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1F1F1E; --panel: #2A2A28; --sunk: #343432; --ink: #EEEEEC; --muted: #A9A9A4; --rule: #474744;
+    --accent: #FF7A57; --mark: #FF5A33;
+    --ok: #9FD08A; --ok-bg: #2C3A27; --warn: #E8B865; --warn-bg: #3D3222; --bad: #FF8A6E; --bad-bg: #452823;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1F1F1E; --panel: #2A2A28; --sunk: #343432; --ink: #EEEEEC; --muted: #A9A9A4; --rule: #474744;
+  --accent: #FF7A57; --mark: #FF5A33;
+  --ok: #9FD08A; --ok-bg: #2C3A27; --warn: #E8B865; --warn-bg: #3D3222; --bad: #FF8A6E; --bad-bg: #452823;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 1rem; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 4rem;
+}
+.page { max-width: 54rem; margin: 0 auto; display: grid; gap: 1.5rem; }
+h1, h2, h3 { margin: 0; line-height: 1.2; text-wrap: balance; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 0.85em; }
+:focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+
+.masthead { padding-block: 2.25rem 1.25rem; border-bottom: 3px solid var(--ink); display: grid; gap: 0.75rem; }
+.eyebrow { font-family: var(--display); font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.masthead h1 { font-family: var(--display); font-weight: 400; font-size: 2rem; }
+.lede { max-width: 42rem; }
+.meta { display: flex; flex-wrap: wrap; gap: 0.35rem 1.25rem; font-size: 0.875rem; color: var(--muted); }
+.meta b { color: var(--ink); }
+.tally { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+.chip { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.75rem; font-weight: 700; padding: 0.05rem 0.5rem; border-radius: 2px; white-space: nowrap; }
+.chip.ok { color: var(--ok); background: var(--ok-bg); }
+.chip.warn { color: var(--warn); background: var(--warn-bg); }
+.chip.bad { color: var(--bad); background: var(--bad-bg); }
+.chip.plain { color: var(--muted); background: var(--sunk); }
+
+.round { background: var(--panel); border: 1px solid var(--rule); padding: 1rem 1.1rem; display: grid; gap: 0.6rem; }
+.round h2, .section h2 { font-size: 1.2rem; display: flex; gap: 0.6rem; align-items: baseline; }
+.round h2::before, .section h2::before { content: ""; width: 10px; height: 10px; background: var(--mark); flex: none; transform: translateY(-2px); }
+.round p { font-size: 0.9rem; color: var(--muted); max-width: 44rem; }
+audio { width: 100%; height: 36px; }
+
+.filters { display: flex; flex-wrap: wrap; gap: 0.4rem; position: sticky; top: env(safe-area-inset-top, 0px); background: var(--bg); padding-block: 0.6rem; z-index: 5; border-bottom: 1px solid var(--rule); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.filter { font: inherit; font-size: 0.85rem; border: 1.5px solid var(--rule); background: var(--bg); color: var(--ink); padding: 0.2rem 0.65rem; border-radius: 2px; cursor: pointer; }
+.filter[aria-pressed="true"] { border-color: var(--ink); background: var(--panel); font-weight: 700; }
+
+.section { display: grid; gap: 0.9rem; }
+.card { background: var(--panel); border: 1px solid var(--rule); padding: 1rem 1.1rem; display: grid; gap: 0.75rem; min-width: 0; }
+.card header { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; align-items: baseline; }
+.card h3 { font-family: var(--mono); font-size: 1rem; font-weight: 600; }
+.prompt { font-style: italic; color: var(--muted); font-size: 0.92rem; }
+.uses { font-size: 0.82rem; color: var(--muted); }
+.uses code { background: var(--sunk); padding: 0 0.3rem; border-radius: 2px; }
+
+.takes { display: grid; gap: 0.5rem; }
+.take { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; gap: 0.35rem 0.75rem; align-items: center; padding: 0.5rem 0.6rem; border: 1px solid var(--rule); background: var(--bg); }
+.take.shipped { border-color: var(--ok); box-shadow: inset 4px 0 0 var(--ok); }
+.take .label { font-family: var(--display); font-size: 0.75rem; letter-spacing: 0.04em; }
+.take .facts { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 0.2rem 0.9rem; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.take .ship { font: inherit; font-size: 0.82rem; border: 1.5px solid var(--ink); background: var(--panel); color: var(--ink); padding: 0.2rem 0.6rem; cursor: pointer; border-radius: 2px; white-space: nowrap; }
+.take.shipped .ship { background: var(--ok); color: var(--panel); border-color: var(--ok); }
+@media (max-width: 560px) {
+  .take { grid-template-columns: minmax(0, 1fr) auto; }
+  .take .label { grid-column: 1 / 3; }
+  .take .facts { grid-column: 1 / 3; }
+}
+
+.verdict { display: grid; gap: 0.5rem; border-top: 1px solid var(--rule); padding-top: 0.75rem; }
+.verdict .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.vbtn { font: inherit; font-size: 0.85rem; border: 1.5px solid var(--rule); background: var(--bg); color: var(--ink); padding: 0.25rem 0.75rem; cursor: pointer; border-radius: 2px; }
+.vbtn[aria-pressed="true"].keep { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); font-weight: 700; }
+.vbtn[aria-pressed="true"].again { border-color: var(--bad); background: var(--bad-bg); color: var(--bad); font-weight: 700; }
+textarea { font: inherit; font-size: 0.9rem; width: 100%; min-height: 2.6rem; padding: 0.4rem 0.55rem; border: 1.5px solid var(--rule); background: var(--bg); color: var(--ink); border-radius: 2px; resize: vertical; }
+.saved { font-size: 0.78rem; color: var(--muted); }
+.notice { font-size: 0.85rem; color: var(--warn); background: var(--warn-bg); padding: 0.5rem 0.75rem; }
+footer { font-size: 0.82rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 1rem; }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <div class="eyebrow">BB-102 · sound-gen · <span id="batch-name"></span></div>
+    <h1>Bongbong Sound Audition</h1>
+    <p class="lede">Every take ElevenLabs made for this batch, as it came out. The takes marked <b>In the game</b> were picked by measurement and already play in the build; the game plays them trimmed and levelled. Swap a pick with <b>Use this take</b>, and send a sound back with <b>Make it again</b> and a note on what to change.</p>
+    <div class="meta" id="meta"></div>
+    <div class="tally" id="tally"></div>
+    <p class="notice" id="offline" hidden>Picks and notes are not saved in this view. Open the page signed in to claude.ai to keep them.</p>
+  </header>
+
+  <section class="round" id="round" hidden>
+    <h2>A round, as the game hears it</h2>
+    <p id="round-caption"></p>
+    <audio id="round-audio" controls preload="none"></audio>
+  </section>
+
+  <nav class="filters" id="filters" aria-label="Show sounds by bus"></nav>
+  <main class="section" id="samples"></main>
+  <footer>Picks and notes save as you make them. The <code>sound-gen</code> skill reads them back, swaps the shipped takes and makes the sounds you sent back again.</footer>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var verdicts = {};
+  var db = null, me = null;
+  var filter = "all";
+
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    (kids || []).forEach(function (c) { if (c) n.appendChild(c); });
+    return n;
+  }
+
+  function shippedOf(s) {
+    var v = verdicts[s.id];
+    return (v && Array.isArray(v.ship)) ? v.ship : s.shipped;
+  }
+
+  function header() {
+    document.getElementById("batch-name").textContent = D.batch.name;
+    var meta = document.getElementById("meta");
+    meta.innerHTML = "";
+    [["Made", D.batch.made], ["Model", D.batch.model], ["Takes", String(D.samples.reduce(function (n, s) { return n + s.takes.length; }, 0))], ["Cost", D.batch.credits]].forEach(function (p) {
+      meta.appendChild(el("span", {}, [el("b", { text: p[0] + " " }), document.createTextNode(p[1])]));
+    });
+    tally();
+    if (D.round) {
+      document.getElementById("round").hidden = false;
+      document.getElementById("round-caption").textContent = D.round.caption;
+      document.getElementById("round-audio").src = D.round.url;
+    }
+    var buses = ["all"].concat(D.samples.map(function (s) { return s.bus; }).filter(function (b, i, a) { return a.indexOf(b) === i; }));
+    var nav = document.getElementById("filters");
+    buses.forEach(function (b) {
+      var btn = el("button", { type: "button", class: "filter", "aria-pressed": String(b === filter), text: b === "all" ? "Every sound" : b });
+      btn.addEventListener("click", function () {
+        filter = b;
+        nav.querySelectorAll(".filter").forEach(function (x) { x.setAttribute("aria-pressed", String(x === btn)); });
+        render();
+      });
+      nav.appendChild(btn);
+    });
+  }
+
+  function tally() {
+    var keep = 0, again = 0, open = 0;
+    D.samples.forEach(function (s) {
+      var v = verdicts[s.id] && verdicts[s.id].verdict;
+      if (v === "keep") keep++; else if (v === "again") again++; else open++;
+    });
+    var t = document.getElementById("tally");
+    t.innerHTML = "";
+    t.appendChild(el("span", { class: "chip ok", text: keep + " sound right" }));
+    t.appendChild(el("span", { class: "chip bad", text: again + " to make again" }));
+    t.appendChild(el("span", { class: "chip plain", text: open + " not heard yet" }));
+  }
+
+  function facts(m, looped) {
+    var f = [m.seconds.toFixed(2) + " s", "onset " + Math.round(m.onset_s * 1000) + " ms", "peak " + m.peak_db.toFixed(1) + " dB", "crest " + m.crest_db.toFixed(1) + " dB"];
+    if (looped && m.seam_jump !== undefined) f.push("seam " + m.seam_jump.toFixed(2));
+    if (m.clipped) f.push(m.clipped + " clipped");
+    return f;
+  }
+
+  function save(s, patch) {
+    var v = Object.assign({ sample: s.id, ship: shippedOf(s), verdict: null, note: "" }, verdicts[s.id] || {}, patch);
+    v.by = me; v.at = new Date().toISOString();
+    verdicts[s.id] = v;
+    render();
+    if (!db) return;
+    db.collection("verdicts").doc(s.id).set(v).then(function () {
+      var tag = document.getElementById("saved-" + s.id);
+      if (tag) tag.textContent = "Saved";
+    }, function (e) {
+      var tag = document.getElementById("saved-" + s.id);
+      if (tag) tag.textContent = "Not saved: " + (e && e.message ? e.message : "the store refused it") + ". Try again.";
+    });
+  }
+
+  function card(s) {
+    var shipped = shippedOf(s);
+    var v = verdicts[s.id] || {};
+    var head = el("header", {}, [
+      el("h3", { text: s.id }),
+      el("span", { class: "chip plain", text: s.bus }),
+      s.looped ? el("span", { class: "chip plain", text: "loop" }) : null,
+      v.verdict === "keep" ? el("span", { class: "chip ok", text: "sounds right" }) : null,
+      v.verdict === "again" ? el("span", { class: "chip bad", text: "make it again" }) : null,
+    ]);
+    var takes = el("div", { class: "takes" });
+    s.takes.forEach(function (t, i) {
+      var on = shipped.indexOf(t.generation) >= 0;
+      var audio = el("audio", { controls: "", preload: "none", src: t.url });
+      if (s.looped) audio.loop = true;
+      var btn = el("button", { type: "button", class: "ship", "aria-pressed": String(on), text: on ? "In the game" : "Use this take" });
+      btn.addEventListener("click", function () {
+        var next = shippedOf(s).slice();
+        var at = next.indexOf(t.generation);
+        if (at >= 0) { if (next.length > 1) next.splice(at, 1); }
+        else { next.push(t.generation); if (next.length > s.keep) next.shift(); }
+        save(s, { ship: next });
+      });
+      var row = el("div", { class: "take" + (on ? " shipped" : "") }, [
+        el("span", { class: "label", text: "Take " + "ABCD"[i] }),
+        audio,
+        btn,
+        el("div", { class: "facts" }, facts(t.metrics, s.looped).map(function (f) { return el("span", { text: f }); })),
+      ]);
+      takes.appendChild(row);
+    });
+    var keep = el("button", { type: "button", class: "vbtn keep", "aria-pressed": String(v.verdict === "keep"), text: "Sounds right" });
+    var again = el("button", { type: "button", class: "vbtn again", "aria-pressed": String(v.verdict === "again"), text: "Make it again" });
+    keep.addEventListener("click", function () { save(s, { verdict: v.verdict === "keep" ? null : "keep" }); });
+    again.addEventListener("click", function () { save(s, { verdict: v.verdict === "again" ? null : "again" }); });
+    var note = el("textarea", { id: "note-" + s.id, placeholder: "What should change? Heavier, shorter, less metallic..." });
+    note.value = v.note || "";
+    note.addEventListener("change", function () { save(s, { note: note.value }); });
+    var verdict = el("div", { class: "verdict" }, [
+      el("div", { class: "row" }, [keep, again, el("span", { class: "saved", id: "saved-" + s.id, text: v.at ? "Saved" : "" })]),
+      note,
+    ]);
+    return el("article", { class: "card", id: "s-" + s.id }, [
+      head,
+      el("p", { class: "prompt", text: "“" + s.prompt + "”" }),
+      el("p", { class: "uses" }, [document.createTextNode("Plays in ")].concat(s.cues.map(function (c, i) { return [el("code", { text: c }), document.createTextNode(i < s.cues.length - 1 ? ", " : "")]; }).reduce(function (a, b) { return a.concat(b); }, []))),
+      takes,
+      verdict,
+    ]);
+  }
+
+  function render() {
+    var root = document.getElementById("samples");
+    var focus = document.activeElement && document.activeElement.id;
+    root.innerHTML = "";
+    D.samples.filter(function (s) { return filter === "all" || s.bus === filter; }).forEach(function (s) { root.appendChild(card(s)); });
+    tally();
+    if (focus) { var f = document.getElementById(focus); if (f) f.focus(); }
+  }
+
+  // One sound at a time: starting a take stops the others.
+  document.addEventListener("play", function (e) {
+    document.querySelectorAll("audio").forEach(function (a) { if (a !== e.target) a.pause(); });
+  }, true);
+
+  header();
+  render();
+
+  var claude = window.claude;
+  if (!claude || !claude.use) { document.getElementById("offline").hidden = false; return; }
+  claude.use("user").then(function (user) { return user ? user.id() : null; }).then(function (id) { me = id; }, function () {});
+  claude.use("db").then(function (handle) {
+    if (!handle) { document.getElementById("offline").hidden = false; return; }
+    db = handle;
+    db.collection("verdicts").onSnapshot(function (snap) {
+      snap.docs.forEach(function (d) { if (d.exists) verdicts[d.id] = d.data(); });
+      render();
+    }, function () { document.getElementById("offline").hidden = false; });
+  });
+})();
+</script>
