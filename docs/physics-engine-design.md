@@ -17,7 +17,7 @@ Everything else is the simulation's own:
 | Tank (seat, enemy, wreck) | dynamic body, rotation locked | driven and knocked by impulses |
 | Tank rolling in through a gate | none until it arrives | `rollin_phase` moves it by hand and spawns the body on arrival |
 | Field boundary | 4 fixed cuboids | `battlefield::spawn_walls` |
-| Obstacle tile (wall, prop, tree, tower, cone, door, lamp post) | 1 fixed cuboid each | removed when the tile dies |
+| Obstacle tile (wall, prop, tree, tower, cone, door, lamp post) | 1 fixed cuboid each, with its surface ("Hard and soft") | removed when the tile dies |
 | Deep water, deep lava | 1 fixed cuboid a cell | a hull cannot enter; a shot is never stopped by them |
 | Bong | fixed cuboid, relocated | see "The bong" |
 | Shell, bullet, plasma, missile, grenade, drone, orb, laser, rail | **none** | hand-integrated; hit by `simulation::hits` |
@@ -25,7 +25,8 @@ Everything else is the simulation's own:
 
 Every body carries exactly one collider (`Physics::collider_of`). There are
 no sensors, no collision groups and no joints. Gravity is zero: the game is
-top-down.
+top-down. The one physics hook is the cushion of a soft face
+(`SurfaceHooks`, "Hard and soft").
 
 Projectiles have no body because a body can only say where a shot *ended
 up*. `hits::Terrain::sweep` sweeps the whole segment a shot travelled this
@@ -43,7 +44,9 @@ debug build asserts it. One update is one step:
    `Physics::step` once. On the end screen the projectiles still fly and
    the physics does not step, so nothing drifts.
 3. `sync_tanks_and_ram` reads each body's position back into
-   `Tank::position`, lays tread marks along the travel and resolves rams.
+   `Tank::position`, lets the faces have their say (`respond_to_contacts`:
+   the bounce, a crack, a hit's report - "Hard and soft"), lays tread marks
+   along the travel and resolves rams.
 
 The windowed game keeps real time and the step apart in `app.rs`'s
 `StepClock`: it owes the round whole steps, runs at most
@@ -244,7 +247,79 @@ through it, before `step_world`, so the jump lays no tread marks.
 `Physics::spawn_static` makes a fixed cuboid with rapier's default surface.
 Per-material friction was tried twice and measured worse (more `wall-grind`
 and `spin` in the probe): the rounded hull exists to slide past tiles, and
-friction fights exactly that.
+friction fights exactly that. How hard a tile is acts on the contact's
+normal instead ("Hard and soft" below).
+
+### Hard and soft
+
+Every fixed collider carries a surface (`obstacle::Surface`, set with
+`Physics::set_surface` and kept in the collider's `user_data`), which
+`Material::surface` names for every tile:
+
+| Surface | Tiles | Head on, a hull |
+|---|---|---|
+| Hardest | the towers, a volcano's cone | stops flush, thrown back hardest (`hardest_bounce` 0.5), the strongest jolt |
+| Hard | iron, concrete, brick, a training door, the field's edge | stops flush, thrown back (`hard_bounce` 0.38) |
+| Brittle | glass | as hard, but a hit at `glass_crack_speed` (170 px/s) cracks the pane (`glass_ram_damage`, half its health) instead |
+| Firm | a timber wall, broadleaf, pine, spruce, Scots pine, fir, palm, a drum | slows over the last ~2 px (`firm_cushion_decel`) |
+| Yielding | birch, willow, snag | slows over the last ~4 px (`yielding_cushion_decel`) |
+| Soft | sandbags, a fence, a lamp post, a range board | slows over the last ~10 px (`soft_cushion_decel`) |
+| Plain | deep water, lava, the bong | the solver's own stop |
+
+**The cushion is the solver's.** While a hull is within its look-ahead of
+a collider (`HULL_LOOK_AHEAD`), their contact is a speculative one: the
+solver lets the hull close the gap `d` this step and no more. A contact
+hook (`physics::SurfaceHooks`, rapier's `modify_solver_contacts`, asked only
+by the colliders that cushion) shortens that, for a hull coming at the face
+head on, to what `v^2 = 2 a d` allows at `d`. The nearer the hull is the
+slower it may come, so it settles flush against the face over the last few
+px - 3 to 5 steps against sandbags at full speed - instead of stopping on
+it from full speed. Head on means a normal within `CUSHION_AXIS_COS` of an
+axis and at least `CUSHION_HEAD_ON` of the hull's velocity going into it:
+a hull sliding along a face, or driving past a corner, is not slowed. It
+stays a stop at the face, never a sink into the tile: a hull pressed into
+a run of tiles would meet the next tile's side face at the seam and snag,
+which is the failure the rounded hull exists to avoid. Rapier never
+recycles the contacts of a hooked pair, so the cushion is recomputed every
+step, a pure function of the gap and the hull's velocity.
+
+**The bounce is a knock** (`simulation::contact`, after the step, before the
+rams). A hull whose body went into the step at `hull_bounce_min_speed` (130
+px/s) or more along its contact with a hard face is thrown back along the
+normal at that share of the speed, with a skid of
+`hull_bounce_skid_seconds` so the drive does not take the throw back in a
+frame (`combat::knock`, so a client-owned seat is told through
+`Event::Shoved`). 130 px/s is over a driven hull's own push into a face it
+rests on - one step of `tank_accel_force` is 70 to 90 px/s - so leaning on
+a wall never bounces; after a throw `hull_bounce_rest_seconds` passes
+before the same hull is thrown or reports a hit again, since it comes back
+at the face under its own drive. Rapier's restitution is not used: it
+cannot tell a hit from a hull leaning on the face at the drive's push.
+
+**A hit is reported** at `hull_struck_min_speed` (120 px/s):
+`Event::HullStruck` carries the slot, the tile's material (none for the
+field's edge), the surface, the contact, the way in, the speed and whether
+it bounced. `fx.rs` draws it by surface - a hard face slams (sparks, dust,
+the hull's flash and a jolt), the rest throw their own chips and dust
+(`tile_chip`: a timber wall's splinters, a sandbag's sand, a tree's leaves)
+with a smaller jolt (`hardest_jolt` .. `soft_jolt`); a tree's crown shakes
+(`contact::TreeShake`, `tree_shake_px`, the round's presentation, set on a
+replica from the event).
+
+Around the faces, by the same request: a lamp post snaps
+(`lamp_ram_seconds`) and a range board tips over (`target_ram_seconds`) under
+a ram, as a fence does; a training door stays hard. Tall grass and reeds keep
+`grass_pace` (0.95) of a hull's pace and a bush `bush_pace` (0.88)
+(`Footing::in_brush`), on top of the sway and the flattening they always
+had.
+
+**Measured** (2026-11-22, BB-205): with the brush's pace at 1, the faces
+move no round of the nine fixtures, the seven field maps or the pinned
+default-map stream. The probe's default-map sweep over four seed bases
+(120 rounds) reads wall-grind 0 before and after, spin 7 -> 6, stall 4 -> 3,
+bump-rate 3 -> 2; the fixtures read exactly as before; the field maps'
+total fell from 204 to 199, hedge-maze's jitter rising with its bushes
+(justfile, `field_ceilings`).
 
 ### Tiles and their seams
 

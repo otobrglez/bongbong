@@ -307,6 +307,8 @@ pub enum WireEvent {
     AircraftDowned { id: u16, x: i16, y: i16, height: i16, by: crate::air::AirStrike },
     /// Air support `id` is done; `Event::AirSupportLeft`.
     AirSupportLeft { id: u16 },
+    /// Seat or enemy `slot`'s hull hit a fixed face; `Event::HullStruck`.
+    HullStruck { slot: u16, material: Option<Material>, surface: crate::obstacle::Surface, x: i16, y: i16, nx: f32, ny: f32, speed: f32, bounced: bool },
 }
 
 /// `WireEvent::AirSupportCalled::arrive` for a call waiting behind another.
@@ -366,6 +368,9 @@ impl WireEvent {
             Event::Wreck { slot, x, y } => WireEvent::Wreck { slot: slot_u16(slot), x: q(x), y: q(y) },
             Event::Ram { slot, other_slot, damage } => {
                 WireEvent::Ram { slot: slot_u16(slot), other_slot: slot_u16(other_slot), damage }
+            }
+            Event::HullStruck { slot, material, surface, x, y, nx, ny, speed, bounced } => {
+                WireEvent::HullStruck { slot: slot_u16(slot), material, surface, x: q(x), y: q(y), nx, ny, speed, bounced }
             }
             Event::PickupCollected { slot, kind, x, y, spilled } => WireEvent::PickupCollected { slot: slot_u16(slot), kind, x: q(x), y: q(y), spilled },
             Event::CrateBroken { kind, x, y, cooked } => WireEvent::CrateBroken { kind, x: q(x), y: q(y), cooked },
@@ -618,6 +623,9 @@ impl WireEvent {
             WireEvent::Wreck { slot, x, y } => Event::Wreck { slot: slot as usize, x: d(x), y: d(y) },
             WireEvent::Ram { slot, other_slot, damage } => {
                 Event::Ram { slot: slot as usize, other_slot: other_slot as usize, damage }
+            }
+            WireEvent::HullStruck { slot, material, surface, x, y, nx, ny, speed, bounced } => {
+                Event::HullStruck { slot: slot as usize, material, surface, x: d(x), y: d(y), nx, ny, speed, bounced }
             }
             WireEvent::PickupCollected { slot, kind, x, y, spilled } => Event::PickupCollected { slot: slot as usize, kind, x: d(x), y: d(y), spilled },
             WireEvent::CrateBroken { kind, x, y, cooked } => Event::CrateBroken { kind, x: d(x), y: d(y), cooked },
@@ -895,6 +903,7 @@ mod tests {
             Event::GrenadeBlast { slot: 0, x: 200.0, y: 96.0 },
             Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue", seat: 1, leg: 1, portal: true },
             Event::Shoved { seat: 0, vx: 120.0, vy: -40.0, skid: 0.6 },
+            Event::HullStruck { slot: 3, material: Some(Material::Birch), surface: crate::obstacle::Surface::Yielding, x: 96.0, y: 64.0, nx: 0.0, ny: -1.0, speed: 205.5, bounced: true },
             Event::Placed { seat: 2, x: 320.0, y: 160.0, rotation: 90.0 },
             Event::Teleported { slot: 1, x: 64.0, y: 64.0, to_x: 960.0, to_y: 480.0 },
             Event::ShotTeleported { id: Some(41), x: 320.0, y: 362.25, to_x: 960.0, to_y: 362.25 },
@@ -945,7 +954,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 85, "one sample per Event variant");
+        assert_eq!(seen.len(), 86, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

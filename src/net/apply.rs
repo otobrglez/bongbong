@@ -744,6 +744,10 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presse
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
                 game.drum_in_flight(from, to, drum as i32);
             }
+            // A tree a hull hit shakes its crown on the replica too.
+            WireEvent::HullStruck { material: Some(m), x, y, nx, ny, speed, .. } if show.drawn() && m.is_tree() => {
+                game.shake_tree(Position::new(dequantise_pos(x), dequantise_pos(y)), Position::new(nx, ny), speed);
+            }
             // A print is the room's oil from now on, drawn or not: a flame
             // the room lights there is a fire the snapshots list.
             WireEvent::OilPrinted { col, row, dir, fade } => {

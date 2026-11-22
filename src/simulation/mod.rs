@@ -23,6 +23,8 @@
 mod air_support;
 mod combat;
 mod command;
+mod contact;
+pub use contact::TreeShake;
 mod comms;
 mod crates;
 pub mod debug;
@@ -626,6 +628,14 @@ pub enum Event {
     /// than pretending to report an outcome. Sum it for "how hard the pack is
     /// shoving itself", never for "damage dealt".
     Ram { slot: usize, other_slot: usize, damage: f32 },
+    /// `slot`'s hull hit a fixed face at `speed` px/s along the contact -
+    /// `hull_struck_min_speed` or more (`simulation::contact`): a tile of
+    /// `material`, or the field's edge (`None`), whose `surface` says how
+    /// it took it. (`x`, `y`) is where they met, (`nx`, `ny`) the way the
+    /// hull was going into it. `bounced`: the face threw the hull back.
+    /// What the jolt, the chips and dust and a tree's shaking crown are
+    /// drawn from.
+    HullStruck { slot: usize, material: Option<Material>, surface: crate::obstacle::Surface, x: f32, y: f32, nx: f32, ny: f32, speed: f32, bounced: bool },
     /// `slot` took a `kind` pickup at (`x`, `y`) - where its opening plays
     /// (`fx::CrateOpen`). `spilled`: it was a broken crate's contents lying
     /// loose (`Pickup::loose`), so there was no crate left to open.
@@ -1265,6 +1275,11 @@ pub struct Game {
     /// The tufts those cells scatter, built once per round. Purely drawn -
     /// see `grass.rs` for why this is not an `Obstacle`.
     pub(crate) grass: Vec<crate::grass::GrassTuft>,
+    /// The share of its pace a hull keeps in each cell of tall grass,
+    /// reeds or a bush (`grass_pace`, `bush_pace`), by cell: what
+    /// `Footing::in_brush` reads. Built with the tufts; looked up, never
+    /// walked.
+    pub(crate) brush: BTreeMap<(i32, i32), crate::grass::Brush>,
     /// The woods as a whole (`woods.rs`): where each crown is drawn, the
     /// trails, the forest floor and the undergrowth. Built once per round
     /// from the map; picture only.
@@ -1298,6 +1313,9 @@ pub struct Game {
     /// Fuel drums in the air, launched by another blast and about to
     /// detonate where they land (`props::tick_launches`).
     pub(crate) flying_drums: Vec<FlyingDrum>,
+    /// Tree crowns swinging from a hull's hit (`contact::TreeShake`):
+    /// presentation the painters read, oldest first.
+    pub(crate) tree_shakes: Vec<TreeShake>,
     /// The volcanoes on the field (docs/volcano.md), one per crater cell
     /// in the map's order (`volcano::build_volcanoes`).
     pub(crate) volcanoes: Vec<crate::volcano::Volcano>,
@@ -1783,6 +1801,7 @@ impl Game {
         self.oil_prints.clear();
         self.portals.clear();
         self.flying_drums.clear();
+        self.tree_shakes.clear();
         self.lava_bombs.clear();
         self.lanterns.clear();
         self.lantern_next_id = 0;
@@ -1792,6 +1811,7 @@ impl Game {
         self.screen_flash_strength = 1.0;
         self.screen_flash_cooldown = 0.0;
         self.grass_cells.clear();
+        self.brush.clear();
         self.grass.clear();
         self.laser_beams.clear();
         self.flame_jets.clear();
@@ -1969,6 +1989,20 @@ impl Game {
         // of tufts - or, a bush cell, growing its one bush. Hashed from
         // position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
+        self.brush = {
+            let bushes: BTreeMap<(i32, i32), crate::grass::Bush> = map_spawn.bush_cells.iter().map(|&(p, b)| (map::world_to_cell(p), b)).collect();
+            self.grass_cells
+                .iter()
+                .map(|&c| {
+                    let cell = map::world_to_cell(c);
+                    let brush = match bushes.get(&cell) {
+                        Some(crate::grass::Bush::Reeds) | None => crate::grass::Brush::Grass,
+                        Some(_) => crate::grass::Brush::Bush,
+                    };
+                    (cell, brush)
+                })
+                .collect()
+        };
         self.looks = map_spawn.looks.clone();
         self.oil_cells = map_spawn.oil_cells.iter().copied().collect();
         self.portals = map_spawn.portal_cells.iter().map(|&(c, r)| map::cell_to_world(c, r)).collect();
@@ -2638,6 +2672,7 @@ impl Game {
                 tank.well_grace = (tank.well_grace - dt).max(0.0);
             }
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
+            tank.bounce_rest = (tank.bounce_rest - dt).max(0.0);
             if tank.portal_cooldown > 0.0 && !portals.iter().any(|p| p.distance_to(tank.position) <= trigger_radius) {
                 tank.portal_cooldown = (tank.portal_cooldown - dt).max(0.0);
             }
@@ -2788,7 +2823,7 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, lava, craters, rubble, weather, time, map, zones, zone_lead, .. } = self;
+        let Game { world, physics, water, lava, craters, rubble, brush, weather, time, map, zones, zone_lead, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return None };
         if tank.body.is_none() || tank.is_wreck() {
             return None;
@@ -2799,7 +2834,7 @@ impl Game {
         // clock), the room's when this pose lands (docs/gravity-well.md
         // "Online").
         let wells = if zones.is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(zones, *time + *zone_lead) };
-        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time).on_rubble(rubble, tank.position).pulled(&wells, &*tank);
+        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time).on_rubble(rubble, tank.position).in_brush(brush, tank.position).pulled(&wells, &*tank);
         // The seat's own skid and spin run on the client's ticks, as the
         // room's do in `tick_timers` (`Predictor::shove` starts a skid).
         tank.skid = (tank.skid - dt).max(0.0);
@@ -3944,7 +3979,7 @@ impl Game {
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
-            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank);
+            let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).in_brush(&self.brush, tank.position).pulled(&f.wells, tank);
             drive_tank(&mut self.physics, tank, drive, f.dt, footing);
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -4688,7 +4723,7 @@ impl Game {
             // A turn pressed just short of an opening waits for it, as a
             // seat's does (`buffer_turn`).
             let intent = buffer_turn(&self.physics, tank, intent, current, || {
-                Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank)
+                Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).in_brush(&self.brush, tank.position).pulled(&f.wells, tank)
             });
             tank.control(intent.move_dir, intent.face);
             let owner = tank.owner();
@@ -4773,7 +4808,7 @@ impl Game {
                 // The commander's order is never the last word on a tank
                 // in a tell: it holds its aim (docs/sonic-hammer.md).
                 let intent = commanded_intent(&self.commander, p.slot, p.intent, tank.tell);
-                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).pulled(&f.wells, tank);
+                let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time).on_rubble(&self.rubble, tank.position).in_brush(&self.brush, tank.position).pulled(&f.wells, tank);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
         }
@@ -5000,6 +5035,7 @@ impl Game {
         for tank in self.world.query::<&mut Tank>().iter() {
             sync_tank_from_physics(&self.physics, tank);
         }
+        self.respond_to_contacts(f);
         let (look, now) = (self.wear_look(), self.time);
         let floor = wear::Underfoot { ground: &self.ground, water: &self.water, lava: &self.lava, craters: &self.craters };
         for &(player, before) in &players {
@@ -6397,6 +6433,20 @@ impl Footing {
             crate::chunks::RubbleLevel::Heavy => t.rubble_heavy_speed,
         };
         Footing { pace: self.pace * pace, ..self }
+    }
+
+    /// This footing in the brush at `pos` (`Game::brush`): tall grass and
+    /// reeds keep `grass_pace` of the hull's pace, a bush `bush_pace` -
+    /// the hull parts them as it goes (`grass::tick`). The driving paths
+    /// read it; a shove's skid does not.
+    pub(crate) fn in_brush(self, brush: &BTreeMap<(i32, i32), crate::grass::Brush>, pos: Position) -> Footing {
+        let Some(&kind) = brush.get(&crate::map::world_to_cell(pos)) else { return self };
+        let t = tuning();
+        let pace = match kind {
+            crate::grass::Brush::Grass => t.grass_pace,
+            crate::grass::Brush::Bush => t.bush_pace,
+        };
+        if pace == 1.0 { self } else { Footing { pace: self.pace * pace, ..self } }
     }
 
     /// This footing with the wells' pull on `tank` from `wells` (none with
@@ -7804,8 +7854,15 @@ mod determinism_tests {
         // fire model - its spin-up, round spacing, spread, damage and the
         // rounds that glance (`minigun_ricochet_chance`) - moves the second
         // pin alone (the BB-187 re-baseline).
+        // A hull keeps `grass_pace` of its pace in tall grass and reeds and
+        // `bush_pace` in a bush (BB-205, `Footing::in_brush`), and the
+        // default map's meadows move both pins; with both at 1 the pair is
+        // the one before, (9_140_234_918_546_171_875,
+        // 10_710_207_252_993_327_427). The hard and soft faces
+        // (`obstacle::Surface`) move neither: no hull in these rounds hits a
+        // face hard enough to be thrown or comes at a soft one head on.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (9_140_234_918_546_171_875, 10_710_207_252_993_327_427), "(one seat, two seats)");
+        assert_eq!((one, two), (17_819_061_092_656_083_158, 16_437_452_299_240_425_103), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -7911,6 +7968,10 @@ mod mechanics_tests {
     // As `drive`: its cases put a knob table in force on their thread.
     #[cfg(feature = "dev-tools")]
     mod round_flow;
+
+    // As `drive`: its cases put a knob table in force on their thread.
+    #[cfg(feature = "dev-tools")]
+    mod surfaces;
 
     const W: f32 = 1280.0;
     const H: f32 = 720.0;

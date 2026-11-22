@@ -1014,7 +1014,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   one-step look-ahead (`HULL_LOOK_AHEAD`, rapier's soft CCD, set at spawn for the body's whole
   life), so a hull driven, rammed, blasted, knocked or pulled stops flush against what it meets
   (docs/physics-engine-design.md "Scale"). `quarantined` reports rapier's NaN quarantine as
-  `Event::PhysicsQuarantine`.
+  `Event::PhysicsQuarantine`. Hard and soft faces (docs/physics-engine-design.md "Hard and soft"):
+  `set_surface` puts a tile's `obstacle::Surface` on its collider (`user_data`); `SurfaceHooks`, the
+  one contact hook, cushions a hull coming head on at a firm, yielding or soft face by shortening
+  the speculative contact's gap to `v^2 = 2 a d` - the normal only, so sliding along a face is
+  untouched; `fixed_contacts` lists the fixed bodies a hull touches with their surfaces.
+  `simulation/contact.rs` (`respond_to_contacts`, after the step and before the rams) throws a hull
+  back off a hard face as a knock, cracks glass under a fast ram, reports `Event::HullStruck` and
+  shakes a tree's crown (`TreeShake`, presentation the painters read, set on a replica from the
+  event). `Footing::in_brush` slows a hull a little in grass, reeds and bushes (`Game::brush`).
 
 ## AI
 

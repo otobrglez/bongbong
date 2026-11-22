@@ -765,6 +765,38 @@ impl Fx {
         }
     }
 
+    /// A hull's hit on a fixed face at `at` at `speed` px/s, `back` the
+    /// way off the face (`Event::HullStruck`): a hard face slams - sparks,
+    /// dust, the hull's flash and a jolt (`slam`); glass, a timber wall, a
+    /// tree, a sandbag or a fence throws its own chips or dust
+    /// (`tile_chip`) with a smaller jolt. How hard is the face's
+    /// (`Surface::jolt`) at `tank_speed`, more for a faster hit.
+    fn struck(&mut self, slot: usize, at: Position, back: Vec2, material: Option<Material>, surface: crate::obstacle::Surface, speed: f32) {
+        use crate::obstacle::Surface;
+        let t = tuning();
+        let hard = (surface.jolt(&t) * speed / t.tank_speed.max(1.0)).clamp(0.0, 1.0);
+        match surface {
+            Surface::Hardest | Surface::Hard => {
+                self.slam(slot, at, hard.max(0.3), false);
+                if let Some(m) = material.filter(|&m| m != Material::Iron) {
+                    self.tile_chip(m, at, Some(back));
+                }
+            }
+            _ => {
+                if let Some(m) = material {
+                    self.tile_chip(m, at, Some(back));
+                }
+                let shock = t.ram_shock * hard;
+                if shock > 0.0 {
+                    if self.jolts.len() >= MAX_JOLTS {
+                        self.jolts.remove(0);
+                    }
+                    self.jolts.push(Jolt { shock: crate::shockwave::Shockwave::scaled(at, shock) });
+                }
+            }
+        }
+    }
+
     /// The particles of a blast at `at`: every cause's, so two blasts of
     /// one `size` throw as much whatever set them off. `size` is the
     /// cause's row of the `shock` tuning group - 1 a tank dying, the scale
@@ -1034,6 +1066,13 @@ impl Fx {
                             self.flash(Flashed::Tank(other_slot));
                         }
                         rammed.extend([slot, other_slot]);
+                    }
+                    // A hull hit a fixed face: by how hard the face is, a
+                    // slam's sparks and jolt off a hard one, chips and dust
+                    // off a softer one (`struck`).
+                    Event::HullStruck { slot, material, surface, x, y, nx, ny, speed, .. } => {
+                        self.struck(slot, Position::new(x, y), Vec2::new(-nx, -ny), material, surface, speed);
+                        rammed.push(slot);
                     }
                     // A fuel drum leaving the ground: a spit of sparks and
                     // a puff where it stood.

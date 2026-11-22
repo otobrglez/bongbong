@@ -1279,8 +1279,8 @@ fn a_bush_is_soft_cover_a_tank_drives_through_and_flattens() {
 
 #[test]
 fn a_tank_drives_through_a_bush_cell_without_stopping() {
-    // A hull driving north across a bush cell crosses it in the time open
-    // ground takes: nothing to push over, nothing to ram.
+    // A hull driving north across a bush cell crosses it barely slower
+    // than open ground: nothing to push over, nothing to ram.
     let frames_to = |extra: &str| {
         let mut game = game_on(&map_with(extra), 1);
         game.debug_teleport(0, cell_to_world(20, 14), Some(0.0)).unwrap();
@@ -1291,7 +1291,9 @@ fn a_tank_drives_through_a_bush_cell_without_stopping() {
     };
     let open = frames_to("").expect("the hull crosses open ground");
     let bush = frames_to("cells.\"20,11\" = { kind = \"bush\" }\n").expect("the hull crosses the bush");
-    assert_eq!(bush, open, "a bush costs a hull nothing");
+    // It slows a hull a little (`bush_pace`) and never stops it: a cell
+    // at the bush's pace is a frame or two longer than open ground.
+    assert!(bush >= open && bush <= open + 3, "a bush costs a hull a frame or two: {bush} vs {open}");
 }
 
 #[test]

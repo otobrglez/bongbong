@@ -92,6 +92,14 @@ knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
   `fence_one_shot_chance` (0.7) odds, else it goes to its damaged keyframe
   and the next hit finishes it; rammed through in `fence_ram_seconds`
   (0.15). Don't block line of sight.
+- **How they feel to drive into** (BB-205, docs/physics-engine-design.md
+  "Hard and soft"): sandbags, fences, lamp posts and range boards are
+  *soft* - a hull coming at one head on slows over its last ~10 px
+  (`soft_cushion_decel`) and settles against it with no dead stop and no
+  bounce, where iron, concrete and brick stop it flush and throw it back
+  off a fast hit (`hard_bounce`). A drum is *firm* (a ~2 px give). A lamp
+  post snaps under a ram (`lamp_ram_seconds`) and a range board tips over
+  (`target_ram_seconds`), as a fence does.
 - Events: `obstacle_destroyed { material, x, y }` for any tile death,
   `blast { x, y, chained, drum }` for a detonation, `drum_launched { x, y,
   to_x, to_y }` for a fuel drum leaving the ground, and `fire_started { x,
