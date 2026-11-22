@@ -40,11 +40,28 @@ pub struct Play {
     pub after: f32,
     /// What made it, for the cue's cooldown and for telling its copies apart.
     pub source: u64,
+    /// Which of a sample's takes to play, counted round them; `None` lets
+    /// the hash choose. A twin gun's two barrels take neighbouring ones, so
+    /// the two shots never sound alike.
+    pub take: Option<usize>,
+    /// Added to the pan the sound's place gives it: a twin gun's barrels a
+    /// little apart.
+    pub pan: f32,
 }
 
 impl Play {
     pub fn new(cue: impl Into<String>, at: At) -> Play {
-        Play { cue: cue.into(), at, strength: 1.0, pitch: 1.0, after: 0.0, source: 0 }
+        Play { cue: cue.into(), at, strength: 1.0, pitch: 1.0, after: 0.0, source: 0, take: None, pan: 0.0 }
+    }
+
+    pub fn take(mut self, take: usize) -> Play {
+        self.take = Some(take);
+        self
+    }
+
+    pub fn pan(mut self, pan: f32) -> Play {
+        self.pan = pan;
+        self
     }
 
     pub fn strength(mut self, s: f32) -> Play {
@@ -273,32 +290,50 @@ fn destroyed(material: Material) -> String {
     format!("destroy.{}.{}", source::surface_family(material), source::material_name(material))
 }
 
-/// A tank's shot: the cannon tiered by its calibre, with a twin barrel's
-/// second crack a beat later; a weapon a watcher drives or another event
-/// carries is not played here.
+/// A tank's shot: the cannon tiered by its calibre; a twin gun's shells
+/// and plasma bolts each sound as their own shot (`twin_shots`); a weapon a
+/// watcher drives or another event carries is not played here.
 fn fired(game: &Game, slot: usize, weapon: &str) -> Binding {
     let Some(weapon) = ActiveWeapon::parse(weapon) else {
         return Binding::Silent("a weapon the sound maps do not know");
     };
-    match source::weapon_sound(weapon) {
-        FireSound::Cue(cue) => one(Play::new(cue, At::Slot(slot)).source(slot as u64)),
-        FireSound::Watched(watcher) => Binding::Watched(watcher),
-        FireSound::Elsewhere(_) => Binding::Silent("its own event carries the sound"),
+    let tank = tank_in(game, slot);
+    // The weapons whose twin barrel fires a second projectile
+    // (`Tank::pending_shot`, `Tank::pending_plasma_shot`).
+    let twin = matches!(weapon, ActiveWeapon::Shell | ActiveWeapon::Plasma) && tank.as_ref().is_some_and(|tank| tank.twin_gun());
+    let rotation = tank.as_ref().map_or(0.0, |tank| tank.rotation);
+    let first = match source::weapon_sound(weapon) {
+        FireSound::Cue(cue) => Play::new(cue, At::Slot(slot)).source(slot as u64),
+        FireSound::Watched(watcher) => return Binding::Watched(watcher),
+        FireSound::Elsewhere(_) => return Binding::Silent("its own event carries the sound"),
         FireSound::Cannon => {
             let t = tuning();
-            let (factor, mass, twin) = match tank_in(game, slot) {
-                Some(tank) => (t.tank_damage_factor[tank.row as usize], tank.mass_factor(), tank.twin_gun()),
-                None => (1.0, 1.0, false),
-            };
-            let cue = source::cannon_cue(factor);
-            let pitch = source::engine_pitch(mass);
-            let first = Play::new(cue, At::Slot(slot)).pitch(pitch).source(slot as u64);
-            if twin {
-                let second = first.clone().after(t.tank_twin_shot_delay_seconds).strength(0.85).source(slot as u64 + 1_000);
-                Binding::Play(vec![first, second])
-            } else {
-                one(first)
-            }
+            let (factor, mass) = tank.as_ref().map_or((1.0, 1.0), |tank| (t.tank_damage_factor[tank.row as usize], tank.mass_factor()));
+            Play::new(source::cannon_cue(factor), At::Slot(slot)).pitch(source::engine_pitch(mass)).source(slot as u64)
         }
-    }
+    };
+    if twin { Binding::Play(twin_shots(first, rotation, game.frame())) } else { one(first) }
+}
+
+/// A twin gun's two shots, each heard as its own (docs/sound-system-prd.md
+/// section 4.3): the first barrel's at once, the second's when its
+/// projectile leaves (`tank_twin_shot_delay_seconds`), on neighbouring takes
+/// so the two never sound alike, the second a shade lower, and each panned
+/// toward its own barrel - the first fires from the hull's left, the second
+/// from its right, so a gun aimed up or down splits them across the stereo
+/// field and one aimed sideways stacks them, as two barrels do.
+pub fn twin_shots(first: Play, rotation_deg: f32, frame: u64) -> Vec<Play> {
+    let t = tuning();
+    // The second barrel sits along (cos r, sin r) from the hull's centre
+    // (`Shell::spawn`), the first opposite; the screen's x is the pan's.
+    let side = libm::cosf(rotation_deg.to_radians()) * t.audio_twin_spread;
+    let take = (frame % 2) as usize;
+    let second = first
+        .clone()
+        .after(t.tank_twin_shot_delay_seconds)
+        .pitch(first.pitch * (1.0 - t.audio_twin_detune))
+        .take(take + 1)
+        .pan(side)
+        .source(first.source + 1_000);
+    vec![first.take(take).pan(-side), second]
 }

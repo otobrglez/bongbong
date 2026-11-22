@@ -251,6 +251,46 @@ fn a_shot_starts_the_cannon_once() {
     assert!(started(&a.take_commands()).iter().all(|&(_, bus, _)| bus != Bus::Weapons.index()));
 }
 
+/// A twin gun's two shots are two sounds: the second when its projectile
+/// leaves, on the other take, a shade lower, the two panned to their own
+/// barrels across a gun aimed up and stacked on one aimed sideways.
+#[test]
+fn a_twin_guns_two_shots_are_two_sounds() {
+    let t = crate::tuning::tuning();
+    let first = bind::Play::new("weapon.shell.fire", bind::At::Slot(0)).pitch(1.0).source(0);
+    let up = bind::twin_shots(first.clone(), 0.0, 10);
+    assert_eq!(up.len(), 2);
+    let (a, b) = (&up[0], &up[1]);
+    assert_eq!((a.after, b.after), (0.0, t.tank_twin_shot_delay_seconds));
+    assert_ne!(a.take.map(|k| k % 2), b.take.map(|k| k % 2), "neighbouring takes");
+    assert!(b.pitch < a.pitch && a.source != b.source);
+    assert!(a.pan < 0.0 && b.pan > 0.0 && (b.pan - a.pan - 2.0 * t.audio_twin_spread).abs() < 1e-4, "split across: {} {}", a.pan, b.pan);
+    let sideways = bind::twin_shots(first, 90.0, 10);
+    assert!(sideways.iter().all(|p| p.pan.abs() < 1e-4), "stacked when the barrels lie along the view");
+
+    // Through the director: a twin chassis's shell starts two cannon
+    // voices, the second the barrel gap later and to the right of the first.
+    let mut game = game_on(OPEN);
+    assert!(bind::tank_in(&game, 0).is_some_and(|tank| tank.twin_gun()), "row 1 is a twin chassis");
+    let mut a = audio();
+    a.observe_events(&game);
+    a.observe(&game, &view_on(&game), &[0], 0.0, true);
+    a.take_commands();
+    let commands = step(&mut game, &mut a, Input::single(Intent { fire: true, ..Intent::default() }));
+    let shots: Vec<(f32, f32)> = commands
+        .iter()
+        .filter_map(|c| match c {
+            Command::Start { bus, looped: false, params, delay, .. } if *bus == Bus::Weapons.index() => Some((*delay, params.pan)),
+            _ => None,
+        })
+        .collect();
+    let early = shots.iter().filter(|(d, _)| *d < t.tank_twin_shot_delay_seconds * 0.5).count();
+    let late: Vec<_> = shots.iter().filter(|(d, _)| (*d - t.tank_twin_shot_delay_seconds).abs() < 1e-3).collect();
+    assert!(early >= 1 && !late.is_empty(), "two shots, the second a barrel gap later: {shots:?}");
+    let first_pan = shots.iter().find(|(d, _)| *d < 1e-3).map(|(_, p)| *p).unwrap_or(0.0);
+    assert!(late.iter().all(|(_, p)| *p > first_pan), "the second barrel to the right of the first: {shots:?}");
+}
+
 #[test]
 fn a_seat_has_an_engine_that_revs_with_speed() {
     let mut game = game_on(OPEN);

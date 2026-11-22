@@ -5212,6 +5212,11 @@ tunables! {
         /// (`Event::HullStruck`) sounds at its full strength; it starts at
         /// a third at `hull_struck_min_speed`.
         audio_slam_full_speed: f32 = 320.0 in 1.0 ..= 2000.0;
+        /// A twin gun's two shots (`bind::twin_shots`): how far apart they
+        /// pan when the barrels lie across the screen, and how much lower
+        /// the second sits, as a share of its pitch.
+        audio_twin_spread: f32 = 0.35 in 0.0 ..= 1.0;
+        audio_twin_detune: f32 = 0.05 in 0.0 ..= 0.5;
         /// An engine's pitch at idle and at top speed, before the chassis's
         /// own offset (section 4.4).
         audio_engine_idle_pitch: f32 = 0.8 in 0.25 ..= 2.0;

@@ -502,9 +502,10 @@ impl Audio {
             if takes.is_empty() {
                 continue;
             }
-            let pcm = takes[(h as usize) % takes.len()].clone();
+            let pcm = takes[play.take.unwrap_or(h as usize) % takes.len()].clone();
             let pitch = play.pitch * heard.doppler * pitch_j;
-            let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff, send: heard.send };
+            let pan = (heard.pan + play.pan).clamp(-1.0, 1.0);
+            let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan, pitch, cutoff: heard.cutoff, send: heard.send };
             let vid = self.voice_id();
             let delay = heard.delay + play.after;
             ends = ends.max(self.time + delay as f64 + (pcm.seconds() / pitch.max(0.05)) as f64);
