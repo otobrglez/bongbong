@@ -1029,17 +1029,24 @@ impl Ramp {
     fn in_biome(look: Look, b: &BiomeLook, floor: Floor) -> Ramp {
         let ([silt, silt_dk], [earth, earth_dk], [pale, stone, stone_dk]) = (b.silt, b.shoulder, b.gravel);
         let [mud_darkest, mud_dk, ..] = b.deck;
+        // The open ground's own first steps, from the theme's ramp: pressed
+        // grass on a grass map, pressed dust on a desert one (the karst) -
+        // never grass greens on sand.
+        let (fresh, mid, deep) = match look.theme {
+            Theme::Desert => (DESERT_DUST.pad[0], DESERT_DUST.pad[1], DESERT_DUST.pad[2]),
+            _ => (hex(0x7ea64a), hex(0x5c8e3d), hex(0x4f7f37)),
+        };
         let base = match floor {
             Floor::Meadow => Ramp {
-                pad: [hex(0x7ea64a), earth_dk, silt, earth],
-                pad_back: Some(hex(0x5c8e3d)),
-                grouser: [hex(0x5c8e3d), silt, earth_dk, earth_dk],
-                grouser_back: Some(hex(0x4f7f37)),
-                rim: [hex(0x4f7f37), hex(0x5c8e3d), silt_dk, silt],
+                pad: [fresh, earth_dk, silt, earth],
+                pad_back: Some(mid),
+                grouser: [mid, silt, earth_dk, earth_dk],
+                grouser_back: Some(deep),
+                rim: [deep, mid, silt_dk, silt],
                 berm: silt,
                 wet: [silt, silt_dk],
-                smear: hex(0x7ea64a),
-                churn: [earth_dk, silt, hex(0x5c8e3d), earth],
+                smear: fresh,
+                churn: [earth_dk, silt, mid, earth],
             },
             Floor::Gravel => Ramp {
                 pad: [stone_dk, silt, silt, silt_dk],
@@ -1546,6 +1553,16 @@ mod tests {
             assert!(!olive.contains(c), "pressed meadow deepens into earth, not olive: {c:?}");
         }
         assert_eq!(meadow.wet, Biome::Valley.look().silt, "wet tracks off a bank print its silt");
+    }
+
+    #[test]
+    fn the_karst_presses_dust_not_grass() {
+        let desert = Look { theme: Theme::Desert, ..look() };
+        let open = Ramp::in_biome(desert, Biome::Karst.look(), Floor::Meadow);
+        let steps = open.pad.iter().chain(&open.grouser).chain(&open.rim).chain(&open.churn).chain([&open.smear]);
+        for c in steps.chain(open.pad_back.iter()).chain(open.grouser_back.iter()) {
+            assert!(c.g <= c.r, "a karst track is dust and earth, never green: {c:?}");
+        }
     }
 
     #[test]
