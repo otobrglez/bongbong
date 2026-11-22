@@ -833,7 +833,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     room's tick; no RNG here beyond the blasts' damage rolls, and a map with neither a volcano nor
     lava runs none of it. Knobs: the `volcano` tuning group. Tests: the lava cases in
     `mechanics_tests`, `simulation::volcano::tests`.
-  - `crates.rs` (docs/CRATES_SPEC.md) — breakable crates, behind `crate_breakable` (off by default,
+  - `crates.rs` (docs/CRATES_SPEC.md) — every blast tosses the pickups round it (`toss_crates`: a
+    landing searched along the line, short of a tile, deep water and lava; `Pickup::airborne` keeps it
+    from being taken in the air; the arc a `pickup::CrateToss` on `Game::crate_tosses`, staged on a
+    replica from `Event::CrateTossed`); breakable crates, behind `crate_breakable` (off by default,
     read once by `init` into `Game::crates_breakable`, so a test turns it on for its own round):
     what reaches the ground breaks a crate - `blast_crates` from every drum, missile, wreck and
     crate blast (mid damage times falloff, no roll), and fire (`tick_crates`: `crate_ignite_seconds`

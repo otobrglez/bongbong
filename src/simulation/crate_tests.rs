@@ -108,9 +108,11 @@ fn spilled_contents_are_taken_like_a_crate() {
     game.debug_detonate(cell_to_world(10, 10)).expect("the drum");
     step(&mut game);
     assert!(pickup_at(&game, 11, 10).is_some_and(|p| p.3.is_some()), "spilled");
-    game.debug_teleport(0, cell_to_world(11, 11), Some(0.0)).expect("player 1");
+    // The blast tossed it too (`toss_crates`): the seat waits where it lands.
+    let (at, _) = lies(&game, 11, 10).expect("it lies somewhere");
+    game.debug_teleport(0, Position::new(at.x, at.y + 32.0), Some(0.0)).expect("player 1");
     let mut taken = None;
-    for _ in 0..10 {
+    for _ in 0..40 {
         step(&mut game);
         taken = taken.or_else(|| {
             game.events().iter().find_map(|e| match *e {
@@ -176,4 +178,97 @@ fn a_crate_round_replays_byte_for_byte() {
         game.drawable_state()
     };
     assert_eq!(run(), run());
+}
+
+/// Where the pickup of slot cell (`c`, `r`) lies now (`Pickup::at`) and
+/// how long it has left in the air.
+fn lies(game: &Game, c: i32, r: i32) -> Option<(Position, f32)> {
+    let at = cell_to_world(c, r);
+    game.world.query::<&Pickup>().iter().find(|p| p.position.distance_to(at) < 0.5).map(|p| (p.at(), p.airborne))
+}
+
+/// A blast tosses a crate away from it, a hop it cannot be taken in, to
+/// where it lands; one past the toss's reach stays put, and the same seed
+/// lands it on the same spot.
+#[test]
+fn a_blast_tosses_a_crate_away_and_it_lands_to_be_taken() {
+    let run = || {
+        let mut game = round(&[(13, 10, "ammo"), (30, 10, "health")], false);
+        let near_from = lies(&game, 13, 10).expect("the near crate").0;
+        let far_from = lies(&game, 30, 10).expect("the far crate").0;
+        game.debug_detonate(cell_to_world(10, 10)).unwrap();
+        step(&mut game);
+        let tossed: Vec<(f32, f32, f32, f32)> = game
+            .events()
+            .iter()
+            .filter_map(|e| match *e {
+                Event::CrateTossed { x, y, to_x, to_y, .. } => Some((x, y, to_x, to_y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tossed.len(), 1, "the near crate is tossed: {tossed:?}");
+        let (at, airborne) = lies(&game, 13, 10).expect("it keeps its slot");
+        assert!(airborne > 0.0, "it is in the air");
+        assert!(at.x - near_from.x > 24.0 && (at.y - near_from.y).abs() < 0.5, "away from the blast: {near_from:?} -> {at:?}");
+        assert_eq!(lies(&game, 30, 10).map(|l| l.0), Some(far_from), "past the reach it stays put");
+        for _ in 0..60 {
+            step(&mut game);
+        }
+        assert_eq!(lies(&game, 13, 10).map(|l| l.1), Some(0.0), "and lands");
+        at
+    };
+    let (a, b) = (run(), run());
+    assert_eq!((a.x.to_bits(), a.y.to_bits()), (b.x.to_bits(), b.y.to_bits()), "the same spot on the same seed");
+}
+
+/// A crate in the air cannot be taken; landed, it is taken where it lies.
+#[test]
+fn a_tossed_crate_is_taken_where_it_lands_and_not_in_the_air() {
+    let mut game = round(&[(13, 10, "ammo")], false);
+    game.debug_detonate(cell_to_world(10, 10)).unwrap();
+    step(&mut game);
+    let (at, _) = lies(&game, 13, 10).expect("tossed");
+    // The seat parked right on where it lands, the frame after the blast.
+    game.debug_teleport(0, at, Some(0.0)).unwrap();
+    step(&mut game);
+    assert!(lies(&game, 13, 10).is_some(), "nobody takes a crate in the air");
+    for _ in 0..60 {
+        step(&mut game);
+    }
+    assert!(lies(&game, 13, 10).is_none(), "landed, it is taken where it lies");
+}
+
+/// A toss stops short of a wall, deep water and lava: the crate comes down
+/// on the last clear spot.
+#[test]
+fn a_tossed_crate_never_lands_in_a_wall_water_or_lava() {
+    for blocker in ["kind = \"wall\", material = \"iron\"", "kind = \"water\"", "kind = \"lava\""] {
+        let mut map = map_with(&[(12, 10, "ammo")]);
+        // A block of it two cells east of the crate, too wide to fly over.
+        for c in 14..=18 {
+            for r in 8..=12 {
+                map.push_str(&format!("cells.\"{c},{r}\" = {{ {blocker} }}\n"));
+            }
+        }
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(0xC4A7E);
+        game.player_row_override = Some(0);
+        game.show_intro = false;
+        game.map = MapFile::from_toml_str(&map).expect("test map parses");
+        game.init(W, H);
+        game.debug_teleport(1, cell_to_world(ENEMY_CELL.0, ENEMY_CELL.1), Some(0.0)).unwrap();
+        game.debug_detonate(cell_to_world(10, 10)).unwrap();
+        step(&mut game);
+        let (at, _) = lies(&game, 12, 10).expect("the crate");
+        assert!(at.x > cell_to_world(12, 10).x, "{blocker}: tossed east");
+        // A wall's cell and lava of any depth stop it; water only where it
+        // is deep - a ford's shallows are ground a crate may lie on.
+        let edge = cell_to_world(14, 10).x - crate::OBSTACLE_GRID_SIZE * 0.5;
+        let clear = match blocker {
+            b if b.contains("water") => game.water.depth_at(at) != crate::ground::Depth::Deep,
+            _ => at.x < edge,
+        };
+        assert!(clear, "{blocker}: short of it, at {at:?}");
+    }
 }

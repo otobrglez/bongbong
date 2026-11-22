@@ -307,6 +307,8 @@ pub enum WireEvent {
     AircraftDowned { id: u16, x: i16, y: i16, height: i16, by: crate::air::AirStrike },
     /// Air support `id` is done; `Event::AirSupportLeft`.
     AirSupportLeft { id: u16 },
+    /// A blast tossed a crate; `Event::CrateTossed`.
+    CrateTossed { kind: PickupKind, x: i16, y: i16, to_x: i16, to_y: i16 },
     /// The loose drum placed at (`col`, `row`) is gone; `Event::LooseGone`.
     LooseGone { col: u8, row: u8 },
     /// Seat or enemy `slot`'s hull hit a fixed face; `Event::HullStruck`.
@@ -420,6 +422,7 @@ impl WireEvent {
                     fade,
                 }
             }
+            Event::CrateTossed { kind, x, y, to_x, to_y } => WireEvent::CrateTossed { kind, x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) },
             Event::LooseGone { home } => {
                 WireEvent::LooseGone { col: home.0.clamp(0, u8::MAX as i32) as u8, row: home.1.clamp(0, u8::MAX as i32) as u8 }
             }
@@ -662,6 +665,7 @@ impl WireEvent {
             }
             WireEvent::GrassTrampled { col, row } => Event::GrassTrampled { cell: (col as i32, row as i32) },
             WireEvent::LooseGone { col, row } => Event::LooseGone { home: (col as i32, row as i32) },
+            WireEvent::CrateTossed { kind, x, y, to_x, to_y } => Event::CrateTossed { kind, x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) },
             WireEvent::Blast { x, y, chained, drum } => Event::Blast { x: d(x), y: d(y), chained, drum },
             WireEvent::LavaBombLaunched { x, y, to_x, to_y } => {
                 Event::LavaBombLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
@@ -871,6 +875,7 @@ mod tests {
             Event::OilPrinted { cell: (12, 6), dir: "right", fade: 6 },
             Event::GrassTrampled { cell: (12, 7) },
             Event::LooseGone { home: (12, 0) },
+            Event::CrateTossed { kind: PickupKind::Ammo, x: 96.0, y: 64.0, to_x: 160.25, to_y: 64.0 },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0, drum: Drum::Oil },
             Event::SonicBlast { slot: 3, x: 128.0, y: 160.0, dir: "left" },
@@ -961,7 +966,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 87, "one sample per Event variant");
+        assert_eq!(seen.len(), 88, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }
