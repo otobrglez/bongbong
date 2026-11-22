@@ -118,7 +118,8 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   four seats - sky blue, hot pink, silver-white, orange
   (docs/SPRITESHEET_SPEC.md) - so a seat past the fourth draws player 1's
   and is told apart by its ring colour (`TEAM_COLORS`: the four blocks'
-  base steps, then four more Resurrect 64 steps) and its `P1`..`P8` locate
+  base steps, then three more Resurrect 64 steps and seat 8's violet,
+  picked to stand apart from every biome's water, BB-202) and its `P1`..`P8` locate
   label.
 - **What is still two.** The players dialog and `--players`' keyboard
   mapping (arrows + Space, WASD + Left Shift); the HUD's slot tables, which

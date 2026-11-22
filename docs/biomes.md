@@ -210,10 +210,9 @@ The water roles map from today's tileset colours: edge ← `#0E818C`,
   (`biome::tests::every_material_stands_apart_from_every_seat_pickup_and_shell`).
   The closest valley pair is the pale gravel and seat 3's silver, 24.9.
   Open water stands ΔE 10 from a ford, and both the ford and open water
-  stand ΔE 20 from every seat colour, the teal hull and glass - but seat 8,
-  whose deep teal is ΔE 5 from the valley's ford (12 from today's cyan).
-  Seat 8's colour is to change (BB-202); until then the test holds it as
-  its one exception (`SEAT_ON_ITS_WATER`).
+  stand ΔE 20 from every seat colour, the teal hull and glass. Seat 8 is
+  violet `#6B3FD8` for this: its old deep teal was ΔE 5 from the valley's
+  ford (BB-202).
 - **De-greened.** Large areas stay deep green or earth tan, never olive or
   yellow-khaki; a meadow patch keeps green its strongest channel
   (`a_meadow_patch_stays_green`, docs/PALETTE.md).

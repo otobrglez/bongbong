@@ -2739,7 +2739,7 @@ pub const TEAM_COLORS: [Color; crate::MAX_SEATS] = [
     Color::new(0x4D, 0x65, 0xB4, 255), // P5 royal blue
     Color::new(0xC3, 0x24, 0x54, 255), // P6 crimson
     Color::new(0x90, 0x5E, 0xA9, 255), // P7 grape
-    Color::new(0x0B, 0x8A, 0x8F, 255), // P8 deep teal
+    Color::new(0x6B, 0x3F, 0xD8, 255), // P8 violet
 ];
 /// The light step of each team ramp: the sheet's accent for the four seats
 /// it draws, the colour their marker lights glow in at night, and every
@@ -2753,7 +2753,7 @@ const TEAM_LIGHT: [Color; crate::MAX_SEATS] = [
     Color::new(0x7C, 0x92, 0xD8, 255),
     Color::new(0xE8, 0x63, 0x7F, 255),
     Color::new(0xC3, 0x98, 0xD6, 255),
-    Color::new(0x4F, 0xC0, 0xC4, 255),
+    Color::new(0xA8, 0x84, 0xF3, 255),
 ];
 
 /// `TEAM_COLORS`/`TEAM_LIGHT` for a seat, wrapping past `MAX_SEATS` rather
