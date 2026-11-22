@@ -20,8 +20,12 @@
 # A valley climate: the round's seed picks clear, dusk, rain, fog or snow.
 # Rain halves every hull's grip, fog shortens the enemies' sight, and snow
 # freezes the river, so the whole of it becomes open ground.
+#
+# Drawn as the Soca gravel valley (`biome`, docs/biomes.md): clear alpine
+# water, gravel by the banks, a plank deck at the crossing. A look only.
 
 version = 1
+biome = "valley"
 weather = ["clear", "dusk", "rain", "fog", "snow"]
 bong = "oggle"
 enemy_bong = "fuzz"

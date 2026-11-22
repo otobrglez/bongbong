@@ -50,8 +50,10 @@ the karst came in stage 6 (BB-198).
   only the biomes of the map's theme, and a change of THEME takes a look
   made for the other one off in the same undo step; the knob does not ask.
 
-No shipped map names a biome yet. All three looks go live together once
-the third is accepted (decided 2026-11-20); until then each is opt-in.
+**Live on three maps** (BB-198): Serpent River is the valley, Lotus
+Lagoon the floodplain, No Man's Land the karst - each by its `biome` key,
+all three together, as decided on 2026-11-20. Every other map draws the
+plain tiles until it names one.
 
 **The key travels as text.** A room is handed its map as TOML
 (`wire::map_toml`) or by a shipped map's name, so `biome` reaches every
@@ -344,7 +346,8 @@ teal hull and 14 from its open water.
   never an area of it.
 - **Off by default, exact when off.** A map with no biome draws the pixels
   it always did, so the pinned CPU renders of the shipped maps
-  (`thumbnail.rs`) hold until a look is turned on deliberately.
+  (`thumbnail.rs`) hold until a look is turned on deliberately - as the
+  three maps above were, their hashes re-pinned with it.
 - **Flat.** Nothing a biome paints may read as a ledge, a wall or a step:
   anything that looks like cover has to be cover (an authored solid with
   the same footprint) or it is a gameplay change and its own issue.

@@ -1,7 +1,12 @@
+# no-mans-land - drawn as a dry karst frontier (`biome`, docs/biomes.md):
+# warm hardpan, limestone plates, dark pools, scrub in the walls' shelter.
+# A look only. Saved from the builder; re-saving drops these comments.
+
 version = 1
 tank = "warden"
 tank2 = "assault"
 theme = "desert"
+biome = "karst"
 size = [
     50.0,
     25.0,
