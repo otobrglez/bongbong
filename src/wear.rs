@@ -23,6 +23,7 @@
 use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
 
+use crate::biome::{Biome, BiomeLook, Floor};
 use crate::canvas::{TileAtlas, TILE_BLOCKS};
 use crate::map::{Theme, Weather};
 use crate::math::{Color, Rectangle};
@@ -801,11 +802,12 @@ impl WearGrid {
     pub fn refresh_pictures(&self, frame: &PictureFrame, t: &Tuning) {
         let mut guard = self.pictures.borrow_mut();
         let p = &mut *guard;
-        if p.look != Some(frame.look) {
+        let look = (frame.look, frame.floor.as_ref().map(|f| f.biome));
+        if p.look != Some(look) {
             for key in std::mem::take(&mut p.baked).into_keys() {
                 p.atlas.remove(key);
             }
-            p.look = Some(frame.look);
+            p.look = Some(look);
         }
         let jump = p.at.is_none_or(|at| frame.time < at || frame.time - at > 1.0);
         let shown = |cell: (i32, i32)| {
@@ -859,6 +861,9 @@ impl WearGrid {
     fn bake(&self, key: (i32, i32), cell: &Cell, frame: &PictureFrame, t: &Tuning) -> [Option<Color>; BLOCKS] {
         let quads = quarters(key, frame.surface);
         let ramps = quads.map(|s| Ramp::of(frame.look, s));
+        // Under a biome a mark on grass or a road takes the ramp of the
+        // material under each block (`BiomeFloor`).
+        let biome = frame.floor.as_ref().map(|f| (f, Floor::ALL.map(|m| Ramp::in_biome(frame.look, f.biome.look(), m))));
         let up = self.cells.get(&(key.0, key.1 - 1));
         let left = self.cells.get(&(key.0 - 1, key.1));
         let pressed = |i: usize, du: i32, dv: i32| -> bool {
@@ -885,7 +890,11 @@ impl WearGrid {
                 Surface::Ice => ice_colour(*b, bx, by, frame.time, t),
                 surf => {
                     let rim = !pressed(i, 0, -1) || !pressed(i, -1, 0);
-                    ground_colour(*b, bx, by, surf, frame.look, &ramps[q], rim, frame.time, t)
+                    let ramp = match &biome {
+                        Some((floor, by_floor)) if matches!(surf, Surface::Grass | Surface::Road) => (floor.at)(bx, by).map_or(&ramps[q], |m| &by_floor[m as usize]),
+                        _ => &ramps[q],
+                    };
+                    ground_colour(*b, bx, by, surf, frame.look, ramp, rim, frame.time, t)
                 }
             };
         }
@@ -901,6 +910,20 @@ pub struct PictureFrame<'a> {
     pub views: &'a [Rectangle],
     /// What lies where (`Game::surface_at`).
     pub surface: &'a dyn Fn(Position) -> Surface,
+    /// The round's biome and its materials, if it has one.
+    pub floor: Option<BiomeFloor<'a>>,
+}
+
+/// A biome's floor, as the marks' colours see it: a mark pressed into
+/// grass or a road takes the colours of the material at its block
+/// (`Ramp::in_biome`) - pressed meadow, gravel crushed into tracks, wet
+/// silt off a bank, dry packed earth - and a hull's wet tracks print mud.
+/// Pictures only: nothing pressed or played reads it.
+pub struct BiomeFloor<'a> {
+    pub biome: Biome,
+    /// The material at world block (`bx`, `by`) (`GroundGrid::floor_material`);
+    /// `None` keeps the ground's own ramp.
+    pub at: &'a dyn Fn(i32, i32) -> Option<Floor>,
 }
 
 /// The worn cells baked as tiles, for the painter.
@@ -909,7 +932,8 @@ pub struct Pictures {
     atlas: TileAtlas,
     /// Each baked cell's version and the round time it was baked at.
     baked: BTreeMap<(i32, i32), (u32, f32)>,
-    look: Option<Look>,
+    /// The look and the biome the pictures were baked under.
+    look: Option<(Look, Option<crate::biome::Biome>)>,
     at: Option<f32>,
 }
 
@@ -992,10 +1016,75 @@ impl Ramp {
             (_, Surface::Sand) => SAND,
             _ => GRASS,
         };
+        base.under(look)
+    }
+
+    /// The ramp of a mark pressed into `floor` under biome `b`, in steps of
+    /// the biome's own tones and the grass tiles' greens (docs/ground-memory.md
+    /// "Colours"): pressed meadow lies lighter and deepens into the biome's
+    /// earth rather than the grass ramp's olive; gravel crushes to its dark
+    /// stone and the earth under it; a bank's silt prints dark wet mud; packed
+    /// earth - a shoulder, a furrow, the road's dirt - dry dust. Wet tracks
+    /// print the silt's mud on any of them.
+    fn in_biome(look: Look, b: &BiomeLook, floor: Floor) -> Ramp {
+        let ([silt, silt_dk], [earth, earth_dk], [pale, stone, stone_dk]) = (b.silt, b.shoulder, b.gravel);
+        let [mud_darkest, mud_dk, ..] = b.deck;
+        let base = match floor {
+            Floor::Meadow => Ramp {
+                pad: [hex(0x7ea64a), earth_dk, silt, earth],
+                pad_back: Some(hex(0x5c8e3d)),
+                grouser: [hex(0x5c8e3d), silt, earth_dk, earth_dk],
+                grouser_back: Some(hex(0x4f7f37)),
+                rim: [hex(0x4f7f37), hex(0x5c8e3d), silt_dk, silt],
+                berm: silt,
+                wet: [silt, silt_dk],
+                smear: hex(0x7ea64a),
+                churn: [earth_dk, silt, hex(0x5c8e3d), earth],
+            },
+            Floor::Gravel => Ramp {
+                pad: [stone_dk, silt, silt, silt_dk],
+                pad_back: None,
+                grouser: [silt, silt_dk, silt_dk, silt_dk],
+                grouser_back: None,
+                rim: [earth_dk, silt, silt_dk, silt_dk],
+                berm: pale,
+                wet: [silt, silt_dk],
+                smear: stone_dk,
+                churn: [stone_dk, pale, stone, silt],
+            },
+            Floor::Silt => Ramp {
+                pad: [silt_dk, mud_dk, mud_dk, mud_darkest],
+                pad_back: None,
+                grouser: [mud_dk, mud_darkest, mud_darkest, mud_darkest],
+                grouser_back: None,
+                rim: [mud_dk, mud_darkest, mud_darkest, mud_darkest],
+                berm: silt,
+                wet: [mud_dk, mud_darkest],
+                smear: silt_dk,
+                churn: [silt_dk, silt, mud_dk, mud_darkest],
+            },
+            Floor::Earth => Ramp {
+                pad: [earth_dk, silt, silt, silt_dk],
+                pad_back: None,
+                grouser: [silt, silt, silt_dk, silt_dk],
+                grouser_back: None,
+                rim: [earth_dk, silt, silt_dk, silt_dk],
+                berm: stone,
+                wet: [silt, silt_dk],
+                smear: stone,
+                churn: [earth_dk, stone, earth, silt],
+            },
+        };
+        base.under(look)
+    }
+
+    /// This ramp under `look`'s sky: itself, or under snow the compacted
+    /// blue-grey with its own dark step showing in the deep ruts.
+    fn under(self, look: Look) -> Ramp {
         if look.sky != Sky::Snow {
-            return base;
+            return self;
         }
-        let under = base.wet[1];
+        let under = self.wet[1];
         Ramp {
             pad: [hex(0xc6d0dc), hex(0xaebbca), hex(0x93a1b3), under],
             pad_back: None,
@@ -1398,7 +1487,7 @@ mod tests {
         let (cell, i) = locate(bx, by);
         let c = g.cells.get(&cell).expect("worn");
         let s = move |_: Position| Surface::Grass;
-        let frame = PictureFrame { time: c.blocks[i].laid() + age, look, views: &[], surface: &s };
+        let frame = PictureFrame { time: c.blocks[i].laid() + age, look, views: &[], surface: &s, floor: None };
         g.bake(cell, c, &frame, t)[i]
     }
 
@@ -1415,6 +1504,48 @@ mod tests {
         assert_eq!(shown(1.0), run.len());
         let late = shown(t.wear_fade_seconds * 10.0);
         assert!(late * 2 >= run.len() - 2 && late * 2 <= run.len() + 2, "half held: {late} of {}", run.len());
+    }
+
+    /// Under a biome a mark takes the colours of what it was pressed into:
+    /// the same pass reads as three different traces on gravel, on a
+    /// bank's silt and on packed earth, none of them the plain grass's; the
+    /// meadow's own deepens into earth, never the grass ramp's olive; and
+    /// wet tracks print mud.
+    #[test]
+    fn under_a_biome_a_mark_takes_its_materials_colours() {
+        use std::collections::BTreeSet;
+        let t = Tuning::default();
+        let mut g = WearGrid::new(64);
+        drive_up(&mut g, ASSAULT, Position::new(200.0, 300.0), 120, 0.0, &t);
+        let run: Vec<Position> = (0..32).flat_map(|k| [187.0, 189.0, 191.0].map(|x| Position::new(x, 221.0 + 2.0 * k as f32))).collect();
+        let colours = |floor: Option<Floor>| -> BTreeSet<(u8, u8, u8)> {
+            let at = move |_: i32, _: i32| floor;
+            run.iter()
+                .filter_map(|p| {
+                    let (bx, by) = block_at(*p);
+                    let (cell, i) = locate(bx, by);
+                    let c = g.cells.get(&cell)?;
+                    let s = |_: Position| Surface::Grass;
+                    let frame = PictureFrame { time: c.blocks[i].laid() + 1.0, look: look(), views: &[], surface: &s, floor: Some(BiomeFloor { biome: Biome::Valley, at: &at }) };
+                    g.bake(cell, c, &frame, &t)[i].map(|c| (c.r, c.g, c.b))
+                })
+                .collect()
+        };
+        let plain: BTreeSet<(u8, u8, u8)> = run.iter().filter_map(|p| colour_after(&g, *p, 1.0, look(), &t)).map(|c| (c.r, c.g, c.b)).collect();
+        assert_eq!(colours(None), plain, "no material keeps the ground's own ramp");
+        let traces = [Floor::Gravel, Floor::Silt, Floor::Earth].map(|f| colours(Some(f)));
+        for (i, a) in traces.iter().enumerate() {
+            assert!(!a.is_empty() && a.is_disjoint(&plain), "{:?} reads apart from the grass: {a:?}", Floor::ALL[i + 1]);
+            for b in &traces[i + 1..] {
+                assert!(a != b, "two materials print the same trace");
+            }
+        }
+        let meadow = Ramp::in_biome(look(), Biome::Valley.look(), Floor::Meadow);
+        let olive = [hex(0x84994c), hex(0xa7a559), hex(0xb1a567)];
+        for c in meadow.pad.iter().chain(&meadow.grouser).chain(&meadow.rim).chain(&meadow.churn) {
+            assert!(!olive.contains(c), "pressed meadow deepens into earth, not olive: {c:?}");
+        }
+        assert_eq!(meadow.wet, Biome::Valley.look().silt, "wet tracks off a bank print its silt");
     }
 
     #[test]
@@ -1455,13 +1586,13 @@ mod tests {
         drive_up(&mut g, ASSAULT, Position::new(640.0, 300.0), 40, 0.0, &t);
         let s = |_: Position| Surface::Grass;
         let view = [Rectangle::new(0.0, 200.0, 200.0, 200.0)];
-        g.refresh_pictures(&PictureFrame { time: 1.0, look: look(), views: &view, surface: &s }, &t);
+        g.refresh_pictures(&PictureFrame { time: 1.0, look: look(), views: &view, surface: &s, floor: None }, &t);
         let p = g.pictures();
         assert!(p.atlas().len() > 0);
         assert!(p.atlas().cells().all(|(c, _)| c < 10), "only cells near the view");
         drop(p);
         let elsewhere = [Rectangle::new(500.0, 200.0, 300.0, 200.0)];
-        g.refresh_pictures(&PictureFrame { time: 1.1, look: look(), views: &elsewhere, surface: &s }, &t);
+        g.refresh_pictures(&PictureFrame { time: 1.1, look: look(), views: &elsewhere, surface: &s, floor: None }, &t);
         assert!(g.pictures().atlas().cells().all(|(c, _)| c > 10), "the cells out of view were dropped");
     }
 }

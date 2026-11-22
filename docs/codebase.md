@@ -1432,7 +1432,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   blocks placed by `floor_px` and hashed from position - silt on every bank, gravel shelves by the water,
   packed earth on road shoulders, meadow patches; and `places`, what it dresses by rule (`Places`: a mill
   race from a timber building near water, furrows on tall grass by a fence), which `GroundGrid::set_places`
-  holds for the bake. A look only: nothing that plays reads it. Its tests
+  holds for the bake. `bake_beyond` lays the same layer from any world block, which the floor carried
+  past an arena (`GroundGrid::beyond`) uses to run the materials into its margins, thinned away by
+  `ground::BEYOND_MATERIAL_CELLS`; `BiomeLook::floor_of` reads a texel back as a `Floor` (meadow,
+  gravel, silt, earth), which `GroundGrid::floor_material` hands the tread marks' bake
+  (`wear::BiomeFloor`); `BiomeLook::minimap_ground` dresses the minimap's open ground in the shelves
+  and the meadow's patches. A look only: nothing that plays reads it. Its tests
   hold every material ΔE 20 from every seat colour, crate and shell, and every meadow patch green.
   `dry_cell_near` moves a centre-fallback start out of a lake. `GroundGrid` keeps its `Layout`, seed
   and `Drifts`, so `repaint(&[(col, row, CellFloor)])` re-resolves only the tiles an edit can
@@ -1917,7 +1922,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   No RNG (`roll_tread` keeps a spawn's four draws), nothing that plays reads it. `tick_wear`
   scours under a sandstorm's gusts and drifts the silt; `drain_marks` is a well's scrub,
   `char_marks` a wreck's and a drum's burn-in, `hold_worn_grass` a lane's half-crushed tufts. The
-  look is the bake's (`ground_colour`: ages, depths, rain's puddles, snow's refill, per-theme ramps)
+  look is the bake's (`ground_colour`: ages, depths, rain's puddles, snow's refill, per-theme ramps,
+  and under a biome per-material ramps from `PictureFrame::floor`, `Ramp::in_biome`)
   into a `TileAtlas` of the cells in view (`refresh_pictures`, at most `wear_bakes_per_frame`),
   drawn first in `paint_floor_marks`. `Game::driving()` hands `Fx::drive` every hull's `Tread`.
 - `crate_fx.rs` (docs/CRATES_SPEC.md) — the crates' shows, pure functions of age in the effects
@@ -2203,7 +2209,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `indicators.rs`; `render/minimap.rs` paints it. `Minimap` is a `BlockImage` of one texel per cell
   (texel `(col, row)` is the cell `map::world_to_cell` names, so `source` starts half a texel in), a
   palette step per `Class` (ground, grass and road by `Theme`, water by `ground::Depth`, gate,
-  brick/iron/wood/glass, props, trees, towers by side); `of_map` (the builder, depth from
+  brick/iron/wood/glass, props, trees, towers by side; under a biome its water, and open ground in
+  its gravel shelves and meadow patches, `Minimap::texel`); `of_map` (the builder, depth from
   `GroundGrid::depth`) and `of_round`; `repaint` patches only the texels that changed under a new
   stamp, so `BlockTexture` uploads only them - the builder's per stroke, and `RoundMinimap::sync`
   (`app.rs` keeps one) bakes once per round (seed, map, sky, or the frame counter going back) and
@@ -2423,7 +2430,7 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   it is drawn from changed (`Kept`: the frame, the floor, the backdrop, and `ground::clock_step` -
   the water's frame and the whole pixels its flow marks have drifted, for a ground that has either,
   `GroundGrid::moves`); a sky moves every frame. `render/margin.rs` is `MarginFx`: into targets of the window's
-  world grown to whole 64 px steps (`MarginFrame::rect`; `window` is what is drawn of it), the ground once, the shade part by part, then the sky of its `render::weather::Scene` - a
+  world grown to whole 64 px steps (`MarginFrame::rect`; `window` is what is drawn of it), the ground once (a biome's materials over it, uploaded by `MarginFx` itself), the shade part by part, then the sky of its `render::weather::Scene` - a
   round's, or the builder's canvas's - through `render::weather`'s passes over the parts
   (`PassView::parts`) under a 1x1 light map of the ambient with the margin grid's own cell mask
   (`CellMask::origin`, the shader's `cellOrigin`), or the plain path's blocks and

@@ -479,17 +479,30 @@ pub fn shape_atlas() -> (usize, usize, Vec<u8>) {
 /// taken for another's (`render::canvas::BlockTexture`).
 static NEXT_SHADE_STAMP: AtomicU64 = AtomicU64::new(1);
 
-/// A fresh name for a floor layer baked into a `BlockImage` - a shade, or
-/// the lava's scorched banks (`lava::LavaLayout::banks`) - from the one
-/// counter, so no two are ever taken for each other.
 /// How far in from the field's edge the floor past it reads the field's
 /// tiles (`GroundGrid::beyond`), in cells, with room to spare: the paint
 /// along the edge carries on outward, and a tile is shaped by the cells
 /// beside it.
 const EDGE_READS: i32 = 3;
 
+/// A fresh name for a floor layer baked into a `BlockImage` - a shade, or
+/// the lava's scorched banks (`lava::LavaLayout::banks`) - from the one
+/// counter, so no two are ever taken for each other.
 pub fn next_block_stamp() -> u64 {
     NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed)
+}
+
+/// How far past the field a biome's materials run on into an arena's
+/// margins (`GroundGrid::materials` of a floor carried `beyond` it), in
+/// cells: whole at the field's edge, thinned away through the Bayer
+/// pattern by here. Six cells covers the margins of a tablet's or an
+/// ultrawide's window round a standard arena (4 cells on an iPad, 3 at
+/// 21:9); past them the margin's shade is a plateau that hides the ground.
+pub const BEYOND_MATERIAL_CELLS: usize = 6;
+
+/// A field's side in 2 px blocks, rounded up.
+fn field_blocks(px: f32) -> i32 {
+    (px / 2.0).ceil() as i32
 }
 
 /// This round's resolved ground layer: a flat, row-major grid of source
@@ -556,16 +569,68 @@ impl GroundGrid {
     /// use; `None` with no biome. An edit bakes them again whole
     /// (`repaint`).
     pub fn materials(&self) -> Option<&BlockImage> {
-        // A layer of blocks starts at the field's corner, so the floor
-        // carried past the field (`beyond`) has none.
-        if self.layout.origin != (0, 0) {
-            return None;
-        }
         let biome = self.look.biome?;
         Some(self.materials.get_or_init(|| {
-            let (w, h) = (((self.width / 2.0).ceil() as usize).max(1), ((self.height / 2.0).ceil() as usize).max(1));
-            crate::biome::bake(biome.look(), w, h, &self.floor_blocks(w, h), &self.decks, &self.places, next_block_stamp())
+            let (at, w, h) = self.materials_span();
+            if self.layout.origin == (0, 0) {
+                return crate::biome::bake(biome.look(), w, h, &self.floor_blocks(w, h), &self.decks, &self.places, next_block_stamp());
+            }
+            // The floor carried past the field (`beyond`): the materials
+            // run on out of it and thin away by `BEYOND_MATERIAL_CELLS`,
+            // so the margins read as the same place, fading off the
+            // playfield under their shade.
+            let mut image = crate::biome::bake_beyond(biome.look(), at, w, h, &self.floor_blocks_at(at, w, h), next_block_stamp());
+            let (fw, fh) = (field_blocks(self.width), field_blocks(self.height));
+            let reach = (BEYOND_MATERIAL_CELLS * 16) as f32;
+            for (i, texel) in image.texels.iter_mut().enumerate() {
+                let (bx, by) = ((i % w) as i32 + at.0, (i / w) as i32 + at.1);
+                let (dx, dy) = ((-bx).max(bx - (fw - 1)).max(0), (-by).max(by - (fh - 1)).max(0));
+                let past = ((dx * dx + dy * dy) as f32).sqrt() / reach;
+                if past > 0.0 && 1.0 - past <= crate::pyro::bayer(bx, by) {
+                    *texel = Color::new(0, 0, 0, 0);
+                }
+            }
+            image
         }))
+    }
+
+    /// Where the materials layer (`materials`) lies: the world block of its
+    /// first texel, and its size in blocks. A map's own floor's starts at
+    /// the field's corner and covers the field; one carried `beyond` it
+    /// reaches `BEYOND_MATERIAL_CELLS` cells further on every side, as far
+    /// as its tiles go.
+    pub fn materials_span(&self) -> ((i32, i32), usize, usize) {
+        let (fw, fh) = (field_blocks(self.width), field_blocks(self.height));
+        if self.layout.origin == (0, 0) {
+            return ((0, 0), fw.max(1) as usize, fh.max(1) as usize);
+        }
+        let (ox, oy) = self.layout.origin;
+        let reach = (BEYOND_MATERIAL_CELLS * 16) as i32;
+        // The grid's own cells, in blocks: each is centred on its world cell.
+        let (gx0, gy0) = (ox * 16 - 8, oy * 16 - 8);
+        let (gx1, gy1) = (gx0 + self.cols as i32 * 16, gy0 + self.rows as i32 * 16);
+        let (x0, y0) = ((-reach).max(gx0), (-reach).max(gy0));
+        let (x1, y1) = ((fw + reach).min(gx1), (fh + reach).min(gy1));
+        ((x0, y0), (x1 - x0).max(1) as usize, (y1 - y0).max(1) as usize)
+    }
+
+    /// The `Floor` a tread mark pressed into world block (`bx`, `by`) lies
+    /// in under the biome (`biome::BiomeLook::floor_of`, read off the
+    /// materials and the tiles), `None` with no biome, on water or a deck,
+    /// and past the layer. A picture's question: nothing that plays asks it.
+    pub fn floor_material(&self, bx: i32, by: i32) -> Option<crate::biome::Floor> {
+        let look = self.look.biome?.look();
+        let image = self.materials()?;
+        let (at, w, h) = self.materials_span();
+        let (x, y) = (bx - at.0, by - at.1);
+        if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
+            return None;
+        }
+        match self.floor_px(bx * 2, by * 2) {
+            FloorPx::Road => Some(crate::biome::Floor::Earth),
+            FloorPx::Water | FloorPx::Deep => None,
+            FloorPx::Land | FloorPx::Bank => look.floor_of(image.texels[y as usize * w + x as usize]),
+        }
     }
 
     /// Dress `places` (`biome::places` of the map) under the biome: its
@@ -672,6 +737,11 @@ impl GroundGrid {
     /// corner, row by row: the same answers, a tile's mask looked up once a
     /// cell rather than once a block.
     pub fn floor_blocks(&self, w: usize, h: usize) -> Vec<FloorPx> {
+        self.floor_blocks_at((0, 0), w, h)
+    }
+
+    /// `floor_blocks` for `w` x `h` blocks whose first is world block `at`.
+    pub fn floor_blocks_at(&self, at: (i32, i32), w: usize, h: usize) -> Vec<FloorPx> {
         let mut out = vec![FloorPx::Land; w * h];
         let tile = GROUND_WORLD_TILE as i32;
         let (ox, oy) = self.layout.origin;
@@ -684,12 +754,12 @@ impl GroundGrid {
                 // The cell's corner in field px, and so in blocks.
                 let (x0, y0) = ((gx + ox) * tile - tile / 2, (gy + oy) * tile - tile / 2);
                 for sy in 0..16 {
-                    let by = (y0 / 2) + sy;
+                    let by = (y0 / 2) + sy - at.1;
                     if by < 0 || by as usize >= h {
                         continue;
                     }
                     for sx in 0..16 {
-                        let bx = (x0 / 2) + sx;
+                        let bx = (x0 / 2) + sx - at.0;
                         if bx < 0 || bx as usize >= w {
                             continue;
                         }
@@ -856,8 +926,8 @@ impl GroundGrid {
             width: self.width,
             height: self.height,
             walls: Vec::new(),
-            // The biome's tileset carries on past the field; its materials
-            // do not (`materials`).
+            // The biome carries on past the field: its tileset, and its
+            // materials thinning away (`materials`).
             look: Look { theme: self.look.theme, edge_shade: false, biome: self.look.biome },
             shade: OnceLock::new(),
             materials: OnceLock::new(),
@@ -2103,9 +2173,13 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
             c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
         }
     }
-    // The biome's materials lie on the tiles, under everything else.
+    // The biome's materials lie on the tiles, under everything else - on
+    // a floor carried past the field, from where its layer starts.
     if let Some(materials) = grid.materials() {
-        c.blocks(materials);
+        match grid.materials_span() {
+            ((0, 0), ..) => c.blocks(materials),
+            ((x, y), w, h) => c.blocks_part(materials, (0, 0, w, h), (x * 2, y * 2)),
+        }
     }
     draw_current(c, grid, time, t.water_flow_speed, t.water_flow_lanes.max(0) as u32);
 }
@@ -2332,7 +2406,61 @@ mod tests {
         let valley = build(W, H, 7, &[], &world(&lake), &[], Look { biome: Some(crate::biome::Biome::Valley), ..Look::default() });
         let materials = valley.materials().expect("a valley has materials");
         assert!(materials.texels.iter().any(|t| t.a == 255), "silt along the lake at least");
-        assert!(valley.beyond(4).materials().is_none(), "the floor past the field carries none");
+        assert!(plain.beyond(4).materials().is_none(), "nor past the field");
+    }
+
+    /// The floor carried past an arena's field carries the biome's materials
+    /// on out of it: the field's own blocks where both read the same tiles,
+    /// thinning away by `BEYOND_MATERIAL_CELLS` past the edge.
+    #[test]
+    fn the_margins_carry_the_materials_on_and_thin_them_away() {
+        // A river down column 4 off the top and bottom of the field, and a
+        // road along row 5 off its east side: no deck, which only the
+        // field's own layer lays.
+        let river: Vec<(i32, i32)> = (0..10).map(|y| (4, y)).collect();
+        let road: Vec<(i32, i32)> = (6..10).map(|x| (x, 5)).collect();
+        let valley = build(W, H, 7, &world(&road), &world(&river), &[], Look { biome: Some(crate::biome::Biome::Valley), ..Look::default() });
+        let field = valley.materials().expect("the field's");
+        let beyond = valley.beyond(8);
+        let margin = beyond.materials().expect("the margins'");
+        let (at, w, h) = beyond.materials_span();
+        let reach = (BEYOND_MATERIAL_CELLS * 16) as i32;
+        assert_eq!(at, (-reach, -reach));
+        let (fw, fh) = (field.width as i32, field.height as i32);
+        assert_eq!((w as i32, h as i32), (fw + 2 * reach, fh + 2 * reach));
+        let texel = |bx: i32, by: i32| margin.texels[(by - at.1) as usize * w + (bx - at.0) as usize];
+        // Inside, away from the edge any distance can read across: the field's.
+        for by in 24..fh - 24 {
+            for bx in 24..fw - 24 {
+                assert_eq!(texel(bx, by), field.texels[(by * fw + bx) as usize], "block ({bx}, {by})");
+            }
+        }
+        // Past the top edge, the river's banks run on, thinning out.
+        let shown = |rows: std::ops::Range<i32>| rows.flat_map(|by| (0..fw).map(move |bx| (bx, by))).filter(|&(bx, by)| texel(bx, by).a > 0).count();
+        let (near, far) = (shown(-16..-1), shown(-reach + 16..-reach + 31));
+        assert!(near > 0, "the banks carry on past the field");
+        assert!(far * 3 < near, "and thin away: {near} near the edge, {far} by the reach");
+        assert_eq!(shown(-reach..-reach + 1), 0, "none by the reach itself");
+        // Without a biome nothing is carried.
+        let plain = build(W, H, 7, &world(&road), &world(&river), &[], Look::default());
+        assert!(plain.beyond(8).materials().is_none());
+    }
+
+    /// What a mark is pressed into under a biome: the road's dirt is packed
+    /// earth, water none, the open meadow meadow - and nothing without one.
+    #[test]
+    fn a_biome_names_the_floor_under_each_block() {
+        use crate::biome::Floor;
+        let river: Vec<(i32, i32)> = (0..10).map(|y| (4, y)).collect();
+        let road: Vec<(i32, i32)> = (6..10).map(|x| (x, 5)).collect();
+        let valley = build(W, H, 7, &world(&road), &world(&river), &[], Look { biome: Some(crate::biome::Biome::Valley), ..Look::default() });
+        // Cell (8, 5)'s middle is block (128, 80); cell (4, 2)'s (64, 32).
+        assert_eq!(valley.floor_material(128, 80), Some(Floor::Earth), "the road's dirt");
+        assert_eq!(valley.floor_material(64, 32), None, "the river");
+        let kinds: std::collections::BTreeSet<_> = (0..160).filter_map(|bx| valley.floor_material(bx, 16)).collect();
+        assert!(kinds.contains(&Floor::Meadow) && kinds.contains(&Floor::Silt), "{kinds:?}");
+        let plain = build(W, H, 7, &world(&road), &world(&river), &[], Look::default());
+        assert_eq!(plain.floor_material(128, 80), None);
     }
 
     fn current(grid: &GroundGrid, x: i32, y: i32) -> Current {
