@@ -32,7 +32,7 @@ fluent-bundle = "0.16"
 unic-langid = "0.9"
 # The drawing crate, behind the `render` feature (below): the simulation,
 # the probe and the tests never name it.
-sola-raylib = { version = "6.3.1", optional = true }
+sola-raylib = { version = "6.4.1", optional = true }
 toml = "1"
 
 # The client's native WebSocket (src/net/native.rs,
@@ -70,7 +70,7 @@ png = { version = "0.17", optional = true }
 sys-locale = "0.3"
 
 [target.'cfg(target_os = "ios")'.dependencies]
-sola-raylib = { version = "6.3.1", features = ["nobuild", "sdl"], optional = true }
+sola-raylib = { version = "6.4.1", features = ["nobuild", "sdl"], optional = true }
 
 # Android (docs/android-port-prd.md, CLAUDE.md's Android section): raylib's
 # own Android platform, prebuilt by tools/setup_android.sh and linked by
@@ -79,7 +79,7 @@ sola-raylib = { version = "6.3.1", features = ["nobuild", "sdl"], optional = tru
 # link args raylib needs; no `sdl` here, raylib drives the NativeActivity
 # itself.
 [target.'cfg(target_os = "android")'.dependencies]
-sola-raylib = { version = "6.3.1", features = ["nobuild"], optional = true }
+sola-raylib = { version = "6.4.1", features = ["nobuild"], optional = true }
 
 # The Android shared library lives in its own crate (android/) so the
 # desktop builds never link a cdylib; the root package stays the default

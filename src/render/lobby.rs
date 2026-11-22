@@ -88,7 +88,7 @@ fn draw_code<D: RaylibDraw>(d: &mut D, area: Rect, view: &LobbyView) {
         let r = code_box_rect(area, i);
         let filled = i < typed.len();
         d.draw_rectangle_rounded(r, 0.15, 8, if filled { ROW_YOU } else { ROW_FILL });
-        d.draw_rectangle_rounded_lines_ex(r, 0.15, 8, 2.0, if i == typed.len() { ONLINE_COLOR } else { DIM });
+        crate::render::shapes::rounded_outline(d, r, 0.15, 8, 2.0, if i == typed.len() { ONLINE_COLOR } else { DIM });
         if let Some(&c) = typed.get(i) {
             let size = 40;
             let w = width(&c.to_string(), size);
@@ -170,7 +170,7 @@ fn tail_fit(text: &str, max_px: i32, size: i32) -> String {
 fn draw_seat<D: RaylibDraw>(d: &mut D, r: Rectangle, seat: Option<&SeatRow>) {
     let inner = Rectangle::new(r.x, r.y + 3.0, r.width, r.height - 6.0);
     let Some(seat) = seat else {
-        d.draw_rectangle_rounded_lines_ex(inner, 0.2, 8, 1.0, Color::new(70, 70, 78, 140));
+        crate::render::shapes::rounded_outline(d, inner, 0.2, 8, 1.0, Color::new(70, 70, 78, 140));
         d.draw_text(&text().get(keys::SEAT_EMPTY), (r.x + 12.0) as i32, (r.y + (r.height - UI_SMALL_TEXT as f32) / 2.0) as i32, UI_SMALL_TEXT, DEAD);
         return;
     };
@@ -202,7 +202,7 @@ fn draw_button<D: RaylibDraw>(d: &mut D, r: Rectangle, view: &ButtonView) {
     if view.enabled && view.accent {
         d.draw_rectangle_rounded(r, 0.2, 8, Color::new(120, 220, 255, 30));
     }
-    d.draw_rectangle_rounded_lines_ex(r, 0.2, 8, 2.0, color);
+    crate::render::shapes::rounded_outline(d, r, 0.2, 8, 2.0, color);
     let size = if view.label.chars().count() == 1 { 24 } else { HUD_TEXT_SIZE };
     let w = width(&view.label, size);
     d.draw_text(

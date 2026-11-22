@@ -1238,7 +1238,7 @@ impl MapEditor {
         let reset = layout.reset;
         let color = if self.dirty() { BUILD_ACCENT } else { DIM };
         let inset = Rectangle::new(reset.x + 6.0, reset.y + 6.0, reset.width - 12.0, reset.height - 12.0);
-        d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, color);
+        crate::render::shapes::rounded_outline(d, inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, color);
         let label = t.get(keys::SETTINGS_RESET);
         let w = text_width(&label, MAP_LABEL_SIZE);
         d.draw_text(&label, (reset.x + (reset.width - w) / 2.0) as i32, (reset.y + (reset.height - MAP_LABEL_SIZE as f32) / 2.0) as i32, MAP_LABEL_SIZE, color);
@@ -1286,14 +1286,14 @@ impl MapEditor {
                         d.draw_text(&words, x, text_y(option, MAP_VALUE_SIZE), MAP_VALUE_SIZE, BAR_FILL);
                     } else {
                         let inset = Rectangle::new(option.x + 1.0, option.y + 1.0, option.width - 2.0, option.height - 2.0);
-                        d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
+                        crate::render::shapes::rounded_outline(d, inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
                         d.draw_text(&words, x, text_y(option, MAP_VALUE_SIZE), MAP_VALUE_SIZE, TEXT);
                     }
                 }
             }
             FieldKind::Stepper | FieldKind::Chassis(_) => {
                 let inset = Rectangle::new(rect.x + 1.0, rect.y + 1.0, rect.width - 2.0, rect.height - 2.0);
-                d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
+                crate::render::shapes::rounded_outline(d, inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
                 let glyphs = if field.is_number() { ["-", "+"] } else { ["<", ">"] };
                 for (button, glyph) in [(chrome::stepper_dec(rect), glyphs[0]), (chrome::stepper_inc(rect), glyphs[1])] {
                     let w = text_width(glyph, HUD_TEXT_SIZE);
@@ -1324,9 +1324,9 @@ impl MapEditor {
                 let on = s.weather.contains(sky);
                 let inset = Rectangle::new(rect.x + 1.0, rect.y + 1.0, rect.width - 2.0, rect.height - 2.0);
                 if on {
-                    d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, BUILD_ACCENT);
+                    crate::render::shapes::rounded_outline(d, inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, BUILD_ACCENT);
                 } else {
-                    d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
+                    crate::render::shapes::rounded_outline(d, inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, outline);
                 }
                 let swatch = Rectangle::new(rect.x + 8.0, rect.y + (rect.height - MAP_SWATCH) / 2.0, MAP_SWATCH, MAP_SWATCH);
                 let tint = if on { 255 } else { 110 };
@@ -1389,7 +1389,7 @@ impl MapEditor {
             d.draw_text(&place_text(&finding.cells), text_x, (row.y + 29.0) as i32, UI_SMALL_TEXT, DIM);
             if finding.fix.is_some() {
                 let fix = chrome::LintLayout::fix_box(row);
-                d.draw_rectangle_rounded_lines_ex(fix, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
+                crate::render::shapes::rounded_outline(d, fix, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
                 let label = t.get(keys::CHECK_FIX);
                 let w = text_width(&label, LINT_TITLE_SIZE);
                 let y = (fix.y + (fix.height - LINT_TITLE_SIZE as f32) / 2.0) as i32;

@@ -408,7 +408,10 @@ build, so every switch would recompile them and their dependents). `.cargo/confi
   tried and breaks the HUD inside render textures). **`route_default_framebuffer`** is real platform
   glue: iOS has no framebuffer 0 - SDL draws through its own FBO/renderbuffer - so glad's
   `glBindFramebuffer`/`glBindRenderbuffer` are wrapped to map 0 onto SDL's objects, or every frame
-  after the first render texture goes into the void. `set_hints` sets `SDL_IOS_HIDE_HOME_INDICATOR`
+  after the first render texture goes into the void. The `SDL_Window` it, the safe area and the
+  geometry log read comes from `SDL_GetWindows` (`app::ios::sdl_window`): raylib's
+  `GetWindowHandle` names the native window, an `NSWindow` on Apple's platforms, and answers null
+  on iOS. `set_hints` sets `SDL_IOS_HIDE_HOME_INDICATOR`
   "2". `app::ios::reduce_motion` (`UIAccessibilityIsReduceMotionEnabled`) seeds the motion switch at
   startup, and `app::ios::points_per_mm` (the `hw.machine` model through
   `indicators::apple_points_per_mm`: a full-size iPad's point is 1/132 inch) is what the builder
@@ -434,9 +437,7 @@ not build on the nix toolchain).
   linker drops. The root package stays the default workspace member.
 - **Setup**: `just android-setup` (`tools/setup_android.sh`: command-line tools, pinned NDK,
   platform, arm64 image, the `bongbong` AVD with `hw.keyboard=yes`, raylib from the tree vendored in
-  the `sola-raylib-sys` registry crate (the version `Cargo.lock` pins), with
-  `tools/android/raylib-android-relaunch.patch` (raylib master's fix for a relaunch hang after a
-  destroy while paused) on top, built with `-DPLATFORM=Android` into
+  the `sola-raylib-sys` registry crate (the version `Cargo.lock` pins), built with `-DPLATFORM=Android` into
   `~/.local/share/bongbong-android/<abi>`; `BONGBONG_ANDROID_NO_EMULATOR=1` is the build-machine cut -
   no image, emulator or AVD - and the script runs on Linux too, since `env.sh` picks the NDK's host
   tag, the SDK root and the JDK by OS). `just android-smoke` is the standing check after any

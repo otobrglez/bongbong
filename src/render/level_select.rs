@@ -49,7 +49,7 @@ pub fn draw_level_select<D: RaylibDraw>(d: &mut D, ui: &UiFrame, view: &LevelSel
     }
 
     let back = back_rect(area);
-    d.draw_rectangle_rounded_lines_ex(back, 0.2, 8, 2.0, TEXT);
+    crate::render::shapes::rounded_outline(d, back, 0.2, 8, 2.0, TEXT);
     let w = width(&view.back, HUD_TEXT_SIZE);
     d.draw_text(
         &view.back,
@@ -71,7 +71,7 @@ fn draw_tile<D: RaylibDraw>(d: &mut D, r: Rectangle, tile: &TileView) {
     };
     d.draw_rectangle_rounded(r, 0.12, 6, fill);
     let (edge, thick) = if tile.focus { (TEXT, 2.0) } else { (edge, 1.0) };
-    d.draw_rectangle_rounded_lines_ex(r, 0.12, 6, thick, edge);
+    crate::render::shapes::rounded_outline(d, r, 0.12, 6, thick, edge);
 
     let label = tile.number.to_string();
     let w = width(&label, TILE_NUMBER_SIZE);

@@ -12,6 +12,9 @@
 //! and no offset keeps that: a sheet moved inside a larger texture has a
 //! turned sprite's samples round onto other texels. The sheet's file is
 //! not touched; the texture is built from its pixels at startup.
+//!
+//! `rounded_outline` is the one way a rounded rectangle's outline is
+//! drawn.
 
 use sola_raylib::prelude::*;
 
@@ -57,6 +60,23 @@ pub fn draw_from(_window: &mut RaylibHandle, texture: &Texture2D, white: crate::
     // caller keeps it for as long as anything draws.
     unsafe { sola_raylib::ffi::SetShapesTexture(*texture.as_ref(), Rectangle::new(white.x, white.y, white.width, white.height).into()) };
     crate::frame_stages::shapes_texture(texture.id);
+}
+
+/// A rounded rectangle's outline as a band `thick` points wide just
+/// outside `rec`, so the box it rings keeps its size and a panel's rim
+/// stands clear of its fill. raylib draws a positive thickness inside the
+/// rectangle and a negative one outside it; every rounded outline the
+/// HUD, the lobby, the level select and the builder draw comes through
+/// here.
+pub fn rounded_outline<D: RaylibDraw>(
+    d: &mut D,
+    rec: impl Into<sola_raylib::ffi::Rectangle>,
+    roundness: f32,
+    segments: i32,
+    thick: f32,
+    color: impl Into<sola_raylib::ffi::Color>,
+) {
+    d.draw_rectangle_rounded_lines_ex(rec, roundness, segments, -thick.abs(), color);
 }
 
 #[cfg(test)]
