@@ -1236,9 +1236,11 @@ pub fn set_maps_dir(dir: PathBuf) {
 }
 
 /// The maps compiled into the binary, by name: the default battlefields,
-/// the two mission fixtures, the portal and tower maps, the big field
+/// the two mission fixtures, the portal and tower maps, the big fields
 /// (`longwater`, free play several screens across, the one the follow
-/// camera was built for), then the hand-authored levels (each file's
+/// camera was built for, and `wildwood`, a Hunt across a forest twice its
+/// size on each side, written by `tools/gen_wildwood.py`), then the
+/// hand-authored levels (each file's
 /// header says how it plays). They are what the web build can offer its
 /// Load list, since nothing outside `static/` ships in the wasm, what the
 /// online lobby's map stepper walks, in this order, and what the room
@@ -1252,6 +1254,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("portals", include_str!("../maps/portals.toml")),
     ("towers", include_str!("../maps/towers.toml")),
     ("longwater", include_str!("../maps/longwater.toml")),
+    ("wildwood", include_str!("../maps/wildwood.toml")),
     ("armory", include_str!("../maps/armory.toml")),
     ("lotus-lagoon", include_str!("../maps/lotus-lagoon.toml")),
     ("vulkan", include_str!("../maps/vulkan.toml")),

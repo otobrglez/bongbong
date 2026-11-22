@@ -225,7 +225,7 @@ mod tests {
     /// the Scrapyard carry the BB-209 props (docs/sandbags-barrels-fences.md
     /// "New props").
     #[cfg(feature = "render")]
-    const PINNED: [(&str, u64); 24] = [
+    const PINNED: [(&str, u64); 25] = [
         ("default", 0xc35e_5595_2de6_4cd3),
         ("default-desert", 0x78a1_5549_3c52_88f9),
         ("hunt-basic", 0x433e_19fc_5107_45bc),
@@ -233,6 +233,7 @@ mod tests {
         ("portals", 0x4339_ad71_265d_1078),
         ("towers", 0x5be8_d484_6f04_af4a),
         ("longwater", 0x81c7_dd5f_ddce_9c7e),
+        ("wildwood", 0x3de6_5932_792a_3e47),
         ("armory", 0xbbcd_7d06_53c7_cd1d),
         ("lotus-lagoon", 0x98a9_ea64_3091_f319),
         ("vulkan", 0x187d_1427_5c66_27b8),
