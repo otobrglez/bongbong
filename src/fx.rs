@@ -934,7 +934,7 @@ impl Fx {
                     }
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
                     Event::ChunksBroken { material, variant, x, y, broken, dx, dy, collapsed } => {
-                        self.pieces.throw(material, variant, Position::new(x, y), broken, Vec2::new(dx, dy), collapsed)
+                        self.pieces.throw(material, variant, Position::new(x, y), broken, Vec2::new(dx, dy), collapsed, game.tile_look())
                     }
                     // A burning plank's chunks charring through: ash, a
                     // lift of embers and a puff of smoke.

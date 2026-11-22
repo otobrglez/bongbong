@@ -100,7 +100,9 @@ corner. Vertical rows are the transposed horizontal cells.
   its only grounding. Puddles spread right/down from the drum.
 - **Fences** keep posts at both ends of the tile (x 1–2 and 13–14) and run
   rails edge to edge so tiles join; the wire mesh is a single-pixel checker
-  so the ground shows through.
+  so the ground shows through. Under a biome that dresses its tiles every
+  fence draws the post-and-wire run on the walls sheet instead (rows
+  39-40, docs/WALLS_SPEC.md §14).
 
 The entity-level drop shadow (`draw_obstacle_shadow`, the same source rect
 tinted black and offset) is what gives a lone prop its footing; nothing is

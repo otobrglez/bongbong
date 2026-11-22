@@ -2004,3 +2004,43 @@ fn a_burning_ground_cell_beside_a_range_board_lights_it() {
     }
     assert!(lit, "the fire passing along the trail lit the board");
 }
+
+#[test]
+fn a_dressed_wall_and_fence_play_and_break_exactly_as_plain_ones() {
+    // The valley draws brick as masonry and a fence as post and wire
+    // (`obstacle::TileLook`, BB-203): a picture only. A fence ahead of the
+    // player and a brick run behind it are shot to pieces, once plain and
+    // once under the valley, and every event, every tile's state and every
+    // piece of rubble the round lays must agree.
+    let extra = r#"
+cells."20,13" = { kind = "fence" }
+cells."19,10" = { kind = "wall", material = "brick" }
+cells."20,10" = { kind = "wall", material = "brick" }
+cells."21,10" = { kind = "wall", material = "brick" }
+"#;
+    let run = |valley: bool| {
+        let map = format!("{}{}", if valley { "biome = \"valley\"\n" } else { "" }, map_with(extra));
+        let mut game = game_on(&map, 7);
+        assert_eq!(game.tile_look().masonry, valley);
+        game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+        let mut events = Vec::new();
+        for _ in 0..24 {
+            events.extend(shoot(&mut game, 40).iter().map(|e| format!("{e:?}")));
+        }
+        let mut tiles: Vec<String> = game
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .map(|o| format!("{:?} {:?} {} {} {:?}", o.material, o.cell(), o.health, o.destroyed, o.chunks))
+            .collect();
+        tiles.sort();
+        let rubble: Vec<(i32, i32, f32, f32)> = game.decals.shown(None).map(|d| (d.row, d.col, d.center.x, d.center.y)).collect();
+        (events, tiles, rubble)
+    };
+    let (plain, valley) = (run(false), run(true));
+    assert!(plain.2.iter().any(|d| d.0 == crate::RUBBLE_ROW_BRICK), "the brick was shot down: {:?}", plain.1);
+    assert!(plain.2.iter().any(|d| d.0 == crate::RUBBLE_ROW_FENCE), "the fence went first");
+    assert_eq!(plain.0, valley.0, "the same events");
+    assert_eq!(plain.1, valley.1, "the same tiles standing");
+    assert_eq!(plain.2, valley.2, "the same rubble, its rows frozen plain: the dress is drawn, not laid");
+}

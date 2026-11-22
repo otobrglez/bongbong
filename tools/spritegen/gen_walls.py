@@ -1151,7 +1151,229 @@ def draw_rubble_concrete(variant, seed):
     return img
 
 
-COLS, ROWS = 16, 33
+# ======================================================================
+# THE VALLEY'S DRESS (BB-203) -- masonry and a post-and-wire fence
+# ======================================================================
+# What a biome that dresses its built tiles (biome.rs, `Biome::dresses_tiles`)
+# draws in place of brick and of either fence. Picture only: the game picks
+# these rows at draw time (`obstacle::TileLook`), so the material, its
+# health, its chunks and its rubble count are brick's and the fence's.
+#
+# Masonry is dressed limestone: the four brick bonds again (so a wall keeps
+# its variant), faced in cream WOOD_PALE with the odd paler grey STONE_HI
+# stone, on warm grey STONE_MD mortar. Every shade is an explicit step, never
+# mul(): a cream darkened by a factor snaps onto SAND_*/GOLD_PALE, the
+# yellow-khaki the de-green rule keeps off every object (docs/PALETTE.md).
+M_LIT = STONE_PALE + (255,)
+M_FACE = WOOD_PALE + (255,)
+M_STONE = STONE_HI + (255,)
+M_FLECK = STONE_MID + (255,)
+M_MORTAR = STONE_MD + (255,)
+M_SHADE = WOOD_ASH + (255,)
+# What a masonry pixel darkens to beside a hole: a step down its own ramp.
+M_DEPTH = {M_LIT: M_FACE, M_FACE: M_MORTAR, M_STONE: M_FLECK, M_FLECK: M_MORTAR,
+           M_MORTAR: M_SHADE, M_SHADE: M_SHADE, SCORCH: SCORCH, DUST: M_MORTAR}
+
+
+def masonry_depth(img):
+    """`inner_shadow` for masonry: the blocks touching a hole step down
+    `M_DEPTH` instead of through mul(), a block at a time (see GRID)."""
+    src = img.copy()
+    for by in range(0, S, GRID):
+        for bx in range(0, S, GRID):
+            c = src.getpixel((bx, by))
+            if c[3] == 0:
+                continue
+            hole = False
+            for dy in range(GRID):
+                for dx in range(GRID):
+                    for ox, oy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        nx, ny = bx + dx + ox, by + dy + oy
+                        if 0 <= nx < S and 0 <= ny < S and src.getpixel((nx, ny))[3] == 0:
+                            hole = True
+            if hole:
+                px(img, bx, by, M_DEPTH.get(tuple(c), M_SHADE))
+
+
+def draw_masonry(v, decay, seed):
+    """Brick's bond `v` at `decay` 0-5 (intact .. rubble), dressed as
+    limestone. The holes follow the same rule as `draw_brick`'s, so a
+    masonry wall breaks the way a brick one does."""
+    rng = random.Random(seed)
+    img = blank()
+    rect(img, 0, 0, 31, 31, M_MORTAR)
+    cells = brick_cells(v['pw'], v['ph'], v['bond'])
+    for (x0, y0, x1, y1) in cells:
+        # Group variation: about one stone in five a paler grey.
+        face = M_STONE if rng.random() < 0.2 else M_FACE
+        rect(img, x0, y0, x1, y1, face)
+        # Dressed stone: a lit arris along the top, flecks in the face.
+        rect(img, x0, y0, x1, y0, M_LIT)
+        if x1 - x0 >= 10:
+            for _ in range(specks(4)):
+                px(img, rng.randint(x0 + 2, x1), rng.randint(y0 + 2, max(y0 + 2, y1)), M_FLECK)
+    if decay == 0:
+        return img
+    frac = [0.0, 0.05, 0.12, 0.22, 0.36, 0.55][decay]
+    order = list(cells)
+    rng.shuffle(order)
+    for (x0, y0, x1, y1) in order[:int(len(cells) * frac)]:
+        for y in range(y0 - 1, y1 + 2):
+            for x in range(x0 - 1, x1 + 2):
+                if not (0 <= x < S and 0 <= y < S):
+                    continue
+                if (x in (x0 - 1, x1 + 1) or y in (y0 - 1, y1 + 1)) and rng.random() < 0.45:
+                    continue
+                img.putpixel((x, y), (0, 0, 0, 0))
+    # Pocks where shots struck: grey chips in the cream, a dark heart only
+    # once the wall is badly hit - on a pale stone soot reads as a hole.
+    for _ in range(decay * 2):
+        cx, cy = rng.randint(2, 29), rng.randint(2, 29)
+        disc(img, cx, cy, rng.uniform(1.2, 2.0), M_MORTAR)
+        if decay >= 3:
+            disc(img, cx, cy, 0.6, M_SHADE)
+    for _ in range(max(0, decay - 2)):
+        cx, cy = rng.randint(2, 29), rng.randint(2, 29)
+        disc(img, cx, cy, rng.uniform(1.0, 1.8), SCORCH)
+    for _ in range(decay):
+        x0, y0 = rng.randint(2, 29), rng.randint(2, 29)
+        crack(img, x0, y0, x0 + rng.randint(-9, 9), y0 + rng.randint(-9, 9), M_SHADE, rng)
+    if decay >= 4:
+        for _ in range(10 if decay == 4 else 22):
+            a = rng.random() * math.tau
+            r = 13 + rng.random() * 5
+            disc_clear(img, 15.5 + math.cos(a) * r, 15.5 + math.sin(a) * r, rng.uniform(1.6, 3.2))
+        for _ in range(specks(8)):
+            px(img, rng.randint(0, 31), rng.randint(0, 31), DUST)
+    declutter(img, 5)
+    masonry_depth(img)
+    return img
+
+
+def draw_masonry_cap(mask):
+    """`draw_edge_cap` in masonry's own steps: a pale coping along the top,
+    the warm shade along the bottom, mortar grey at the sides."""
+    img = blank()
+    n, e, s_, w = mask & 8, mask & 4, mask & 2, mask & 1
+    if not n:
+        rect(img, 0, 0, S - 1, GRID - 1, M_LIT)
+    if not s_:
+        rect(img, 0, S - GRID, S - 1, S - 1, M_SHADE)
+    if not w:
+        rect(img, 0, 0, GRID - 1, S - 1, M_MORTAR)
+    if not e:
+        rect(img, S - GRID, 0, S - 1, S - 1, M_MORTAR)
+    if not n and not w:
+        rect(img, 0, 0, GRID - 1, GRID - 1, M_LIT)
+    if not n and not e:
+        rect(img, S - GRID, 0, S - 1, GRID - 1, M_LIT)
+    if not s_ and not w:
+        rect(img, 0, S - GRID, GRID - 1, S - 1, M_SHADE)
+    if not s_ and not e:
+        rect(img, S - GRID, S - GRID, S - 1, S - 1, M_SHADE)
+    return img
+
+
+# Rubble lies on the road dirt every tile stands on, a tan the cream face
+# all but vanishes into, so the pieces lean on the pale greys and the white
+# arris, with a cream one among them.
+MASONRY_PAIRS = [(M_STONE, M_FLECK), (M_LIT, M_STONE), (M_STONE, M_MORTAR), (M_FACE, M_MORTAR), (M_MORTAR, M_SHADE)]
+
+
+def draw_rubble_masonry(variant, seed):
+    """`draw_rubble_brick` in limestone: blocky pale chunks, grey dust."""
+    rng = random.Random(seed)
+    img = blank()
+    for _ in range(rubble_count(variant, 4, 20)):
+        w = rng.choice([1, 2, 2, 3])
+        h = rng.choice([1, 2, 2])
+        chunk(img, rng, rng.randint(0, D - w), rng.randint(0, D - h), w, h, rng.choice(MASONRY_PAIRS))
+    for _ in range(rubble_count(variant, 1, 6)):
+        dpx(img, rng.randint(0, D - 1), rng.randint(0, D - 1), M_FLECK)
+    declutter(img, 2)
+    return img
+
+
+# The post-and-wire fence: one thin wire, its shadow a step darker, strung
+# between square post caps 16 px apart (design x 3-4 and 11-12, so a run's
+# posts keep the same pitch across a join) - slender where the picket and
+# mesh fences on props_sheet.png are solid bands. Horizontal here; the
+# vertical row is its transpose. Column 0 whole, column 1 snapped: the
+# wire parted between the posts with its ends hanging, the second post
+# knocked askew.
+F_WIRE = STONE_MID + (255,)
+F_WIRE_SHADE = STONE_DK + (255,)
+F_BARB = STONE_DARKEST + (255,)
+F_POST_LIT = WOOD_PALE + (255,)
+F_POST = WOOD_DK + (255,)
+F_POST_SIDE = WOOD_PALE + (255,)
+F_POST_DARK = WOOD_DEEPER + (255,)
+F_POSTS = (3, 11)
+
+
+def post(img, dx, dy, askew=False):
+    """A post cap, 2 x 2 design pixels, lit from the top left."""
+    if askew:
+        dx, dy = dx + 1, dy + 1
+        drect(img, dx, dy, 2, 2, F_POST)
+        dpx(img, dx, dy, F_POST_SIDE)
+        dpx(img, dx + 1, dy + 1, F_POST_DARK)
+        return
+    dpx(img, dx, dy, F_POST_LIT)
+    dpx(img, dx + 1, dy, F_POST_SIDE)
+    dpx(img, dx, dy + 1, F_POST)
+    dpx(img, dx + 1, dy + 1, F_POST_DARK)
+
+
+def draw_post_fence(stage, seed):
+    rng = random.Random(seed)
+    img = blank()
+    wy = 7
+    if stage == 0:
+        drect(img, 0, wy, D, 1, F_WIRE)
+        drect(img, 0, wy + 1, D, 1, F_WIRE_SHADE)
+    else:
+        # Parted between the posts: whole to the first post and past the
+        # second, two hanging ends between.
+        drect(img, 0, wy, 6, 1, F_WIRE)
+        drect(img, 0, wy + 1, 6, 1, F_WIRE_SHADE)
+        dpx(img, 6, wy + 1, F_WIRE)
+        dpx(img, 7, wy + 2, F_WIRE_SHADE)
+        dpx(img, 10, wy + 2, F_WIRE)
+        dpx(img, 11, wy + 1, F_WIRE)
+        drect(img, 12, wy, D - 12, 1, F_WIRE)
+        drect(img, 12, wy + 1, D - 12, 1, F_WIRE_SHADE)
+        # A few splinters off the post that was hit.
+        for _ in range(3):
+            dpx(img, rng.randint(8, 14), rng.randint(wy + 2, wy + 4), F_POST_DARK)
+    # Barbs: a dark tick on the wire every four design pixels.
+    for bx in (1, 7, 9, 15):
+        if stage == 0 or bx < 6 or bx > 12:
+            dpx(img, bx, wy, F_BARB)
+    post(img, F_POSTS[0], wy - 1)
+    post(img, F_POSTS[1], wy - 1, askew=stage == 1)
+    return img
+
+
+def draw_rubble_post_fence(variant, seed):
+    """What a post-and-wire fence leaves: a snapped post or two and loose
+    curls of wire, the least of any rubble."""
+    rng = random.Random(seed)
+    img = blank()
+    posts = [(F_POST_LIT, F_POST), (F_POST, F_POST_DARK)]
+    for _ in range(rubble_count(variant, 1, 4)):
+        w, h = (2, 1) if rng.random() < 0.5 else (1, 2)
+        chunk(img, rng, rng.randint(0, D - w), rng.randint(0, D - h), w, h, rng.choice(posts))
+    for _ in range(rubble_count(variant, 1, 4)):
+        # A curl: a short bent run of wire.
+        dx, dy = rng.randint(1, D - 4), rng.randint(1, D - 3)
+        for (ox, oy) in ((0, 0), (1, 0), (2, 1), (1, 2), (0, 1))[:rng.randint(3, 5)]:
+            dpx(img, dx + ox, dy + oy, rng.choice([F_WIRE, F_WIRE_SHADE]))
+    declutter(img, 1)
+    return img
+
+
+COLS, ROWS = 16, 42
 sheet = Image.new('RGBA', (S * COLS, S * ROWS), (0, 0, 0, 0))
 
 
@@ -1204,6 +1426,23 @@ for c in range(RUBBLE_VARIANTS):
     place(draw_rubble_concrete(c, 1400 + c * 7), c, 31)
 for c in range(2):
     place(draw_rebar(c, 1500 + c * 7), c, 32)
+
+# The valley's dress (BB-203), appended after everything above so no row
+# moves: rows 33-36 masonry in brick's four bonds (cols 0-5 as brick's),
+# 37 its edge caps, 38 its rubble, 39-40 the post-and-wire fence
+# horizontal and vertical (cols 0-1 whole, snapped), 41 its rubble.
+for r, v in enumerate(BRICKS):
+    for c in range(6):
+        place(draw_masonry(v, c, 1600 + r * 31 + c * 7), c, 33 + r)
+for mask in range(EDGE_MASKS):
+    place(draw_masonry_cap(mask), mask, 37)
+for c in range(RUBBLE_VARIANTS):
+    place(draw_rubble_masonry(c, 1700 + c * 7), c, 38)
+    place(draw_rubble_post_fence(c, 1800 + c * 7), c, 41)
+for c in range(2):
+    fence = draw_post_fence(c, 1900 + c * 7)
+    place(fence, c, 39)
+    place(fence.transpose(Image.TRANSPOSE), c, 40)
 
 # Chunky-pixelate the finished sheet to match the tanks' own look: tanks
 # draw a 32x32 source tile at Tank::scale=2.0 (tank.rs), so every source

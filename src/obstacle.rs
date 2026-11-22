@@ -12,6 +12,11 @@ use crate::{
     EDGE_CAP_ROW_BASE,
     EDGE_CAP_ROW_CONCRETE,
     REBAR_ROW,
+    EDGE_CAP_ROW_MASONRY,
+    MASONRY_ROW_BASE,
+    POST_FENCE_ROW,
+    RUBBLE_ROW_MASONRY,
+    RUBBLE_ROW_POST_FENCE,
     RUBBLE_ROW_CONCRETE,
     OBSTACLE_GRID_SIZE,
     RUBBLE_ROW_TREE,
@@ -1182,6 +1187,56 @@ pub fn fence_axis(obstacle: &Obstacle, fences: &HashSet<(i32, i32)>) -> FenceAxi
     }
 }
 
+/// How a biome dresses the built tiles, chosen at draw time
+/// (docs/biomes.md, BB-203): brick drawn as masonry - its bond, cap,
+/// broken faces and rubble - and either fence as post and wire. Picture
+/// only: the material, its health, its chunks and the rubble it lays are
+/// what they were, and nothing that plays reads this. The painters ask the
+/// ground they draw over (`Game::tile_look`, the builder's `Still`), so
+/// rubble the simulation froze at a tile's death (`Decal::row`) is dressed
+/// as it is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TileLook {
+    /// Brick draws from the masonry rows (`MASONRY_ROW_BASE`).
+    pub masonry: bool,
+    /// A fence draws from the post-and-wire rows (`POST_FENCE_ROW`).
+    pub post_fence: bool,
+}
+
+impl TileLook {
+    /// Today's tiles.
+    pub const PLAIN: TileLook = TileLook { masonry: false, post_fence: false };
+
+    /// The dress of `biome` (`Biome::dresses_tiles`), plain with none.
+    pub fn of(biome: Option<crate::biome::Biome>) -> TileLook {
+        let dressed = biome.is_some_and(crate::biome::Biome::dresses_tiles);
+        TileLook { masonry: dressed, post_fence: dressed }
+    }
+
+    /// The walls-sheet row drawn for `row`: brick's bonds, cap and rubble
+    /// become masonry's, a fence's rubble the post fence's; any other row
+    /// is itself.
+    pub fn walls_row(self, row: i32) -> i32 {
+        match row {
+            0..=3 if self.masonry => MASONRY_ROW_BASE + row,
+            EDGE_CAP_ROW_BASE if self.masonry => EDGE_CAP_ROW_MASONRY,
+            RUBBLE_ROW_BRICK if self.masonry => RUBBLE_ROW_MASONRY,
+            RUBBLE_ROW_FENCE if self.post_fence => RUBBLE_ROW_POST_FENCE,
+            _ => row,
+        }
+    }
+
+    /// The sheet and row `obstacle` is drawn from, running along `axis`.
+    fn source(self, obstacle: &Obstacle, axis: FenceAxis) -> (Sheet, i32) {
+        if obstacle.material == Material::Fence && self.post_fence {
+            return (Sheet::Walls, POST_FENCE_ROW + axis as i32);
+        }
+        let sheet = obstacle.material.sheet();
+        let row = obstacle.row(axis);
+        (sheet, if sheet == Sheet::Walls { self.walls_row(row) } else { row })
+    }
+}
+
 /// Source rectangle (and which sheet it is in) for `material`'s pristine
 /// (variant 0, undamaged) tile - used by the map editor's toolbar
 /// (`editor.rs`) to draw a representative icon for each material without
@@ -1319,23 +1374,24 @@ pub fn draw_held_drum(c: &mut impl Canvas, ground: Position, height: f32, drum: 
 
 /// Draw a single obstacle sprite from its atlas at its center position.
 /// Obstacles never rotate (unlike tanks/shells), so this skips the
-/// rotation param `draw_tank` needs; `axis` only matters for fences.
-pub fn draw_obstacle(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32) {
-    draw_obstacle_tinted(c, obstacle, axis, time, Color::WHITE);
+/// rotation param `draw_tank` needs; `axis` only matters for fences, and
+/// `look` is how the biome dresses the tile (`TileLook`).
+pub fn draw_obstacle(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32, look: TileLook) {
+    draw_obstacle_tinted(c, obstacle, axis, time, Color::WHITE, look);
 }
 
 /// `draw_obstacle` in `tint`: a hit's flash draws the tile again in light.
-pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32, tint: Color) {
+pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32, tint: Color, look: TileLook) {
     if obstacle.cage.is_some() {
         draw_cage(c, obstacle, tint);
         return;
     }
     if obstacle.chunks_worn() {
-        draw_chunked(c, obstacle, tint);
+        draw_chunked(c, obstacle, tint, look);
         return;
     }
-    let sheet = obstacle.material.sheet();
-    let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
+    let (sheet, row) = look.source(obstacle, axis);
+    let src = source_rec(sheet, row, obstacle.col());
     let size = obstacle.sprite_size();
     let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y + obstacle.burn_sag(), size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
@@ -1364,9 +1420,9 @@ fn draw_cage(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
 /// a burning plank from the fire loop. Where a chunk is gone, the ones
 /// beside it show a face: a lit lip along the top of a hole, shade down
 /// its other sides - depth, not an outline.
-fn draw_chunked(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
+fn draw_chunked(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color, look: TileLook) {
     let Some(ch) = obstacle.chunks else { return };
-    let row = obstacle.material.row_base() + obstacle.variant;
+    let row = look.walls_row(obstacle.material.row_base() + obstacle.variant);
     let o = crate::chunks::origin(obstacle.position);
     let size = crate::chunks::CHUNK_PX;
     for i in (0..crate::chunks::CHUNKS).filter(|&i| ch.stands(i)) {
@@ -1390,7 +1446,7 @@ fn draw_chunked(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
     if tint != Color::WHITE {
         return;
     }
-    let (lit, shade) = chunk_faces(obstacle.material);
+    let (lit, shade) = chunk_faces(obstacle.material, look);
     let band = FX_BLOCK as i32;
     for i in (0..crate::chunks::CHUNKS).filter(|&i| ch.stands(i)) {
         let off = crate::chunks::chunk_offset(i);
@@ -1413,10 +1469,12 @@ fn draw_chunked(c: &mut impl Canvas, obstacle: &Obstacle, tint: Color) {
 
 /// The lit and the shaded step a chunked material's broken faces show:
 /// its own ramp, a step up and two down (tools/punypalette.py).
-fn chunk_faces(material: Material) -> (Color, Color) {
+fn chunk_faces(material: Material, look: TileLook) -> (Color, Color) {
     match material {
         // WOOD_PALE, WOOD_DARKEST.
         Material::Wood => (Color::new(0xD8, 0xBF, 0x8E, 255), Color::new(0x50, 0x33, 0x0B, 255)),
+        // Masonry's own: STONE_PALE, WOOD_ASH (gen_walls.py's M_LIT, M_SHADE).
+        Material::Brick if look.masonry => (Color::new(0xF0, 0xF0, 0xF0, 255), Color::new(0x73, 0x62, 0x4D, 255)),
         // STONE_HI, STONE_SHADE.
         _ => (Color::new(0xDA, 0xDA, 0xDA, 255), Color::new(0x5A, 0x5A, 0x5A, 255)),
     }
@@ -1477,11 +1535,11 @@ pub fn neighbour_mask(cell: (i32, i32), cells: &HashSet<(i32, i32)>) -> u8 {
 /// drawn, so it works for every damage stage and variant. Only walls get
 /// one - a sandbag, a fence or a tree is a discrete object, not part of a
 /// run.
-pub fn draw_obstacle_cap(c: &mut impl Canvas, obstacle: &Obstacle) {
+pub fn draw_obstacle_cap(c: &mut impl Canvas, obstacle: &Obstacle, look: TileLook) {
     if !obstacle.material.is_wall() || obstacle.cage.is_some() {
         return;
     }
-    let Some(cap_row) = obstacle.material.cap_row() else {
+    let Some(cap_row) = obstacle.material.cap_row().map(|row| look.walls_row(row)) else {
         return;
     };
     let col = BLOB_TILE[obstacle.edge_mask as usize] as i32;
@@ -1788,9 +1846,9 @@ const FX_BLOCK: f32 = 2.0;
 
 /// Draw this obstacle's drop shadow - see `tank::draw_tank_shadow` /
 /// docs/sprite-shadows-design.md. Must be called before `draw_obstacle`.
-pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, t: &Tuning) {
-    let sheet = obstacle.material.sheet();
-    let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
+pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, t: &Tuning, look: TileLook) {
+    let (sheet, row) = look.source(obstacle, axis);
+    let src = source_rec(sheet, row, obstacle.col());
     let size = obstacle.sprite_size();
     let dest = Rectangle::new(
         obstacle.position.x + t.shadow_dir_x * t.obstacle_shadow_offset,
@@ -1808,6 +1866,33 @@ mod tests {
     use super::*;
     use crate::pyro::Shape;
     use crate::tank::Dir;
+
+    #[test]
+    fn plain_tiles_draw_their_own_rows_and_the_valley_dresses_only_brick_and_fences() {
+        for row in 0..=RUBBLE_ROW_POST_FENCE {
+            assert_eq!(TileLook::PLAIN.walls_row(row), row, "a plain look moves no row");
+        }
+        assert_eq!(TileLook::of(None), TileLook::PLAIN);
+        let valley = TileLook::of(Some(crate::biome::Biome::Valley));
+        assert!(valley.masonry && valley.post_fence);
+        for variant in 0..Material::Brick.variants() {
+            assert_eq!(valley.walls_row(Material::Brick.row_base() + variant), MASONRY_ROW_BASE + variant, "each bond keeps its variant");
+        }
+        assert_eq!(valley.walls_row(Material::Brick.cap_row().unwrap()), EDGE_CAP_ROW_MASONRY);
+        assert_eq!(valley.walls_row(Material::Brick.rubble_row(false).unwrap().1), RUBBLE_ROW_MASONRY);
+        assert_eq!(valley.walls_row(Material::Fence.rubble_row(false).unwrap().1), RUBBLE_ROW_POST_FENCE);
+        // Steel, timber, glass and concrete are left as they are.
+        for m in [Material::Iron, Material::Wood, Material::Glass, Material::Concrete] {
+            for variant in 0..m.variants() {
+                assert_eq!(valley.walls_row(m.row_base() + variant), m.row_base() + variant, "{m:?}");
+            }
+            assert_eq!(valley.walls_row(m.cap_row().unwrap()), m.cap_row().unwrap(), "{m:?}");
+        }
+        let fence = Obstacle::new(Material::Fence, 1, Position::new(48.0, 48.0), false, RigidBodyHandle::invalid());
+        assert_eq!(valley.source(&fence, FenceAxis::Horizontal), (Sheet::Walls, POST_FENCE_ROW));
+        assert_eq!(valley.source(&fence, FenceAxis::Vertical), (Sheet::Walls, POST_FENCE_ROW + 1));
+        assert_eq!(TileLook::PLAIN.source(&fence, FenceAxis::Vertical), (Sheet::Props, fence.row(FenceAxis::Vertical)));
+    }
 
     #[test]
     fn an_oil_print_is_whole_blocks_inside_its_cell() {

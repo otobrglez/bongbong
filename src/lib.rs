@@ -734,6 +734,18 @@ pub const EDGE_CAP_ROW_CONCRETE: i32 = 30;
 pub const RUBBLE_ROW_CONCRETE: i32 = 31;
 pub const REBAR_ROW: i32 = 32;
 
+// A biome's dress (BB-203, docs/biomes.md), appended after everything above
+// so no row moved: masonry in brick's four bonds (cols 0-5 as brick's), its
+// edge caps and its rubble, then the post-and-wire fence (horizontal and
+// vertical, cols 0-1 whole and snapped) and its rubble. Drawn in place of
+// brick's rows and either fence's, picked at draw time (`obstacle::TileLook`)
+// - nothing that plays reads them.
+pub const MASONRY_ROW_BASE: i32 = 33;
+pub const EDGE_CAP_ROW_MASONRY: i32 = 37;
+pub const RUBBLE_ROW_MASONRY: i32 = 38;
+pub const POST_FENCE_ROW: i32 = 39;
+pub const RUBBLE_ROW_POST_FENCE: i32 = 41;
+
 // Ground/terrain layer (grass base, road painted under every static
 // obstacle tile and every cell a map explicitly marks as road) - see
 // ground.rs for the placement/autotile logic, docs/GROUND_SPEC.md for the

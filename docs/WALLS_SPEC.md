@@ -9,8 +9,8 @@ All destructible obstacles in one sheet. Unlike the tank and shell sheets, these
 | Property | Value |
 |---|---|
 | Filename | `walls_sheet.png` |
-| Dimensions | 512 × 1056 px |
-| Grid | 16 columns × 33 rows |
+| Dimensions | 512 × 1344 px |
+| Grid | 16 columns × 42 rows |
 | Cell size | 32 × 32 px (uniform, no padding) |
 | Format | PNG, RGBA, straight (non-premultiplied) alpha |
 
@@ -75,6 +75,11 @@ Column count varies by material. **Cells outside a material's range are empty** 
 | 30 | **Edge caps — concrete** | 0–15 | as rows 22–25 |
 | 31 | **Rubble — concrete** | 0–7 | slabs and a bent bar, 8 variants |
 | 32 | **Rebar cage** | 0–1 | whole, bent by a heavy blast |
+| 33–36 | **Masonry** (a biome's dress of brick, §14) | 0–5 | as brick's |
+| 37 | **Edge caps — masonry** | 0–15 | as rows 22–25 |
+| 38 | **Rubble — masonry** | 0–7 | pale limestone chunks, 8 variants |
+| 39–40 | **Post-and-wire fence** (§14) | 0–1 | across, upright × whole, snapped |
+| 41 | **Rubble — post fence** | 0–7 | snapped posts and wire curls, 8 variants |
 
 ```
 row_base:  brick = 0,  iron = 4,  wood = 8,  glass = 12
@@ -547,3 +552,42 @@ is reachable plays as it did.
 **Rubble.** The router prices rubble (§10) with `Grid::raise`, which never
 lowers a cell's price. Rubble on a ford or a lava ford leaves the ford's
 price, rather than replacing it with rubble's lower one.
+
+## 14. A biome's dress: masonry and the post fence (BB-203)
+
+A biome can dress the built tiles (`Biome::dresses_tiles`, docs/biomes.md):
+the valley draws brick as pale dressed limestone and every fence, wooden or
+wire, as one slender post-and-wire run. Rows 33-41 hold that art, appended
+after the rebar cage so no row moved. Nothing about the tiles changes but
+their picture: the material is still brick or fence, with brick's health,
+chunks, collapse and rubble count, and the simulation lays the same
+`RUBBLE_ROW_BRICK` or `RUBBLE_ROW_FENCE` decal it always did.
+
+The row is picked at draw time by `obstacle::TileLook`, which the painters
+read off the ground they draw over (`Game::tile_look`, the builder's
+`Still`): `walls_row` turns brick's four variant rows, its cap row and its
+rubble row into masonry's, and a fence's rubble row into the post fence's;
+`draw_obstacle` draws a fence from rows 39-40 by its axis. The chunked
+painter, a broken face's lit and shaded lip, the wall pieces a breach
+throws (`Pieces::throw`) and the rubble decals all go through it, so a
+masonry wall breaks into masonry. A plain look moves no row.
+
+| Row | Contents |
+|---|---|
+| 33–36 | Masonry in brick's four bonds (`running`, `block`, `long`, `stacked`), cols 0–5 as brick's states, so a wall keeps its variant |
+| 37 | Masonry edge caps: a pale coping along an open top, the warm shade along an open bottom, mortar grey at the sides |
+| 38 | Masonry rubble: pale grey and white chunks with a cream one among them (cream all but vanishes on the road dirt rubble lies on) |
+| 39–40 | Post-and-wire fence, across and upright (the transpose): col 0 whole, col 1 snapped - the wire parted between the posts, ends hanging, the second post knocked askew |
+| 41 | Post-fence rubble: a snapped post or two and curls of wire |
+
+Masonry is faced in `WOOD_PALE` with about one stone in five `STONE_HI`, on
+`STONE_MD` mortar, a `STONE_PALE` arris along each block's top and
+`WOOD_ASH` for depth, cracks and hole edges (`masonry_depth`, its own
+`inner_shadow`). Every shade is an explicit step: a cream darkened through
+`mul()` snaps onto `SAND_*`/`GOLD_PALE`, the khaki the de-green rule keeps
+off every object. Shot pocks are grey; soot comes only from the third
+damage state, since on pale stone a dark scorch reads as a hole. The fence
+is a `STONE_MID` wire over a `STONE_DK` shadow, barbed in `STONE_DARKEST`,
+between 2 × 2 design-pixel post caps lit from the top left (`WOOD_PALE`,
+`WOOD_DK`, `WOOD_DEEPER`) at design x 3-4 and 11-12, so a run's posts keep
+one 16 px pitch across a join.

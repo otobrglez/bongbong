@@ -101,6 +101,8 @@ pub struct Still {
     /// were until the picture is worked out again.
     stale_woods: bool,
     theme: Theme,
+    /// How the map's biome dresses its walls and fences (`TileLook`).
+    tile_look: crate::obstacle::TileLook,
     /// The starts, the bongs, the towers and the lamp posts, back to front.
     standing: Vec<Stand>,
     pickups: Vec<(Position, PickupKind)>,
@@ -144,6 +146,7 @@ impl Still {
         let mut still = Still {
             woods: Woods::build(map),
             theme: map.theme,
+            tile_look: crate::obstacle::TileLook::of(crate::biome::in_force(map.biome, &t)),
             cones: crate::battlefield::volcano_cone_cells(map).into_iter().collect(),
             footprint: volcanoes.iter().flat_map(|&(c, r)| crate::volcano::footprint(c, r)).collect(),
             volcanoes,
@@ -405,7 +408,7 @@ impl Still {
                 crate::tower::draw_tower_shadow(c, *kind, *side, *at);
             }
         }
-        crate::game::paint_tile_run(c, self.tiles.iter(), &self.fences, true, time, &crate::tuning::tuning());
+        crate::game::paint_tile_run(c, self.tiles.iter(), &self.fences, true, time, &crate::tuning::tuning(), self.tile_look);
         for &at in &self.doors {
             if !c.culls(at) {
                 crate::training::draw_door(c, at);
