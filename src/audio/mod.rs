@@ -212,6 +212,10 @@ pub struct Audio {
     paused: bool,
     variation: u64,
     recent: VecDeque<String>,
+    /// The owner slot whose shots this window draws at the press online
+    /// (`OnlineRound::draws_own_shots`): its own presses play at once
+    /// (`own_press`) and the room's late copies of them are skipped.
+    predicted: Option<usize>,
 }
 
 /// How many recent cues the dev tools see.
@@ -238,6 +242,7 @@ impl Audio {
             paused: false,
             variation: 0,
             recent: VecDeque::new(),
+            predicted: None,
         }
     }
 
@@ -295,10 +300,67 @@ impl Audio {
             if matches!(event, Event::RoundStarted { .. } | Event::ObstacleDestroyed { .. } | Event::ChunksBroken { collapsed: true, .. }) {
                 self.space.walls_changed();
             }
+            if self.room_copy_of_own_press(event) {
+                continue;
+            }
             if let Binding::Play(plays) = bind::bind(event, game) {
                 self.pending.extend(plays);
             }
         }
+    }
+
+    /// Online, the seat whose shots this window draws at the press, or
+    /// `None` (a local round, or a client that waits for the room).
+    pub fn set_predicted_seat(&mut self, slot: Option<usize>) {
+        self.predicted = slot;
+    }
+
+    /// Whether `event` is the room's late copy of a press this window
+    /// already sounded (docs/sound-system-prd.md section 4.10): the own
+    /// seat's cannon, plasma, well anchor or charge end. The shows of the
+    /// weapons drawn on the press never reach the replica (`apply.rs`).
+    fn room_copy_of_own_press(&self, event: &Event) -> bool {
+        let Some(own) = self.predicted else {
+            return false;
+        };
+        match *event {
+            Event::Fired { slot, weapon } => slot == own && matches!(weapon, "shell" | "plasma" | "minigun"),
+            Event::WellAnchored { slot, .. } | Event::ChargeEnded { slot, .. } => slot == own,
+            _ => false,
+        }
+    }
+
+    /// This client's own press online, sounded at once from its tank in
+    /// `slot` rather than a round trip later.
+    pub fn own_press(&mut self, game: &Game, slot: usize, press: crate::net::round::PressSound) {
+        use crate::net::round::PressSound;
+        let cue = match press {
+            PressSound::Shell | PressSound::Plasma => {
+                let weapon = if press == PressSound::Shell { "shell" } else { "plasma" };
+                if let Binding::Play(plays) = bind::bind(&Event::Fired { slot, weapon }, game) {
+                    self.pending.extend(plays);
+                }
+                return;
+            }
+            PressSound::Bullet => {
+                self.watch.round_fired(slot, self.time);
+                return;
+            }
+            PressSound::Beam => "weapon.laser.fire",
+            PressSound::Sonic => "weapon.sonic_hammer.fire",
+            PressSound::Emp => "weapon.emp_burst.fire",
+            PressSound::Rail => "weapon.gauss_rail.fire",
+            PressSound::ChargeEnd => "weapon.gauss_rail.vent",
+            PressSound::Drone => "weapon.fpv_swarm.launch",
+            PressSound::Rod => {
+                let whistle = (tuning().rod_countdown_seconds - 3.0).max(0.0);
+                self.pending.push(Play::new(cues::ids::ROD_INCOMING.0, At::Slot(slot)).after(whistle));
+                "weapon.rod_from_god.call"
+            }
+            PressSound::Orb => "weapon.gravity_well.fire",
+            PressSound::Anchor => "weapon.gravity_well.anchor",
+        };
+        self.pending.push(Play::new(cue, At::Slot(slot)).source(slot as u64));
     }
 
     /// A new round: every loop ends, the watchers forget, the walls are

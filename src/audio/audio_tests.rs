@@ -316,3 +316,26 @@ fn a_cue_at_its_polyphony_steals_rather_than_piling_up() {
     // The silent step keeps the game honest about time.
     step(&mut game, &mut a, Input::default());
 }
+
+#[test]
+fn an_online_press_sounds_once_at_the_press_and_never_again_from_the_room() {
+    let mut game = game_on(OPEN);
+    let mut a = audio();
+    a.observe_events(&game);
+    a.observe(&game, &view_on(&game), &[0], 0.0, true);
+    a.take_commands();
+    // The client drew its own shot at the press and sounds it there.
+    a.set_predicted_seat(Some(0));
+    a.own_press(&game, 0, crate::net::round::PressSound::Shell);
+    a.observe(&game, &view_on(&game), &[0], 0.0, true);
+    let at_press = started(&a.take_commands()).into_iter().filter(|&(_, bus, _)| bus == Bus::Weapons.index()).count();
+    assert!(at_press >= 1, "the press sounds at once");
+    // The room's `Fired` for that seat arrives later: it is not played again.
+    let fire = Input::single(Intent { fire: true, ..Intent::default() });
+    let mut later = step(&mut game, &mut a, fire);
+    for _ in 0..3 {
+        later.extend(step(&mut game, &mut a, Input::default()));
+    }
+    let again = started(&later).into_iter().filter(|&(_, bus, looped)| bus == Bus::Weapons.index() && !looped).count();
+    assert_eq!(again, 0, "the room's copy of the shot is skipped: {later:?}");
+}

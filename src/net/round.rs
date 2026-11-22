@@ -53,6 +53,26 @@ use crate::PHYSICS_FIXED_DT;
 /// socket or over the rig's in-process link.
 pub type AnyRound = OnlineRound<Box<dyn Transport>>;
 
+/// One press this client drew itself, for its sound to play at the press
+/// rather than a round trip later (docs/sound-system-prd.md section 4.10):
+/// a provisional shot leaving the gun, or the show of a weapon drawn on the
+/// press. Drained once a frame by the window (`OnlineRound::take_press_sounds`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PressSound {
+    Shell,
+    Bullet,
+    Plasma,
+    Beam,
+    Sonic,
+    Emp,
+    Rail,
+    ChargeEnd,
+    Drone,
+    Rod,
+    Orb,
+    Anchor,
+}
+
 /// How many snapshots the lead waits between two adjustments, and how
 /// long a starvation counts as recent: sixty, a second at the room's
 /// cadence. One packet's worth of lead per second is as fast as the loop
@@ -285,6 +305,9 @@ pub struct OnlineRound<T: Transport> {
     /// the room while that knob is on or the client owns its hull, since
     /// an owned hull's poses come from it whatever is drawn.
     predictor: Option<Predictor>,
+    /// This client's own presses drawn since the window last asked
+    /// (`take_press_sounds`).
+    press_sounds: Vec<PressSound>,
     /// `online_predict_own_tank` pinned for a test, which may not write
     /// the process-wide table.
     #[cfg(test)]
@@ -319,6 +342,7 @@ impl<T: Transport> OnlineRound<T> {
             clock: Now::wall(),
             start_sent: false,
             predictor: None,
+            press_sounds: Vec::new(),
             send_owed: 0.0,
             pending_fire: false,
             pending_lamp: false,
@@ -604,6 +628,18 @@ impl<T: Transport> OnlineRound<T> {
     /// The seat this client was given, once the room has said.
     pub fn seat(&self) -> Option<u8> {
         self.client.seat()
+    }
+
+    /// This client's own presses drawn since the last call, for their
+    /// sound; the room's copies of them are the ones its sound skips.
+    pub fn take_press_sounds(&mut self) -> Vec<PressSound> {
+        std::mem::take(&mut self.press_sounds)
+    }
+
+    /// Whether this client draws its own shots at the press
+    /// (`predict_shots`), so its sound plays them there too.
+    pub fn draws_own_shots(&self) -> bool {
+        self.predict_shots()
     }
 
     /// The room's code, to read out to whoever is joining.
@@ -1305,6 +1341,11 @@ impl<T: Transport> OnlineRound<T> {
         for (at, kind) in predictor.take_muzzles() {
             game.draw_muzzle(at);
             game.kick_seat(seat, kind);
+            self.press_sounds.push(match kind {
+                crate::simulation::ProvisionalKind::Shell => PressSound::Shell,
+                crate::simulation::ProvisionalKind::Bullet => PressSound::Bullet,
+                crate::simulation::ProvisionalKind::Plasma => PressSound::Plasma,
+            });
         }
         // An own shell meets an opposing one where the room's
         // `shell_vs_shell` would have them meet: both are drawn on the
@@ -1347,6 +1388,17 @@ impl<T: Transport> OnlineRound<T> {
         // the legs past it arrive as the room's own `LaserBeam`s.
         let beam_reach = crate::simulation::laser_reach(game.map.field_size());
         for show in predictor.take_press_shows() {
+            self.press_sounds.push(match show {
+                crate::net::predict::PressShow::Beam(_) => PressSound::Beam,
+                crate::net::predict::PressShow::Sonic(_) => PressSound::Sonic,
+                crate::net::predict::PressShow::Emp(_) => PressSound::Emp,
+                crate::net::predict::PressShow::Rail(_) => PressSound::Rail,
+                crate::net::predict::PressShow::ChargeEnd(_) => PressSound::ChargeEnd,
+                crate::net::predict::PressShow::Drone(_) => PressSound::Drone,
+                crate::net::predict::PressShow::Rod(_) => PressSound::Rod,
+                crate::net::predict::PressShow::Orb(_) => PressSound::Orb,
+                crate::net::predict::PressShow::Anchor { .. } => PressSound::Anchor,
+            });
             match show {
                 crate::net::predict::PressShow::Beam(beam) => {
                     let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * beam_reach, beam.start.y + beam.dir.y * beam_reach);

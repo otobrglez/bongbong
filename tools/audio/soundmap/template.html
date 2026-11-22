@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bongbong Sound Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a workbench - a masthead with the coverage bars, a sticky tab bar
+   over six views sharing one filter row - in the Puny Palette and the type
+   of the other BB-102 pages. Built by `soundmap --html` from the code, the
+   manifest and the catalogue (docs/sound-system-prd.md section 4.11). */
+:root {
+  --bg: #F0F0EE; --panel: #FBFBFA; --sunk: #E4E4E0; --ink: #252525; --muted: #5B5B57; --rule: #C9C9C4;
+  --accent: #9C3527; --mark: #E4421A;
+  --done: #3E6F2E; --done-bg: #E2EDDC; --part: #2F5F8F; --part-bg: #DCE6F0;
+  --plan: #8A5A12; --plan-bg: #F4E6CC; --miss: #9C3527; --miss-bg: #F5DDD7;
+  --display: "Silkscreen", "Courier New", monospace;
+  --body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #1F1F1E; --panel: #2A2A28; --sunk: #343432; --ink: #EEEEEC; --muted: #A9A9A4; --rule: #474744;
+  --accent: #FF7A57; --mark: #FF5A33; --done: #9FD08A; --done-bg: #2C3A27; --part: #8DB8E8; --part-bg: #23303F;
+  --plan: #E8B865; --plan-bg: #3D3222; --miss: #FF8A6E; --miss-bg: #452823; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #1F1F1E; --panel: #2A2A28; --sunk: #343432; --ink: #EEEEEC; --muted: #A9A9A4; --rule: #474744;
+  --accent: #FF7A57; --mark: #FF5A33; --done: #9FD08A; --done-bg: #2C3A27; --part: #8DB8E8; --part-bg: #23303F;
+  --plan: #E8B865; --plan-bg: #3D3222; --miss: #FF8A6E; --miss-bg: #452823; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 3rem; }
+.page { max-width: 80rem; margin: 0 auto; display: grid; gap: 1rem; }
+h1, h2, h3 { margin: 0; line-height: 1.2; }
+code, .mono { font-family: var(--mono); font-size: 0.85em; }
+.masthead { padding-block: 2rem 1rem; border-bottom: 3px solid var(--ink); display: grid; gap: 0.8rem; }
+.eyebrow { font-family: var(--display); font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.masthead h1 { font-family: var(--display); font-weight: 400; font-size: 2rem; }
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); border: 1px solid var(--rule); background: var(--panel); }
+.strip div { padding: 0.6rem 0.8rem; border-right: 1px solid var(--rule); display: grid; }
+.strip .n { font-family: var(--display); font-size: 1.4rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+.strip .l { font-size: 0.8rem; color: var(--muted); }
+.bar { display: flex; height: 16px; border: 1px solid var(--rule); background: var(--sunk); overflow: hidden; }
+.bar i { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.2rem 0.9rem; font-size: 0.78rem; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 0.3rem; background: var(--sw); }
+nav.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--rule); display: flex; gap: 0.25rem; overflow-x: auto; padding-block: 0.45rem; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+nav.tabs button { font: 0.76rem var(--display); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); background: none; border: 1.5px solid transparent; padding: 0.4rem 0.7rem; cursor: pointer; white-space: nowrap; }
+nav.tabs button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); background: var(--panel); }
+.filters { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; background: var(--panel); border: 1px solid var(--rule); padding: 0.6rem; }
+.filters input[type=search] { flex: 1 1 14rem; min-width: 0; font: inherit; padding: 0.3rem 0.5rem; border: 1.5px solid var(--rule); background: var(--bg); color: var(--ink); }
+.chip { font: inherit; font-size: 0.8rem; border: 1.5px solid var(--rule); background: var(--bg); color: var(--ink); padding: 0.1rem 0.5rem; cursor: pointer; border-radius: 2px; }
+.chip[aria-pressed="true"] { border-color: var(--ink); font-weight: 700; background: var(--panel); }
+.count { margin-left: auto; font-size: 0.8rem; color: var(--muted); }
+.badge { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 0 0.4rem; border-radius: 2px; white-space: nowrap; }
+.s-done { color: var(--done); background: var(--done-bg); } .s-partial { color: var(--part); background: var(--part-bg); }
+.s-planned { color: var(--plan); background: var(--plan-bg); } .s-not_in_manifest { color: var(--miss); background: var(--miss-bg); }
+.s-review { color: var(--part); background: var(--part-bg); } .s-approved { color: var(--done); background: var(--done-bg); } .s-rejected, .s-placeholder { color: var(--miss); background: var(--miss-bg); }
+.p-critical { color: #fff; background: var(--mark); } .p-high { color: var(--miss); background: var(--miss-bg); } .p-medium { color: var(--plan); background: var(--plan-bg); } .p-low, .p-warning { color: var(--muted); background: var(--sunk); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--rule); }
+th { font: 0.68rem var(--display); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); background: var(--bg); position: sticky; top: 0; }
+td .sub { display: block; color: var(--muted); font-size: 0.75rem; }
+audio { height: 28px; width: 14rem; max-width: 100%; }
+#cy { height: max(520px, 70vh); border: 1px solid var(--rule); background: var(--panel); }
+.graph { display: grid; grid-template-columns: minmax(0, 1fr) minmax(16rem, 24rem); gap: 0.75rem; }
+.side { border: 1px solid var(--rule); background: var(--panel); padding: 0.8rem; overflow-y: auto; max-height: max(520px, 70vh); display: grid; gap: 0.5rem; align-content: start; font-size: 0.85rem; }
+@media (max-width: 860px) { .graph { grid-template-columns: minmax(0, 1fr); } }
+.problems { border-left: 4px solid var(--mark); background: var(--panel); padding: 0.6rem 0.9rem; font-size: 0.85rem; }
+.problems li { font-family: var(--mono); font-size: 0.8rem; }
+[hidden] { display: none !important; }
+</style></head><body>
+<div class="page">
+  <header class="masthead">
+    <div class="eyebrow">BB-102 · soundmap · <span id="commit"></span></div>
+    <h1>Bongbong Sound Map</h1>
+    <p>Where the game needs sound, what plays there today and what is still to make. The needed sounds come from the catalogue of every interaction in the game; each is tied to the manifest cue that plays it, and each cue to the files that exist.</p>
+    <div class="strip" id="strip"></div>
+    <div><div class="bar" id="bar"></div><div class="legend" id="legend"></div></div>
+  </header>
+  <nav class="tabs" id="tabs"></nav>
+  <section class="filters" id="filters">
+    <input type="search" id="q" placeholder="Search cues, notes, prompts..." aria-label="Search">
+    <span id="status-chips"></span>
+    <span class="count" id="count"></span>
+  </section>
+  <main id="view"></main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var VIEWS = [["needed", "Needed sounds"], ["manifest", "Manifest"], ["graph", "Graph"], ["code", "Code"], ["gaps", "Gaps"], ["problems", "Problems"]];
+  var STATUS = [["done", "Made"], ["partial", "Partly made"], ["planned", "In the manifest, not made"], ["not_in_manifest", "No cue yet"]];
+  var state = { view: "needed", q: "", status: { done: true, partial: true, planned: true, not_in_manifest: true } };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function badge(cls, text) { return '<span class="badge ' + cls + '">' + esc(text) + "</span>"; }
+  var cueById = {}; D.cues.forEach(function (c) { cueById[c.id] = c; });
+  var sampleById = {}; D.samples.forEach(function (s) { sampleById[s.id] = s; });
+  var neededByInteraction = {}; D.needed.forEach(function (n) { (n.interactions || []).forEach(function (i) { neededByInteraction[i] = n; }); });
+
+  function header() {
+    var s = D.stats, n = s.needed;
+    document.getElementById("commit").textContent = D.commit || "";
+    document.getElementById("strip").innerHTML = [
+      [n.total, "sounds the game needs"], [n.done, "made"], [n.partial + n.planned, "in the manifest, still to make"], [n.not_in_manifest, "with no cue yet"],
+      [s.manifest_cues, "manifest cues"], [s.samples_approved + " / " + s.samples, "samples made"], [s.problems, "problems"]
+    ].map(function (x) { return "<div><span class=n>" + esc(x[0]) + "</span><span class=l>" + esc(x[1]) + "</span></div>"; }).join("");
+    var colors = { done: "var(--done)", partial: "var(--part)", planned: "var(--plan)", not_in_manifest: "var(--miss)" };
+    document.getElementById("bar").innerHTML = STATUS.map(function (st) { return '<i style="width:' + (100 * (n[st[0]] || 0) / Math.max(n.total, 1)) + "%;background:" + colors[st[0]] + '" title="' + esc(st[1]) + '"></i>'; }).join("");
+    document.getElementById("legend").innerHTML = STATUS.map(function (st) { return '<span style="--sw:' + colors[st[0]] + '">' + esc(st[1]) + " " + (n[st[0]] || 0) + "</span>"; }).join("");
+    document.getElementById("tabs").innerHTML = VIEWS.map(function (v) { return '<button type=button data-v="' + v[0] + '" aria-pressed="' + (v[0] === state.view) + '">' + esc(v[1]) + "</button>"; }).join("");
+    document.getElementById("status-chips").innerHTML = STATUS.map(function (st) { return '<button type=button class=chip data-s="' + st[0] + '" aria-pressed=true>' + esc(st[1]) + "</button>"; }).join(" ");
+  }
+  function matches(text) { return !state.q || String(text).toLowerCase().indexOf(state.q) >= 0; }
+  function takes(sample) {
+    if (!sample) return "";
+    return (sample.takes || []).filter(function (t) { return t.exists; }).map(function (t) { return '<audio controls preload=none src="../../static/audio/' + esc(t.file) + '"></audio>'; }).join("");
+  }
+  function needed() {
+    var rows = D.needed.filter(function (n) { return state.status[n.status] && matches(n.cue + " " + (n.descriptions || []).join(" ") + " " + (n.manifest || "") + " " + (n.proposed || "")); });
+    document.getElementById("count").textContent = rows.length + " of " + D.needed.length;
+    return '<div class="table-wrap"><table><thead><tr><th>Sound</th><th>Priority</th><th>Status</th><th>Plays as</th><th>What it is</th><th>Uses</th></tr></thead><tbody>' +
+      rows.map(function (n) {
+        var cue = n.manifest ? cueById[n.manifest] : null;
+        var first = cue && cue.samples.length ? takes(sampleById[cue.samples[0]]) : "";
+        return "<tr><td class=mono><b>" + esc(n.cue) + '</b><span class=sub>' + esc(n.kind) + "</span></td><td>" + badge("p-" + n.priority, n.priority) + "</td><td>" + badge("s-" + n.status, n.status.replace(/_/g, " ")) +
+          "</td><td class=mono>" + (n.manifest ? esc(n.manifest) + (n.fit === "covered" ? '<span class=sub>covered by a broader cue</span>' : "") : '<span class=sub>proposed</span>' + esc(n.proposed || "")) + first +
+          "</td><td>" + esc((n.descriptions || [])[0] || "") + "</td><td>" + (n.interactions || []).length + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+  function manifest() {
+    var rows = D.cues.filter(function (c) { return state.status[c.status] && matches(c.id + " " + c.note + " " + c.samples.join(" ")); });
+    document.getElementById("count").textContent = rows.length + " of " + D.cues.length;
+    return '<div class="table-wrap"><table><thead><tr><th>Cue</th><th>Bus · kind</th><th>Status</th><th>Samples and takes</th><th>Asked for by</th></tr></thead><tbody>' +
+      rows.map(function (c) {
+        var samples = c.samples.map(function (id) { var s = sampleById[id] || {}; return '<div class=mono>' + esc(id) + " " + badge("s-" + s.status, s.status) + '<span class=sub>' + esc(s.prompt || "") + "</span>" + takes(s) + "</div>"; }).join("");
+        return "<tr><td class=mono><b>" + esc(c.id) + '</b><span class=sub>' + esc(c.note) + "</span></td><td>" + esc(c.bus) + "<span class=sub>" + esc(c.kind) + " · " + esc(c.priority) + " · " + esc(c.class) + "</span></td><td>" + badge("s-" + c.status, c.status) +
+          "</td><td>" + samples + '</td><td class=mono><span class=sub>' + esc((c.requested_by || []).slice(0, 6).join(", ")) + ((c.requested_by || []).length > 6 ? " ..." : "") + "</span></td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+  function code() {
+    var rows = D.code.filter(function (r) { return matches(r.from + " " + r.variant + " " + r.wants + " " + (r.resolved || "")); });
+    document.getElementById("count").textContent = rows.length + " of " + D.code.length;
+    return '<div class="table-wrap"><table><thead><tr><th>From</th><th>Variant</th><th>Asks for</th><th>Plays</th><th>Status</th></tr></thead><tbody>' +
+      rows.map(function (r) { var c = r.resolved ? cueById[r.resolved] : null; return "<tr><td>" + esc(r.from) + "</td><td class=mono>" + esc(r.variant) + "</td><td class=mono>" + esc(r.wants) + "</td><td class=mono>" + esc(r.resolved || "") + "</td><td>" + (c ? badge("s-" + c.status, c.status) : "") + "</td></tr>"; }).join("") +
+      "</tbody></table></div>";
+  }
+  function gaps() {
+    var list = (D.catalogue.gaps || []).filter(function (g) { return matches(g.title + " " + g.detail + " " + g.type); });
+    document.getElementById("count").textContent = list.length + " gaps";
+    return '<div class="table-wrap"><table><thead><tr><th>Gap</th><th>Kind</th><th>Fix</th><th>Where</th></tr></thead><tbody>' +
+      list.map(function (g) { return "<tr><td><b>" + esc(g.title) + "</b><span class=sub>" + esc(g.detail) + "</span></td><td>" + esc(g.type) + "</td><td>" + esc(g.suggested_fix) + "</td><td class=mono>" + esc(g.where) + "</td></tr>"; }).join("") + "</tbody></table></div>";
+  }
+  function problems() {
+    document.getElementById("count").textContent = D.problems.length + " problems";
+    return D.problems.length ? '<div class=problems><ul>' + D.problems.map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("") + "</ul></div>" : '<p>None: every cue the code, the catalogue and the watchers name resolves, and every approved sample has its files.</p>';
+  }
+  var cy = null;
+  function graph() {
+    document.getElementById("count").textContent = "";
+    setTimeout(drawGraph, 0);
+    return '<div class=graph><div id=cy></div><aside class=side id=side><b>Select a dot or a line.</b><span>Dots are what is in the game, lines what happens between them, coloured by whether its sound is made.</span></aside></div>';
+  }
+  function drawGraph() {
+    if (typeof cytoscape === "undefined") { document.getElementById("cy").textContent = "The graph library did not load; the tables carry the same data."; return; }
+    var colors = { done: "#3E6F2E", partial: "#2F5F8F", planned: "#CA8A3B", not_in_manifest: "#E4421A", none: "#9A9A94" };
+    var ents = D.catalogue.entities || [], ints = (D.catalogue.interactions || []).filter(function (i) { var n = neededByInteraction[i.id]; return state.status[n ? n.status : "not_in_manifest"]; });
+    var used = {}; ints.forEach(function (i) { used[i.source] = 1; used[i.target] = 1; });
+    var els = ents.filter(function (e) { return used[e.id]; }).map(function (e) { return { data: { id: e.id, label: e.name, cat: e.category } }; });
+    ints.forEach(function (i) { var n = neededByInteraction[i.id]; els.push({ data: { id: "i:" + i.id, source: i.source, target: i.target, color: colors[n ? n.status : "none"], iid: i.id } }); });
+    cy = cytoscape({ container: document.getElementById("cy"), elements: els, layout: { name: "cose", animate: false, nodeRepulsion: 9000 },
+      style: [ { selector: "node", style: { label: "data(label)", "font-size": 8, width: 10, height: 10, "background-color": "#7C7C75", color: getComputedStyle(document.body).color } },
+               { selector: "edge", style: { width: 1.2, "line-color": "data(color)", "curve-style": "bezier", opacity: 0.7 } } ] });
+    cy.on("tap", "node", function (ev) {
+      var id = ev.target.id(); var mine = (D.catalogue.interactions || []).filter(function (i) { return i.source === id || i.target === id; });
+      document.getElementById("side").innerHTML = "<b>" + esc(ev.target.data("label")) + "</b>" + mine.map(function (i) { var n = neededByInteraction[i.id]; return "<div>" + esc(i.verb) + " → " + esc(i.target) + " " + (n ? badge("s-" + n.status, n.cue) : "") + "</div>"; }).join("");
+    });
+    cy.on("tap", "edge", function (ev) {
+      var i = (D.catalogue.interactions || []).find(function (x) { return x.id === ev.target.data("iid"); }); var n = neededByInteraction[i.id];
+      document.getElementById("side").innerHTML = "<b>" + esc(i.source) + " " + esc(i.verb) + " " + esc(i.target) + "</b><span>" + esc(i.description) + "</span>" + (n ? "<span>" + badge("s-" + n.status, n.status) + " <code>" + esc(n.cue) + "</code> plays as <code>" + esc(n.manifest || n.proposed || "") + "</code></span>" : "");
+    });
+  }
+  function render() {
+    var v = state.view;
+    document.getElementById("view").innerHTML = v === "needed" ? needed() : v === "manifest" ? manifest() : v === "graph" ? graph() : v === "code" ? code() : v === "gaps" ? gaps() : problems();
+  }
+  header();
+  document.getElementById("tabs").addEventListener("click", function (e) { var b = e.target.closest("button"); if (!b) return; state.view = b.dataset.v; document.querySelectorAll("#tabs button").forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); }); render(); });
+  document.getElementById("status-chips").addEventListener("click", function (e) { var b = e.target.closest("button"); if (!b) return; state.status[b.dataset.s] = !state.status[b.dataset.s]; b.setAttribute("aria-pressed", String(state.status[b.dataset.s])); render(); });
+  document.getElementById("q").addEventListener("input", function (e) { state.q = e.target.value.trim().toLowerCase(); render(); });
+  render();
+})();
+</script>
+</body></html>

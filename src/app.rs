@@ -2873,6 +2873,12 @@ impl App {
         let fx_dt = stepped.fx_dt;
         let Shot { camera, establishing, shown_rect, split_view, zoom_split, second_shown, overlay } = shot;
         let steer_right = crate::TOUCH_STEER_RIGHT;
+        // Online, the presses this client drew itself, for their sound to
+        // play at the press (docs/sound-system-prd.md section 4.10).
+        let (presses, predicted) = match (self.session.mode(), self.session.online.as_mut()) {
+            (Driver::Online, Some(round)) => (round.take_press_sounds(), round.draws_own_shots().then(|| round.seat()).flatten()),
+            _ => (Vec::new(), None),
+        };
         let game = self.session.shown();
         // Between the steps and the draw: the particle layer samples the
         // world the round is at (its events it read after each step),
@@ -2893,8 +2899,14 @@ impl App {
         // frame (a local round's were read after every step), then the
         // frame's mix, heard from the views the window shows.
         let audio_stage = crate::frame_stages::stage("audio");
+        self.audio.set_predicted_seat(predicted.map(usize::from));
         if self.session.mode() == Driver::Online {
             self.audio.observe_events(game);
+        }
+        if let Some(seat) = predicted {
+            for press in presses {
+                self.audio.own_press(game, seat as usize, press);
+            }
         }
         let seats = local_seats(&self.session);
         let ears = audio_views(game, &camera, second_shown, &seats);

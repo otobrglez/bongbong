@@ -129,6 +129,12 @@ impl Watchers {
         *self = Watchers::default();
     }
 
+    /// A round left `slot`'s gun now: what an online client's own minigun
+    /// press says before the room's bullets arrive.
+    pub fn round_fired(&mut self, slot: usize, now: f64) {
+        self.last_round.insert(slot, now);
+    }
+
     /// Reads the round once a frame. `own` are the owner slots this window
     /// plays; `now` is the director's clock.
     pub fn sample(&mut self, game: &Game, own: &[usize], now: f64, t: &Tuning, wishes: &mut Vec<Wish>, plays: &mut Vec<Play>) {
