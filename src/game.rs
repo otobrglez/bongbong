@@ -810,8 +810,16 @@ impl Game {
         let cull = c.cull();
         let t = crate::tuning::tuning();
         for pickup in self.world.query::<&Pickup>().iter() {
-            if !culled(cull, pickup.at()) {
-                draw_pickup(c, pickup, self.time, self.shadows_enabled, &t);
+            if culled(cull, pickup.at()) {
+                continue;
+            }
+            // Tossed by a blast and still in the air: drawn on its arc.
+            match self.crate_toss_to(pickup.at()) {
+                Some(toss) => {
+                    let (ground, lift) = toss.arc(t.crate_toss_height_px);
+                    crate::pickup::draw_tossed(c, pickup.kind, ground, lift, pickup.loose.is_some(), self.shadows_enabled, &t);
+                }
+                None => draw_pickup(c, pickup, self.time, self.shadows_enabled, &t),
             }
         }
 

@@ -2023,6 +2023,18 @@ tunables! {
     }
 
     group crates {
+        /// How far round a blast its throw reaches the supply crates, as a
+        /// multiple of its radius (docs/CRATES_SPEC.md "Tossed by a
+        /// blast"): a crate inside is tossed away from it.
+        crate_toss_reach: f32 = 1.6 in 0.0 ..= 5.0;
+        /// How many cells a blast tosses a crate at its centre, falling
+        /// linearly to none at `crate_toss_reach`. A crate stops short of
+        /// deep water, lava, a tile and the field's edge.
+        crate_toss_cells: f32 = 3.0 in 0.0 ..= 10.0;
+        /// Seconds a tossed crate is in the air - nobody takes it until it
+        /// lands - and how high it hops, px.
+        crate_toss_seconds: f32 = 0.5 in 0.05 ..= 3.0;
+        crate_toss_height_px: f32 = 18.0 in 0.0 ..= 120.0;
         /// Seconds from a crate appearing to its landing: the air drop it
         /// comes down in (`crate_fx::drop` - a shadow gathers, the crate
         /// falls into it, squashes and throws a ring of dust). Only the

@@ -751,6 +751,12 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presse
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
                 game.drum_in_flight(from, to, drum as i32);
             }
+            // A crate a blast tossed hops to where it lands on the replica too.
+            WireEvent::CrateTossed { kind, x, y, to_x, to_y } if show.drawn() => {
+                let from = Position::new(dequantise_pos(x), dequantise_pos(y));
+                let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
+                game.crate_in_air(kind, from, to);
+            }
             // A tree a hull hit shakes its crown on the replica too.
             WireEvent::HullStruck { material: Some(m), x, y, nx, ny, speed, .. } if show.drawn() && m.is_tree() => {
                 game.shake_tree(Position::new(dequantise_pos(x), dequantise_pos(y)), Position::new(nx, ny), speed);
@@ -2604,6 +2610,28 @@ mod tests {
             step_and_apply(&mut game, &mut replica);
         }
         assert!(drum(&game).is_none() && drum(&replica).is_none(), "gone on both");
+    }
+
+    /// A crate a blast tosses hops on the replica from where it lay to
+    /// where the room lands it, and lies there afterwards.
+    #[test]
+    fn a_tossed_crate_hops_on_the_replica_and_lies_where_the_room_landed_it() {
+        let map = "version = 1\ntanks = 0\ncells.\"2,2\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"barrel\", drum = \"oil\" }\ncells.\"13,10\" = { kind = \"pickup\", pickup = \"ammo\" }\n";
+        let mut game = quiet_round(map, 7, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_detonate(map::cell_to_world(10, 10)).expect("the drum");
+        step_and_apply(&mut game, &mut replica);
+        let lies = |g: &Game| g.world.query::<&Pickup>().iter().map(|p| p.at()).next().expect("the crate");
+        let to = lies(&game);
+        assert!(to.x > map::cell_to_world(13, 10).x + 24.0, "tossed: {to:?}");
+        assert!(replica.crate_toss_to(lies(&replica)).is_some(), "in the air on the replica");
+        // The arc runs on the replica's own clock between snapshots.
+        for _ in 0..40 {
+            step_and_apply(&mut game, &mut replica);
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(replica.crate_toss_to(lies(&replica)).is_none(), "landed");
+        assert!(lies(&replica).distance_to(to) <= 0.25, "where the room landed it: {:?} for {to:?}", lies(&replica));
     }
 
     #[test]

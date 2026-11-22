@@ -503,6 +503,7 @@ impl Game {
         let t = tuning();
         self.throw_loose(center, params.radius * t.barrel_throw_reach, params.knockback * t.barrel_throw_factor);
         self.blast_crates(f, center, params);
+        self.toss_crates(f, center, params.radius);
     }
 
     /// Knock out every lantern on the ground within `reach` of `center`

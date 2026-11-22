@@ -60,6 +60,105 @@ impl Game {
         queue_breaks(f, broken);
     }
 
+    /// A blast at `center` of `radius` tossing the supply crates round it
+    /// (docs/CRATES_SPEC.md "Tossed by a blast"): every pickup on the
+    /// ground within `crate_toss_reach` of the radius is thrown straight
+    /// away from the centre, `crate_toss_cells` at the centre falling
+    /// linearly to none at the reach, and lands at the last clear spot on
+    /// that line (`crate_lands_clear`) - short of deep water, lava, a tile
+    /// or the field's edge. It keeps its slot and lies at its new place
+    /// from now on (`Pickup::drift`, what the seeks and the collection
+    /// read), but nobody takes it while it is in the air
+    /// (`Pickup::airborne`). `Event::CrateTossed` says so; the arc is a
+    /// `CrateToss` the painters read. In position order; no RNG.
+    pub(super) fn toss_crates(&mut self, f: &mut Frame, center: Position, radius: f32) {
+        let t = tuning();
+        let reach = radius * t.crate_toss_reach;
+        let most = t.crate_toss_cells * crate::OBSTACLE_GRID_SIZE;
+        if reach <= 0.0 || most <= 0.0 {
+            return;
+        }
+        let mut tossed: Vec<(Entity, Position, Position)> = Vec::new();
+        for (entity, pickup) in self.world.query::<(Entity, &Pickup)>().iter() {
+            if pickup.airborne > 0.0 {
+                continue;
+            }
+            let from = pickup.at();
+            let line = from - center;
+            let dist = line.length();
+            if dist > reach {
+                continue;
+            }
+            let dir = if dist > 0.001 { line / dist } else { crate::math::Vec2::new(0.0, -1.0) };
+            let want = most * (1.0 - dist / reach);
+            let to = self.crate_landing(f, from, dir, want);
+            if to.distance_to(from) >= CRATE_TOSS_MIN_PX {
+                tossed.push((entity, from, to));
+            }
+        }
+        tossed.sort_by(|a, b| a.1.y.total_cmp(&b.1.y).then(a.1.x.total_cmp(&b.1.x)));
+        for (entity, from, to) in tossed {
+            let Ok(mut pickup) = self.world.get::<&mut Pickup>(entity) else { continue };
+            pickup.drift = pickup.drift + (to - from);
+            pickup.slide = crate::math::Vec2::zero();
+            pickup.airborne = t.crate_toss_seconds;
+            let kind = pickup.kind;
+            drop(pickup);
+            f.events.push(Event::CrateTossed { kind, x: from.x, y: from.y, to_x: to.x, to_y: to.y });
+            self.crate_in_air(kind, from, to);
+        }
+    }
+
+    /// Put a tossed crate's arc up, from `from` to `to`: the round as it
+    /// tosses one, a replica from `Event::CrateTossed`.
+    pub(crate) fn crate_in_air(&mut self, kind: PickupKind, from: Position, to: Position) {
+        self.crate_tosses.retain(|c| c.flying());
+        self.crate_tosses.push(crate::pickup::CrateToss { kind, from, to, age: 0.0, total: tuning().crate_toss_seconds });
+    }
+
+    /// Age the tossed crates' arcs by `dt`, dropping the ones that landed.
+    pub(crate) fn age_crate_tosses(&mut self, dt: f32) {
+        for toss in &mut self.crate_tosses {
+            toss.age += dt;
+        }
+        self.crate_tosses.retain(|c| c.flying());
+    }
+
+    /// The arc of the crate in the air landing at `at`, if one is.
+    pub fn crate_toss_to(&self, at: Position) -> Option<crate::pickup::CrateToss> {
+        self.crate_tosses.iter().rev().find(|c| c.flying() && c.to.distance_to(at) < 0.5).copied()
+    }
+
+    /// Where a crate tossed from `from` along the unit `dir` for `want` px
+    /// comes down: the furthest point on that line, in `CRATE_TOSS_STEP_PX`
+    /// steps, that it reaches with every step before it clear
+    /// (`crate_lands_clear`); `from` if the first step is not.
+    fn crate_landing(&self, f: &Frame, from: Position, dir: crate::math::Vec2, want: f32) -> Position {
+        let solid: HashSet<(i32, i32)> =
+            self.world.query::<&crate::obstacle::Obstacle>().iter().filter(|o| !o.destroyed && !o.material.is_loose()).map(|o| o.cell()).collect();
+        let steps = (want / CRATE_TOSS_STEP_PX).floor() as i32;
+        let mut landed = from;
+        for k in 1..=steps {
+            let at = from + dir * (k as f32 * CRATE_TOSS_STEP_PX);
+            if !self.crate_lands_clear(&solid, at, f.width, f.height) {
+                break;
+            }
+            landed = at;
+        }
+        landed
+    }
+
+    /// Whether a crate may come down at `at`: inside the field by half a
+    /// cell, on no fixed tile's cell, in no deep water and on no lava.
+    fn crate_lands_clear(&self, solid: &HashSet<(i32, i32)>, at: Position, width: f32, height: f32) -> bool {
+        let inset = crate::OBSTACLE_GRID_SIZE * 0.5;
+        (inset..=width - inset).contains(&at.x)
+            && (inset..=height - inset).contains(&at.y)
+            && !solid.contains(&world_to_cell(at))
+            && self.water.depth_at(at) != crate::ground::Depth::Deep
+            && self.lava.depth_at(at) == crate::ground::Depth::Dry
+    }
+
     /// Once a frame, before `explosions`: the crates' fire and the loose
     /// pickups' clocks. A crate catches under the flamethrower once its
     /// cell has had `crate_ignite_seconds` of heat, or at once on a
@@ -72,6 +171,7 @@ impl Game {
         let mut gone: Vec<Entity> = Vec::new();
         let mut broken: Vec<(Position, Entity)> = Vec::new();
         for (entity, pickup) in self.world.query::<(Entity, &mut Pickup)>().iter() {
+            pickup.airborne = (pickup.airborne - f.dt).max(0.0);
             if let Some(left) = pickup.loose.as_mut() {
                 *left -= f.dt;
                 if *left <= 0.0 {
@@ -103,6 +203,7 @@ impl Game {
             self.world.despawn(entity).ok();
         }
         queue_breaks(f, broken);
+        self.age_crate_tosses(f.dt);
     }
 
     /// Break the crate `entity` (from `explosions`' worklist): it cooks off
@@ -171,6 +272,12 @@ impl Game {
         crate::grass::flatten(&mut self.grass, center, cookoff_params().radius * t.blast_grass_flatten);
     }
 }
+
+/// How far a toss must carry a crate for it to leave the ground, px.
+const CRATE_TOSS_MIN_PX: f32 = 4.0;
+
+/// The step a toss's landing is searched along its line in, px.
+const CRATE_TOSS_STEP_PX: f32 = 2.0;
 
 /// A crate cooking off: an oil drum's blast scaled by `crate_cookoff_scale`.
 fn cookoff_params() -> BlastParams {

@@ -636,6 +636,9 @@ pub enum Event {
     /// What the jolt, the chips and dust and a tree's shaking crown are
     /// drawn from.
     HullStruck { slot: usize, material: Option<Material>, surface: crate::obstacle::Surface, x: f32, y: f32, nx: f32, ny: f32, speed: f32, bounced: bool },
+    /// A blast tossed a `kind` crate from (`x`, `y`) to (`to_x`, `to_y`),
+    /// where it lands (docs/CRATES_SPEC.md "Tossed by a blast").
+    CrateTossed { kind: PickupKind, x: f32, y: f32, to_x: f32, to_y: f32 },
     /// `slot` took a `kind` pickup at (`x`, `y`) - where its opening plays
     /// (`fx::CrateOpen`). `spilled`: it was a broken crate's contents lying
     /// loose (`Pickup::loose`), so there was no crate left to open.
@@ -1321,6 +1324,9 @@ pub struct Game {
     /// Tree crowns swinging from a hull's hit (`contact::TreeShake`):
     /// presentation the painters read, oldest first.
     pub(crate) tree_shakes: Vec<TreeShake>,
+    /// Supply crates in the air after a blast tossed them
+    /// (`crates::toss_crates`): presentation the painters read.
+    pub(crate) crate_tosses: Vec<crate::pickup::CrateToss>,
     /// The volcanoes on the field (docs/volcano.md), one per crater cell
     /// in the map's order (`volcano::build_volcanoes`).
     pub(crate) volcanoes: Vec<crate::volcano::Volcano>,
@@ -1807,6 +1813,7 @@ impl Game {
         self.portals.clear();
         self.flying_drums.clear();
         self.tree_shakes.clear();
+        self.crate_tosses.clear();
         self.lava_bombs.clear();
         self.lanterns.clear();
         self.lantern_next_id = 0;
@@ -3390,6 +3397,7 @@ impl Game {
         // rest. A lava bomb the same.
         self.age_flying_drums(dt);
         self.age_lava_bombs(dt);
+        self.age_crate_tosses(dt);
         // A grenade's fuse runs down on the replica's own clock, so its
         // lamp blinks smoothly between snapshots; the room's blast is what
         // ends it.
@@ -3627,6 +3635,8 @@ impl Game {
         // In cell order: a crate taken may draw the RNG (a laser's colour).
         let collected: Vec<(Entity, Entity, PickupKind, Position, bool)> = ordered(self.world.query::<(Entity, &Pickup)>().iter(), |(_, p)| cell_order(p.position))
             .into_iter()
+            // A crate a blast tossed is taken once it lands.
+            .filter(|(_, pickup)| pickup.airborne <= 0.0)
             .filter_map(|(pickup_entity, pickup)| {
                 living_tanks
                     .iter()
