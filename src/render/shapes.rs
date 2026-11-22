@@ -86,8 +86,8 @@ mod tests {
     /// a sheet as tall as the walls'.
     #[test]
     fn a_sheet_twice_as_tall_keeps_every_sample() {
-        let h = 1056.0f32;
-        for half in 0..=(2 * 1056) {
+        let h = 1344.0f32;
+        for half in 0..=(2 * 1344) {
             let y = half as f32 / 2.0;
             let (alone, doubled) = (y / h, y / (h * 2.0));
             assert_eq!(doubled, alone / 2.0, "row {y}");

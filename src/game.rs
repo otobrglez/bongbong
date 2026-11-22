@@ -15,7 +15,7 @@ use crate::canvas::Canvas;
 use crate::decal::draw_decal_kept;
 use crate::bong::{draw_bong, draw_bong_ring};
 use crate::math::Color;
-use crate::obstacle::{draw_obstacle, draw_obstacle_cap, draw_obstacle_shadow, draw_oil_cell, draw_oil_print, draw_tree, draw_tree_shadow, fence_axis, tree_lean, Material, Obstacle};
+use crate::obstacle::{draw_obstacle, draw_obstacle_cap, draw_obstacle_shadow, draw_oil_cell, draw_oil_print, draw_tree, draw_tree_shadow, fence_axis, tree_lean, Material, Obstacle, TileLook};
 use crate::pickup::{draw_pickup, Pickup};
 use crate::portal::draw_portal;
 use crate::simulation::Game;
@@ -304,10 +304,11 @@ pub fn is_tile(obstacle: &Obstacle) -> bool {
 /// one: its drop shadow while `shadows`, the tile at its variant, then
 /// the lighting along whichever of its faces face open ground, so a run
 /// of tiles reads as one structure rather than as a grid. `fences` is
-/// every fence's cell, which way each runs (`fence_axis`). The round's
-/// tiles (`Game::paint_tiles`) and the builder's canvas (`editor::still`)
-/// are drawn by this one loop, under the knobs `t`. Each tile the canvas
-/// culls is left out.
+/// every fence's cell, which way each runs (`fence_axis`); `look` is how
+/// the biome dresses them (`TileLook`). The round's tiles
+/// (`Game::paint_tiles`) and the builder's canvas (`editor::still`) are
+/// drawn by this one loop, under the knobs `t`. Each tile the canvas culls
+/// is left out.
 pub fn paint_tile_run<'a>(
     c: &mut impl Canvas,
     tiles: impl Iterator<Item = &'a Obstacle>,
@@ -315,6 +316,7 @@ pub fn paint_tile_run<'a>(
     shadows: bool,
     time: f32,
     t: &crate::tuning::Tuning,
+    look: TileLook,
 ) {
     for obstacle in tiles {
         if c.culls(obstacle.position) {
@@ -322,10 +324,10 @@ pub fn paint_tile_run<'a>(
         }
         let axis = fence_axis(obstacle, fences);
         if shadows {
-            draw_obstacle_shadow(c, obstacle, axis, t);
+            draw_obstacle_shadow(c, obstacle, axis, t, look);
         }
-        draw_obstacle(c, obstacle, axis, time);
-        draw_obstacle_cap(c, obstacle);
+        draw_obstacle(c, obstacle, axis, time, look);
+        draw_obstacle_cap(c, obstacle, look);
     }
 }
 
@@ -613,7 +615,7 @@ impl Game {
             if !c.culls(decal.center) {
                 let kind = if decal.upright { crate::smoulder::Kind::Stump } else { crate::smoulder::Kind::Ruin };
                 let cold = if decal.hot { self.cold_for(kind, decal.age, &t) } else { decal.age };
-                draw_decal_kept(c, decal, self.snow_keep(cold, &t));
+                draw_decal_kept(c, decal, self.snow_keep(cold, &t), self.tile_look());
             }
         }
         // What the fight left smouldering on the ground, and the snow over
@@ -693,6 +695,13 @@ impl Game {
         }
     }
 
+    /// How the round's biome dresses its walls, fences and their rubble
+    /// (`TileLook`): read off the ground it is drawn over, never by
+    /// anything that plays.
+    pub fn tile_look(&self) -> TileLook {
+        TileLook::of(self.ground.biome())
+    }
+
     /// The tiles: every wall and prop with its shadow and edge cap. Trees
     /// are not tiles here - their canopies belong over the tanks, so they
     /// close `paint_standing` instead.
@@ -731,7 +740,7 @@ impl Game {
         // What stands in the canvas's part of the field, in the world's
         // order.
         self.with_obstacles_in(cull, |shown| {
-            paint_tile_run(c, shown.iter().copied().filter(|o| is_tile(o)), fences, self.shadows_enabled, self.time, &t);
+            paint_tile_run(c, shown.iter().copied().filter(|o| is_tile(o)), fences, self.shadows_enabled, self.time, &t, self.tile_look());
             // Training doors and flags (docs/training-stage.md): drawn by
             // their own code, doors with the tiles, flags standing on the
             // ground beside them.

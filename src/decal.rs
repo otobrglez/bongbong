@@ -22,7 +22,7 @@
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::Canvas;
-use crate::obstacle::{Material, Sheet};
+use crate::obstacle::{Material, Sheet, TileLook};
 use crate::tuning::tuning;
 use crate::{Position, RUBBLE_VARIANTS};
 
@@ -159,13 +159,15 @@ impl Decal {
 /// Draw one settled decal. Mirrored and quarter-turned by its seed so a
 /// levelled wall doesn't read as a row of clones; quarter-turns keep the
 /// pixels square, exactly like `blast::draw_scorch`.
-pub fn draw_decal(c: &mut impl Canvas, decal: &Decal) {
-    draw_decal_kept(c, decal, 1.0);
+/// `look` dresses the rubble as the tiles it came from are drawn
+/// (`TileLook::walls_row`): the row stays what the simulation froze.
+pub fn draw_decal(c: &mut impl Canvas, decal: &Decal, look: TileLook) {
+    draw_decal_kept(c, decal, 1.0, look);
 }
 
 /// `draw_decal` with `keep` (0 to 1) of its strength, in eighths: what
 /// snow lying over it leaves showing (docs/aftermath.md).
-pub fn draw_decal_kept(c: &mut impl Canvas, decal: &Decal, keep: f32) {
+pub fn draw_decal_kept(c: &mut impl Canvas, decal: &Decal, keep: f32, look: TileLook) {
     let keep = crate::pyro::eighths(keep);
     if keep <= 0.0 {
         return;
@@ -176,7 +178,8 @@ pub fn draw_decal_kept(c: &mut impl Canvas, decal: &Decal, keep: f32) {
     }
     let cell = decal.sheet.cell();
     let flip = if decal.seed & 1 != 0 { -1.0 } else { 1.0 };
-    let src = Rectangle::new(decal.col as f32 * cell, decal.row as f32 * cell, cell * flip, cell);
+    let row = if decal.sheet == Sheet::Walls { look.walls_row(decal.row) } else { decal.row };
+    let src = Rectangle::new(decal.col as f32 * cell, row as f32 * cell, cell * flip, cell);
     let size = cell * crate::OBSTACLE_SCALE;
     let rotation = ((decal.seed >> 1) % 4) as f32 * 90.0;
     // A piece still in the air is drawn solid: it is a lump of debris in

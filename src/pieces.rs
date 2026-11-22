@@ -20,7 +20,7 @@ use rand::RngExt;
 use crate::canvas::{Canvas, Sheet};
 use crate::chunks::{chunk_offset, origin, CHUNKS, CHUNK_PX};
 use crate::math::{Color, Rectangle, Vec2};
-use crate::obstacle::Material;
+use crate::obstacle::{Material, TileLook};
 use crate::tuning::tuning;
 use crate::{OBSTACLE_TEXTURE_SIZE, Position};
 
@@ -109,14 +109,17 @@ impl Pieces {
     /// `center` come apart: each splits into pieces that mostly leave along
     /// `dir` (the blow's way, zero for none), a third sprayed back off the
     /// struck face - or, when the tile `collapsed`, drop where they stood.
-    pub fn throw(&mut self, material: Material, variant: i32, center: Position, broken: u16, dir: Vec2, collapsed: bool) {
-        self.spill(material, variant, center, broken, dir, collapsed, Color::WHITE);
+    /// Each is cut from the tile as `look` draws it, so masonry breaks into
+    /// masonry (`TileLook`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn throw(&mut self, material: Material, variant: i32, center: Position, broken: u16, dir: Vec2, collapsed: bool, look: TileLook) {
+        self.spill(material, variant, center, broken, dir, collapsed, Color::WHITE, look);
     }
 
     /// The chunks in `broken` of the burning plank wall centred on
     /// `center` charred through: they slump where they stood as ash.
     pub fn char_away(&mut self, center: Position, broken: u16) {
-        self.spill(Material::Wood, 0, center, broken, Vec2::zero(), true, ASH);
+        self.spill(Material::Wood, 0, center, broken, Vec2::zero(), true, ASH, TileLook::PLAIN);
     }
 
     /// An ember thrown from `from` that lands on `to`.
@@ -127,7 +130,7 @@ impl Pieces {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn spill(&mut self, material: Material, variant: i32, center: Position, broken: u16, dir: Vec2, collapsed: bool, tint: Color) {
+    fn spill(&mut self, material: Material, variant: i32, center: Position, broken: u16, dir: Vec2, collapsed: bool, tint: Color, look: TileLook) {
         if !material.is_wall() || broken == 0 {
             return;
         }
@@ -137,7 +140,7 @@ impl Pieces {
             return;
         }
         let mut rng = rand::rng();
-        let row = material.row_base() + variant;
+        let row = look.walls_row(material.row_base() + variant);
         let o = origin(center);
         let wood = material == Material::Wood;
         let across = grain_across(variant);
@@ -363,7 +366,7 @@ mod tests {
     #[test]
     fn pieces_fly_land_and_go() {
         let mut p = Pieces::default();
-        p.throw(Material::Brick, 0, Position::new(64.0, 64.0), 0b11, Vec2::new(1.0, 0.0), false);
+        p.throw(Material::Brick, 0, Position::new(64.0, 64.0), 0b11, Vec2::new(1.0, 0.0), false, TileLook::PLAIN);
         assert!(!p.is_empty());
         let n = p.len();
         for _ in 0..120 {
@@ -420,7 +423,7 @@ mod tests {
     #[test]
     fn only_walls_throw_pieces() {
         let mut p = Pieces::default();
-        p.throw(Material::Sandbag, 0, Position::new(64.0, 64.0), 0xFF, Vec2::zero(), true);
+        p.throw(Material::Sandbag, 0, Position::new(64.0, 64.0), 0xFF, Vec2::zero(), true, TileLook::PLAIN);
         assert!(p.is_empty());
     }
 }

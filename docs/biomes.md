@@ -146,9 +146,17 @@ rules are BB-62.
   ploughed in furrows every 6 px that run along the fence. Nothing is
   authored, so every map with a biome gets them; `GroundGrid::set_places`
   holds them, and the round and the builder set them from the map.
-- **Split off:** the farm wall's masonry cap and the fence's wire-and-post
-  look, which need new rows on the walls sheet through every damage state
-  (BB-203).
+- **Masonry and the post fence** (BB-203). A biome that dresses its
+  built tiles (`Biome::dresses_tiles`; the valley does) draws every brick
+  wall as pale dressed limestone and every fence as one slender run of wire
+  between square post caps, through every state: whole, struck, breached,
+  given way, and the rubble and pieces it leaves. The row is picked at
+  draw time (`obstacle::TileLook`, read off the ground by
+  `Game::tile_look` and the builder's canvas); the material, its health,
+  its chunks and the rubble decal the simulation lays are brick's and the
+  fence's, so a round plays the same plain or dressed
+  (`props_tests::a_dressed_wall_and_fence_play_and_break_exactly_as_plain_ones`).
+  The art is rows 33-41 of the walls sheet (docs/WALLS_SPEC.md §14).
 
 ### Weather (stage 4, BB-196)
 

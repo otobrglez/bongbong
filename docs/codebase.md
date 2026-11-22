@@ -1256,7 +1256,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   their idle is a colour shimmer, not motion, and a ram lean shifts whole 2 px bands. On a desert map
   every species but the palm is drawn from the sheet's dry half (`Material::is_dry`, `Obstacle::dry`,
   `TREE_DRY_COL`), rolls `dry_tree_flammable_chance` at spawn and leaves dry litter; a snag is dry
-  anywhere. The edge-cap
+  anywhere. **`TileLook`** is how a biome dresses the built tiles at draw time - brick as masonry,
+  a fence as post and wire (`walls_row`, docs/WALLS_SPEC.md §14): every painter of a tile, its cap,
+  its pieces and its rubble takes one (`Game::tile_look`), and nothing that plays reads it. The edge-cap
   neighbour mask is cached and refreshed by `Game::refresh_edge_masks` on destruction. A barrel's
   `variant` is its `Drum`. **`Looks`** is how a round dressed its map - each wall material's one
   variant, each prop's and tree's by cell, the ground's seed (`battlefield::spawn_from_map` and

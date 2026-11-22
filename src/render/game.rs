@@ -1379,7 +1379,7 @@ impl Game {
                     } else {
                         let fences: std::collections::HashSet<(i32, i32)> =
                             self.world.query::<&Obstacle>().iter().filter(|f| f.material == crate::obstacle::Material::Fence).map(|f| f.cell()).collect();
-                        crate::obstacle::draw_obstacle_tinted(c, o, crate::obstacle::fence_axis(o, &fences), self.time, tint);
+                        crate::obstacle::draw_obstacle_tinted(c, o, crate::obstacle::fence_axis(o, &fences), self.time, tint, self.tile_look());
                     }
                 }
             }
@@ -2124,7 +2124,7 @@ impl Game {
         {
             let mut c = GpuCanvas::new(d, textures);
             for decal in flying() {
-                draw_decal(&mut c, decal);
+                draw_decal(&mut c, decal, self.tile_look());
             }
             // Launched fuel drums, tumbling over the lot on their way to
             // where they go off.

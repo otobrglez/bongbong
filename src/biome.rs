@@ -69,6 +69,13 @@ impl Biome {
             Biome::Valley => &VALLEY,
         }
     }
+
+    /// Whether this biome dresses the built tiles (`obstacle::TileLook`):
+    /// brick drawn as pale masonry and every fence as post and wire, on
+    /// the valley's farms (BB-203). Picture only, like the rest of a look.
+    pub fn dresses_tiles(self) -> bool {
+        matches!(self, Biome::Valley)
+    }
 }
 
 /// The biome a round is drawn in: the map's own, unless `biome_override`
