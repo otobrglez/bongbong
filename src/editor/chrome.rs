@@ -997,8 +997,11 @@ enum Pack {
     /// after it. `rows[k]` is shelf `k`'s first row.
     Stacked { rows: [usize; SHELVES], total: usize },
     /// One run of cells, `width` to a row: shelf `k`'s name starts
-    /// `starts[k]` cells into the run and its tools follow.
-    Flow { width: usize, starts: [usize; SHELVES], total: usize },
+    /// `starts[k]` cells into the run and its tools follow, and the
+    /// brush's name `brush` cells in, its cells after it on the same row -
+    /// on the shelves' last row where they fit, so a phone's palette is a
+    /// row shorter.
+    Flow { width: usize, starts: [usize; SHELVES], brush: usize, total: usize },
 }
 
 impl Palette {
@@ -1020,9 +1023,9 @@ impl Palette {
         let flowing = |split: bool| {
             let cell = crate::hud::UI_TOUCH_PT;
             let width = ((room.width / cell).floor() as usize).max(NAME_CELLS + BrushRow::ALL.len());
-            let (starts, total) = Self::flow(width, split);
-            let (w, h) = (width as f32 * cell, (total + 1) as f32 * cell);
-            Palette { panel: hang(w, h), per_row: width, cell, pack: Pack::Flow { width, starts, total }, split }
+            let (starts, brush, total) = Self::flow(width, split);
+            let (w, h) = (width as f32 * cell, total as f32 * cell);
+            Palette { panel: hang(w, h), per_row: width, cell, pack: Pack::Flow { width, starts, brush, total }, split }
         };
         stacked(true)
             .or_else(|| stacked(false))
@@ -1048,8 +1051,9 @@ impl Palette {
     }
 
     /// The shelves as one run of cells `width` to a row - a name never
-    /// split from its first tool - and the rows the run takes.
-    fn flow(width: usize, split: bool) -> ([usize; SHELVES], usize) {
+    /// split from its first tool - then the brush's name and cells, never
+    /// split across a row: where each starts, and the rows the run takes.
+    fn flow(width: usize, split: bool) -> ([usize; SHELVES], usize, usize) {
         let mut starts = [0; SHELVES];
         let mut at = 0;
         for (k, shelf) in Shelf::all(split).iter().enumerate() {
@@ -1059,7 +1063,13 @@ impl Palette {
             starts[k] = at;
             at += NAME_CELLS + shelf.span().1;
         }
-        (starts, at.div_ceil(width))
+        let brush_cells = NAME_CELLS + BrushRow::ALL.len();
+        if at % width + brush_cells > width {
+            at = at.div_ceil(width) * width;
+        }
+        let brush = at;
+        at += brush_cells;
+        (starts, brush, at.div_ceil(width))
     }
 
     /// Row `index`: the shelves', then the brush's.
@@ -1131,23 +1141,39 @@ impl Palette {
         }
     }
 
-    /// The brush's row, under the shelves'.
+    /// The brush's row: under the shelves', or the row of a flowing
+    /// palette's run its cells stand on.
     pub fn brush_row(&self) -> Rectangle {
         match self.pack {
-            Pack::Stacked { total, .. } | Pack::Flow { total, .. } => self.row_at(total),
+            Pack::Stacked { total, .. } => self.row_at(total),
+            Pack::Flow { width, brush, .. } => self.row_at(brush / width),
         }
     }
 
-    /// The brush row's name, at its left.
+    /// The brush's name: at its row's left, or where its cells start in a
+    /// flowing palette's run.
     pub fn brush_label(&self) -> Rectangle {
-        let row = self.brush_row();
-        Rectangle::new(row.x, row.y, PALETTE_LABEL_W, row.height)
+        match self.pack {
+            Pack::Stacked { .. } => {
+                let row = self.brush_row();
+                Rectangle::new(row.x, row.y, PALETTE_LABEL_W, row.height)
+            }
+            Pack::Flow { width, brush, .. } => {
+                let at = self.run_cell(width, brush);
+                Rectangle::new(at.x, at.y, PALETTE_LABEL_W, at.height)
+            }
+        }
     }
 
-    /// The brush row's `i`th cell (`BrushRow::ALL`).
+    /// The brush's `i`th cell (`BrushRow::ALL`).
     pub fn brush_cell(&self, i: usize) -> Rectangle {
-        let row = self.brush_row();
-        Rectangle::new(row.x + PALETTE_LABEL_W + i as f32 * self.cell, row.y, self.cell, self.cell)
+        match self.pack {
+            Pack::Stacked { .. } => {
+                let row = self.brush_row();
+                Rectangle::new(row.x + PALETTE_LABEL_W + i as f32 * self.cell, row.y, self.cell, self.cell)
+            }
+            Pack::Flow { width, brush, .. } => self.run_cell(width, brush + NAME_CELLS + i),
+        }
     }
 }
 

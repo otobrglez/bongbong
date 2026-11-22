@@ -2057,7 +2057,16 @@ fn draw_cell<D: RaylibDraw>(d: &mut D, textures: &EditorTextures, field: (f32, f
             let src = obstacle::drum_source_rec(drum);
             d.draw_texture_pro(textures.sheets.props, src, dest, origin, 0.0, tint);
         }
-        CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence | CellObject::Target => {
+        CellObject::Wall { .. }
+        | CellObject::Sandbag
+        | CellObject::Barrel { .. }
+        | CellObject::Fence
+        | CellObject::Target
+        | CellObject::Tyres
+        | CellObject::Hay
+        | CellObject::WoodCrate
+        | CellObject::Barrier
+        | CellObject::TankTrap => {
             // At the sheet's own cell size: the cell for a wall or a prop,
             // a range board's 44px, so its overhang matches a round.
             let material = obj.material().expect("solid cells have a material");

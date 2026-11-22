@@ -136,7 +136,33 @@ pub enum Material {
     /// A dead snag: a grey trunk and bare limbs. Hides nothing, snaps at a
     /// touch, and is tinder on any map (`is_dry`).
     Snag,
+    /// A stack of tyres (docs/sandbags-barrels-fences.md "New props"):
+    /// fixed, and springy - a hull rebounds off it (`Surface::Springy`).
+    /// Shots wear it to a slumped stack, then it goes.
+    #[serde(rename = "tyres")]
+    Tyres,
+    /// A hay bale: loose like a drum but heavier, soft, and it burns - a
+    /// flame or a blast lights it and it burns out to ash.
+    #[serde(rename = "hay")]
+    Hay,
+    /// A wooden crate - not a supply crate, a box: loose, and a shot or a
+    /// hard knock splinters it.
+    #[serde(rename = "wood_crate")]
+    WoodCrate,
+    /// A concrete jersey barrier: loose but so heavy only a sustained push
+    /// shifts it, slowly; it stops shots as concrete does.
+    #[serde(rename = "barrier")]
+    Barrier,
+    /// A tank trap, a steel hedgehog: fixed, the hardest thing on the field
+    /// to drive into, and a shot passes between its beams more often than
+    /// not.
+    #[serde(rename = "tank_trap")]
+    TankTrap,
 }
+
+/// Every prop the soft and loose physics brought (BB-209), in sheet row
+/// order: the map kinds, the builder's palette and the tests walk this.
+pub const NEW_PROPS: [Material; 5] = [Material::Tyres, Material::Hay, Material::WoodCrate, Material::Barrier, Material::TankTrap];
 
 /// Every tree species, in sheet row order - the map kinds, the builder's
 /// palette and the tests walk this rather than spelling the list again.
@@ -185,6 +211,7 @@ impl Material {
     pub fn sheet(self) -> Sheet {
         match self {
             Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
+            m if NEW_PROPS.contains(&m) => Sheet::Props,
             Material::Target => Sheet::Target,
             Material::Tree
             | Material::Pine
@@ -232,6 +259,11 @@ impl Material {
             // A tower's rows depend on its side as well (`tower::base_row`).
             Material::Tesla | Material::GunTower | Material::BioSlush => 0,
             Material::Volcano | Material::Lamp | Material::Door => 0,
+            Material::Tyres => crate::PROPS_TYRES_ROW,
+            Material::Hay => crate::PROPS_HAY_ROW,
+            Material::WoodCrate => crate::PROPS_CRATE_ROW,
+            Material::Barrier => crate::PROPS_BARRIER_ROW,
+            Material::TankTrap => crate::PROPS_TRAP_ROW,
         }
     }
 
@@ -247,6 +279,7 @@ impl Material {
             m if m.is_tree() => TREE_VARIANTS,
             Material::Tesla | Material::GunTower | Material::BioSlush => 1,
             Material::Volcano | Material::Lamp | Material::Door | Material::Target => 1,
+            m if NEW_PROPS.contains(&m) => 1,
             _ => 4,
         }
     }
@@ -280,6 +313,11 @@ impl Material {
             // Never spent: `Obstacle::damage` turns every blow away.
             Material::Volcano | Material::Door => 1.0,
             Material::Lamp => tuning().lamp_max_health,
+            Material::Tyres => tuning().tyres_max_health,
+            Material::Hay => tuning().hay_max_health,
+            Material::WoodCrate => tuning().wood_crate_max_health,
+            Material::Barrier => tuning().barrier_max_health,
+            Material::TankTrap => tuning().tank_trap_max_health,
         }
     }
 
@@ -315,6 +353,16 @@ impl Material {
             // Intact, scuffed, damaged, critical; the ruin is a decal.
             Material::Tesla | Material::GunTower | Material::BioSlush => 4,
             Material::Volcano | Material::Lamp | Material::Door => 1,
+            // Intact, slumped.
+            Material::Tyres => 2,
+            // Intact, torn; its burn is col 3 (`Obstacle::col`).
+            Material::Hay => 2,
+            // Intact, split.
+            Material::WoodCrate => 2,
+            // Intact, chipped, cracked to the rebar.
+            Material::Barrier => 3,
+            // Intact, bent.
+            Material::TankTrap => 2,
         }
     }
 
@@ -336,8 +384,13 @@ impl Material {
                 if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD },
             )),
             Material::Glass => Some((Sheet::Walls, RUBBLE_ROW_GLASS)),
-            Material::Concrete => Some((Sheet::Walls, RUBBLE_ROW_CONCRETE)),
-            Material::Sandbag => Some((Sheet::Walls, RUBBLE_ROW_SANDBAG)),
+            // A barrier leaves concrete's rubble, a bale the sand's straw.
+            Material::Concrete | Material::Barrier => Some((Sheet::Walls, RUBBLE_ROW_CONCRETE)),
+            Material::Sandbag | Material::Hay => Some((Sheet::Walls, RUBBLE_ROW_SANDBAG)),
+            // A crate's planks are timber.
+            Material::WoodCrate => Some((Sheet::Walls, if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD })),
+            // Tyres and a tank trap leave nothing a rubble tile draws.
+            Material::Tyres | Material::TankTrap => None,
             Material::Barrel => Some((Sheet::Walls, RUBBLE_ROW_BARREL)),
             Material::Fence => Some((Sheet::Walls, RUBBLE_ROW_FENCE)),
             Material::Tree
@@ -425,6 +478,8 @@ impl Material {
     pub fn flammable_chance(self, dry: bool) -> f64 {
         match self {
             Material::Wood => tuning().wood_flammable_chance,
+            // Hay always burns.
+            Material::Hay => 1.0,
             m if m.is_tree() && dry => tuning().dry_tree_flammable_chance,
             m if m.is_tree() => tuning().tree_flammable_chance,
             _ => 0.0,
@@ -451,7 +506,7 @@ impl Material {
     /// Wood and trees catch from the stream by their own rule
     /// (`Game::resolve_flames`) and from the ground by their roll.
     pub fn catches_fire(self) -> bool {
-        self == Material::Target
+        matches!(self, Material::Target | Material::Hay)
     }
 
     /// How long a tile of this material burns before it chars out:
@@ -485,7 +540,19 @@ impl Material {
     pub fn blocks_sight(self) -> bool {
         // A fir sapling is below a hull's eye line, a palm's crown is a few
         // fronds on a pole and a snag is bare limbs.
-        !matches!(self, Material::Sandbag | Material::Fence | Material::Lamp | Material::Fir | Material::Palm | Material::Snag)
+        !matches!(
+            self,
+            Material::Sandbag
+                | Material::Fence
+                | Material::Lamp
+                | Material::Fir
+                | Material::Palm
+                | Material::Snag
+                | Material::Tyres
+                | Material::Hay
+                | Material::WoodCrate
+                | Material::TankTrap
+        )
     }
 
     /// Whether this tile throws a shadow in the weather's light map
@@ -535,6 +602,10 @@ impl Material {
             Material::Fir => t.sapling_pass_over_chance,
             Material::Palm => t.palm_pass_over_chance,
             Material::Snag => t.snag_pass_over_chance,
+            Material::Tyres => t.tyres_pass_over_chance,
+            Material::Hay => t.hay_pass_over_chance,
+            Material::WoodCrate => t.wood_crate_pass_over_chance,
+            Material::TankTrap => t.tank_trap_pass_over_chance,
             _ => 0.0,
         }
     }
@@ -579,7 +650,7 @@ impl Material {
     /// no wall in the nav grid and is drawn from its interpolated pose. A
     /// barrel.
     pub fn is_loose(self) -> bool {
-        self == Material::Barrel
+        matches!(self, Material::Barrel | Material::Hay | Material::WoodCrate | Material::Barrier)
     }
 
     /// How a hull meets this tile (`Surface`, docs/physics-engine-design.md
@@ -598,9 +669,47 @@ impl Material {
             | Material::Palm
             | Material::Barrel => Surface::Firm,
             Material::Birch | Material::Willow | Material::Snag => Surface::Yielding,
-            Material::Sandbag | Material::Fence | Material::Lamp | Material::Target => Surface::Soft,
+            Material::Sandbag | Material::Fence | Material::Lamp | Material::Target | Material::Hay => Surface::Soft,
+            Material::Tyres => Surface::Springy,
+            Material::TankTrap => Surface::Hardest,
+            Material::WoodCrate => Surface::Firm,
+            Material::Barrier => Surface::Hard,
         }
     }
+
+    /// A loose tile's body (`physics::Physics::spawn_loose`): its mass
+    /// against the standard chassis's 1, its damping, its bounce and the
+    /// ground's friction on it (`Game::sync_loose`); `None` for a fixed
+    /// tile.
+    pub fn loose_body(self, t: &Tuning) -> Option<LooseBody> {
+        match self {
+            Material::Barrel => Some(LooseBody { mass: t.barrel_mass, damping: t.barrel_damping, bounce: t.barrel_bounce, friction: t.barrel_friction }),
+            Material::Hay => Some(LooseBody { mass: t.hay_mass, damping: t.hay_damping, bounce: t.hay_bounce, friction: t.hay_friction }),
+            Material::WoodCrate => Some(LooseBody { mass: t.wood_crate_mass, damping: t.wood_crate_damping, bounce: t.wood_crate_bounce, friction: t.wood_crate_friction }),
+            Material::Barrier => Some(LooseBody { mass: t.barrier_mass, damping: t.barrier_damping, bounce: t.barrier_bounce, friction: t.barrier_friction }),
+            _ => None,
+        }
+    }
+
+    /// The velocity change in one step (px/s) that breaks a loose tile -
+    /// a drum goes off, a crate splinters (`Game::sync_loose`); `None` for
+    /// one no knock breaks.
+    pub fn burst_speed(self, t: &Tuning) -> Option<f32> {
+        match self {
+            Material::Barrel => Some(t.barrel_burst_speed),
+            Material::WoodCrate => Some(t.wood_crate_burst_speed),
+            _ => None,
+        }
+    }
+}
+
+/// A loose tile's body (`Material::loose_body`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LooseBody {
+    pub mass: f32,
+    pub damping: f32,
+    pub bounce: f32,
+    pub friction: f32,
 }
 
 /// How hard a solid thing is to drive into (docs/physics-engine-design.md
@@ -639,12 +748,15 @@ pub enum Surface {
     Firm = 4,
     /// A birch, a willow, a snag.
     Yielding = 5,
-    /// Sandbags, a fence, a lamp post, a range board.
+    /// Sandbags, a fence, a lamp post, a range board, a hay bale.
     Soft = 6,
+    /// A tyre stack: no give, but it throws a hull back off any hit at
+    /// `hull_bounce_min_speed` or more, harder than iron (`tyres_bounce`).
+    Springy = 7,
 }
 
 impl Surface {
-    pub const ALL: [Surface; 7] = [Surface::Plain, Surface::Hardest, Surface::Hard, Surface::Brittle, Surface::Firm, Surface::Yielding, Surface::Soft];
+    pub const ALL: [Surface; 8] = [Surface::Plain, Surface::Hardest, Surface::Hard, Surface::Brittle, Surface::Firm, Surface::Yielding, Surface::Soft, Surface::Springy];
 
     /// The surface a collider's `user_data` names; `Plain` for anything
     /// else.
@@ -658,6 +770,7 @@ impl Surface {
         match self {
             Surface::Hardest => t.hardest_bounce,
             Surface::Hard | Surface::Brittle => t.hard_bounce,
+            Surface::Springy => t.tyres_bounce,
             _ => 0.0,
         }
     }
@@ -680,7 +793,7 @@ impl Surface {
             Surface::Hardest => t.hardest_jolt,
             Surface::Hard | Surface::Brittle => t.hard_jolt,
             Surface::Firm | Surface::Yielding => t.firm_jolt,
-            Surface::Soft => t.soft_jolt,
+            Surface::Soft | Surface::Springy => t.soft_jolt,
             Surface::Plain => 0.0,
         }
     }
@@ -1147,6 +1260,9 @@ impl Obstacle {
             // embers (`target::fire_shapes`).
             let stage = (self.burn_progress() * TARGET_BURN_STAGES as f32) as i32;
             return TARGET_BURN_COL + stage.clamp(0, TARGET_BURN_STAGES - 1);
+        }
+        if self.burning && self.material == Material::Hay {
+            return crate::PROPS_HAY_BURNT_COL;
         }
         if self.burning {
             return 4 + self.burn_frame;

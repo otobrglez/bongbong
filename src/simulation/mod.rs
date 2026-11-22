@@ -8016,6 +8016,10 @@ mod mechanics_tests {
     #[cfg(feature = "dev-tools")]
     mod loose;
 
+    // As `drive`: its cases put a knob table in force on their thread.
+    #[cfg(feature = "dev-tools")]
+    mod new_props;
+
     const W: f32 = 1280.0;
     const H: f32 = 720.0;
 

@@ -1307,18 +1307,16 @@ impl Game {
     /// it comes to rest. In home-cell order; no RNG.
     pub(super) fn sync_loose(&mut self, f: &mut Frame) {
         let t = tuning();
-        let (burst, friction) = (t.barrel_burst_speed, t.barrel_friction * f.dt);
         let mut bursts = Vec::new();
         for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
-            if !o.material.is_loose() || o.destroyed {
-                continue;
-            }
+            let Some(body) = o.material.loose_body(&t).filter(|_| !o.destroyed) else { continue };
             o.position = self.physics.position(o.body);
             let v = self.physics.velocity(o.body);
             let knock = (v - o.loose_velocity).length();
-            if burst > 0.0 && knock >= burst && o.fuse.is_none() {
+            if o.material.burst_speed(&t).is_some_and(|burst| burst > 0.0 && knock >= burst) && o.fuse.is_none() && !o.burning {
                 bursts.push((o.home, entity));
             }
+            let friction = body.friction * f.dt;
             // The ground's friction: a steady fall to rest.
             let speed = v.length();
             if speed > 0.0 && friction > 0.0 {
@@ -1332,27 +1330,33 @@ impl Game {
         }
     }
 
-    /// Throw every loose drum within `reach` of a blast at `center` away
+    /// Throw every loose tile within `reach` of a blast at `center` away
     /// from it, at `speed` px/s at the centre falling linearly to nothing at
-    /// `reach` (`Game::blast`). A drum the blast lit is thrown too and goes
-    /// off where its fuse runs out. In home-cell order; no RNG.
+    /// `reach` (`Game::blast`) - for a drum's weight; a heavier one goes as
+    /// much slower as it outweighs a drum (`Material::loose_body`). A drum
+    /// the blast lit is thrown too and goes off where its fuse runs out. In
+    /// home-cell order; no RNG.
     pub(super) fn throw_loose(&mut self, center: Position, reach: f32, speed: f32) {
         if reach <= 0.0 || speed <= 0.0 {
             return;
         }
+        let t = tuning();
+        let drum = t.barrel_mass.max(0.01);
         let mut thrown: Vec<((i32, i32), RigidBodyHandle, Vec2)> = self
             .world
             .query::<&Obstacle>()
             .iter()
-            .filter(|o| o.material.is_loose() && !o.destroyed)
+            .filter(|o| !o.destroyed)
             .filter_map(|o| {
+                let body = o.material.loose_body(&t)?;
                 let line = o.position - center;
                 let dist = line.length();
                 if dist > reach {
                     return None;
                 }
                 let dir = if dist > 0.001 { line / dist } else { Vec2::new(0.0, -1.0) };
-                Some((o.home, o.body, dir * (speed * (1.0 - dist / reach))))
+                let heft = (drum / body.mass.max(0.01)).min(1.0);
+                Some((o.home, o.body, dir * (speed * heft * (1.0 - dist / reach))))
             })
             .collect();
         thrown.sort_by_key(|&((c, r), _, _)| (r, c));

@@ -1328,3 +1328,15 @@ size = 2
 growth = 2
 tier_start = "light"
 tier_end = "heavy"
+
+[cells."8,5"]
+kind = "tank_trap"
+
+[cells."22,5"]
+kind = "tank_trap"
+
+[cells."44,5"]
+kind = "tank_trap"
+
+[cells."27,13"]
+kind = "tank_trap"

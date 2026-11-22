@@ -203,3 +203,27 @@ a titan's at 28, and let go it slides a few px and stops - cover you can
 push into place. A blast throws a wreck as it throws a live hull, at
 `wreck_blast_factor` (1) of the knock, but never hurts it and draws no roll;
 a wreck's own death blast spares it.
+
+## New props (BB-209, 2026-11-22)
+
+Five props that use the hard and soft faces and the loose bodies, each a
+`Material` (`obstacle::NEW_PROPS`, in sheet row order) placed as its own
+cell, drawn from `props_sheet.png` rows 10-14 (docs/PROPS_SPEC.md), named in
+the builder's WALL list (`tool-<name>` in `lang/en.ftl` and `lang/sl.ftl`) -
+the things a hull runs into - since PROP's list is full at eleven rows.
+
+| Prop | Map kind | Body | A hull meeting it | Shots | Knobs |
+|---|---|---|---|---|---|
+| Tyre stack | `tyres` | fixed | thrown back off it, harder than off iron (`Surface::Springy`, `tyres_bounce` 0.7) | pass over at 0.3; wear it to a slumped stack, then it goes | `tyres_max_health` 30 |
+| Hay bale | `hay` | loose, twice a drum's weight (`hay_mass` 0.8), soft | shoves it; slides little (`hay_friction`) | pass over at 0.35; a blast or a flame lights it (it always burns, `Material::catches_fire`) and it burns out to ash | `hay_*` |
+| Wooden crate | `wood_crate` | loose, a drum's weight | shoves it; a knock of `wood_crate_burst_speed` (260 px/s) splinters it, nothing goes off | pass over at 0.3; one or two shots splinter it | `wood_crate_*` |
+| Concrete barrier | `barrier` | loose, six times a hull (`barrier_mass` 6), braked hard (`barrier_friction` 600) | a standard hull's held push creeps it at about 17 px/s; a light hull's does not move it | stops every shot and hides what is behind it, as concrete | `barrier_*` |
+| Tank trap | `tank_trap` | fixed | the hardest stop and throw (`Surface::Hardest`) | pass between its beams at 0.6 | `tank_trap_max_health` 160 |
+
+A blast throws the loose ones as it throws a drum, slower as they outweigh
+one (`throw_loose`). The fixed two are walls to the router; the loose three
+are not ("Loose barrels" above). What the AI sees over has a pass-over
+chance and the barrier, which hides, has none (`Material::blocks_sight`).
+Placed on the campaign where they fit: three bales on Serpent River's
+meadow by the bong, a row of tyres and two barriers in the Scrapyard, four
+lone tank traps across No Man's Land.

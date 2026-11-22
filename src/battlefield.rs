@@ -533,6 +533,11 @@ pub fn spawn_from_map(
             | CellObject::Barrel { .. }
             | CellObject::Fence
             | CellObject::Target
+            | CellObject::Tyres
+            | CellObject::Hay
+            | CellObject::WoodCrate
+            | CellObject::Barrier
+            | CellObject::TankTrap
             | CellObject::Tree
             | CellObject::Pine
             | CellObject::Spruce
@@ -556,9 +561,8 @@ pub fn spawn_from_map(
                 let dry = material.is_dry(map.theme);
                 let chance = material.flammable_chance(dry);
                 let flammable = chance > 0.0 && rng.random_bool(chance);
-                let body = if material.is_loose() {
-                    let t = crate::tuning::tuning();
-                    physics.spawn_loose(pos, obstacle_half_extent, t.barrel_mass, t.barrel_damping, t.barrel_bounce)
+                let body = if let Some(loose) = material.loose_body(&crate::tuning::tuning()) {
+                    physics.spawn_loose(pos, obstacle_half_extent, loose.mass, loose.damping, loose.bounce)
                 } else {
                     let body = physics.spawn_static(pos, tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent));
                     physics.set_surface(body, material.surface());

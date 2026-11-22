@@ -3157,6 +3157,48 @@ tunables! {
         /// shoves it and a boosted ram, a thrown drum hitting a wall or a
         /// hull flung into one pops it.
         barrel_burst_speed: f32 = 300.0 in 0.0 ..= 5000.0;
+        /// The BB-209 props (docs/sandbags-barrels-fences.md "New props").
+        /// Toughness: a tyre stack takes a few shells, a hay bale and a
+        /// wooden crate one or two, a concrete barrier most of a fight, a
+        /// tank trap's steel all of one. Baked in at spawn.
+        tyres_max_health: f32 = 30.0 in 1.0 ..= 500.0 @ Spawn;
+        hay_max_health: f32 = 10.0 in 1.0 ..= 500.0 @ Spawn;
+        wood_crate_max_health: f32 = 6.0 in 1.0 ..= 500.0 @ Spawn;
+        barrier_max_health: f32 = 120.0 in 1.0 ..= 2000.0 @ Spawn;
+        tank_trap_max_health: f32 = 160.0 in 1.0 ..= 2000.0 @ Spawn;
+        /// Odds a projectile passes the prop instead of hitting it: over a
+        /// low tyre stack, a bale, a crate, between a tank trap's beams. A
+        /// barrier stops every shot, as concrete does.
+        tyres_pass_over_chance: f64 = 0.3 in 0.0 ..= 1.0;
+        hay_pass_over_chance: f64 = 0.35 in 0.0 ..= 1.0;
+        wood_crate_pass_over_chance: f64 = 0.3 in 0.0 ..= 1.0;
+        tank_trap_pass_over_chance: f64 = 0.6 in 0.0 ..= 1.0;
+        /// The share of a hit's speed a tyre stack throws a hull back with
+        /// (`Surface::Springy`): more than iron's.
+        tyres_bounce: f32 = 0.7 in 0.0 ..= 1.0;
+        /// A hay bale's loose body (`barrel_mass` and the rows after it):
+        /// twice a drum's weight, soft, slow to slide.
+        hay_mass: f32 = 0.8 in 0.05 ..= 20.0 @ Spawn;
+        hay_damping: f32 = 3.0 in 0.0 ..= 50.0 @ Spawn;
+        hay_bounce: f32 = 0.1 in 0.0 ..= 1.0 @ Spawn;
+        hay_friction: f32 = 220.0 in 0.0 ..= 5000.0;
+        /// A wooden crate's: a drum's weight, a little bounce.
+        wood_crate_mass: f32 = 0.4 in 0.05 ..= 20.0 @ Spawn;
+        wood_crate_damping: f32 = 2.0 in 0.0 ..= 50.0 @ Spawn;
+        wood_crate_bounce: f32 = 0.3 in 0.0 ..= 1.0 @ Spawn;
+        wood_crate_friction: f32 = 180.0 in 0.0 ..= 5000.0;
+        /// The knock (px/s of velocity change in a step) that splinters a
+        /// wooden crate: a hull a little faster than it drives, a crate
+        /// thrown at a wall.
+        wood_crate_burst_speed: f32 = 260.0 in 0.0 ..= 5000.0;
+        /// A concrete barrier's: six times a standard hull's weight and
+        /// braked so hard by the ground that a standard hull's push, held,
+        /// only creeps it, a light one's does not move it and a heavy
+        /// one's shoves it a little faster.
+        barrier_mass: f32 = 6.0 in 0.05 ..= 50.0 @ Spawn;
+        barrier_damping: f32 = 8.0 in 0.0 ..= 50.0 @ Spawn;
+        barrier_bounce: f32 = 0.0 in 0.0 ..= 1.0 @ Spawn;
+        barrier_friction: f32 = 600.0 in 0.0 ..= 5000.0;
         /// How far past its own radius a blast throws the barrels round it,
         /// as a multiple of that radius: inside the radius they are lit as
         /// ever and thrown too, out to this they are only thrown.

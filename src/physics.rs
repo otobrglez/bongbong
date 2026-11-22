@@ -647,7 +647,7 @@ const CUSHION_HEAD_ON: f32 = 0.7;
 /// RNG.
 struct SurfaceHooks {
     /// `Surface::cushion` of each surface, by its code.
-    decel: [f32; 7],
+    decel: [f32; 8],
     dt: f32,
 }
 

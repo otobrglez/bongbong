@@ -639,8 +639,20 @@ pub const OBSTACLE_CLEAR: f32 = 90.0;
 //   row 9    Oil trail (cols 0-3): four puddle variants of the ground cell
 //            a fire runs along (map `kind = "oil"`, not an obstacle - drawn
 //            by `obstacle::draw_oil_cell` straight from the sheet).
+//   rows 10-14 the BB-209 props (`obstacle::NEW_PROPS`), one look each:
+//            tyre stack (cols 0-1 intact/slumped), hay bale (cols 0-1
+//            intact/torn, col 3 burnt), wooden crate (cols 0-1
+//            intact/split), concrete barrier (cols 0-2 intact/chipped/
+//            cracked), tank trap (cols 0-1 intact/bent).
 pub const PROPS_COLUMNS: i32 = 4;
-pub const PROPS_ROWS: i32 = 10;
+pub const PROPS_ROWS: i32 = 15;
+pub const PROPS_TYRES_ROW: i32 = 10;
+pub const PROPS_HAY_ROW: i32 = 11;
+pub const PROPS_CRATE_ROW: i32 = 12;
+pub const PROPS_BARRIER_ROW: i32 = 13;
+pub const PROPS_TRAP_ROW: i32 = 14;
+/// The column a burning hay bale draws from: the bale black and glowing.
+pub const PROPS_HAY_BURNT_COL: i32 = 3;
 pub const PROPS_BARREL_LIT_COL: i32 = 3;
 pub const PROPS_OIL_ROW: i32 = 9;
 pub const PROPS_OIL_VARIANTS: i32 = 4;

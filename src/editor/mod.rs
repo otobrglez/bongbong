@@ -296,17 +296,24 @@ fn cell_label(obj: &CellObject) -> String {
 
 /// Every tool, in bar order: the categories one after another, then the
 /// eraser and the select tool, which no category holds. The trees, the
-/// volcano and the lamp post sit with the ground, which leaves PROP room
-/// for the six tower tools inside the eleven rows a dropdown fits, and the
+/// volcano and the lamp post sit with the ground, the BB-209 props
+/// (`obstacle::NEW_PROPS`, what a hull runs into) with the walls, which
+/// leaves PROP room for the six tower tools inside the eleven rows a
+/// dropdown fits, and the
 /// range board stands with the actors, the thing on the field there to be
 /// shot at. The pickups stand group by group in `PickupGroup::ALL`'s
 /// order, AMMO first, as their list's headed columns show them.
-pub const TOOLS: [Tool; 69] = [
+pub const TOOLS: [Tool; 74] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
     Tool::Wall(Material::Glass),
     Tool::Wall(Material::Concrete),
+    Tool::Prop(Material::Tyres),
+    Tool::Prop(Material::Hay),
+    Tool::Prop(Material::WoodCrate),
+    Tool::Prop(Material::Barrier),
+    Tool::Prop(Material::TankTrap),
     Tool::Prop(Material::Sandbag),
     Tool::Prop(Material::Barrel),
     Tool::Drum(Drum::Oil),
@@ -386,6 +393,11 @@ impl Tool {
             Tool::Prop(Material::Sandbag) => "sandbag",
             Tool::Prop(Material::Barrel) => "barrel",
             Tool::Prop(Material::Fence) => "fence",
+            Tool::Prop(Material::Tyres) => "tyres",
+            Tool::Prop(Material::Hay) => "hay",
+            Tool::Prop(Material::WoodCrate) => "wood_crate",
+            Tool::Prop(Material::Barrier) => "barrier",
+            Tool::Prop(Material::TankTrap) => "tank_trap",
             Tool::Prop(Material::Target) => "target",
             Tool::Prop(Material::Tree) => "tree",
             Tool::Prop(Material::Pine) => "pine",
@@ -492,6 +504,7 @@ impl Tool {
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
+            Tool::Prop(m) if crate::obstacle::NEW_PROPS.contains(&m) => Some(Category::Wall),
             Tool::Prop(m) if m.is_tree() => Some(Category::Plant),
             Tool::Bush(_) | Tool::Forest => Some(Category::Plant),
             Tool::Prop(Material::Lamp) => Some(Category::Ground),
@@ -5680,7 +5693,8 @@ mod editor_tests {
         let caret = center(named(&ed, &frame, "list_wall"));
         click(&mut ed, &frame, caret);
         assert_eq!(ed.open_menu(), Some("wall"));
-        let on_cell = on_cell(&ed, &frame, 20, 10);
+        // A cell clear of the list, which runs ten tools down the left.
+        let on_cell = on_cell(&ed, &frame, 30, 4);
         click(&mut ed, &frame, on_cell);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing press painted through the menu");
@@ -5689,7 +5703,7 @@ mod editor_tests {
         ed.update(&BuilderInput { escape: true, ..Default::default() }, &frame);
         assert_eq!(ed.open_menu(), None);
         click(&mut ed, &frame, on_cell);
-        assert_eq!(ed.map().cell(20, 10), Some(&brick()));
+        assert_eq!(ed.map().cell(30, 4), Some(&brick()));
     }
 
     #[test]
@@ -5896,11 +5910,13 @@ mod editor_tests {
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &frame);
-        assert_eq!(ed.tool(), Tool::Wall(Material::Concrete), "wraps");
+        // WALL's last tool is the tank trap (`obstacle::NEW_PROPS` stand with
+        // the walls).
+        assert_eq!(ed.tool(), Tool::Prop(Material::TankTrap), "wraps");
         // Off the buttons the wheel does nothing to the tool.
         let field = Vec2::new(400.0, 400.0);
         ed.update(&BuilderInput { pointer: Some(field), wheel: -1.0, ..Default::default() }, &frame);
-        assert_eq!(ed.tool(), Tool::Wall(Material::Concrete));
+        assert_eq!(ed.tool(), Tool::Prop(Material::TankTrap));
     }
 
     /// A 96 x 54 map in the builder on a window of `window` units, a unit a

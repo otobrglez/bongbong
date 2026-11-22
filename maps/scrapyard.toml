@@ -286,3 +286,8 @@ cells."34,23" = { kind = "tall_grass" }
 cells."35,23" = { kind = "tall_grass" }
 cells."36,23" = { kind = "tall_grass" }
 cells."47,23" = { kind = "fence" }
+cells."31,14" = { kind = "tyres" }
+cells."32,14" = { kind = "tyres" }
+cells."33,14" = { kind = "tyres" }
+cells."13,21" = { kind = "barrier" }
+cells."14,21" = { kind = "barrier" }
