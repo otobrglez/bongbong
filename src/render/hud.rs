@@ -605,6 +605,9 @@ fn draw_pause_button(d: &mut impl RaylibDraw, r: Rectangle, paused: bool, a: f32
 /// it. Drawn in UI points at the corners' `scale`.
 pub fn draw_sound_panel(d: &mut impl RaylibDraw, r: &crate::hud::SoundPanelRects, settings: &crate::audio::Settings, scale: f32) {
     let size = ((HUD_TEXT_SIZE as f32) * scale).round().max(8.0) as i32;
+    // Solid under the plate: it stands over the minimap, which must not
+    // show through the sliders.
+    d.draw_rectangle_rounded(r.panel, 0.12, 6, Color::new(PLATE_FILL.r, PLATE_FILL.g, PLATE_FILL.b, 255));
     draw_plate(d, r.panel, TEXT, 1.0);
     let t = text();
     let text_y = |row: Rectangle| (row.y + (row.height - size as f32) / 2.0) as i32;

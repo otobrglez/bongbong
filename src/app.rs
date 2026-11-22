@@ -2244,17 +2244,28 @@ impl App {
             self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
         }
         let mut mute_toggle = crate::KEYBOARD_AVAILABLE && rl.is_key_pressed(KeyboardKey::KEY_M);
-        if pressed && corner_hit == Some(CornerButton::Sound) {
+        // The sound UI's press: the window's, or a dev server `click` on
+        // the button or the panel, which is a press held for this frame.
+        let dev_press = self.dev.take_sound_press();
+        let (sound_pressed, sound_held, sound_at) = match dev_press {
+            Some(at) => (true, true, at),
+            None => (pressed, held, ui_pointer),
+        };
+        let sound_corner = match dev_press {
+            Some(at) => corners.as_ref().and_then(|c| c.hit(at)),
+            None => corner_hit,
+        };
+        if sound_pressed && sound_corner == Some(CornerButton::Sound) {
             self.touch.claim(&ui_touch_points);
             self.sound_panel = !self.sound_panel;
             self.sound_drag = None;
-        } else if let Some(panel) = sound_panel.filter(|_| pressed) {
-            if panel.panel.contains(ui_pointer) {
+        } else if let Some(panel) = sound_panel.filter(|_| sound_pressed) {
+            if panel.panel.contains(sound_at) {
                 self.touch.claim(&ui_touch_points);
-                if panel.switch.contains(ui_pointer) {
+                if panel.switch.contains(sound_at) {
                     mute_toggle = true;
                     self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
-                } else if let Some(i) = panel.rows.iter().position(|row| row.contains(ui_pointer)) {
+                } else if let Some(i) = panel.rows.iter().position(|row| row.contains(sound_at)) {
                     self.sound_drag = Some(hud::SoundLevel::ALL[i]);
                 }
             } else {
@@ -2265,9 +2276,9 @@ impl App {
         }
         if let (Some(level), Some(panel)) = (self.sound_drag, sound_panel) {
             let mut settings = self.audio.settings();
-            if held {
+            if sound_held {
                 let i = hud::SoundLevel::ALL.iter().position(|l| *l == level).unwrap_or(0);
-                level.set(&mut settings, hud::SoundPanelRects::value_at(panel.tracks[i], ui_pointer.x));
+                level.set(&mut settings, hud::SoundPanelRects::value_at(panel.tracks[i], sound_at.x));
                 self.audio.set_settings(settings);
             } else {
                 // Let go: kept, and a click at the new level.
@@ -2282,6 +2293,7 @@ impl App {
             self.audio.set_settings(settings);
             save_audio_settings(&settings);
         }
+        self.dev.publish_sound_panel(corners.as_ref().filter(|_| self.sound_panel).map(hud::sound_panel_rects));
         let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);
         // A modified map whose original this build changed asks first.
         self.session.watch_originals();
