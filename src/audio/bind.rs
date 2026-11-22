@@ -90,6 +90,9 @@ fn cell(cell: (i32, i32)) -> At {
     At::Point(crate::map::cell_to_world(cell.0, cell.1))
 }
 
+/// How long the rod's falling whistle (`warning.rod`) runs before it lands.
+const ROD_WHISTLE_S: f32 = 3.0;
+
 fn key(a: u64, b: u64) -> u64 {
     a.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ b
 }
@@ -164,7 +167,13 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         Event::AirStrike { bomb, x, y, .. } => one(Play::new(if bomb { "air.bomb" } else { "air.cannon" }, point(x, y))),
         Event::AircraftDowned { x, y, .. } => one(Play::new("air.downed", point(x, y))),
         Event::AirSupportLeft { .. } => Binding::Watched("aircraft"),
-        Event::RodCalled { cell: c, .. } => one(Play::new("weapon.rod_from_god.call", cell(c))),
+        Event::RodCalled { cell: c, land, .. } => {
+            // The designator locks at once; the fall whistles down to the
+            // landing (`land` is on the round clock), its sample's length
+            // before it.
+            let whistle = (land - game.time - ROD_WHISTLE_S).max(0.0);
+            Binding::Play(vec![Play::new("weapon.rod_from_god.call", cell(c)), Play::new(ids::ROD_INCOMING.0, cell(c)).after(whistle)])
+        }
         Event::RodImpact { cell: c, .. } => one(Play::new("weapon.rod_from_god.impact", cell(c))),
         Event::WellAnchored { x, y, .. } => one(Play::new("weapon.gravity_well.anchor", point(x, y))),
         Event::WellCollapsed { x, y, .. } => one(Play::new("weapon.gravity_well.collapse", point(x, y))),

@@ -69,6 +69,12 @@ pub const WATCHERS: &[WatcherSpec] = &[
     WatcherSpec { id: "place", entity: "map", reads: "the map's theme and biome", cues: &["bed.grass", "bed.desert", "bed.valley", "bed.floodplain", "bed.karst"], online: "the same" },
     WatcherSpec { id: "slam", entity: "tank", reads: "Game::contacts impulse spikes", cues: &["vehicle.slam", "vehicle.scrape"], online: "silent: a client steps no physics (BB-214 adds Slam)" },
     WatcherSpec { id: "aircraft", entity: "aircraft", reads: "Game::aircraft", cues: &["air.heli", "air.jet"], online: "the same" },
+    WatcherSpec { id: "flyby", entity: "shell, bullet", reads: "projectiles' closest approach to a seat's own tank", cues: &["flyby.shell", "flyby.bullet"], online: "the same: projectiles replicate" },
+    WatcherSpec { id: "thunder", entity: "weather", reads: "weather::lightning on the round clock: a flash's rising edge", cues: &["world.thunder"], online: "the same: the clock is the round's" },
+    WatcherSpec { id: "tesla", entity: "tesla tower", reads: "Game::tower_views charge", cues: &["world.tesla.charge"], online: "silent: tower charge is not on the wire" },
+    WatcherSpec { id: "fuse", entity: "barrel", reads: "Game::fused_barrels", cues: &["world.fuse"], online: "the same" },
+    WatcherSpec { id: "portal", entity: "portal", reads: "Game::portals", cues: &["world.portal"], online: "the same" },
+    WatcherSpec { id: "volcano", entity: "volcano", reads: "Volcano::phase on the round clock", cues: &["world.volcano"], online: "the same: the clock is the round's" },
 ];
 
 /// What a watcher keeps about a tank between frames.
@@ -87,6 +93,12 @@ pub struct Watchers {
     bullets_seen: HashSet<u32>,
     last_round: HashMap<usize, f64>,
     spinning: HashSet<usize>,
+    /// Each projectile's nearest pass so far by a seat's own tank (px), and
+    /// whether it already whooshed.
+    passes: HashMap<u32, (f32, bool)>,
+    /// The last frame's lightning, for a flash's rising edge.
+    lightning: f32,
+    flashes: u64,
     impulse: HashMap<usize, f32>,
     last_slam: HashMap<usize, f64>,
 }
@@ -102,6 +114,15 @@ const PLACE: u64 = 8 << 56;
 const SCRAPE: u64 = 9 << 56;
 const CHARGE: u64 = 10 << 56;
 const AIR: u64 = 11 << 56;
+const TESLA: u64 = 12 << 56;
+const FUSE: u64 = 13 << 56;
+const PORTAL: u64 = 14 << 56;
+const VOLCANO: u64 = 15 << 56;
+
+/// A key from a position, for a loop whose source has no id.
+fn at_key(tag: u64, p: Vec2) -> u64 {
+    tag | (((p.x.round() as i32 as u32 as u64) & 0xFF_FFFF) << 24) | ((p.y.round() as i32 as u32 as u64) & 0xFF_FFFF)
+}
 
 impl Watchers {
     pub fn reset(&mut self) {
@@ -118,6 +139,9 @@ impl Watchers {
         self.beds(game, t, wishes);
         self.slams(game, now, t, wishes, plays);
         self.aircraft(game, wishes);
+        self.flybys(game, own, t, plays);
+        self.thunder(game, t, plays);
+        self.places(game, t, wishes);
     }
 
     fn tanks_and_treads(&mut self, game: &Game, own: &[usize], t: &Tuning, wishes: &mut Vec<Wish>, plays: &mut Vec<Play>) {
@@ -277,6 +301,83 @@ impl Watchers {
                 let gain = (impulse / 200.0).clamp(0.2, 1.0);
                 wishes.push(Wish { key: SCRAPE | slot as u64, cue: ids::SCRAPE.0, at: Some(at), velocity: Vec2::new(0.0, 0.0), gain, pitch: 1.0, own: false });
             }
+        }
+    }
+
+    /// A shell or a round passing close by a seat's own tank whooshes once,
+    /// as it starts to move away (`audio_flyby_px`); a seat's own shots
+    /// never do.
+    fn flybys(&mut self, game: &Game, own: &[usize], t: &Tuning, plays: &mut Vec<Play>) {
+        let seats: Vec<Vec2> = game.world.query::<&Tank>().iter().filter(|tk| own.contains(&tk.owner_slot()) && !tk.is_wreck()).map(|tk| tk.position).collect();
+        let reach = t.audio_flyby_px;
+        let mut live = HashSet::new();
+        let mut shots: Vec<(u32, Vec2, Vec2, &'static str)> = Vec::new();
+        for s in game.world.query::<&crate::shell::Shell>().iter() {
+            if !own.contains(&s.owner.slot()) {
+                shots.push((s.id, s.position, s.velocity, ids::FLYBY_SHELL.0));
+            }
+        }
+        for b in game.world.query::<&Bullet>().iter() {
+            if !own.contains(&b.owner.slot()) {
+                shots.push((b.id, b.position, b.velocity, ids::FLYBY_BULLET.0));
+            }
+        }
+        for (id, at, velocity, cue) in shots {
+            live.insert(id);
+            let near = seats.iter().map(|s| s.distance_to(at)).fold(f32::INFINITY, f32::min);
+            let pass = self.passes.entry(id).or_insert((f32::INFINITY, false));
+            if !pass.1 && pass.0 <= reach && near > pass.0 {
+                pass.1 = true;
+                plays.push(Play::new(cue, At::Point(at - velocity * crate::PHYSICS_FIXED_DT)).source(id as u64));
+            }
+            pass.0 = pass.0.min(near);
+        }
+        self.passes.retain(|id, _| live.contains(id));
+    }
+
+    /// Thunder after a storm's lightning: the flash comes off the round
+    /// clock (`weather::lightning`), so a replica hears the same strikes,
+    /// and the clap follows it by a hashed half second to three.
+    fn thunder(&mut self, game: &Game, t: &Tuning, plays: &mut Vec<Play>) {
+        let look = game.look(t);
+        if look.lightning <= 0.0 {
+            self.lightning = 0.0;
+            return;
+        }
+        let flash = crate::weather::lightning(game.time, t) * look.lightning;
+        if flash > 0.6 && self.lightning <= 0.6 {
+            self.flashes += 1;
+            let h = (self.flashes.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40) as f32 / (1u64 << 24) as f32;
+            plays.push(Play::new(ids::THUNDER.0, At::Nowhere).after(0.5 + 2.5 * h).strength(0.6 + 0.4 * look.lightning.min(1.0)).source(self.flashes));
+        }
+        self.lightning = flash;
+    }
+
+    /// What the field's own places hum with: a tesla tower charging, a
+    /// fused barrel's fuse, a portal, a volcano working toward an eruption.
+    fn places(&mut self, game: &Game, t: &Tuning, wishes: &mut Vec<Wish>) {
+        let still = Vec2::new(0.0, 0.0);
+        for tower in game.tower_views() {
+            if tower.kind == crate::tower::TowerKind::Tesla && tower.charge > 0.05 && tower.disabled <= 0.0 {
+                wishes.push(Wish { key: at_key(TESLA, tower.position), cue: ids::TESLA_CHARGE.0, at: Some(tower.position), velocity: still, gain: 0.4 + 0.6 * tower.charge, pitch: 0.8 + 0.5 * tower.charge, own: false });
+            }
+        }
+        for at in game.fused_barrels() {
+            wishes.push(Wish { key: at_key(FUSE, at), cue: ids::FUSE.0, at: Some(at), velocity: still, gain: 1.0, pitch: 1.0, own: false });
+        }
+        for &at in game.portals() {
+            wishes.push(Wish { key: at_key(PORTAL, at), cue: ids::PORTAL_HUM.0, at: Some(at), velocity: still, gain: 1.0, pitch: 1.0, own: false });
+        }
+        for v in game.volcanoes() {
+            let phase = v.phase(game.time, t);
+            let gain = match phase.stage {
+                crate::volcano::Stage::Asleep => 0.15,
+                crate::volcano::Stage::Rumble => 0.3 + 0.7 * phase.progress,
+                crate::volcano::Stage::Erupt => 1.0,
+                crate::volcano::Stage::Cool => 0.5 * (1.0 - phase.progress),
+            };
+            let at = crate::map::cell_to_world(v.cell.0, v.cell.1);
+            wishes.push(Wish { key: at_key(VOLCANO, at), cue: ids::VOLCANO.0, at: Some(at), velocity: still, gain, pitch: 0.9 + 0.2 * phase.heat.min(1.0), own: false });
         }
     }
 

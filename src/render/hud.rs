@@ -181,6 +181,9 @@ fn draw_full_corners(
     if let Some(r) = corners.pause {
         draw_pause_button(d, r, chrome.paused, a);
     }
+    if let Some(r) = corners.sound {
+        draw_sound_button(d, r, chrome.muted, a);
+    }
     if let Some(r) = corners.build {
         draw_label_button(d, r, &text().get(keys::BUTTON_BUILD), BUILD_COLOR, a);
     }
@@ -581,6 +584,31 @@ fn draw_pause_button(d: &mut impl RaylibDraw, r: Rectangle, paused: bool, a: f32
     const PAUSE: [&str; 7] = ["##...##", "##...##", "##...##", "##...##", "##...##", "##...##", "##...##"];
     const PLAY: [&str; 7] = ["#......", "###....", "#####..", "#######", "#####..", "###....", "#......"];
     let rows = if paused { PLAY } else { PAUSE };
+    let (x, y) = ((r.x + (r.width - 14.0) / 2.0).round() as i32, (r.y + (r.height - 14.0) / 2.0).round() as i32);
+    for (row, line) in rows.iter().enumerate() {
+        for (col, c) in line.chars().enumerate() {
+            if c == '#' {
+                d.draw_rectangle(x + col as i32 * 2, y + row as i32 * 2, 2, 2, color);
+            }
+        }
+    }
+}
+
+/// The sound button: a speaker and its waves while the game plays sound,
+/// the speaker struck out - and the frame washed, as the paused pause
+/// button's is - while it is muted, in the pause button's 2 pt blocks. The
+/// press is the M key's.
+fn draw_sound_button(d: &mut impl RaylibDraw, r: Rectangle, muted: bool, a: f32) {
+    let frame = button_frame(r);
+    if muted {
+        d.draw_rectangle_rec(frame, faded(Color::new(TEXT.r, TEXT.g, TEXT.b, 40), a));
+    }
+    let color = faded(TEXT, a);
+    d.draw_rectangle_lines_ex(frame, 2.0, color);
+    // 7x7 blocks of 2 pt, centred on the button's whole points.
+    const ON: [&str; 7] = ["..#..#.", ".##...#", "###.#.#", "###.#.#", "###.#.#", ".##...#", "..#..#."];
+    const OFF: [&str; 7] = ["..#....", ".##....", "###.#.#", "###..#.", "###.#.#", ".##....", "..#...."];
+    let rows = if muted { OFF } else { ON };
     let (x, y) = ((r.x + (r.width - 14.0) / 2.0).round() as i32, (r.y + (r.height - 14.0) / 2.0).round() as i32);
     for (row, line) in rows.iter().enumerate() {
         for (col, c) in line.chars().enumerate() {

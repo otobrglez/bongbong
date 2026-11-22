@@ -1872,6 +1872,7 @@ mod chrome_tests {
             build: true,
             leave: false,
             pause: true,
+            sound: true,
             lines: 0,
             minimap: None,
             lanterns: false,

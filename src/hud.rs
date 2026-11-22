@@ -860,6 +860,9 @@ pub const MODE_BUTTON_W: f32 = 72.0;
 /// on every local round so one press works the same everywhere. A
 /// finger's width, since it carries no label.
 pub const PAUSE_BUTTON_W: f32 = UI_TOUCH_PT;
+/// The sound button: a speaker that mutes the game and unmutes it, as
+/// the M key does (docs/sound-system-prd.md section 4.5).
+pub const SOUND_BUTTON_W: f32 = UI_TOUCH_PT;
 
 /// The `ONLINE` button: the way into the lobby (`lobby.rs`,
 /// docs/online-coop-prd.md §4.10). Wide enough for its six characters.
@@ -934,11 +937,13 @@ pub const INFO_TITLE_W: f32 = 160.0;
 pub const MISSION_BONG_SRC: Rectangle = Rectangle::new(11.0, 12.0, 26.0, 24.0);
 /// The gap either side of that bong.
 pub const MISSION_BONG_GAP: i32 = 4;
-/// The buttons' row: `ONLINE`, the players (or RESTART), the pause button
-/// and the mode button, right to left from its right end.
-pub const BUTTONS_W: f32 = ONLINE_BUTTON_W + PLAYERS_BUTTON_GAP + PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN;
+/// The buttons' row: `ONLINE`, the players (or RESTART), the sound button,
+/// the pause button and the mode button, right to left from its right end.
+pub const BUTTONS_W: f32 = ONLINE_BUTTON_W + PLAYERS_BUTTON_GAP + PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + SOUND_SPAN;
 /// The pause button and the mode button to its right.
 const PAUSE_SPAN: f32 = PAUSE_BUTTON_W + PLAYERS_BUTTON_GAP + MODE_BUTTON_W;
+/// The sound button and the pause and mode slots to its right.
+const SOUND_SPAN: f32 = SOUND_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN;
 /// One chip of the other seats' strip: its number over its health gauge.
 pub const CHIP_W: f32 = 20.0;
 pub const CHIP_H: f32 = 26.0;
@@ -969,6 +974,8 @@ pub struct CornerShape {
     pub leave: bool,
     /// The pause button, left of the mode button.
     pub pause: bool,
+    /// The sound button, left of the pause slot.
+    pub sound: bool,
     /// Lines of text under the left cluster.
     pub lines: usize,
     /// The minimap's size in points (`minimap::MinimapRules::size_pt`),
@@ -1010,6 +1017,7 @@ impl CornerShape {
                 build: chrome.build_button,
                 leave: chrome.leave_button,
                 pause: chrome.pause_button,
+                sound: chrome.sound_button,
                 // The build stamp always; an online round's status, a
                 // prompt and BACK's note over it.
                 lines: 1 + usize::from(chrome.status.is_some()) + usize::from(chrome.prompt.is_some()) + usize::from(chrome.note.is_some()),
@@ -1033,6 +1041,8 @@ pub enum CornerButton {
     Leave,
     /// Pauses the round or takes it on again, as the P key does.
     Pause,
+    /// Mutes the game's sound or brings it back, as the M key does.
+    Sound,
     /// The lamp row's lantern count: a press sets a lantern down, as the
     /// lamp key does (docs/volcano.md).
     Lamp,
@@ -1049,6 +1059,7 @@ impl CornerButton {
             CornerButton::Build => "build",
             CornerButton::Leave => "leave",
             CornerButton::Pause => "pause",
+            CornerButton::Sound => "sound",
             CornerButton::Lamp => "lamp",
         }
     }
@@ -1090,6 +1101,7 @@ pub struct Corners {
     pub build: Option<Rectangle>,
     pub leave: Option<Rectangle>,
     pub pause: Option<Rectangle>,
+    pub sound: Option<Rectangle>,
     /// The other seats' strip, in the right cluster's row between its
     /// numbers and its buttons.
     pub chips: Option<Rectangle>,
@@ -1159,6 +1171,7 @@ impl Corners {
             (CornerButton::Build, self.build),
             (CornerButton::Leave, self.leave),
             (CornerButton::Pause, self.pause),
+            (CornerButton::Sound, self.sound),
             (CornerButton::Lamp, self.lamp),
         ]
         .into_iter()
@@ -1196,6 +1209,7 @@ impl Corners {
             build: opt(self.build),
             leave: opt(self.leave),
             pause: opt(self.pause),
+            sound: opt(self.sound),
             chips: opt(self.chips),
             minimap: opt(self.minimap),
             lamp: opt(self.lamp),
@@ -1236,13 +1250,15 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let block_plate = VITALS_W + 2.0 * PLATE_PAD;
     let chips_w = if shape.chips > 0 { shape.chips as f32 * (CHIP_W + CHIP_GAP) - CHIP_GAP } else { 0.0 };
     // The buttons' row reaches from its right end to the leftmost slot the
-    // round draws a button in - the mode slot, the pause slot, the players
-    // slot, the online slot - so each keeps its own place whichever are
-    // drawn.
+    // round draws a button in - the mode slot, the pause slot, the sound
+    // slot, the players slot, the online slot - so each keeps its own
+    // place whichever are drawn.
     let buttons_w = if shape.online {
         BUTTONS_W
     } else if shape.players || shape.restart {
-        PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN
+        PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + SOUND_SPAN
+    } else if shape.sound {
+        SOUND_SPAN
     } else if shape.pause {
         PAUSE_SPAN
     } else if shape.build || shape.leave {
@@ -1293,11 +1309,12 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let lines = Rectangle::new(area.x, bottom + ROW_GAP, block_plate, shape.lines as f32 * LINE_H);
 
     // The buttons from the row's right end - the mode slot, the pause slot,
-    // the players slot, the online slot - each always in its own place,
-    // whichever of them a round draws.
+    // the sound slot, the players slot, the online slot - each always in
+    // its own place, whichever of them a round draws.
     let mode = Rectangle::new(buttons_row.x + buttons_row.width - MODE_BUTTON_W, buttons_row.y, MODE_BUTTON_W, button_h);
     let pause = Rectangle::new(mode.x - PLAYERS_BUTTON_GAP - PAUSE_BUTTON_W, mode.y, PAUSE_BUTTON_W, button_h);
-    let players = Rectangle::new(pause.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, mode.y, PLAYERS_BUTTON_W, button_h);
+    let sound = Rectangle::new(pause.x - PLAYERS_BUTTON_GAP - SOUND_BUTTON_W, mode.y, SOUND_BUTTON_W, button_h);
+    let players = Rectangle::new(sound.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, mode.y, PLAYERS_BUTTON_W, button_h);
     let online = Rectangle::new(players.x - PLAYERS_BUTTON_GAP - ONLINE_BUTTON_W, mode.y, ONLINE_BUTTON_W, button_h);
 
     // The minimap: under the right cluster's plate, its own plate flush
@@ -1332,6 +1349,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         build: shape.build.then_some(mode),
         leave: shape.leave.then_some(mode),
         pause: shape.pause.then_some(pause),
+        sound: shape.sound.then_some(sound),
         chips,
         minimap,
         lamp: shape.lanterns.then(|| Rectangle::new(first.x, first.y + button_h + ROW_GAP, LAMP_BUTTON_W, button_h)),
@@ -1665,6 +1683,12 @@ pub struct PlayChrome {
     /// The local round is paused: the pause button shows the play
     /// triangle that takes it on again.
     pub paused: bool,
+    /// The sound button left of the pause slot: every round's, local or
+    /// a room's.
+    pub sound_button: bool,
+    /// The game's sound is muted: the sound button shows the speaker
+    /// struck out. The app sets it from its audio settings.
+    pub muted: bool,
     /// The seat this window is playing in a room, whose block the left
     /// cluster shows. `None` in a couch round, where the first block is
     /// player 1's and the couch layouts apply.
@@ -2356,6 +2380,7 @@ mod hud_tests {
             build: true,
             leave: false,
             pause: true,
+            sound: true,
             lines: 1,
             minimap: None,
             lanterns: false,

@@ -741,6 +741,58 @@ fn load_progress() -> Option<crate::levels::Progress> {
     }
 }
 
+/// The sound settings (`audio::Settings`) the player chose in an earlier
+/// session: `bongbong.audio` in the page's `localStorage` on the web, a
+/// file beside the progress elsewhere. `None` the first time.
+fn load_audio_settings() -> Option<crate::audio::Settings> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let kept = page_string(PAGE_AUDIO);
+        serde_json::from_str(&kept).ok()
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let path = progress_path()?.with_file_name("audio.json");
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    }
+}
+
+/// The sound settings the page kept, as `load_audio_settings` reads them.
+#[cfg(target_os = "emscripten")]
+const PAGE_AUDIO: &std::ffi::CStr = c"(function(){try{return String(localStorage.getItem('bongbong.audio')||'')}catch(e){return ''}})()";
+
+/// Keep `settings` where `load_audio_settings` finds them; a store that
+/// cannot be written is logged and skipped.
+fn save_audio_settings(settings: &crate::audio::Settings) {
+    let Ok(json) = serde_json::to_string(settings) else {
+        return;
+    };
+    #[cfg(target_os = "emscripten")]
+    {
+        unsafe extern "C" {
+            fn emscripten_run_script(script: *const std::os::raw::c_char);
+        }
+        // The settings are numbers and booleans: nothing in the JSON
+        // needs quoting inside the script's single-quoted string.
+        let script = format!("(function(){{try{{localStorage.setItem('bongbong.audio','{json}')}}catch(e){{}}}})()");
+        if let Ok(script) = std::ffi::CString::new(script) {
+            unsafe { emscripten_run_script(script.as_ptr()) };
+        }
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let Some(path) = progress_path().map(|p| p.with_file_name("audio.json")) else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = std::fs::write(&path, json) {
+            eprintln!("bongbong: audio settings not saved to {}: {e}", path.display());
+        }
+    }
+}
+
 /// Keep `progress` where `load_progress` will find it. A store that
 /// cannot be written is logged and skipped: the session plays on, it only
 /// forgets.
@@ -1816,6 +1868,9 @@ pub fn run(args: Args) {
         audio: {
             let mut audio = crate::audio::Audio::shipped();
             audio.warm();
+            if let Some(settings) = load_audio_settings() {
+                audio.set_settings(settings);
+            }
             audio
         },
         audio_out: crate::render::audio::AudioOut::open(),
@@ -2161,6 +2216,22 @@ impl App {
         let held = mouse_held || touching;
         if pressed {
             self.dev.note_press(window_pointer, touch_pressed);
+        }
+        // Every corner button clicks; the sound button, and the M key,
+        // mute the game or bring its sound back, in any round, and keep
+        // the choice (docs/sound-system-prd.md section 4.5).
+        if pressed && corner_hit.is_some() {
+            self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
+        }
+        let sound_tap = pressed && corner_hit == Some(CornerButton::Sound);
+        if sound_tap || (crate::KEYBOARD_AVAILABLE && rl.is_key_pressed(KeyboardKey::KEY_M)) {
+            if sound_tap {
+                self.touch.claim(&ui_touch_points);
+            }
+            let mut settings = self.audio.settings();
+            settings.muted = !settings.muted;
+            self.audio.set_settings(settings);
+            save_audio_settings(&settings);
         }
         let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);
         // A modified map whose original this build changed asks first.
@@ -2848,7 +2919,8 @@ impl App {
         // The chrome the frame draws, and its corners laid out on the
         // window as this frame left it - a press may have opened a dialog
         // or started another round since the hit tests ran.
-        let chrome = self.session.play_chrome();
+        let mut chrome = self.session.play_chrome();
+        chrome.muted = self.audio.settings().muted;
         let corners = CornerShape::of(&chrome, game.players.count()).map(|shape| hud::corners(&ui, &shape));
         // A cluster fades while a tank, a shot or a blast is under it, on
         // the frame's own time - a lockstep `step`'s, as the particles'.
