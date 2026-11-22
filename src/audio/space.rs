@@ -51,11 +51,14 @@ pub struct Heard {
     pub doppler: f32,
     /// Across the field, px.
     pub distance: f32,
+    /// The share of it sent to the room: more the farther it is, so a far
+    /// sound is heard by its room as much as by itself.
+    pub send: f32,
 }
 
 impl Heard {
     /// A sound with no place: the UI, a stinger, the player's own voice.
-    pub const CENTRE: Heard = Heard { gain: 1.0, pan: 0.0, cutoff: 20_000.0, delay: 0.0, doppler: 1.0, distance: 0.0 };
+    pub const CENTRE: Heard = Heard { gain: 1.0, pan: 0.0, cutoff: 20_000.0, delay: 0.0, doppler: 1.0, distance: 0.0, send: 0.0 };
 }
 
 /// The field's cells, each with the dB a sound loses crossing it.
@@ -223,7 +226,8 @@ fn hear_one(ear: &Ear, at: Vec2, velocity: Vec2, class: Class, occlusion: &Occlu
     } else {
         1.0
     };
-    Heard { gain, pan, cutoff, delay, doppler, distance: flat }
+    let send = t.audio_reverb_send_near + (t.audio_reverb_send_far - t.audio_reverb_send_near) * reach;
+    Heard { gain, pan, cutoff, delay, doppler, distance: flat, send }
 }
 
 #[cfg(test)]

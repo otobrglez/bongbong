@@ -38,6 +38,13 @@ round-lost = PORAZ
 round-restarting = Nova igra čez { $seconds }...
 round-back-to-lobby = Nazaj v sobo čez { $seconds }...
 paused = PAVZA
+
+sound-title = ZVOK
+sound-on = VKL
+sound-off = IZKL
+sound-master = GLASNOST
+sound-effects = UČINKI
+sound-music = GLASBA
 render-trouble = Težava z grafiko: { $name }
 
 mission-protect = BRANI

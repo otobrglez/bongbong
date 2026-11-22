@@ -848,25 +848,37 @@ Where the build departs from the text:
 - **The catalogue** is `audio/interactions.json`, not TOML: BB-199's map in its own schema, each cue
   given `manifest: {cue, proposed, fit}`. That is 108 exact, 55 covered and 156 missing at seeding.
 - **The engine** resamples linearly, not cubically: cheaper on wasm and inaudible at these pitches.
-  The FDN reverb is not built yet, and neither are the voice's reverb send or the path-based
-  propagation of §4.3; occlusion is the straight-line cell walk.
+  The room is one four-line FDN (`dsp/reverb.rs`) every voice sends into: the send rises with
+  distance (`audio_reverb_send_near` to `_far`), the tail rings `audio_reverb_arena_s` on an arena
+  and `audio_reverb_field_s` on a field, darkened by `audio_reverb_damp_hz`; no per-biome presets
+  and no ear-ring yet. The path-based propagation of §4.3 is not built; occlusion is the
+  straight-line cell walk.
 - **The driver** is the pull path from the start: the engine lives behind a lock the raylib stream's
   callback takes, so a main-thread hitch never starves the device. The web takes the same path
   (D4), verified in the release build: no ASYNCIFY, no `emscripten_sleep`, a ScriptProcessorNode.
 - **Hidden tab:** the page itself suspends miniaudio's contexts (`runtime.ts`), so no `bbHidden`
   global was needed.
-- **Settings:** mute is the HUD's sound button and the M key, kept beside the progress. There are
-  no volume sliders yet: the levels are the `audio` tuning group's.
+- **Settings:** the HUD's sound button opens the sound panel (`hud::sound_panel_rects`) under
+  the right cluster, and the round runs on behind it, a room's too: SOUND and an ON/OFF switch
+  (the M key mutes as well), then MASTER, EFFECTS and MUSIC sliders. A slider is kept when it is
+  let go, with a click at the new level; the choice is kept beside the progress. No voice slider
+  until there is a voice, and no mono switch on screen (the setting exists).
 - **Slams online** are `Event::HullStruck` (BB-205), which is sent and carries the face's
   material, `Surface` and speed: the slam's cue follows the surface (`source::slam_cue`) and its
   strength the speed (`audio_slam_full_speed`). The sound adds nothing to the wire. The other
   payload changes of §4.10 are still to do: `Hit`'s shooter, `Wreck`'s cause, `Ricochet`'s surface,
   `Ram`'s speed, `BongBite`'s position, `RoundEnded`'s reason, `ObstacleDestroyed`'s cause.
 - **Takes are pre-picked by measurement** (`tools/audio/process.py`) and reviewed by the owner on
-  the audition page. The real charge is about 3.3 credits a second of audio per take, a third of
-  `estimate_only`'s figure.
-- **Still to make:** every planned sample after the first batch, the bong's babble, the announcer,
-  and music.
+  the audition page. A take far shorter than its recipe asked for scores down, a late onset only a
+  little (the trim removes the silence before it), and a loop is levelled on its whole length, not
+  on its loud parts. The real charge is about 3.3 credits a second of audio per take, a third of
+  `estimate_only`'s figure. The account's queue holds about 60 generations, so a batch runs in
+  calls of at most 14 sounds.
+- **Made:** all 123 planned samples (150 cues), 2,076 credits for the 109 after the first 14.
+  `static/audio` is 3.9 MB, all of it preloaded on the web; the core-preload and lazy-fetch split
+  of section 4.8 is not built.
+- **Still to make:** the 156 needs not yet in the manifest, the bong's babble wired to its bubbles
+  (the sample exists), the announcer, and music.
 
 ## 9. References
 

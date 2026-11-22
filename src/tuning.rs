@@ -5194,6 +5194,18 @@ tunables! {
         /// The pitch range doppler may bend a sound across.
         audio_doppler_min: f32 = 0.8 in 0.5 ..= 1.0;
         audio_doppler_max: f32 = 1.25 in 1.0 ..= 2.0;
+        /// The room every placed sound sends into (section 4.3): the level
+        /// its tail returns at, in dB; how long it rings (to -60 dB) on an
+        /// arena and on a field, in seconds; and where its high-cut sits,
+        /// in Hz.
+        audio_reverb_db: f32 = 0.0 in -60.0 ..= 12.0;
+        audio_reverb_arena_s: f32 = 0.8 in 0.05 ..= 8.0;
+        audio_reverb_field_s: f32 = 1.6 in 0.05 ..= 8.0;
+        audio_reverb_damp_hz: f32 = 3500.0 in 100.0 ..= 20000.0;
+        /// The share of a sound sent to the room close up and at the end of
+        /// its class's range, linear; between them it follows the distance.
+        audio_reverb_send_near: f32 = 0.15 in 0.0 ..= 2.0;
+        audio_reverb_send_far: f32 = 1.2 in 0.0 ..= 2.0;
         /// How close (px) a projectile must pass a seat's tank to whoosh by.
         audio_flyby_px: f32 = 48.0 in 0.0 ..= 400.0;
         /// The speed (px/s) into a face at which a hull's slam

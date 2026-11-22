@@ -91,6 +91,12 @@ keys! {
     ROUND_RESTARTING = "round-restarting";
     ROUND_BACK_TO_LOBBY = "round-back-to-lobby";
     PAUSED = "paused";
+    SOUND_TITLE = "sound-title";
+    SOUND_ON = "sound-on";
+    SOUND_OFF = "sound-off";
+    SOUND_MASTER = "sound-master";
+    SOUND_EFFECTS = "sound-effects";
+    SOUND_MUSIC = "sound-music";
     RENDER_TROUBLE = "render-trouble";
     MISSION_PROTECT = "mission-protect";
     MISSION_HUNT = "mission-hunt";
@@ -939,6 +945,14 @@ mod text_tests {
             button(keys::BUTTON_PLAY, MODE_BUTTON_W),
             button(keys::BUTTON_LEAVE, MODE_BUTTON_W),
             button(keys::BUTTON_ONLINE, ONLINE_BUTTON_W),
+            // The sound panel: SOUND left of its switch, a level's name in
+            // the label column, the switch's word inside its frame.
+            (keys::SOUND_TITLE, HUD_TEXT_SIZE, (crate::hud::SOUND_PANEL_W - crate::hud::SOUND_SWITCH_W - 2.0 * crate::hud::PLATE_PAD) as i32 - 16, vec![]),
+            button(keys::SOUND_ON, crate::hud::SOUND_SWITCH_W),
+            button(keys::SOUND_OFF, crate::hud::SOUND_SWITCH_W),
+            (keys::SOUND_MASTER, HUD_TEXT_SIZE, crate::hud::SOUND_LABEL_W as i32 - 8, vec![]),
+            (keys::SOUND_EFFECTS, HUD_TEXT_SIZE, crate::hud::SOUND_LABEL_W as i32 - 8, vec![]),
+            (keys::SOUND_MUSIC, HUD_TEXT_SIZE, crate::hud::SOUND_LABEL_W as i32 - 8, vec![]),
             (keys::PLAYERS_TITLE, 28, DIALOG_W as i32 - 32, vec![]),
             (keys::PLAYERS_KEYS, 16, DIALOG_W as i32 - 32, vec![]),
             (keys::PLAYERS_TOUCH, 16, DIALOG_W as i32 - 32, vec![]),

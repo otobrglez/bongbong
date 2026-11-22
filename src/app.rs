@@ -1874,6 +1874,9 @@ pub fn run(args: Args) {
             audio
         },
         audio_out: crate::render::audio::AudioOut::open(),
+        sound_panel: false,
+        sound_drag: None,
+        babbled: None,
         round_blocks,
         builder_blocks,
         round_minimap,
@@ -2006,6 +2009,13 @@ struct App {
     /// where the machine has none, and the game plays silent.
     audio: crate::audio::Audio,
     audio_out: Option<crate::render::audio::AudioOut>,
+    /// The sound panel is open under the right cluster
+    /// (`hud::sound_panel_rects`), and the slider a held press is setting.
+    sound_panel: bool,
+    sound_drag: Option<hud::SoundLevel>,
+    /// The bong's line last babbled and its age then: a line put up again
+    /// starts younger, so it babbles again.
+    babbled: Option<(String, f32)>,
     round_blocks: crate::render::canvas::BlockTextures,
     builder_blocks: crate::render::canvas::BlockTextures,
     round_minimap: crate::minimap::RoundMinimap,
@@ -2197,7 +2207,15 @@ impl App {
         let mut lamp_tap = false;
         // The pause button, pressed this frame (`CornerButton::Pause`).
         let mut pause_tap = false;
-        let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
+        // The sound panel, where it is open: it closes with the corners,
+        // and while it is up a touch on it is the HUD's too.
+        if corners.is_none() {
+            self.sound_panel = false;
+            self.sound_drag = None;
+        }
+        let sound_panel = corners.as_ref().filter(|_| self.sound_panel).map(hud::sound_panel_rects);
+        let mut keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
+        keep_out.extend(sound_panel.map(|p| p.panel));
         self.touch.set_keep_out(&keep_out);
         // This frame's touch points, ids included so a stick follows its
         // own finger: on the window in UI points for the touch scheme,
@@ -2217,17 +2235,48 @@ impl App {
         if pressed {
             self.dev.note_press(window_pointer, touch_pressed);
         }
-        // Every corner button clicks; the sound button, and the M key,
-        // mute the game or bring its sound back, in any round, and keep
-        // the choice (docs/sound-system-prd.md section 4.5).
+        // Every corner button clicks. The sound button opens the sound
+        // panel or closes it, in any round, which runs on behind it: its
+        // switch mutes the game or brings its sound back, as the M key
+        // does, and its sliders set the levels, kept when a slider is let
+        // go (docs/sound-system-prd.md section 4.5).
         if pressed && corner_hit.is_some() {
             self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
         }
-        let sound_tap = pressed && corner_hit == Some(CornerButton::Sound);
-        if sound_tap || (crate::KEYBOARD_AVAILABLE && rl.is_key_pressed(KeyboardKey::KEY_M)) {
-            if sound_tap {
+        let mut mute_toggle = crate::KEYBOARD_AVAILABLE && rl.is_key_pressed(KeyboardKey::KEY_M);
+        if pressed && corner_hit == Some(CornerButton::Sound) {
+            self.touch.claim(&ui_touch_points);
+            self.sound_panel = !self.sound_panel;
+            self.sound_drag = None;
+        } else if let Some(panel) = sound_panel.filter(|_| pressed) {
+            if panel.panel.contains(ui_pointer) {
                 self.touch.claim(&ui_touch_points);
+                if panel.switch.contains(ui_pointer) {
+                    mute_toggle = true;
+                    self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
+                } else if let Some(i) = panel.rows.iter().position(|row| row.contains(ui_pointer)) {
+                    self.sound_drag = Some(hud::SoundLevel::ALL[i]);
+                }
+            } else {
+                // A press anywhere else closes it and goes on to whatever
+                // it lands on.
+                self.sound_panel = false;
             }
+        }
+        if let (Some(level), Some(panel)) = (self.sound_drag, sound_panel) {
+            let mut settings = self.audio.settings();
+            if held {
+                let i = hud::SoundLevel::ALL.iter().position(|l| *l == level).unwrap_or(0);
+                level.set(&mut settings, hud::SoundPanelRects::value_at(panel.tracks[i], ui_pointer.x));
+                self.audio.set_settings(settings);
+            } else {
+                // Let go: kept, and a click at the new level.
+                self.sound_drag = None;
+                save_audio_settings(&settings);
+                self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
+            }
+        }
+        if mute_toggle {
             let mut settings = self.audio.settings();
             settings.muted = !settings.muted;
             self.audio.set_settings(settings);
@@ -2933,6 +2982,7 @@ impl App {
         // or started another round since the hit tests ran.
         let mut chrome = self.session.play_chrome();
         chrome.muted = self.audio.settings().muted;
+        chrome.sound_panel = self.sound_panel.then(|| self.audio.settings());
         let corners = CornerShape::of(&chrome, game.players.count()).map(|shape| hud::corners(&ui, &shape));
         // A cluster fades while a tank, a shot or a blast is under it, on
         // the frame's own time - a lockstep `step`'s, as the particles'.
@@ -3018,6 +3068,15 @@ impl App {
                 .unwrap_or_else(|| key.to_string())
         };
         self.voice.update(game, voice_dt, &tuning(), |key| words(key).chars().count());
+        // A new line up babbles once, where the bong stands.
+        let line = (self.session.mode() == Driver::Play).then(|| self.voice.showing()).flatten().map(|l| (l.key.clone(), l.age));
+        if let Some((key, age)) = &line
+            && self.babbled.as_ref().is_none_or(|(last, last_age)| last != key || age < last_age)
+            && let Some(at) = game.bong_position()
+        {
+            self.audio.babble(at, game.map.bong_kind(crate::bong::Side::Player));
+        }
+        self.babbled = line;
         let bubble = (self.session.mode() == Driver::Play)
             .then(|| self.voice.showing())
             .flatten()

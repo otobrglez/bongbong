@@ -15,6 +15,7 @@ pub mod decode;
 pub mod engine;
 pub mod filter;
 pub mod limiter;
+pub mod reverb;
 pub mod wav;
 
 pub use decode::Pcm;

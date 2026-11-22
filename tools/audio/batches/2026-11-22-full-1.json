@@ -1,0 +1,31 @@
+{
+  "flow": "bWSh3NEAkd74zwRwIStm",
+  "name": "bongbong sfx 2026-11-22 full-1",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 1518,
+  "charged_credits": 332,
+  "note": "the queue holds about 60 generations: 59 of the 80 takes started, so 3 takes a sample (round_won 2)",
+  "nodes": {
+    "LHdKgOm1XF3IV8oGzUHK": "air_radio",
+    "xF1Rx6glCvUvTT5NTGHE": "lock_warning",
+    "FfpVp0ZgBMLKuy6fKrpx": "rod_call",
+    "P1U2JaSDSPtbF1ygmxfm": "rod_incoming",
+    "N1eWXO10wextP7416yAL": "wave_start",
+    "VmofKnRvG4W20nfvvYyi": "windup",
+    "qMlYkBIqOMbi4VodiJ03": "air_bomb",
+    "YMsHXRFBtivZ9kANC1ip": "aircraft_downed",
+    "OHv0izsWVUTzqqr4etPd": "blast_fuel",
+    "xZ6n7Q3FVUaVTJrkuC4W": "emp_burst",
+    "L8Asq9VxgStPdo2FCTbY": "gauss_fire",
+    "QuVAt12kmoSzXoPSKFKd": "rod_impact",
+    "bgdsQbU2wKm4AxB12CI5": "round_lost",
+    "jS78oscf3Sy3v0sdrOLA": "round_start",
+    "nNkpobYbmriX8EVawhpO": "round_won",
+    "RgtL14SS7U7afMbYzpzF": "sonic_hammer",
+    "AGuyHgA2V119vCfoONuP": "well_anchor",
+    "UNdqPJ1P4svh9Wte9laJ": "well_collapse",
+    "3TLdDxA8SU8cRw6C1P0B": "air_cannon",
+    "mnlKgWtbQE3r1oTVx5zo": "air_salvo"
+  },
+  "sessions": ["y7hbq4PXtxuuXH6Kk3yp","DbV8mOZxQTZty3cwd7oK","cz74LXi8hledkT9QL4b5","IqJr0a8L7Ub4feUp0TsP","Ax8sV2boTvY9Cwg8aoKW","Vx0ydvEIIijpn8PJuX8h","8VtQq7ciODfAd6nKRiEg","A0l5gYFaS0RGyYLxbett","gWby3APrI1cmaWOuNxlf","9w4lbIXu0OR7TR7YQOqW","wfVJZzhYxsjMjyU9yRDN","UCMuI44e6TQvyTlCf9Df","mvWQHMczB2ZdhJy5J05x","dnK3YMnrnFOBEJlyoSX4","QhJge0Kuc1xbl0uN1IWI","l5juQ75U7o1knf0zZ3EI","f7gj7tC2HUbPh9p8RDoT","zGXnkXXdqq0j8OiSkyfk","BWYGpqD1QNeesxtCupNO","3XG5Fg6mZd5C331SMcKf","md5FDrFxLGx3dgLB1KtI","knMHXbQS9fRxQPMltbIi","EoU9kvsbz5w1f48ykA5D","fiUlWL6MsQls5ZtoEAkt","DAWlo8gQBagxZmHKEb9Y","wNMUwxgOwXJBB7YWgkIW","ZVXbIXLhuUAzOmI6oC9O","VeOhr6KGooVPAf6I1Jd2","idhX4uDXuAZmqGujtoh3","ebNxrb53EFy8sAwv2sGo","l4HXYEtUpWnZ8nPbZMFY","U5qPFKwIPvPiGTJOEkTP","ABYMlI3HNAgl0cTqkDfG","rryygy6yLrWFMV0DKcrU","8AwKW81QG6QuSX7AY15t","uLEwr58EuODSXNQNov9x","6TSpj9YyrDZ5vzH5uCwP","vh7msVPVEc24XxzbfeE4","YdTheXX9mYGVqEXEa6b8","33whHFpNQhHv8z396Twn","N3aHiIe1DH0YoXLZ6QuD","27e36CBT7wsr3LxaZqwQ","7jPmRa6YidgXGCqtpESP","9UKW6T1LxMloduiJYwYx","iXrUKWRBj5Ehy8xVHni4","76tSKtDvPUIPIvN3hVO9","gaGviqvPQkin54DAsvsL","PtcNYQ9zNxljebMjwAkX","BiPg2jGJZEBtvzjRnfJf","Gpg4g6TJmJvDXOJjj7ws","uPlKfDWOuC1MciAy5WQs","yMfAv2ZqtIjtmfgmwOSG","f7EwtZHERLLh9l1QfZB7","sj7SrPvS3PLYXRHkng4U","HDbMGXkftP4m1MA9tKXU","RSYJy7hs7gWFWye8pqHm","uknXaZQAermJ0OT8nyN9","sHjzCC0Y0rSOcehbLamD","O6sdMnWCcYsVWvxUhQiM"]
+}

@@ -1297,6 +1297,11 @@ impl Game {
             if let Some(corners) = frame.corners {
                 let fade = Fade { left: frame.fade.left * c.hud_end, right: frame.fade.right * c.hud_end };
                 draw_corners(&mut d, corners, hud, chrome, self.players, textures, fade, &lines, minimap);
+                // The sound panel the sound button opened, over the
+                // minimap; the round runs on behind it.
+                if let Some(settings) = &chrome.sound_panel {
+                    crate::render::hud::draw_sound_panel(&mut d, &crate::hud::sound_panel_rects(corners), settings, corners.scale);
+                }
             }
 
             // The players question (docs/two-players.md): the same dim as

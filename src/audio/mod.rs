@@ -42,6 +42,7 @@ use crate::tuning::{Tuning, tuning};
 
 use bind::{At, Binding, Play};
 use cues::{Manifest, Steal};
+use dsp::reverb::Room;
 use dsp::{Command, VoiceId, VoiceParams, db_to_gain, gain_to_db};
 use space::{Heard, Space, View};
 use watch::{Watchers, Wish};
@@ -209,6 +210,7 @@ pub struct Audio {
     settings: Settings,
     sent_bus: [f32; 9],
     sent_master: (f32, bool),
+    sent_room: Option<Room>,
     paused: bool,
     variation: u64,
     recent: VecDeque<String>,
@@ -239,6 +241,7 @@ impl Audio {
             settings: Settings::default(),
             sent_bus: [f32::NAN; 9],
             sent_master: (f32::NAN, false),
+            sent_room: None,
             paused: false,
             variation: 0,
             recent: VecDeque::new(),
@@ -277,6 +280,13 @@ impl Audio {
     /// A UI sound, with no place.
     pub fn ui(&mut self, cue: &str) {
         self.pending.push(Play::new(cue, At::Nowhere));
+    }
+
+    /// The bong putting a line up (section 4.7): its babble where it
+    /// stands, no words, pitched by its kind. The app calls it when
+    /// `bubble::BongVoice` shows a new line.
+    pub fn babble(&mut self, at: Vec2, kind: crate::bong::BongKind) {
+        self.pending.push(Play::new(cues::ids::BONG_BABBLE.0, At::Point(at)).pitch(source::bong_pitch(kind)));
     }
 
     /// The commands the frame wrote, for the driver.
@@ -407,7 +417,22 @@ impl Audio {
             self.start(game, play, own, &t);
         }
         self.levels(&t);
+        self.room(game, &t);
         self.commands.push(Command::Beat);
+    }
+
+    /// The room the round's sounds ring in (section 4.3): an arena's
+    /// shorter, a field's longer and more open; sent when it changes.
+    fn room(&mut self, game: &Game, t: &Tuning) {
+        let seconds = match game.map.class() {
+            crate::framing::MapClass::Arena => t.audio_reverb_arena_s,
+            crate::framing::MapClass::Field => t.audio_reverb_field_s,
+        };
+        let room = Room { seconds, damp_hz: t.audio_reverb_damp_hz, gain: db_to_gain(t.audio_reverb_db) };
+        if self.sent_room != Some(room) {
+            self.sent_room = Some(room);
+            self.commands.push(Command::Room(room));
+        }
     }
 
     fn hash(&mut self, cue: &str, source: u64) -> u64 {
@@ -479,7 +504,7 @@ impl Audio {
             }
             let pcm = takes[(h as usize) % takes.len()].clone();
             let pitch = play.pitch * heard.doppler * pitch_j;
-            let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff };
+            let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff, send: heard.send };
             let vid = self.voice_id();
             let delay = heard.delay + play.after;
             ends = ends.max(self.time + delay as f64 + (pcm.seconds() / pitch.max(0.05)) as f64);
@@ -535,7 +560,7 @@ impl Audio {
                 for &(vid, li) in &inst.voices {
                     let layer = &cue.layers[li.min(cue.layers.len() - 1)];
                     let w = layer.weight(heard.distance);
-                    let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff };
+                    let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff, send: heard.send };
                     self.commands.push(Command::Update { id: vid, params });
                 }
                 continue;
@@ -552,7 +577,7 @@ impl Audio {
                 }
                 let pcm = takes[(h as usize) % takes.len()].clone();
                 let w = layer.weight(heard.distance);
-                let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff };
+                let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff, send: heard.send };
                 let offset = (h >> 16) as f32 / (1u64 << 48) as f32 * pcm.seconds();
                 let vid = self.voice_id();
                 self.commands.push(Command::Start { id: vid, pcm, bus: cue.bus.index(), looped: true, params, delay: 0.0, offset, fade_in: 0.15 });

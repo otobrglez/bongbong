@@ -31,7 +31,13 @@ keep it one sound, concrete, no visual words, "no music" (the model guide:
    second of audio per take). Above 2,000 estimated credits, or past the
    budget the owner set, ask first.
 4. `creative_run_flow_nodes {flow_id, node_ids}` - 4 takes each by default.
-   Never call it again to retry: every call is a new charge.
+   Never call it again to retry: every call is a new charge. The account's
+   queue holds about 60 generations: run at most 14 nodes a call, and the
+   next call only once the last one's sessions are all done, or the takes
+   past 60 fail with a 429 (lost, not charged).
+   The status replies are large (about 25k characters per 20 takes): for a
+   batch of many samples, hand the run, the polling and the fetch to a
+   subagent with these rules and keep only its report.
 5. Write `tools/audio/batches/<date>-<batch>.json`: `flow`, `name`, `model`,
    `estimate_credits`, `nodes` (node id -> sample id) and the run's
    `session_ids` (see `2026-11-22-core-1.json`).

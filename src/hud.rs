@@ -1442,6 +1442,108 @@ pub fn players_dialog_rects(area: Rect) -> PlayersDialogRects {
     PlayersDialogRects { panel, one, two }
 }
 
+// ---- the sound panel --------------------------------------------------------
+//
+// The sound button opens it (docs/sound-system-prd.md section 4.5) under the
+// right cluster, flush with its right edge, over the minimap; the round runs
+// on behind it, a room's as a local one. Its first row is SOUND and an ON/OFF
+// switch that mutes as the M key does; under it a slider per level the player
+// sets. Every row is the corners' row height, a finger's on a touch screen,
+// and the panel is laid out at the corners' scale.
+
+/// The sound panel's width at full size.
+pub const SOUND_PANEL_W: f32 = 260.0;
+/// A row's label column, the slider's track to its right.
+pub const SOUND_LABEL_W: f32 = 104.0;
+/// The ON/OFF switch at the end of the first row.
+pub const SOUND_SWITCH_W: f32 = 64.0;
+
+/// A level the panel's sliders set, top to bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoundLevel {
+    Master,
+    Effects,
+    Music,
+}
+
+impl SoundLevel {
+    pub const ALL: [SoundLevel; 3] = [SoundLevel::Master, SoundLevel::Effects, SoundLevel::Music];
+
+    pub fn get(self, s: &crate::audio::Settings) -> f32 {
+        match self {
+            SoundLevel::Master => s.master,
+            SoundLevel::Effects => s.effects,
+            SoundLevel::Music => s.music,
+        }
+    }
+
+    pub fn set(self, s: &mut crate::audio::Settings, value: f32) {
+        let value = value.clamp(0.0, 1.0);
+        match self {
+            SoundLevel::Master => s.master = value,
+            SoundLevel::Effects => s.effects = value,
+            SoundLevel::Music => s.music = value,
+        }
+    }
+
+    pub fn label(self) -> crate::text::Key {
+        use crate::text::keys;
+        match self {
+            SoundLevel::Master => keys::SOUND_MASTER,
+            SoundLevel::Effects => keys::SOUND_EFFECTS,
+            SoundLevel::Music => keys::SOUND_MUSIC,
+        }
+    }
+}
+
+/// The sound panel's geometry (UI points, at the corners' scale).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoundPanelRects {
+    pub panel: Rectangle,
+    /// The first row: SOUND and its switch.
+    pub title: Rectangle,
+    /// The ON/OFF switch: mutes the game and brings its sound back.
+    pub switch: Rectangle,
+    /// Each level's row, in `SoundLevel::ALL`'s order: a press anywhere
+    /// on it takes the slider.
+    pub rows: [Rectangle; 3],
+    /// Each row's track, the value read along it from 0 to 1.
+    pub tracks: [Rectangle; 3],
+}
+
+impl SoundPanelRects {
+    /// The value a pointer at `x` sets on `track`: its share of the way
+    /// along it, 0 left of it and 1 right of it.
+    pub fn value_at(track: Rectangle, x: f32) -> f32 {
+        if track.width <= 0.0 {
+            return 0.0;
+        }
+        ((x - track.x) / track.width).clamp(0.0, 1.0)
+    }
+}
+
+/// The sound panel under `corners`' right cluster: the one geometry its
+/// painter (`render::hud::draw_sound_panel`) and every hit test read.
+pub fn sound_panel_rects(corners: &Corners) -> SoundPanelRects {
+    let s = corners.scale;
+    let (pad, gap, row) = (PLATE_PAD * s, ROW_GAP * s, corners.row_h);
+    let w = SOUND_PANEL_W * s;
+    let right = corners.right.x + corners.right.width;
+    let top = corners.right.y + corners.right.height + CLUSTER_GAP * s;
+    let rows_h = 4.0 * row + 3.0 * gap;
+    let panel = Rectangle::new(right - w, top, w, rows_h + 2.0 * pad);
+    let (x, inner_w) = (panel.x + pad, w - 2.0 * pad);
+    let title = Rectangle::new(x, panel.y + pad, inner_w, row);
+    let switch = Rectangle::new(x + inner_w - SOUND_SWITCH_W * s, title.y, SOUND_SWITCH_W * s, row);
+    let row_at = |i: usize| Rectangle::new(x, title.y + (i as f32 + 1.0) * (row + gap), inner_w, row);
+    let rows = [row_at(0), row_at(1), row_at(2)];
+    // The track keeps half a knob clear at either end, so the knob at 0
+    // or 1 stays on the panel.
+    let knob = 8.0 * s;
+    let track = |r: Rectangle| Rectangle::new(r.x + SOUND_LABEL_W * s + knob, r.y, r.width - SOUND_LABEL_W * s - 2.0 * knob, r.height);
+    SoundPanelRects { panel, title, switch, rows, tracks: [track(rows[0]), track(rows[1]), track(rows[2])] }
+}
+
 /// A level's opening lines (docs/levels.md): its number over the mission
 /// banner and its title under it, half the banner's size.
 #[derive(Clone, Debug, PartialEq)]
@@ -1689,6 +1791,9 @@ pub struct PlayChrome {
     /// The game's sound is muted: the sound button shows the speaker
     /// struck out. The app sets it from its audio settings.
     pub muted: bool,
+    /// The sound panel is open under the right cluster
+    /// (`sound_panel_rects`), showing these settings. The app sets it.
+    pub sound_panel: Option<crate::audio::Settings>,
     /// The seat this window is playing in a room, whose block the left
     /// cluster shows. `None` in a couch round, where the first block is
     /// player 1's and the couch layouts apply.
@@ -2686,6 +2791,35 @@ mod hud_tests {
                 let unscaled = c.unscaled();
                 assert_eq!(unscaled.scale, 1.0);
                 assert!((unscaled.row_h - button_height(ui.touch)).abs() < 1e-3, "{what}");
+            }
+        }
+    }
+
+    /// The sound panel hangs under the right cluster, flush with its right
+    /// edge and inside the area, on every window: its switch on the title
+    /// row, a row per level under it, each a button's height at the
+    /// corners' scale, with its track right of the label column; a press
+    /// at either end of a track sets 0 or 1.
+    #[test]
+    fn the_sound_panel_hangs_under_the_right_cluster() {
+        for (screen, ui) in screens() {
+            for (shape_name, shape) in shapes() {
+                let what = format!("{shape_name} on {screen}");
+                let c = corners(&ui, &shape);
+                let p = sound_panel_rects(&c);
+                let right = c.right.x + c.right.width;
+                assert!((p.panel.x + p.panel.width - right).abs() < 1e-3, "{what}: flush right");
+                assert!(p.panel.y >= c.right.y + c.right.height, "{what}: under the cluster");
+                assert!(p.panel.x >= ui.area.x - 1e-3, "{what}: inside the area");
+                assert!(p.panel.y + p.panel.height <= ui.area.y + ui.area.h + 1e-3, "{what}: {:?} past the bottom", p.panel);
+                assert!(p.title.contains(Vec2::new(p.switch.x + 1.0, p.switch.y + 1.0)), "{what}: the switch on the title row");
+                for (row, track) in p.rows.iter().zip(p.tracks) {
+                    assert!((row.height - c.row_h).abs() < 1e-3, "{what}");
+                    assert!(row.y >= p.title.y + p.title.height && row.y + row.height <= p.panel.y + p.panel.height, "{what}");
+                    assert!(track.x > row.x + SOUND_LABEL_W * c.scale - 1e-3 && track.x + track.width < row.x + row.width, "{what}");
+                    assert_eq!(SoundPanelRects::value_at(track, track.x - 5.0), 0.0);
+                    assert_eq!(SoundPanelRects::value_at(track, track.x + track.width + 5.0), 1.0);
+                }
             }
         }
     }

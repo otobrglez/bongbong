@@ -1,0 +1,31 @@
+{
+  "flow": "OBN6Ep0t8D4clZahHQSQ",
+  "name": "bongbong sfx 2026-11-22 full-3",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 748,
+  "charged_credits": 224,
+  "note": "run in two calls (14 nodes, then 6): all 80 takes started and completed; both calls hit a concurrency limit that the service retried on its own, no take lost",
+  "nodes": {
+    "aGoxf8ee39i4lszwUCEo": "pickup_boost",
+    "s0MV4ObosBASJ1KUQGHK": "pickup_health",
+    "bRPaw2Cdr3QAxrJ0vahr": "pickup_weapon",
+    "dJL7xwNDCLRrIrSATz1Y": "plasma_fire",
+    "qndXI1cDIXkWXTWSNSmP": "portal_teleport",
+    "wZQTnk2jmMWFw8OqUjm8": "ram",
+    "3YpB0S95UbTglS43GAhR": "shield_break",
+    "7DztbZ7SANvbluLI7ydB": "slam",
+    "GIQ6YbjEevsatEwt9gcm": "slam_glass",
+    "2tpI25qIp77KaFafgLbK": "slam_rubber",
+    "wybHQnv6cPN4CaoOn3OP": "slam_wood",
+    "p2L0PJ6C01eC152Bsubi": "tesla_strike",
+    "Om0MTRsvVJkePAjDa3p4": "ui_beat",
+    "XqR7lCw5HyO9NjNgDar2": "ui_refuse",
+    "kWka3sUpwAThwmZAiotw": "well_fire",
+    "YbK9ESFbMo7vQlopoNFz": "bio_fire",
+    "zbH5mqO203bfPykzDbwc": "bio_splash",
+    "gozXc9M9eeuNFeE2MszZ": "crate_break",
+    "lLzwcGjKg3IBfmOwZgMg": "destroy_masonry",
+    "APL4ZBl7z6PfEXg7vH5Q": "destroy_metal"
+  },
+  "sessions": ["rFqXSNlYKzTVxO1n04vQ","R33kPNqomjVY2YTNQVfV","6pU28FTAjHDtzRMhagky","kgLQWbB3LbnRfxtQOT7T","375zhbGycmvX5SjqInni","vnlWJqT6iCqQqZ5uJqlh","8aDBsVeAFs5Nzuhhlhew","hRyQU1g9TEcFmocb5Njb","rAH47ccK3AeOJ1hQdhKm","aCFRTaOuLB3QrdYwhnkJ","YMZyaiO2DEVHjqiLdsiQ","7bwbKq2KefkLVOEOEapL","PvY5sS2NKJSTGyobdTTG","kI89TKOxon2BUcE6HBuD","O0Hy95ROGxYtdhefwSQH","F2RRpjopMMJjDpo3sxnD","anAhVAni5ievzHKxOSJZ","AeCLM3sxL3wfZbCk75ta","7szOsBikB065xZgCnLou","ZaTiivRrQazuzYxFkJlJ","RD850bxUhx0sBX1qfVwX","8rXeYYlL9fb72B0FRfV2","kk0qB7ilZQK5WHIKA174","s68L6zd9l9GX8tQCZf44","tWtpf3o8TftSwXqOEwYE","BxTZtloA44WQKL0N3Z66","DKZPqu0vBQe24LDrdwop","QcYV9idZVZt0zowqTIAQ","kvGdRK0VOr1NYj56OnWr","kYnqQq0Ob8NoAwm6J7zi","orf2bs4Gk8xYZYe6u0fn","6ssa6frvha6GrbyiqPTd","GwUul2sV0V8zrB6MsfcV","q5tmZjMXhBP4hcj3WAJd","NBqoS9PsquPYPLkK3ExU","oaH354DVPulctGn0WJlE","vr1gl1t0ev3jx2rP29JT","56hUIW6H4kwwJUaT4Goi","7lEISan3GrkovRIjvst2","TGUQSNWOOulTLvJu0YMK","wHf4jUCQxKqW8bDKR0VS","phI62tEOMY0ikmeKd1Nt","jhEWKG5aG7a0FKzT8aPI","qdk6YDGp5Z4RULJ184Rn","5yRG9an9aSQihwZsh7C7","Zj4V7hGvvoCZC34pxJ1p","V8PHyo6bszmNYUaMv3BS","UvOqCwBoThzXFWiBJ7vH","p0kwrS8tCSigPqXjCqvq","z7BZfYMXZzjUVwWZDIcr","ULU8kjaGtFW5kW3S4wYp","Hvthj3CwXisRRLUO0bRt","Mml3GVQzlU8zgFYrjm32","DuWH0qTNIsqH2bByglfu","EudNdOFQSOhtbs0yqTwj","I3aDtXbLAfB7U0cGNbRM","248BW6EdhrxiG3Ela1rH","keL3VtLKnVprdZU7IuDd","1CWCSdjl8DJ6feVNseUi","PFUviVGEVJE0uhOjXOHt","xg8yD32IoI01wrCL46Yx","6oNKg7N8eBWo1GEnivTq","M2fI5JcA8bMx9iNtWuWe","OrJN4pMAUJ4RDHgnKNEO","WOxLKILclmlcZcEAgCFI","4nzNVuukAbnsAaU0q70R","PKTR1O91JkxICH08EYYf","BqkZm8XBDzXYg9ZXLM81","inZ6cIazM9tOtDbQfmCb","rKrEpBb081DXmHsvCLej","g5oxRX0hObnWqPOc4Ajp","sfzBRE3VaU6xAwOFFqiC","HSmEFbHkssjjIWYpcG80","lgkibTVCtklszqCbyBOe","7NuFI4BNwDmRymtQxMQh","2xWNRrUk1HcpccVDE4qD","Mqb9U3srqs0e2Z7Ro3wT","BGSEwPHJNBzhLIexxFLA","zgDDrVw15wRgK1kOUQaU","ZIHWOcgTOeeVhxTWKEIa"]
+}

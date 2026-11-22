@@ -364,586 +364,2522 @@ prompt_influence = 0.5
   seconds = 0.26
 
 [sample.laser_fire]
+status = "approved"
 bus = "weapons"
 prompt = "sci-fi tank laser cannon firing, bright electric zap with a searing hum tail, no music"
 duration_seconds = 0.8
+  [[sample.laser_fire.take]]
+  file = "weapons/laser_fire_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "a30wpQ26tF85WN83eM14"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.00
+  peak_dbtp = -1.12
+  seconds = 0.76
+  [[sample.laser_fire.take]]
+  file = "weapons/laser_fire_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "MPld8wHLjaJxY0XSBLmV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.84
+  peak_dbtp = -1.00
+  seconds = 0.71
 
 [sample.plasma_fire]
+status = "approved"
 bus = "weapons"
 prompt = "plasma cannon firing a glowing bolt, deep electric whump with a crackling hiss, no music"
 duration_seconds = 0.8
+  [[sample.plasma_fire.take]]
+  file = "weapons/plasma_fire_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "A1Ix0jlyl4Us2eRZnQnP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.02
+  peak_dbtp = -1.00
+  seconds = 0.69
+  [[sample.plasma_fire.take]]
+  file = "weapons/plasma_fire_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "EgUoyKMV1hgasvTYJoo9"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.16
+  peak_dbtp = -1.00
+  seconds = 0.73
 
 [sample.missiles_fire]
+status = "approved"
 bus = "weapons"
 prompt = "small guided missile launching from a tube, sharp pop then a rushing rocket whoosh, no music"
 duration_seconds = 1.2
+  [[sample.missiles_fire.take]]
+  file = "weapons/missiles_fire_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "DTSwVJ20gAs6fAChwi2K"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.41
+  peak_dbtp = -1.00
+  seconds = 0.79
+  [[sample.missiles_fire.take]]
+  file = "weapons/missiles_fire_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "EM7XTf0lVch7SGoh20dx"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.95
+  peak_dbtp = -1.00
+  seconds = 0.98
 
 [sample.grenade_launch]
+status = "approved"
 bus = "weapons"
 prompt = "grenade launcher firing, hollow thunk of a launched grenade, metallic action, no music"
 duration_seconds = 0.6
+  [[sample.grenade_launch.take]]
+  file = "weapons/grenade_launch_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ABLFzCL7ifdcz0iGypKM"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.59
+  peak_dbtp = -1.00
+  seconds = 0.38
+  [[sample.grenade_launch.take]]
+  file = "weapons/grenade_launch_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "cqdHcD6Y80KKKiFUfhM2"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.83
+  peak_dbtp = -1.00
+  seconds = 0.28
 
 [sample.flamethrower_loop]
+status = "approved"
 bus = "weapons"
 prompt = "flamethrower spraying a continuous jet of fire, roaring whoosh of burning fuel, steady, no music"
 duration_seconds = 2.0
 loop = true
+  [[sample.flamethrower_loop.take]]
+  file = "weapons/flamethrower_loop_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "e1iMLqoo9zEuF1VFCuPF"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.00
+  peak_dbtp = -3.60
+  seconds = 2.00
+  [[sample.flamethrower_loop.take]]
+  file = "weapons/flamethrower_loop_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "fGH05KSU4cWUJJ9GX2sj"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.82
+  peak_dbtp = -1.44
+  seconds = 2.00
 
 [sample.sonic_hammer]
+status = "approved"
 bus = "weapons"
 prompt = "massive sonic blast weapon, deep concussive whomp of compressed air with a ringing shock, no music"
 duration_seconds = 1.5
+  [[sample.sonic_hammer.take]]
+  file = "weapons/sonic_hammer_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "YmNeV0vK03oWXMRHNTwh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.47
+  peak_dbtp = -1.00
+  seconds = 0.85
+  [[sample.sonic_hammer.take]]
+  file = "weapons/sonic_hammer_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "aNgTukOlMunAtxK326bN"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.04
+  peak_dbtp = -1.00
+  seconds = 0.85
 
 [sample.emp_burst]
+status = "approved"
 bus = "weapons"
 prompt = "electromagnetic pulse discharge, rising electric whine then a heavy crackling burst, no music"
 duration_seconds = 1.5
+  [[sample.emp_burst.take]]
+  file = "weapons/emp_burst_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "cH8BFTWw6wPhDo82Wd1X"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.53
+  peak_dbtp = -1.00
+  seconds = 1.28
+  [[sample.emp_burst.take]]
+  file = "weapons/emp_burst_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "TUah1RRns1XrDauWtJm6"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.64
+  peak_dbtp = -1.00
+  seconds = 1.00
 
 [sample.emp_disabled]
+status = "approved"
 bus = "impacts"
 prompt = "electronics shorting out, sputtering sparks and a dying electric buzz, no music"
 duration_seconds = 0.8
+  [[sample.emp_disabled.take]]
+  file = "impacts/emp_disabled_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "AAx25JwvkPR7pGatYuuL"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.39
+  peak_dbtp = -1.00
+  seconds = 0.66
+  [[sample.emp_disabled.take]]
+  file = "impacts/emp_disabled_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "qjViNsBy2276vgiwyeQK"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.21
+  peak_dbtp = -1.00
+  seconds = 0.74
 
 [sample.gauss_fire]
+status = "approved"
 bus = "weapons"
 prompt = "railgun firing, violent electromagnetic crack with a supersonic snap and a metallic ring, no music"
 duration_seconds = 1.2
+  [[sample.gauss_fire.take]]
+  file = "weapons/gauss_fire_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "5sySfknlHl7jMJ9Hy47h"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.10
+  peak_dbtp = -1.00
+  seconds = 1.16
+  [[sample.gauss_fire.take]]
+  file = "weapons/gauss_fire_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "JjtwNXIlQFEACTMx7cIU"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.95
+  peak_dbtp = -1.00
+  seconds = 1.00
 
 [sample.gauss_charge_loop]
+status = "approved"
 bus = "weapons"
 prompt = "railgun capacitor charging, steady rising electric whine and hum, no music"
 duration_seconds = 2.0
 loop = true
+  [[sample.gauss_charge_loop.take]]
+  file = "weapons/gauss_charge_loop_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "uB0tI8skIKJRHwU91Pa6"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.51
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.gauss_charge_loop.take]]
+  file = "weapons/gauss_charge_loop_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "LnpqGYUJch6syeu4jAUA"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.67
+  peak_dbtp = -1.00
+  seconds = 2.00
 
 [sample.gauss_vent]
+status = "approved"
 bus = "weapons"
 prompt = "high pressure steam and electric discharge venting from a weapon, hissing sputter, no music"
 duration_seconds = 1.0
+  [[sample.gauss_vent.take]]
+  file = "weapons/gauss_vent_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "2BEUhPhwknBlUgpe6XTY"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.15
+  peak_dbtp = -1.00
+  seconds = 0.91
+  [[sample.gauss_vent.take]]
+  file = "weapons/gauss_vent_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "jg8uP92aiacfXlGnr8SO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.62
+  peak_dbtp = -1.00
+  seconds = 0.91
 
 [sample.drone_launch]
+status = "approved"
 bus = "weapons"
 prompt = "small quadcopter drones launching, rising buzz of tiny rotors and a release clack, no music"
 duration_seconds = 1.0
+  [[sample.drone_launch.take]]
+  file = "weapons/drone_launch_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "zW90U8I3PGPsPRXAq0qG"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.63
+  peak_dbtp = -1.00
+  seconds = 0.98
+  [[sample.drone_launch.take]]
+  file = "weapons/drone_launch_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "BZ4kkrWjheL6idybJZ1T"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.19
+  peak_dbtp = -1.00
+  seconds = 0.96
 
 [sample.drone_burst]
+status = "approved"
 bus = "explosions"
 prompt = "small drone exploding, sharp crack of a light charge and plastic debris, no music"
 duration_seconds = 1.0
+  [[sample.drone_burst.take]]
+  file = "explosions/drone_burst_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "AtRzhAdeQkf0pYErf98M"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.23
+  peak_dbtp = -1.00
+  seconds = 0.56
+  [[sample.drone_burst.take]]
+  file = "explosions/drone_burst_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "5DtShtUAv8idtz98aNbe"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.31
+  peak_dbtp = -1.00
+  seconds = 0.40
 
 [sample.drone_downed]
+status = "approved"
 bus = "impacts"
 prompt = "small drone shot down, rotor sputter and a plastic crunch, no music"
 duration_seconds = 0.8
+  [[sample.drone_downed.take]]
+  file = "impacts/drone_downed_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "CJqWNOoF5wUrRahJ9CFX"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.62
+  peak_dbtp = -1.00
+  seconds = 0.65
+  [[sample.drone_downed.take]]
+  file = "impacts/drone_downed_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "2kU69mzRMBPma3lsvrG7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.62
+  peak_dbtp = -1.07
+  seconds = 0.66
 
 [sample.rod_call]
+status = "approved"
 bus = "warnings"
 prompt = "orbital strike designator locking on, rising electronic tone with a radio blip, no music"
 duration_seconds = 1.2
+  [[sample.rod_call.take]]
+  file = "warnings/rod_call_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "tmZ95YPXmXriEckV9BmD"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.65
+  peak_dbtp = -5.38
+  seconds = 0.63
 
 [sample.rod_incoming]
+status = "approved"
 bus = "warnings"
 prompt = "incoming projectile falling from the sky, descending shrill whistle growing louder, no music"
 duration_seconds = 3.0
+  [[sample.rod_incoming.take]]
+  file = "warnings/rod_incoming_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "jI9bycICutte5nmrfawC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.00
+  peak_dbtp = -9.08
+  seconds = 3.00
 
 [sample.rod_impact]
+status = "approved"
 bus = "explosions"
 prompt = "huge kinetic orbital impact, earth shaking boom, crushing crack and rumbling debris, no music"
 duration_seconds = 3.5
+  [[sample.rod_impact.take]]
+  file = "explosions/rod_impact_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "tIroNWQc7InlKtU64XNU"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.06
+  peak_dbtp = -1.00
+  seconds = 3.03
+  [[sample.rod_impact.take]]
+  file = "explosions/rod_impact_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "VaxdLgGgT1nsy1EQqZ6X"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.03
+  peak_dbtp = -1.00
+  seconds = 2.71
 
 [sample.well_fire]
+status = "approved"
 bus = "weapons"
 prompt = "dark energy orb launching, low warping whoosh with a subsonic hum, no music"
 duration_seconds = 1.0
+  [[sample.well_fire.take]]
+  file = "weapons/well_fire_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "iIviJA0mk3IvTagBMWzG"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.13
+  peak_dbtp = -1.00
+  seconds = 0.85
+  [[sample.well_fire.take]]
+  file = "weapons/well_fire_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "VsPHJzwDTCuT6wU10e9D"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.90
+  peak_dbtp = -3.88
+  seconds = 0.93
 
 [sample.well_anchor]
+status = "approved"
 bus = "weapons"
 prompt = "gravity well forming, deep pulling hum that bends and warbles, sucking air, no music"
 duration_seconds = 2.0
+  [[sample.well_anchor.take]]
+  file = "weapons/well_anchor_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "kgzeRgplcF450BpGBepb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.58
+  peak_dbtp = -1.00
+  seconds = 1.16
+  [[sample.well_anchor.take]]
+  file = "weapons/well_anchor_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "FnhNjinYRpf2wwYmVN88"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.86
+  peak_dbtp = -1.00
+  seconds = 1.06
 
 [sample.well_collapse]
+status = "approved"
 bus = "explosions"
 prompt = "gravity well collapsing, imploding whomp then a reversed boom, no music"
 duration_seconds = 1.5
+  [[sample.well_collapse.take]]
+  file = "explosions/well_collapse_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "LxxMUwTcgVyD4McfWGA9"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.50
+  peak_dbtp = -1.00
+  seconds = 1.01
+  [[sample.well_collapse.take]]
+  file = "explosions/well_collapse_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "C5bKRDvxtGZp4z4UrZ1t"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.00
+  peak_dbtp = -1.72
+  seconds = 0.29
 
 [sample.missile_dud]
+status = "approved"
 bus = "impacts"
 prompt = "dud missile clanking to the ground without exploding, metallic thud and fizzle, no music"
 duration_seconds = 0.8
 
 # Planned: impacts.
+  [[sample.missile_dud.take]]
+  file = "impacts/missile_dud_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "ksaEvIrKl9Y8WHSdMPQX"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.89
+  peak_dbtp = -1.00
+  seconds = 0.73
+  [[sample.missile_dud.take]]
+  file = "impacts/missile_dud_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "le2sHzrrD1cEuahfiFH4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.47
+  peak_dbtp = -1.00
+  seconds = 0.69
 
 [sample.hit_shell_wood]
+status = "approved"
 bus = "impacts"
 prompt = "shell smashing through a wooden wall, splintering crack of planks, no music, no reverb"
 duration_seconds = 0.8
+  [[sample.hit_shell_wood.take]]
+  file = "impacts/hit_shell_wood_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "63x0Vs7EWfGZ7VfUmKR4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.42
+  peak_dbtp = -1.00
+  seconds = 0.74
+  [[sample.hit_shell_wood.take]]
+  file = "impacts/hit_shell_wood_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "On5ZU8t4IGuvZu25homS"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.77
+  peak_dbtp = -1.00
+  seconds = 0.49
 
 [sample.hit_glass]
+status = "approved"
 bus = "impacts"
 prompt = "thick glass pane shattering from a hit, bright crash and tinkling shards, no music"
 duration_seconds = 1.0
+  [[sample.hit_glass.take]]
+  file = "impacts/hit_glass_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "LKtHrvwgNAYBG2ZB3Oux"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.31
+  peak_dbtp = -1.00
+  seconds = 0.83
+  [[sample.hit_glass.take]]
+  file = "impacts/hit_glass_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "zQlmgCa0MEoAaZrcQllP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.20
+  peak_dbtp = -1.00
+  seconds = 0.79
 
 [sample.hit_earth]
+status = "approved"
 bus = "impacts"
 prompt = "shell thudding into sandbags, dull heavy thump and pouring sand, no music"
 duration_seconds = 0.7
+  [[sample.hit_earth.take]]
+  file = "impacts/hit_earth_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ZLscOkLh7OUCoTztz30F"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.12
+  peak_dbtp = -1.00
+  seconds = 0.41
+  [[sample.hit_earth.take]]
+  file = "impacts/hit_earth_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "nT6aV07n6ywogugX5NIb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.25
+  peak_dbtp = -1.00
+  seconds = 0.40
 
 [sample.hit_foliage]
+status = "approved"
 bus = "impacts"
 prompt = "shell ripping through a tree, cracking branches and rustling leaves, no music"
 duration_seconds = 0.8
+  [[sample.hit_foliage.take]]
+  file = "impacts/hit_foliage_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "dCgt34XDLCxot02HRhZm"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.62
+  peak_dbtp = -1.00
+  seconds = 0.59
+  [[sample.hit_foliage.take]]
+  file = "impacts/hit_foliage_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "Orutz7tYMZJzrPtbHYqu"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.63
+  peak_dbtp = -1.00
+  seconds = 0.65
 
 [sample.hit_bullet_metal]
+status = "approved"
 bus = "impacts"
 prompt = "bullets pinging off steel armour, sharp metallic ping, no music"
-duration_seconds = 0.4
+duration_seconds = 0.5
+  [[sample.hit_bullet_metal.take]]
+  file = "impacts/hit_bullet_metal_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "C3PClurWZw0UnRPUXo44"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.43
+  peak_dbtp = -1.00
+  seconds = 0.38
+  [[sample.hit_bullet_metal.take]]
+  file = "impacts/hit_bullet_metal_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "kjLzk7R1pswLED495n5k"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.63
+  peak_dbtp = -1.00
+  seconds = 0.38
 
 [sample.hit_bullet_masonry]
+status = "approved"
 bus = "impacts"
 prompt = "bullet striking a stone wall, short crack and chip of stone, no music"
-duration_seconds = 0.4
+duration_seconds = 0.5
+  [[sample.hit_bullet_masonry.take]]
+  file = "impacts/hit_bullet_masonry_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "RITmh0nnz78fQJhVju5W"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.20
+  peak_dbtp = -1.00
+  seconds = 0.35
+  [[sample.hit_bullet_masonry.take]]
+  file = "impacts/hit_bullet_masonry_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "xswE1mogDoBPMIXjP7Gu"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.06
+  peak_dbtp = -1.00
+  seconds = 0.38
 
 [sample.hit_energy]
+status = "approved"
 bus = "impacts"
 prompt = "energy bolt striking metal, sizzling electric splash and hiss, no music"
 duration_seconds = 0.6
+  [[sample.hit_energy.take]]
+  file = "impacts/hit_energy_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "U6lHDCFh2T93luT5DWBg"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.81
+  peak_dbtp = -3.13
+  seconds = 0.54
+  [[sample.hit_energy.take]]
+  file = "impacts/hit_energy_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "BP9PmsbhQ5SiXPD1LsW3"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.00
+  peak_dbtp = -3.51
+  seconds = 0.51
 
 [sample.hit_flame]
+status = "approved"
 bus = "impacts"
 prompt = "flames licking against metal, short fiery whoosh and sizzle, no music"
 duration_seconds = 0.6
+  [[sample.hit_flame.take]]
+  file = "impacts/hit_flame_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "rpj99kdMQoFrLVtrVpcV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.00
+  peak_dbtp = -2.54
+  seconds = 0.48
+  [[sample.hit_flame.take]]
+  file = "impacts/hit_flame_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "PvyUwtSUe2RDikVSiLnr"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.71
+  peak_dbtp = -1.76
+  seconds = 0.50
 
 [sample.ricochet]
+status = "approved"
 bus = "impacts"
 prompt = "bullet ricochet off steel, sharp whining zing that flies away, no music"
 duration_seconds = 0.6
+  [[sample.ricochet.take]]
+  file = "impacts/ricochet_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "c14wDVVC6hGEGyYyonv7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.25
+  peak_dbtp = -1.00
+  seconds = 0.48
+  [[sample.ricochet.take]]
+  file = "impacts/ricochet_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "lMmEwZpPT7RRnhI5wjHF"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.68
+  peak_dbtp = -1.00
+  seconds = 0.60
 
 [sample.shield_break]
+status = "approved"
 bus = "impacts"
 prompt = "energy shield shattering, crystalline crack and a collapsing electric hum, no music"
 duration_seconds = 1.0
+  [[sample.shield_break.take]]
+  file = "impacts/shield_break_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "EZG3UfRm0V5HErgIKSoU"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.11
+  peak_dbtp = -1.61
+  seconds = 0.90
+  [[sample.shield_break.take]]
+  file = "impacts/shield_break_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "NO3qLHD2nP7sq8exmQV8"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.95
+  peak_dbtp = -2.68
+  seconds = 0.94
 
 [sample.shells_collide]
+status = "approved"
 bus = "impacts"
 prompt = "two shells colliding in mid air, sharp metallic clang and a small burst, no music"
 duration_seconds = 0.7
 
 # Planned: explosions.
+  [[sample.shells_collide.take]]
+  file = "impacts/shells_collide_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "vukAn16JfFI2NR5mvdtl"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.24
+  peak_dbtp = -1.00
+  seconds = 0.31
+  [[sample.shells_collide.take]]
+  file = "impacts/shells_collide_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "zFVXyIsxzqNfNXbrG9kB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.97
+  peak_dbtp = -1.00
+  seconds = 0.27
 
 [sample.blast_fuel]
+status = "approved"
 bus = "explosions"
 prompt = "fuel tank exploding, big fiery roaring fireball, burning debris, no music"
 duration_seconds = 2.5
+  [[sample.blast_fuel.take]]
+  file = "explosions/blast_fuel_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "PpvEkElLRbsp9FxVXeRN"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.24
+  peak_dbtp = -1.00
+  seconds = 2.16
+  [[sample.blast_fuel.take]]
+  file = "explosions/blast_fuel_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "OS06fF6XM2B8gexhGacY"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.12
+  peak_dbtp = -1.00
+  seconds = 2.11
 
 [sample.blast_small]
+status = "approved"
 bus = "explosions"
 prompt = "small missile explosion, sharp punchy blast with a short crackle, no music"
 duration_seconds = 1.2
+  [[sample.blast_small.take]]
+  file = "explosions/blast_small_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ZSBXWjAUyweaBngG8JvC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.98
+  peak_dbtp = -1.00
+  seconds = 1.10
+  [[sample.blast_small.take]]
+  file = "explosions/blast_small_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "BNW9EhhVgH5ZBthSN9HB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.35
+  peak_dbtp = -1.00
+  seconds = 0.95
 
 [sample.blast_grenade]
+status = "approved"
 bus = "explosions"
 prompt = "grenade explosion, sharp crack, dirt and shrapnel spray, no music"
 duration_seconds = 1.5
+  [[sample.blast_grenade.take]]
+  file = "explosions/blast_grenade_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "9rNveXrk3W41gKr6amBp"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.85
+  peak_dbtp = -1.00
+  seconds = 1.11
+  [[sample.blast_grenade.take]]
+  file = "explosions/blast_grenade_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "g6SEC7ReWkjLzmJOWOYP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.70
+  peak_dbtp = -1.00
+  seconds = 0.97
 
 [sample.lava_bomb]
+status = "approved"
 bus = "explosions"
 prompt = "molten lava bomb hitting the ground, heavy splat and sizzling burst, no music"
 duration_seconds = 1.5
+  [[sample.lava_bomb.take]]
+  file = "explosions/lava_bomb_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "FRC8LbhiDhznbVh17PWJ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.30
+  peak_dbtp = -1.00
+  seconds = 1.27
+  [[sample.lava_bomb.take]]
+  file = "explosions/lava_bomb_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ewzIvSRrnpgESSm8F4o7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.61
+  peak_dbtp = -1.00
+  seconds = 1.15
 
 [sample.drum_launch]
+status = "approved"
 bus = "explosions"
 prompt = "steel drum blown into the air, hollow metallic clang and whoosh, no music"
 duration_seconds = 1.0
+  [[sample.drum_launch.take]]
+  file = "explosions/drum_launch_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "wvlG4RfIgXLHIgej8R5d"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.27
+  peak_dbtp = -1.00
+  seconds = 0.65
+  [[sample.drum_launch.take]]
+  file = "explosions/drum_launch_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "1qfaiL7nkoFb15uGVfYr"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.46
+  peak_dbtp = -1.00
+  seconds = 0.85
 
 [sample.cookoff]
+status = "approved"
 bus = "explosions"
 prompt = "ammunition cooking off inside a burning vehicle, rapid popping and crackling bursts, no music"
 duration_seconds = 2.0
+  [[sample.cookoff.take]]
+  file = "explosions/cookoff_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "EI1G6774070hWuI2Cnzw"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.11
+  peak_dbtp = -1.00
+  seconds = 1.63
+  [[sample.cookoff.take]]
+  file = "explosions/cookoff_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "nvhiVZSyOWI8efY3rkY4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.58
+  peak_dbtp = -1.00
+  seconds = 1.50
 
 [sample.air_bomb]
+status = "approved"
 bus = "explosions"
 prompt = "aircraft bomb detonating, massive deep blast, ground shaking, no music"
 duration_seconds = 2.5
 
 # Planned: vehicles.
+  [[sample.air_bomb.take]]
+  file = "explosions/air_bomb_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "vKgHc5KeXWir8CXyLDlO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.93
+  peak_dbtp = -1.00
+  seconds = 2.10
+  [[sample.air_bomb.take]]
+  file = "explosions/air_bomb_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "blMPyrA4GKLTbcfzKUNz"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.56
+  peak_dbtp = -1.00
+  seconds = 1.97
 
 [sample.engine_twin_loop]
+status = "approved"
 bus = "vehicles"
 prompt = "two huge diesel engines running together in a super heavy tank, deep layered growl, constant revs, no music"
 duration_seconds = 3.0
 loop = true
+  [[sample.engine_twin_loop.take]]
+  file = "vehicles/engine_twin_loop_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "hyP8Az2QA6uKuZmvDSlm"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.28
+  seconds = 3.00
+  [[sample.engine_twin_loop.take]]
+  file = "vehicles/engine_twin_loop_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "AtFd9QK5USEEFrRErGnL"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.49
+  seconds = 3.00
 
 [sample.ground_grass_loop]
+status = "approved"
 bus = "vehicles"
 prompt = "heavy tracks rolling through grass, steady swishing and soft crunching, no engine, no music"
 duration_seconds = 2.0
 loop = true
+  [[sample.ground_grass_loop.take]]
+  file = "vehicles/ground_grass_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "CdpH2Q8GpIdo7WD7Z0oI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -1.13
+  seconds = 2.00
+  [[sample.ground_grass_loop.take]]
+  file = "vehicles/ground_grass_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "O5ZbLUx3SwoVOWCnWb23"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.08
+  peak_dbtp = -1.00
+  seconds = 1.96
 
 [sample.ground_sand_loop]
+status = "approved"
 bus = "vehicles"
 prompt = "heavy tracks churning through dry sand, steady hissing grind, no engine, no music"
 duration_seconds = 2.0
 loop = true
+  [[sample.ground_sand_loop.take]]
+  file = "vehicles/ground_sand_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "gugo5QVnbiUu7ndrKHXV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -2.76
+  seconds = 2.00
+  [[sample.ground_sand_loop.take]]
+  file = "vehicles/ground_sand_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "mwwnFsgqnic8CGvGD4jX"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -1.10
+  seconds = 2.00
 
 [sample.ground_water_loop]
+status = "approved"
 bus = "vehicles"
 prompt = "heavy vehicle driving through shallow water, continuous splashing and sloshing, no engine, no music"
 duration_seconds = 2.0
 loop = true
+  [[sample.ground_water_loop.take]]
+  file = "vehicles/ground_water_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "7TVHBavccaQ4RCcptuXw"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.07
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.ground_water_loop.take]]
+  file = "vehicles/ground_water_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "z9ybwECGvbVaDFGK3fnc"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -3.42
+  seconds = 2.00
 
 [sample.ground_ice_loop]
+status = "approved"
 bus = "vehicles"
 prompt = "heavy tracks grinding over ice, steady crunching and cracking, no engine, no music"
 duration_seconds = 2.0
 loop = true
+  [[sample.ground_ice_loop.take]]
+  file = "vehicles/ground_ice_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "JJdWAz64L1bdZbsw11qM"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.26
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.ground_ice_loop.take]]
+  file = "vehicles/ground_ice_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "wzA2PgykwDS2jLFfOObf"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.78
+  peak_dbtp = -1.00
+  seconds = 2.00
 
 [sample.slam]
+status = "approved"
 bus = "impacts"
 prompt = "heavy tank slamming into a wall, deep crunching metal impact, no music"
 duration_seconds = 1.0
+  [[sample.slam.take]]
+  file = "impacts/slam_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "k6GeLz3w2WEqM0NDVeHo"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.78
+  peak_dbtp = -1.00
+  seconds = 1.00
+  [[sample.slam.take]]
+  file = "impacts/slam_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "wv6XSlrmxA3uXzVDq0Pf"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.48
+  peak_dbtp = -1.00
+  seconds = 0.97
 
 [sample.slam_glass]
+status = "approved"
 bus = "impacts"
 prompt = "heavy steel vehicle bumping into a thick glass window, sharp glassy crack and rattle, no music"
 duration_seconds = 1.0
+  [[sample.slam_glass.take]]
+  file = "impacts/slam_glass_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "2e6oAcC5GXELOio9ObWF"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.36
+  peak_dbtp = -1.00
+  seconds = 0.70
+  [[sample.slam_glass.take]]
+  file = "impacts/slam_glass_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "Fj3i1hETOhNiLRPPxwID"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.65
+  peak_dbtp = -1.00
+  seconds = 0.72
 
 [sample.slam_wood]
+status = "approved"
 bus = "impacts"
 prompt = "heavy steel vehicle ramming a thick timber wall, deep wooden thud and creak, no music"
 duration_seconds = 1.0
+  [[sample.slam_wood.take]]
+  file = "impacts/slam_wood_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "vcs34dUaEza5ZLV2whyi"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.48
+  peak_dbtp = -1.00
+  seconds = 0.56
+  [[sample.slam_wood.take]]
+  file = "impacts/slam_wood_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "dMpqQPnITdORUjkPjnun"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.04
+  peak_dbtp = -1.00
+  seconds = 0.63
 
 [sample.slam_tree]
+status = "approved"
 bus = "impacts"
 prompt = "heavy vehicle bumping a young tree, trunk creaking and leaves shaking and rustling, no music"
 duration_seconds = 1.5
+  [[sample.slam_tree.take]]
+  file = "impacts/slam_tree_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "qHPpDbRu6jMIQ8QWpsN1"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.73
+  peak_dbtp = -1.00
+  seconds = 0.97
+  [[sample.slam_tree.take]]
+  file = "impacts/slam_tree_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "NWbUgqx3QDooDQWN2bE4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.86
+  peak_dbtp = -1.03
+  seconds = 0.83
 
 [sample.slam_soft]
+status = "approved"
 bus = "impacts"
 prompt = "heavy steel vehicle pushing into sandbags and hay bales, dull soft thump with gritty rustle, no music"
 duration_seconds = 0.8
+  [[sample.slam_soft.take]]
+  file = "impacts/slam_soft_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "7HSUHtcT15D8RTS0Sv4W"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.95
+  peak_dbtp = -1.00
+  seconds = 0.61
+  [[sample.slam_soft.take]]
+  file = "impacts/slam_soft_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "Yx5BAEkjBf77hC3JCc1P"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.14
+  peak_dbtp = -1.00
+  seconds = 0.60
 
 [sample.slam_rubber]
+status = "approved"
 bus = "impacts"
 prompt = "heavy vehicle bouncing off a stack of old rubber tyres, springy rubber boing and thump, no music"
 duration_seconds = 1.0
+  [[sample.slam_rubber.take]]
+  file = "impacts/slam_rubber_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "l4OBjqOb1jOFNaqWHJgY"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.57
+  peak_dbtp = -1.00
+  seconds = 0.81
+  [[sample.slam_rubber.take]]
+  file = "impacts/slam_rubber_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "I7h16lIwqQKuHP0eFe3v"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.97
+  peak_dbtp = -1.00
+  seconds = 0.71
 
 [sample.hit_rubber]
+status = "approved"
 bus = "impacts"
 prompt = "bullet and small shell striking a stack of rubber tyres, dull rubbery thwack, no music"
 duration_seconds = 0.6
+  [[sample.hit_rubber.take]]
+  file = "impacts/hit_rubber_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "fyxTlsTNjMicfVdMRqqQ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.54
+  peak_dbtp = -2.76
+  seconds = 0.31
+  [[sample.hit_rubber.take]]
+  file = "impacts/hit_rubber_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "zcl3QxgBymAiRb6WsJkq"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.61
+  peak_dbtp = -2.61
+  seconds = 0.60
 
 [sample.destroy_rubber]
+status = "approved"
 bus = "impacts"
 prompt = "stack of rubber tyres blown apart and tumbling down, rubbery thumps and bounces, no music"
 duration_seconds = 1.5
+  [[sample.destroy_rubber.take]]
+  file = "impacts/destroy_rubber_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "yu34eB8MKjGoNst8IucI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.51
+  peak_dbtp = -1.00
+  seconds = 0.33
+  [[sample.destroy_rubber.take]]
+  file = "impacts/destroy_rubber_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "rhIa0JaPwko443brtkxw"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.06
+  peak_dbtp = -1.00
+  seconds = 0.20
 
 [sample.crate_land]
+status = "approved"
 bus = "impacts"
 prompt = "small wooden supply crate thrown through the air landing on dirt, short hollow wooden thump, no music"
 duration_seconds = 0.6
+  [[sample.crate_land.take]]
+  file = "impacts/crate_land_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "9wKefD1cgJWOEWI6OWBz"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.45
+  peak_dbtp = -1.00
+  seconds = 0.38
+  [[sample.crate_land.take]]
+  file = "impacts/crate_land_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "uRryBzoqxYbU6Z6agM3c"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.05
+  peak_dbtp = -1.00
+  seconds = 0.40
 
 [sample.scrape_loop]
+status = "approved"
 bus = "vehicles"
 prompt = "steel hull scraping along a stone wall, continuous grinding screech, no music"
 duration_seconds = 2.0
 loop = true
+  [[sample.scrape_loop.take]]
+  file = "vehicles/scrape_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "V32jiv4h2QFXc742QUz0"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -5.03
+  seconds = 2.00
+  [[sample.scrape_loop.take]]
+  file = "vehicles/scrape_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "Uh9dxqWq0sXMzzbuF8Uk"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -4.66
+  seconds = 2.00
 
 [sample.ram]
+status = "approved"
 bus = "impacts"
 prompt = "two heavy tanks ramming each other, huge clanging metal crash, no music"
 duration_seconds = 1.0
 
 # Planned: pickups, the bong, towers, the world.
+  [[sample.ram.take]]
+  file = "impacts/ram_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "2RkXAYECl4R0ppq9CEWX"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.94
+  peak_dbtp = -1.00
+  seconds = 0.97
+  [[sample.ram.take]]
+  file = "impacts/ram_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "S2NHhpOUUXHDZcF5qmFK"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.46
+  peak_dbtp = -1.00
+  seconds = 0.79
 
 [sample.pickup_weapon]
+status = "approved"
 bus = "ui"
 prompt = "picking up a weapon crate, solid mechanical cha-chunk of a gun being loaded, no music"
 duration_seconds = 0.6
+  [[sample.pickup_weapon.take]]
+  file = "ui/pickup_weapon_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "mlUjrmTdm2AAdbVTmY9y"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.81
+  peak_dbtp = -5.36
+  seconds = 0.55
 
 [sample.pickup_health]
+status = "approved"
 bus = "ui"
 prompt = "health pickup, warm rising chime with a soft mechanical click, no music"
 duration_seconds = 0.6
+  [[sample.pickup_health.take]]
+  file = "ui/pickup_health_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "V9YUEXPEIPjB5qEezwJj"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.88
+  peak_dbtp = -7.42
+  seconds = 0.40
 
 [sample.pickup_ammo]
+status = "approved"
 bus = "ui"
 prompt = "ammunition box picked up, rattle of shells and a latch snap, no music"
 duration_seconds = 0.5
+  [[sample.pickup_ammo.take]]
+  file = "ui/pickup_ammo_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "FVLlOclAP9UVeltmlRGT"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.20
+  peak_dbtp = -4.51
+  seconds = 0.45
 
 [sample.pickup_boost]
+status = "approved"
 bus = "ui"
 prompt = "power-up activating, short rising electric whoosh, no music"
 duration_seconds = 0.6
+  [[sample.pickup_boost.take]]
+  file = "ui/pickup_boost_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "23akbeQiHz2Z08JpbkNS"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -6.01
+  seconds = 0.50
 
 [sample.crate_break]
+status = "approved"
 bus = "impacts"
 prompt = "wooden supply crate smashed open, splintering crack and scattering contents, no music"
 duration_seconds = 0.8
+  [[sample.crate_break.take]]
+  file = "impacts/crate_break_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "g7F3D9vvLjQrUwgP8yU7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.06
+  peak_dbtp = -1.00
+  seconds = 0.50
+  [[sample.crate_break.take]]
+  file = "impacts/crate_break_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "CJ3NRV2shKge3OkJzHEi"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.04
+  peak_dbtp = -1.00
+  seconds = 0.59
 
 [sample.crate_drop]
+status = "approved"
 bus = "world"
 prompt = "supply crate landing on the ground from a parachute, heavy wooden thud, no music"
 duration_seconds = 0.7
+  [[sample.crate_drop.take]]
+  file = "world/crate_drop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "hMz8CMZBU0Qj9PdIP1Qr"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.99
+  peak_dbtp = -9.03
+  seconds = 0.57
+  [[sample.crate_drop.take]]
+  file = "world/crate_drop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "LP40updbUEak2N0bG8D1"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.98
+  peak_dbtp = -7.01
+  seconds = 0.55
 
 [sample.bong_bite]
+status = "approved"
 bus = "voice"
 prompt = "small cute creature biting, snappy chomp with a squeaky growl, no music"
 duration_seconds = 0.5
+  [[sample.bong_bite.take]]
+  file = "voice/bong_bite_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "fBBSeOfAjikll3pjEHEA"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.22
+  peak_dbtp = -1.25
+  seconds = 0.32
+  [[sample.bong_bite.take]]
+  file = "voice/bong_bite_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ZI7HBxST7J7Tug0SPan0"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.54
+  peak_dbtp = -1.00
+  seconds = 0.39
 
 [sample.bong_heal]
+status = "approved"
 bus = "voice"
 prompt = "small cute creature healed, happy sparkling chime and a coo, no music"
 duration_seconds = 0.8
+  [[sample.bong_heal.take]]
+  file = "voice/bong_heal_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "MMVu6ahsKyaRa1RKMc8s"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.00
+  peak_dbtp = -5.53
+  seconds = 0.50
+  [[sample.bong_heal.take]]
+  file = "voice/bong_heal_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "yZXgGuKhsod9HOP6uzKq"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.67
+  peak_dbtp = -4.35
+  seconds = 0.66
 
 [sample.bong_babble]
+status = "approved"
 bus = "voice"
 prompt = "cute small creature babbling gibberish, playful chirpy nonsense syllables, no words, no music"
 duration_seconds = 2.0
+  [[sample.bong_babble.take]]
+  file = "voice/bong_babble_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "5EpwAiKFJqaPrxPcmCnR"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.45
+  peak_dbtp = -1.00
+  seconds = 1.85
+  [[sample.bong_babble.take]]
+  file = "voice/bong_babble_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "iGkLcpKPxQAb1IJRFrY6"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.00
+  peak_dbtp = -1.69
+  seconds = 1.62
 
 [sample.tesla_strike]
+status = "approved"
 bus = "weapons"
 prompt = "tesla coil lightning strike, violent electric crackle and zap, no music"
 duration_seconds = 0.8
+  [[sample.tesla_strike.take]]
+  file = "weapons/tesla_strike_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "qnADnvMljl3rj6oopxqO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.45
+  peak_dbtp = -1.00
+  seconds = 0.64
+  [[sample.tesla_strike.take]]
+  file = "weapons/tesla_strike_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "B7Y0YHuve1D2fvj3ktb7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.02
+  peak_dbtp = -1.00
+  seconds = 0.75
 
 [sample.tesla_charge_loop]
+status = "approved"
 bus = "world"
 prompt = "tesla coil charging, steady rising electric buzz and crackle, no music"
 duration_seconds = 2.0
 loop = true
+  [[sample.tesla_charge_loop.take]]
+  file = "world/tesla_charge_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "538ub1uuja1CA5clJLNW"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.98
+  seconds = 1.96
+  [[sample.tesla_charge_loop.take]]
+  file = "world/tesla_charge_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "47ms6acDs3vhoEbfKVhS"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -8.58
+  seconds = 1.96
 
 [sample.gun_tower_fire]
+status = "approved"
 bus = "weapons"
 prompt = "automatic gun turret firing a short burst, rapid mechanical bangs, no music"
 duration_seconds = 0.8
+  [[sample.gun_tower_fire.take]]
+  file = "weapons/gun_tower_fire_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "YhZomjTa9kuoUL9KTt1E"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.07
+  peak_dbtp = -1.31
+  seconds = 0.80
+  [[sample.gun_tower_fire.take]]
+  file = "weapons/gun_tower_fire_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "BwXcEgFt1vIHxFt5VFuV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.13
+  peak_dbtp = -1.00
+  seconds = 0.80
 
 [sample.bio_fire]
+status = "approved"
 bus = "weapons"
 prompt = "slime cannon firing a glob, wet gloopy launch, no music"
 duration_seconds = 0.6
+  [[sample.bio_fire.take]]
+  file = "weapons/bio_fire_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "fExOg1347N33HzYesp2g"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.69
+  peak_dbtp = -1.00
+  seconds = 0.52
+  [[sample.bio_fire.take]]
+  file = "weapons/bio_fire_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "GfEn9VobJ9bkWVx5ABMh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.55
+  peak_dbtp = -1.00
+  seconds = 0.59
 
 [sample.bio_splash]
+status = "approved"
 bus = "impacts"
 prompt = "glob of thick slime splattering on the ground, wet splat and bubbling, no music"
 duration_seconds = 0.6
+  [[sample.bio_splash.take]]
+  file = "impacts/bio_splash_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "5dxzV7cP7JhnDWNenlUN"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.23
+  peak_dbtp = -1.00
+  seconds = 0.48
+  [[sample.bio_splash.take]]
+  file = "impacts/bio_splash_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "7V2EwFuFfnNwqyuKGy8C"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.81
+  peak_dbtp = -1.00
+  seconds = 0.38
 
 [sample.fire_loop]
+status = "approved"
 bus = "world"
 prompt = "large fire burning steadily outdoors, crackling and roaring flames, no music"
 duration_seconds = 3.0
 loop = true
+  [[sample.fire_loop.take]]
+  file = "world/fire_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "sPN2CooDMQ4AZWGuIA9f"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -8.31
+  seconds = 3.00
+  [[sample.fire_loop.take]]
+  file = "world/fire_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "2YEbf7Npt9UlvqkZ0zQL"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.58
+  peak_dbtp = -1.00
+  seconds = 3.00
 
 [sample.fire_ignite]
+status = "approved"
 bus = "world"
 prompt = "fire catching quickly, sudden whoosh of igniting flames, no music"
 duration_seconds = 0.8
+  [[sample.fire_ignite.take]]
+  file = "world/fire_ignite_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "RyfwFNwfniybyDkgMFHn"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.16
+  peak_dbtp = -9.47
+  seconds = 0.65
+  [[sample.fire_ignite.take]]
+  file = "world/fire_ignite_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "8FflaYf2rC30fKAMumc7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.90
+  peak_dbtp = -7.69
+  seconds = 0.56
 
 [sample.fuse]
+status = "approved"
 bus = "world"
 prompt = "burning fuse fizzing and sparking, steady hiss, no music"
 duration_seconds = 1.5
 loop = true
+  [[sample.fuse.take]]
+  file = "world/fuse_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "jCnmPOv2rFHNIbyhLq5i"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -3.47
+  seconds = 1.48
+  [[sample.fuse.take]]
+  file = "world/fuse_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "eaHrfQE7dc5W6tMQbvZC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.20
+  peak_dbtp = -1.00
+  seconds = 1.48
 
 [sample.rain_loop]
+status = "approved"
 bus = "world"
 prompt = "steady heavy rain falling on open ground, constant downpour, no thunder, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.rain_loop.take]]
+  file = "world/rain_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "bnalxAPjYholCuTQNlEI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -7.23
+  seconds = 4.00
+  [[sample.rain_loop.take]]
+  file = "world/rain_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "Cr6ysd69biyoxQiYg1Me"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.50
+  seconds = 4.00
 
 [sample.wind_loop]
+status = "approved"
 bus = "world"
 prompt = "strong gusty wind blowing sand across a desert, steady howl and hiss, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.wind_loop.take]]
+  file = "world/wind_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "DihOeCDEMX0FqLqZxb8J"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -6.48
+  seconds = 4.00
+  [[sample.wind_loop.take]]
+  file = "world/wind_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "8vw93Hpylnv9KgbgZmlM"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.99
+  peak_dbtp = -5.61
+  seconds = 4.00
 
 [sample.night_loop]
+status = "approved"
 bus = "world"
 prompt = "quiet night in the countryside, crickets chirping, gentle breeze, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.night_loop.take]]
+  file = "world/night_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "88yDAkQEtlaM4wavNoXI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -28.65
+  peak_dbtp = -1.00
+  seconds = 4.00
+  [[sample.night_loop.take]]
+  file = "world/night_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "ToAsJU5RwnBk3jXuHcQJ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.13
+  seconds = 4.00
 
 [sample.thunder]
+status = "approved"
 bus = "world"
 prompt = "distant thunder clap rolling across the sky, deep rumble, no music"
 duration_seconds = 3.5
+  [[sample.thunder.take]]
+  file = "world/thunder_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "iXcErSb0aLNiIPiQAYHW"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -26.37
+  peak_dbtp = -1.63
+  seconds = 3.39
+  [[sample.thunder.take]]
+  file = "world/thunder_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "XY7SKbhHTEovv0U8n7Jq"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.49
+  peak_dbtp = -5.88
+  seconds = 3.07
 
 [sample.bed_grass_loop]
+status = "approved"
 bus = "world"
 prompt = "open green meadow ambience, light wind in grass, distant birds, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.bed_grass_loop.take]]
+  file = "world/bed_grass_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "jJ7Bq5eLmvatVyJL5s8N"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.50
+  seconds = 4.00
+  [[sample.bed_grass_loop.take]]
+  file = "world/bed_grass_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "egHlXsK4lgpaCYZbWuaC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.47
+  seconds = 4.00
 
 [sample.bed_desert_loop]
+status = "approved"
 bus = "world"
 prompt = "empty desert ambience, dry wind, faint shifting sand, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.bed_desert_loop.take]]
+  file = "world/bed_desert_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "uvaPmhLAN8qnvXTa7CfW"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -7.43
+  seconds = 4.00
+  [[sample.bed_desert_loop.take]]
+  file = "world/bed_desert_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "nma0Z95O06bD1JudXXiR"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.61
+  peak_dbtp = -1.00
+  seconds = 4.00
 
 [sample.bed_valley_loop]
+status = "approved"
 bus = "world"
 prompt = "river valley ambience, flowing water of a mill race, birds, light wind, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.bed_valley_loop.take]]
+  file = "world/bed_valley_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "xw1bBWGGXwTlGIQ9g1Yj"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.56
+  seconds = 4.00
+  [[sample.bed_valley_loop.take]]
+  file = "world/bed_valley_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "ZUADeODizNtgpxH04JRV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.83
+  seconds = 4.00
 
 [sample.bed_floodplain_loop]
+status = "approved"
 bus = "world"
 prompt = "marshy floodplain ambience, frogs croaking, still water, insects, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.bed_floodplain_loop.take]]
+  file = "world/bed_floodplain_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "xBg46xyG3oIgyMMqXLwh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -4.70
+  seconds = 4.00
+  [[sample.bed_floodplain_loop.take]]
+  file = "world/bed_floodplain_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "MrQ8VM4jhHPnj4QSMKlB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.66
+  peak_dbtp = -1.00
+  seconds = 4.00
 
 [sample.bed_karst_loop]
+status = "approved"
 bus = "world"
 prompt = "rocky karst plateau ambience, wind whistling over limestone, sparse birds, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.bed_karst_loop.take]]
+  file = "world/bed_karst_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "qsKkVhBtwB1KaosyM5bv"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -10.50
+  seconds = 4.00
+  [[sample.bed_karst_loop.take]]
+  file = "world/bed_karst_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "YYx2Kqom2CGsv8sPjoyo"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -7.44
+  seconds = 4.00
 
 [sample.volcano_rumble_loop]
+status = "approved"
 bus = "world"
 prompt = "volcano rumbling, deep continuous earth rumble with hissing vents, no music"
 duration_seconds = 4.0
 loop = true
+  [[sample.volcano_rumble_loop.take]]
+  file = "world/volcano_rumble_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "NsHZotiR4P7vU472jDSG"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.24
+  peak_dbtp = -10.12
+  seconds = 4.00
+  [[sample.volcano_rumble_loop.take]]
+  file = "world/volcano_rumble_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "Bhbxy9a1cFkHaRYmPRQz"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.19
+  peak_dbtp = -9.51
+  seconds = 4.00
 
 [sample.lava_whistle]
+status = "approved"
 bus = "world"
 prompt = "lava bomb flying through the air, falling whoosh and crackle, no music"
 duration_seconds = 1.2
+  [[sample.lava_whistle.take]]
+  file = "world/lava_whistle_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "Dw2nyu8Yttpku7FZZQal"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.70
+  peak_dbtp = -5.41
+  seconds = 1.19
+  [[sample.lava_whistle.take]]
+  file = "world/lava_whistle_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "4IbgshfyZC6XJWm9vNmC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.22
+  peak_dbtp = -6.66
+  seconds = 1.06
 
 [sample.portal_hum_loop]
+status = "approved"
 bus = "world"
 prompt = "sci-fi teleport portal humming, steady warbling energy drone, no music"
 duration_seconds = 3.0
 loop = true
+  [[sample.portal_hum_loop.take]]
+  file = "world/portal_hum_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "vjee2YTWm0LIp7orLAIk"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -12.22
+  seconds = 3.00
+  [[sample.portal_hum_loop.take]]
+  file = "world/portal_hum_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "3PLr6BEtaphxnCIVeQa1"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.99
+  peak_dbtp = -10.58
+  seconds = 3.00
 
 [sample.portal_teleport]
+status = "approved"
 bus = "world"
 prompt = "teleporter whoosh, swirling energy zap with a quick swoosh, no music"
 duration_seconds = 0.8
+  [[sample.portal_teleport.take]]
+  file = "world/portal_teleport_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "PIAaSR0pJWYKbLZxW7CZ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.70
+  peak_dbtp = -8.64
+  seconds = 0.60
+  [[sample.portal_teleport.take]]
+  file = "world/portal_teleport_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "b90BEBB7qdU9XUXKo31r"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.52
+  peak_dbtp = -7.70
+  seconds = 0.64
 
 [sample.door_open]
+status = "approved"
 bus = "world"
 prompt = "heavy metal gate sliding open, grinding steel and a clunk, no music"
 duration_seconds = 1.2
+  [[sample.door_open.take]]
+  file = "world/door_open_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "zbi66PgOgAPt2EvJafvz"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.99
+  peak_dbtp = -7.06
+  seconds = 1.00
+  [[sample.door_open.take]]
+  file = "world/door_open_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "S11MFk8C9MmiNHrjF17l"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.79
+  peak_dbtp = -6.28
+  seconds = 0.96
 
 [sample.lantern]
+status = "approved"
 bus = "world"
 prompt = "glass lantern breaking, small crash of glass and a fizzling flame, no music"
 duration_seconds = 0.6
+  [[sample.lantern.take]]
+  file = "world/lantern_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "QB2okn2x6cflsErZHwvI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -26.19
+  peak_dbtp = -8.65
+  seconds = 0.38
+  [[sample.lantern.take]]
+  file = "world/lantern_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "w19CQkiG1VqEhw6eJnU5"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.15
+  peak_dbtp = -2.72
+  seconds = 0.51
 
 [sample.destroy_masonry]
+status = "approved"
 bus = "impacts"
 prompt = "brick wall collapsing, heavy crumbling bricks and dust, no music"
 duration_seconds = 1.5
+  [[sample.destroy_masonry.take]]
+  file = "impacts/destroy_masonry_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "byhb73N54byuN5XRLSmi"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.39
+  peak_dbtp = -1.00
+  seconds = 0.95
+  [[sample.destroy_masonry.take]]
+  file = "impacts/destroy_masonry_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "YifBOKeHIXsGj7kzK6Sh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.38
+  peak_dbtp = -1.00
+  seconds = 1.33
 
 [sample.destroy_metal]
+status = "approved"
 bus = "impacts"
 prompt = "steel structure torn apart, crunching twisted metal and a clattering fall, no music"
 duration_seconds = 1.2
+  [[sample.destroy_metal.take]]
+  file = "impacts/destroy_metal_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "pav9xsgvxhUV1qx51pK1"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.68
+  peak_dbtp = -1.00
+  seconds = 0.98
+  [[sample.destroy_metal.take]]
+  file = "impacts/destroy_metal_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "mtoLRBUXBN104mzBtcqa"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.18
+  peak_dbtp = -1.00
+  seconds = 0.87
 
 [sample.destroy_wood]
+status = "approved"
 bus = "impacts"
 prompt = "wooden fence smashed to pieces, splintering crash of planks, no music"
 duration_seconds = 1.0
+  [[sample.destroy_wood.take]]
+  file = "impacts/destroy_wood_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "E4stAlXroc6d9yzwHJBl"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.31
+  peak_dbtp = -1.00
+  seconds = 0.93
+  [[sample.destroy_wood.take]]
+  file = "impacts/destroy_wood_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "PpkkJdEahpX5pcH91lsH"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.89
+  peak_dbtp = -1.00
+  seconds = 0.87
 
 [sample.destroy_tree]
+status = "approved"
 bus = "impacts"
 prompt = "tree snapping and falling, cracking trunk and crashing branches, no music"
 duration_seconds = 1.5
+  [[sample.destroy_tree.take]]
+  file = "impacts/destroy_tree_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "ZXcSsJJI5rBTbxTOVLL8"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.22
+  peak_dbtp = -1.00
+  seconds = 1.03
+  [[sample.destroy_tree.take]]
+  file = "impacts/destroy_tree_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "PnCtzS7B5i5owYuZu1Oi"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.89
+  peak_dbtp = -1.00
+  seconds = 0.87
 
 [sample.chunk_masonry]
+status = "approved"
 bus = "impacts"
 prompt = "chunk of brick wall breaking off, short crumble and falling stones, no music"
 duration_seconds = 0.6
 
 # Planned: air support.
+  [[sample.chunk_masonry.take]]
+  file = "impacts/chunk_masonry_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "EFurTr1w2Aqm9xNjG5Ve"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.08
+  peak_dbtp = -1.00
+  seconds = 0.50
+  [[sample.chunk_masonry.take]]
+  file = "impacts/chunk_masonry_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "lRDocmy8U47q4gJQJ3Br"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.10
+  peak_dbtp = -1.00
+  seconds = 0.50
 
 [sample.heli_loop]
+status = "approved"
 bus = "vehicles"
 prompt = "attack helicopter hovering close by, steady thumping rotor blades and turbine whine, no music"
 duration_seconds = 3.0
 loop = true
+  [[sample.heli_loop.take]]
+  file = "vehicles/heli_loop_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "IaBCkmVjX3vBgZTTigzY"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -5.58
+  seconds = 3.00
+  [[sample.heli_loop.take]]
+  file = "vehicles/heli_loop_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "yqoFE2VI9Km1NyN2MJ3z"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.09
+  seconds = 3.00
 
 [sample.jet_loop]
+status = "approved"
 bus = "vehicles"
 prompt = "ground attack jet flying overhead, roaring turbofan engine, steady, no music"
 duration_seconds = 3.0
 loop = true
+  [[sample.jet_loop.take]]
+  file = "vehicles/jet_loop_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "aaEgulyyItyO48SX9DHC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -7.33
+  seconds = 3.00
+  [[sample.jet_loop.take]]
+  file = "vehicles/jet_loop_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "hLToANEhMdIeUFF39CAl"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.27
+  seconds = 3.00
 
 [sample.air_cannon]
+status = "approved"
 bus = "weapons"
 prompt = "aircraft rotary cannon strafing run, ripping burst of heavy rounds, no music"
 duration_seconds = 1.2
+  [[sample.air_cannon.take]]
+  file = "weapons/air_cannon_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "pgFB15XBvyMFl5KqJbtA"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.70
+  peak_dbtp = -1.00
+  seconds = 1.14
+  [[sample.air_cannon.take]]
+  file = "weapons/air_cannon_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "w65HjmEsyrG4E4E7zDvR"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.84
+  peak_dbtp = -1.00
+  seconds = 1.05
 
 [sample.air_salvo]
+status = "approved"
 bus = "weapons"
 prompt = "helicopter firing a pair of rockets, double whoosh launch, no music"
 duration_seconds = 1.0
+  [[sample.air_salvo.take]]
+  file = "weapons/air_salvo_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "snjGvrrX9RigISxPqwgQ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.66
+  peak_dbtp = -1.00
+  seconds = 0.79
+  [[sample.air_salvo.take]]
+  file = "weapons/air_salvo_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "aZOGC4whaDlcIHJn2YyO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.29
+  peak_dbtp = -1.00
+  seconds = 0.80
 
 [sample.aircraft_downed]
+status = "approved"
 bus = "explosions"
 prompt = "aircraft shot down, engine sputter, explosion and crashing wreckage, no music"
 duration_seconds = 2.5
 
 # Planned: warnings, the round, the UI.
+  [[sample.aircraft_downed.take]]
+  file = "explosions/aircraft_downed_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "pi1XGDCAVymLWTFBJ5mH"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.28
+  peak_dbtp = -1.00
+  seconds = 2.42
+  [[sample.aircraft_downed.take]]
+  file = "explosions/aircraft_downed_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "bxZwtzzfmDyS0sLUbTJb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.70
+  peak_dbtp = -1.00
+  seconds = 2.24
 
 [sample.lock_warning]
+status = "approved"
 bus = "warnings"
 prompt = "missile lock warning, fast insistent electronic beeping alarm, no music"
 duration_seconds = 1.0
+  [[sample.lock_warning.take]]
+  file = "warnings/lock_warning_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "qGjytsPKc3Alw4dzs8Ew"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.00
+  peak_dbtp = -2.77
+  seconds = 0.99
 
 [sample.windup]
+status = "approved"
 bus = "warnings"
 prompt = "weapon charging up to fire, short rising electric whine, no music"
 duration_seconds = 0.6
+  [[sample.windup.take]]
+  file = "warnings/windup_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "Ar8HrMfHrqu0F6P28JNh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.47
+  peak_dbtp = -1.00
+  seconds = 0.54
 
 [sample.air_radio]
+status = "approved"
 bus = "warnings"
 prompt = "military radio squelch and a short beep of a call acknowledged, no voice, no music"
 duration_seconds = 0.8
+  [[sample.air_radio.take]]
+  file = "warnings/air_radio_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "nLKu05bMQgA1AqPfUdsB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.93
+  peak_dbtp = -1.20
+  seconds = 0.70
 
 [sample.round_start]
+status = "approved"
 bus = "ui"
 prompt = "battle start horn, short brassy military signal, no music"
 duration_seconds = 1.5
+  [[sample.round_start.take]]
+  file = "ui/round_start_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "A9vY5MLCU74EDHTUa356"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.81
+  peak_dbtp = -9.44
+  seconds = 1.26
 
 [sample.round_won]
+status = "approved"
 bus = "ui"
 prompt = "victory fanfare sting, short triumphant brass flourish"
 duration_seconds = 2.0
+  [[sample.round_won.take]]
+  file = "ui/round_won_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "ohKozQTJdjk7yloT3sqV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.11
+  peak_dbtp = -3.96
+  seconds = 1.48
 
 [sample.round_lost]
+status = "approved"
 bus = "ui"
 prompt = "defeat sting, short low descending brass phrase"
 duration_seconds = 2.0
+  [[sample.round_lost.take]]
+  file = "ui/round_lost_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "eugqvTxOMU9h2oqPGFoI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.56
+  peak_dbtp = -4.50
+  seconds = 1.62
 
 [sample.wave_start]
+status = "approved"
 bus = "ui"
 prompt = "incoming wave warning, short rising siren blast, no music"
 duration_seconds = 1.5
+  [[sample.wave_start.take]]
+  file = "ui/wave_start_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "41p4ehpU98rpLABz3Zuy"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.97
+  peak_dbtp = -8.06
+  seconds = 1.44
 
 [sample.ui_refuse]
+status = "approved"
 bus = "ui"
 prompt = "soft negative buzz of a refused button press, short, no music"
-duration_seconds = 0.4
+duration_seconds = 0.5
+  [[sample.ui_refuse.take]]
+  file = "ui/ui_refuse_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "M1KtR4eine9HcHK1A2tx"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.51
+  peak_dbtp = -1.00
+  seconds = 0.30
 
 [sample.ui_beat]
+status = "approved"
 bus = "ui"
 prompt = "small positive chime for a task completed, bright short ding"
 duration_seconds = 0.6
+  [[sample.ui_beat.take]]
+  file = "ui/ui_beat_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "EJoUrPWOZLHHvq5aPmZO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.75
+  peak_dbtp = -4.60
+  seconds = 0.42
 
 [sample.flyby_shell]
+status = "approved"
 bus = "impacts"
 prompt = "artillery shell flying past close by, fast tearing whoosh, no music"
 duration_seconds = 0.6
+  [[sample.flyby_shell.take]]
+  file = "impacts/flyby_shell_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "W4VmmnMLYINGMI6NRSCH"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.09
+  peak_dbtp = -1.00
+  seconds = 0.44
+  [[sample.flyby_shell.take]]
+  file = "impacts/flyby_shell_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "BXvKSmU2EckUBBWG31z4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.79
+  peak_dbtp = -1.45
+  seconds = 0.51
 
 [sample.flyby_bullet]
+status = "approved"
 bus = "impacts"
 prompt = "bullets whizzing past the ear, quick supersonic snaps, no music"
-duration_seconds = 0.4
+duration_seconds = 0.5
+  [[sample.flyby_bullet.take]]
+  file = "impacts/flyby_bullet_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "hdwCPfC2fVtmMQ1DjZ4h"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.20
+  peak_dbtp = -1.00
+  seconds = 0.34
+  [[sample.flyby_bullet.take]]
+  file = "impacts/flyby_bullet_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "LPRdVMVcdEvYPBVAkjnb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.30
+  peak_dbtp = -1.00
+  seconds = 0.32
 
 [sample.flyby_missile]
+status = "approved"
 bus = "impacts"
 prompt = "rocket streaking past close by, roaring whoosh moving away, no music"
 duration_seconds = 1.0
 
 # ------------------------------------------------------------------- cues
+  [[sample.flyby_missile.take]]
+  file = "impacts/flyby_missile_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "pVWwc7R99a9IELA4oUS0"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.26
+  peak_dbtp = -1.00
+  seconds = 0.88
+  [[sample.flyby_missile.take]]
+  file = "impacts/flyby_missile_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "uQljbuTxsGX8MR35Os0o"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.60
+  peak_dbtp = -1.00
+  seconds = 0.75
 
 [cue."ui.click"]
 kind = "ui"

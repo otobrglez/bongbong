@@ -2139,7 +2139,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   pitch and level jitter) is hashed from the cue, the frame and the source, never drawn. Online,
   `set_predicted_seat` and `own_press` sound the own seat's presses at once and skip the room's
   late copies (`room_copy_of_own_press`). `Settings` (volumes, mute, mono) are the player's,
-  kept by `app.rs` beside the progress (`audio.json`, `bongbong.audio` on the web).
+  kept by `app.rs` beside the progress (`audio.json`, `bongbong.audio` on the web), set on the
+  sound panel the HUD's sound button opens (`hud::sound_panel_rects`, `SoundLevel`; painted by
+  `render::hud::draw_sound_panel`) and muted by M. `room` picks the reverb by the map's class.
 - `audio/bind.rs` — `bind(&Event, &Game) -> Binding`: an exhaustive match with no wildcard, each
   arm a `Play` (cue, place, strength, pitch, delay, source), `Watched(watcher)` or
   `Silent(reason)`.
@@ -2153,16 +2155,18 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   portals, the volcano.
 - `audio/space.rs` — listeners at a height above the field, distance (audibility classes),
   pan, air absorption, occlusion (`Occlusion`: one byte a cell from `Material::sound_transmission`,
-  rebuilt when a tile dies), propagation delay, doppler.
+  rebuilt when a tile dies), propagation delay, doppler, and the room send that rises with
+  distance.
 - `audio/cues.rs` — the manifest (`audio/cues.toml`, embedded): samples and their takes, cues and
   their layers by distance; `resolve` falls a dotted id back to its nearest ancestor; `ids` the
   cue ids code names.
 - `audio/bank.rs` — samples decoded on first use (`lewton`), and a dev build's placeholder for a
   sample with no file.
 - `audio/dsp/` — the engine: voices (linear resampler, SVF high-cut, gain and pan ramps, delayed
-  start, fades), nine buses with ducks and pauses, master gain, mono, a watchdog that fades the
-  mix when the director stops beating, a lookahead limiter at -1 dBFS; `wav.rs` for offline
-  renders. Pure Rust, `Send`, `libm` for its transcendentals.
+  start, fades, a send to the room), nine buses with ducks and pauses, the room (`reverb.rs`, a
+  four-line FDN with a damped loop), master gain, mono, a watchdog that fades the mix when the
+  director stops beating, a lookahead limiter at -1 dBFS; `wav.rs` for offline renders. Pure
+  Rust, `Send`, `libm` for its transcendentals.
 - `audio/offline.rs` — `Recorder`: the director and the engine stepped beside a headless round
   (`probe --audio-out`).
 - `render/audio.rs` — `AudioOut`: the device and one 48 kHz float stereo `AudioStream` whose
@@ -2206,7 +2210,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   bong gauge under the bong pack's symbol, then the `CornerButton`s (`BUILD` or, online, `LEAVE` - `Session::leave_online`,
   the way out with no keyboard -, left of the mode button a local round's pause icon -
   `CornerButton::Pause`, the P key's `Input::pause_pressed`, two bars or a play triangle by
-  `PlayChrome::paused` -, players or `RESTART` on a keyboard-less build, `ONLINE` where
+  `PlayChrome::paused` -, left of it the sound button, which opens the sound panel under the right
+  cluster - `sound_panel_rects`, the one geometry of its switch and sliders, the round running on
+  behind it -, players or `RESTART` on a keyboard-less build, `ONLINE` where
   `ONLINE_AVAILABLE`) and a room's seat chips between the numbers and the buttons - all one row on
   every window. The minimap's slot (`Corners::minimap`, from `CornerShape::minimap` =
   `PlayChrome::minimap`, its size in points): its own plate under the right cluster, flush right,

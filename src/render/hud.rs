@@ -182,7 +182,7 @@ fn draw_full_corners(
         draw_pause_button(d, r, chrome.paused, a);
     }
     if let Some(r) = corners.sound {
-        draw_sound_button(d, r, chrome.muted, a);
+        draw_sound_button(d, r, chrome.muted, chrome.sound_panel.is_some(), a);
     }
     if let Some(r) = corners.build {
         draw_label_button(d, r, &text().get(keys::BUTTON_BUILD), BUILD_COLOR, a);
@@ -598,10 +598,49 @@ fn draw_pause_button(d: &mut impl RaylibDraw, r: Rectangle, paused: bool, a: f32
 /// the speaker struck out - and the frame washed, as the paused pause
 /// button's is - while it is muted, in the pause button's 2 pt blocks. The
 /// press is the M key's.
-fn draw_sound_button(d: &mut impl RaylibDraw, r: Rectangle, muted: bool, a: f32) {
+/// The sound panel (`hud::sound_panel_rects`): an edged plate, SOUND and
+/// its ON/OFF switch, then a slider per level - its name, a track filled
+/// up to the level and a knob on it, all dimmed while the game is muted.
+/// Never faded with the corners: it is open because the player is using
+/// it. Drawn in UI points at the corners' `scale`.
+pub fn draw_sound_panel(d: &mut impl RaylibDraw, r: &crate::hud::SoundPanelRects, settings: &crate::audio::Settings, scale: f32) {
+    let size = ((HUD_TEXT_SIZE as f32) * scale).round().max(8.0) as i32;
+    draw_plate(d, r.panel, TEXT, 1.0);
+    let t = text();
+    let text_y = |row: Rectangle| (row.y + (row.height - size as f32) / 2.0) as i32;
+    let pad = (8.0 * scale) as i32;
+    d.draw_text(&t.get(keys::SOUND_TITLE), r.title.x as i32 + pad, text_y(r.title), size, TEXT);
+
+    let frame = button_frame(r.switch);
+    let on = !settings.muted;
+    if on {
+        d.draw_rectangle_rec(frame, Color::new(TEXT.r, TEXT.g, TEXT.b, 40));
+    }
+    d.draw_rectangle_lines_ex(frame, 2.0, if on { TEXT } else { DIM });
+    let word = t.get(if on { keys::SOUND_ON } else { keys::SOUND_OFF });
+    let word_x = r.switch.x + (r.switch.width - width(&word, size) as f32) / 2.0;
+    d.draw_text(&word, word_x as i32, text_y(r.switch), size, if on { TEXT } else { DIM });
+
+    let (ink, rest) = if on { (TEXT, Color::new(TEXT.r, TEXT.g, TEXT.b, 70)) } else { (DIM, Color::new(DIM.r, DIM.g, DIM.b, 60)) };
+    let bar = (4.0 * scale).max(2.0);
+    let (knob_w, knob_h) = (10.0 * scale, (r.rows[0].height * 0.55).max(8.0));
+    for (i, level) in crate::hud::SoundLevel::ALL.into_iter().enumerate() {
+        let (row, track) = (r.rows[i], r.tracks[i]);
+        d.draw_text(&t.get(level.label()), row.x as i32 + pad, text_y(row), size, ink);
+        let mid = track.y + track.height / 2.0;
+        let x = track.x + track.width * level.get(settings).clamp(0.0, 1.0);
+        d.draw_rectangle_rec(Rectangle::new(track.x, mid - bar / 2.0, track.width, bar), rest);
+        d.draw_rectangle_rec(Rectangle::new(track.x, mid - bar / 2.0, x - track.x, bar), ink);
+        d.draw_rectangle_rec(Rectangle::new(x - knob_w / 2.0, mid - knob_h / 2.0, knob_w, knob_h), ink);
+    }
+}
+
+/// The sound button: the speaker, struck out while the game is muted,
+/// washed while the sound panel it opens is up.
+fn draw_sound_button(d: &mut impl RaylibDraw, r: Rectangle, muted: bool, open: bool, a: f32) {
     let frame = button_frame(r);
-    if muted {
-        d.draw_rectangle_rec(frame, faded(Color::new(TEXT.r, TEXT.g, TEXT.b, 40), a));
+    if muted || open {
+        d.draw_rectangle_rec(frame, faded(Color::new(TEXT.r, TEXT.g, TEXT.b, if open { 70 } else { 40 }), a));
     }
     let color = faded(TEXT, a);
     d.draw_rectangle_lines_ex(frame, 2.0, color);

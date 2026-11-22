@@ -1421,6 +1421,7 @@ impl Session {
                 paused: self.game.paused,
                 sound_button: true,
                 muted: false,
+                sound_panel: None,
                 seat: None,
                 players_dialog: self.players_dialog,
                 question: self.question.clone(),

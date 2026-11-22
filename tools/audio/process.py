@@ -117,6 +117,9 @@ def measure(s: array.array, ch: int, looped: bool) -> dict:
         "onset_s": onset / RATE,
         "tail_s": tail / RATE,
         "clipped": clipped,
+        # Over the whole take, silences included: what a loop is levelled
+        # by, since it plays all of itself all the time.
+        "rms_all_db": db(window_rms(s, ch, 0, n)),
     }
     if looped and n > 2 * win:
         # The seam: how far the last frame is from the first, against the
@@ -129,17 +132,25 @@ def measure(s: array.array, ch: int, looped: bool) -> dict:
     return m
 
 
-def score(m: dict, looped: bool, bus: str) -> float:
-    """Higher is better: what the measurements can say about a take."""
+def score(m: dict, looped: bool, bus: str, want: float) -> float:
+    """Higher is better: what the measurements can say about a take. `want`
+    is the length the recipe asked for."""
     s = -2.0 * m["clipped"] / max(m["seconds"] * RATE, 1) * 1000
     if looped:
         s -= 4.0 * m.get("seam_jump", 0.0)
         s -= 0.4 * m.get("steadiness_db", 0.0)
     else:
-        # A hit, a shot, a blast starts at once.
-        s -= 20.0 * max(m["onset_s"] - 0.01, 0.0)
+        # A hit, a shot, a blast starts at once. The silence before the
+        # onset is trimmed anyway, so a late one counts only a little: it
+        # hints at a soft lead-in.
+        s -= 3.0 * max(m["onset_s"] - 0.01, 0.0)
         if bus in ("weapons", "impacts", "explosions"):
             s += min(m["crest_db"], 18.0) / 6.0
+        # A blip where the recipe asked for a tumble or a tail is not the
+        # sound asked for.
+        sounding = m["tail_s"] - m["onset_s"]
+        if want > 0.0:
+            s -= 6.0 * max(0.0, 0.4 * want - sounding) / want
     # A take that is mostly silence is a poor take.
     s -= 3.0 * max(0.0, 0.2 - (m["seconds"] - m["onset_s"] - (m["seconds"] - m["tail_s"])))
     return s
@@ -258,7 +269,7 @@ def main() -> int:
             s = decode(f, ch)
             m = measure(s, ch, looped)
             m["generation"] = f.stem
-            m["score"] = score(m, looped, bus)
+            m["score"] = score(m, looped, bus, float(sample.get("duration_seconds", 0.0)))
             measured.append((m, s))
         measured.sort(key=lambda ms: ms[0]["score"], reverse=True)
         (TAKES / name / "metrics.json").write_text(json.dumps([m for m, _ in measured], indent=1))
@@ -271,7 +282,7 @@ def main() -> int:
                 fade = 0.06 if bus in ("explosions", "world") else 0.02
                 out = trim(s, ch, m, fade)
             after = measure(out, ch, looped)
-            out = level(out, ch, bus, after["rms_db"])
+            out = level(out, ch, bus, after["rms_all_db"] if looped else after["rms_db"])
             final = measure(out, ch, looped)
             rel = f"{bus}/{name}_{n}.ogg"
             encode(out, ch, STATIC / rel)

@@ -6,14 +6,17 @@
 //! gain and pan, after an optional delay; a loop wraps, a one-shot ends. Every
 //! parameter moves smoothly - a change set by a command glides over about ten
 //! milliseconds - so a distance, an occlusion or an engine's revs never click.
-//! Buses carry a gain and a duck; the master carries the player's volume, a
-//! mono switch, the watchdog (D5) and a lookahead limiter.
+//! Buses carry a gain and a duck. Each voice also sends into the room
+//! (`reverb.rs`), at its own share; the room returns into the mix ahead of
+//! the master, which carries the player's volume, a mono switch, the
+//! watchdog (D5) and a lookahead limiter.
 
 use std::sync::Arc;
 
 use super::Pcm;
 use super::filter::{LowPass, OPEN_HZ};
 use super::limiter::Limiter;
+use super::reverb::{Reverb, Room};
 
 /// A voice's name, chosen by the director, unique while the voice lives.
 pub type VoiceId = u32;
@@ -26,17 +29,18 @@ const BLOCK: usize = 64;
 
 /// What a voice is set to. `gain` is linear; `pan` runs -1 (left) to 1
 /// (right); `pitch` multiplies the playback rate; `cutoff` is the high-cut
-/// in Hz.
+/// in Hz; `send` is the share of what it plays that goes to the room.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoiceParams {
     pub gain: f32,
     pub pan: f32,
     pub pitch: f32,
     pub cutoff: f32,
+    pub send: f32,
 }
 
 impl VoiceParams {
-    pub const NEUTRAL: VoiceParams = VoiceParams { gain: 1.0, pan: 0.0, pitch: 1.0, cutoff: 20_000.0 };
+    pub const NEUTRAL: VoiceParams = VoiceParams { gain: 1.0, pan: 0.0, pitch: 1.0, cutoff: 20_000.0, send: 0.0 };
 }
 
 /// What the director asks of the engine.
@@ -58,6 +62,8 @@ pub enum Command {
     Duck { bus: usize, gain: f32, release: f32 },
     /// The whole mix's level, linear, and whether it plays in mono.
     Master { gain: f32, mono: bool },
+    /// The room every voice sends into.
+    Room(Room),
     /// The director is alive (D5): without one for a quarter second the
     /// engine fades itself out.
     Beat,
@@ -78,6 +84,7 @@ struct Voice {
     gain_l: f32,
     gain_r: f32,
     cutoff: f32,
+    send: f32,
     filters: [LowPass; 2],
     /// The fade envelope 0..1 and how far it moves a frame.
     fade: f32,
@@ -112,6 +119,9 @@ pub struct Engine {
     since_beat: u32,
     limiter: Limiter,
     block: Vec<[f32; 2]>,
+    /// What the voices send to the room this block.
+    sends: Vec<[f32; 2]>,
+    reverb: Reverb,
     peak: f32,
 }
 
@@ -128,6 +138,8 @@ impl Engine {
             since_beat: 0,
             limiter: Limiter::new(rate, super::db_to_gain(-1.0)),
             block: vec![[0.0; 2]; BLOCK],
+            sends: vec![[0.0; 2]; BLOCK],
+            reverb: Reverb::new(rate),
             peak: 0.0,
         }
     }
@@ -165,6 +177,7 @@ impl Engine {
                     gain_l: l,
                     gain_r: r,
                     cutoff: params.cutoff,
+                    send: params.send,
                     filters,
                     fade: if fade_in > 0.0 { 0.0 } else { 1.0 },
                     fade_step: 1.0 / fade_frames,
@@ -205,6 +218,7 @@ impl Engine {
                 self.master_target = gain.max(0.0);
                 self.mono = mono;
             }
+            Command::Room(room) => self.reverb.set(room),
             Command::Beat => self.since_beat = 0,
         }
     }
@@ -236,6 +250,9 @@ impl Engine {
         for f in &mut self.block[..n] {
             *f = [0.0, 0.0];
         }
+        for f in &mut self.sends[..n] {
+            *f = [0.0, 0.0];
+        }
         // The watchdog (D5): no beat for a quarter second and the mix fades.
         self.since_beat = self.since_beat.saturating_add(n as u32);
         let alive = if self.since_beat > self.rate / 4 { 0.0 } else { 1.0 };
@@ -259,6 +276,10 @@ impl Engine {
             v.gain_r += (tr - v.gain_r) * glide;
             let (l1, r1) = (v.gain_l, v.gain_r);
             v.cutoff += (v.target.cutoff - v.cutoff) * glide;
+            let s0 = v.send;
+            v.send += (v.target.send - v.send) * glide;
+            let s1 = v.send;
+            let sending = s0 > 0.0 || s1 > 0.0;
             let filtered = v.cutoff < OPEN_HZ;
             if filtered {
                 for f in &mut v.filters {
@@ -268,7 +289,7 @@ impl Engine {
             v.step = step_of(&v.pcm, v.target.pitch, self.rate);
             let (b0, b1) = (bus_from[v.bus], bus_to[v.bus]);
             let frames = v.pcm.frames() as f64;
-            for (i, out) in self.block[..n].iter_mut().enumerate() {
+            for (i, (out, send)) in self.block[..n].iter_mut().zip(self.sends[..n].iter_mut()).enumerate() {
                 if v.delay > 0 {
                     v.delay -= 1;
                     continue;
@@ -287,6 +308,11 @@ impl Engine {
                 }
                 out[0] += sl * gl;
                 out[1] += sr * gr;
+                if sending {
+                    let s = s0 + (s1 - s0) * t;
+                    send[0] += sl * gl * s;
+                    send[1] += sr * gr * s;
+                }
                 if v.stopping {
                     v.fade -= v.fade_step;
                     if v.fade <= 0.0 {
@@ -304,6 +330,9 @@ impl Engine {
                     }
                 }
             }
+        }
+        if !self.reverb.idle() {
+            self.reverb.run(&self.sends[..n], &mut self.block[..n], glide);
         }
         let m0 = self.master;
         self.master += (self.master_target - self.master) * glide;
@@ -425,7 +454,7 @@ mod tests {
     fn a_render_is_the_same_every_time() {
         let make = || {
             let mut e = Engine::new(48_000);
-            e.apply(start(1, sine(330.0, 0.3), VoiceParams { pitch: 1.07, cutoff: 2000.0, pan: 0.3, gain: 0.8 }, false));
+            e.apply(start(1, sine(330.0, 0.3), VoiceParams { pitch: 1.07, cutoff: 2000.0, pan: 0.3, gain: 0.8, send: 0.2 }, false));
             render(&mut e, 0.3)
         };
         assert_eq!(make(), make());
