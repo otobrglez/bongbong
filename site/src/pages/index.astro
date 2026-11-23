@@ -624,10 +624,7 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
         }
       }
 
-      /* The game on Apple's own iPhone bezel (tools/web/gen_site_art.py
-         `--iphone`), shown whole as Apple's marketing guidelines ask - never
-         cropped, tilted or shadowed - and smoothly scaled: it is a
-         photograph of a phone, not pixel art. */
+      /* A full frame from the iPhone simulator. */
       .iphone {
         display: block;
         width: 100%;
@@ -1048,7 +1045,7 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
                 apart around you.</p>
             <div class="cards">
                 <article class="card">
-                    <img class="px" src="/art/field-default.webp" alt="" width="400" height="200" loading="lazy"/>
+                    <img class="px" src="/art/field-vulkan.webp" alt="" width="400" height="200" loading="lazy"/>
                     <div>
                         <h3 data-i18n="campaign">Campaign and free play</h3>
                         <p data-i18n="campaignText">Level by level, or any map with as many enemies as you dare.</p>
@@ -1072,14 +1069,14 @@ import { APP_STORE_URL, CHANGELOG_URL, DOWNLOADS, RELEASES_URL, SHOW_APP_STORE }
             </div>
         </section>
 
-        <section class="section">
+        <section class="section" id="take-it-with-you">
             <h2 data-i18n="takeTitle">Take it with you</h2>
             <p class="lead" data-i18n="takeLead">The same game on every screen. The browser is just the quickest way
                 in.</p>
             <div class="take">
                 <article class="ios">
-                    <img class="iphone" src="/art/iphone.webp" alt="BongBong running on an iPhone 18 Pro"
-                         data-i18n-alt="iphoneAlt" width="1120" height="548" loading="lazy"/>
+                    <img class="iphone" src="/art/iphone.webp" alt="A tank battle in Glasshouse Gardens on an iPhone 18 Pro"
+                         data-i18n-alt="iphoneAlt" width="1120" height="515" loading="lazy"/>
                     <div class="ios-text">
                         <h3 data-i18n="ios">iPhone and iPad</h3>
                         <p data-i18n="iosText">Left thumb steers, right thumb fires. Plays offline.</p>
