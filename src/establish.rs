@@ -68,10 +68,10 @@ impl EstablishRules {
 /// The most texels of whole field a phone or a tablet (`crate::EMBEDDED`)
 /// draws the shot through: its targets - two, five under a sky, each with
 /// a depth buffer, about 8 bytes a texel - stay under about 170 MB, which
-/// every level fits (the largest, grand-campaign's 67 x 34 cells, is 2.3
-/// million texels) and longwater's 112 x 63 (7.2 million) would nearly
-/// double on a device with a phone's memory: there it opens on the follow
-/// view, as the study map does.
+/// a field of 67 x 34 cells fits (2.3 million texels) and longwater's
+/// 112 x 63 (7.2 million) or grand-campaign's 116 x 59 (7.0 million) would
+/// nearly double on a device with a phone's memory: there they open on the
+/// follow view, as the study map does.
 pub const EMBEDDED_MAX_AREA: f32 = 2048.0 * 2048.0;
 
 /// Whether a field of `field` world pixels fits the shot's whole-field
@@ -387,11 +387,12 @@ mod establish_tests {
         assert!(!wanted(true, false, (1088.0, 544.0), &r), "a view that shows the whole field");
         assert!(!wanted(true, true, (8000.0, 2000.0), &r), "past the whole-field target");
         assert!(!wanted(true, true, (2560.0, 1440.0), &EstablishRules { hold_seconds: 0.0, ..r }), "turned off");
-        // A phone or a tablet keeps its targets to a phone's memory: every
-        // level plays the shot there, longwater and the study map open on
-        // the follow view.
-        assert!(fits((2144.0, 1088.0), true), "grand-campaign on a phone");
+        // A phone or a tablet keeps its targets to a phone's memory: a
+        // 67 x 34 field plays the shot there, longwater, grand-campaign and
+        // the study map open on the follow view.
+        assert!(fits((2144.0, 1088.0), true), "a 67 x 34 field on a phone");
         assert!(!fits((3584.0, 2016.0), true), "longwater on a phone");
+        assert!(!fits((3712.0, 1888.0), true), "grand-campaign on a phone");
         assert!(!fits((3072.0, 1728.0), true), "the study map on a phone");
         assert!(fits((3072.0, 1728.0), false), "the study map on a desktop");
         assert!(!fits((4100.0, 100.0), false), "past a side");

@@ -228,8 +228,9 @@ mod tests {
     /// moved with the laser crate by its start, and Wildwood's with its
     /// campaign crates by the start and no rod or rail (BB-220). Jungle
     /// Temple is `tools/gen_jungle_temple.py`'s output (BB-228),
-    /// Archipelago `tools/gen_archipelago.py`'s (BB-229) and Castle Moat
-    /// `tools/gen_castle_moat.py`'s (BB-234), the same way.
+    /// Archipelago `tools/gen_archipelago.py`'s (BB-229), Castle Moat
+    /// `tools/gen_castle_moat.py`'s (BB-234) and Grand Campaign
+    /// `tools/gen_grand_campaign.py`'s (BB-235), the same way.
     #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 25] = [
         ("default", 0xc35e_5595_2de6_4cd3),
@@ -255,7 +256,7 @@ mod tests {
         ("no-mans-land", 0xf61b_2a3f_da22_6019),
         ("glasshouses", 0xc23c_430a_7218_e35b),
         ("scrapyard", 0x5c9b_93bc_2f81_f474),
-        ("grand-campaign", 0xee89_f6f6_937d_9311),
+        ("grand-campaign", 0x5df1_3594_7ab3_0935),
         ("boot-camp", 0x973a_9707_e1bf_7b2d),
     ];
 
