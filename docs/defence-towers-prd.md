@@ -549,25 +549,48 @@ could tint its speed readout; that is a nicety, not a requirement.
 Phase 6, and a `PROTOCOL_VERSION` bump (9 to 10): `Material` gains three
 variants and `WireEvent` gains the tower events.
 
-- **Health and fire** travel in `TileState` (`hp`, `BURNING`), with
-  `apply_tiles` reading `BURNING` per material (section 7).
-- **The turrets and the charge** travel in a new keyed family, `TowerState {
-  cell: u16, heading: u8, charge: u8 }`, sent only for towers whose values
-  changed (delta.rs's `diff_keyed`). The replica eases the heading in
-  `tick_presentation` the way a tank's turret is eased, and takes the charge
-  from the bracket's near end.
+- **Health** travels in `TileState` (`hp`), the EMP's outage as its
+  `DISABLED` flag; a tower's death is the tile's `ObstacleDestroyed`, on
+  which a replica puts on the room's wreck show and leaves the ruin
+  (`net::apply::remove_tiles`; a joiner gets a cold ruin for every tower
+  in `Welcome::dead_cells`).
+- **The turrets, the charge and the fire** travel in their own keyed family
+  (protocol 41), `TowerState { cell: u16, heading: u8, charge: u8, flags:
+  u8 }`: the heading in the wire's 256 steps, the charge in
+  `wire::CHARGE_STEPS` (32) - a tesla's charge toward its strike, the
+  mortar's reload - and `tower_flags::BURNING` for `Tower::burning`, which
+  is not a tile's burning-out. Every standing tower is listed, and a delta
+  carries only those that changed (`diff_keyed`). The interpolator turns
+  the heading by the shortest arc and blends the charge between the
+  bracket's ends; the fire is the near end's. So a replica's turrets track,
+  its coils light up and its towers burn as the room's do, and the tesla's
+  hum (`audio::watch`'s `tesla`) plays online.
 - **Bullets** are `ShotState`s already. `owner` is `NO_SEAT` for a tower;
   the present-time pass for incoming fire (`draw_incoming_in_present`) must
   not stop a *player* tower's bullet on this seat's hull, so the owner byte
   gains a "player tower" value.
-- **Globs** get a keyed family shaped like `MissileState` (`GlobState { id,
-  x, y, to_x, to_y, age }`), and **puddles** one shaped like `FireState`
-  (`OozeState { cell, left }`); a puddle the snapshot stops listing dried up.
-  `TankState::flags` gains `SLIMED`.
-- **A slimed hull the client owns** (stage 3, `online_client_hull`) must be
-  slowed by the client: the sandbox reads the seat's `SLIMED` flag and timer
-  from the snapshot it reconciles onto, or the client would drive at full pace
-  and the room, which only checks a pose against top speed, would accept it.
+- **Globs** get a keyed family, `GlobState { id, x, y, to_x, to_y, tick }`:
+  where it left the mouth, where it lands and the tick it was lobbed, so an
+  entry never changes; the replica ages it on its own clock between
+  snapshots and the snapshot dropping it lands it. **Puddles** get
+  `OozeState { cell, until, total }` - the tick each cell dries on, as
+  `GrassFlatState` does it, so an entry changes only when it is splashed
+  again; a cell the snapshot stops listing dried or burnt away. **Coats**
+  get `CoatState { id, left }` (the tank's owner slot, tenths left) rather
+  than a `SLIMED` bit in `TankState`, so a coat running down costs two
+  bytes, not the tank's whole entry. The four families ride in one optional
+  `delta::TowerDelta`, which a delta leaves out - one byte - when none of
+  them changed. The tesla's bolt is drawn on a replica from its
+  `TeslaStrike`.
+- **A slimed hull the client owns** (stage 3, `online_client_hull`) is
+  slowed by the client: the sandbox runs `towers::coat_tick` on its own
+  hull every tick, the room's own ooze rule - coated by a puddle the
+  snapshots laid as soon as it drives onto it, washed in water, the coat
+  running down - and takes a splash's coat from `Snapshot::coats`, run down
+  over the ticks it stands ahead of the acked one (`Predictor::reconcile`).
+  The room holds an owned coated hull to the slower pace too
+  (`accept_seat_pose`), from `POSE_SLIME_GRACE_TICKS` after the coat went
+  on - the time its client takes to hear of a splash.
 - **Strikes** travel as `WireEvent::TeslaStrike`, mirrored from the new
   `Event`; `every_variant_is_sent_or_on_the_not_sent_list` counts it and the
   glob and slime events.

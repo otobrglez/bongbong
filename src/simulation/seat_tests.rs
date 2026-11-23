@@ -561,6 +561,45 @@ fn an_owned_pose_is_taken_when_reachable_and_refused_otherwise() {
     assert_eq!(game.accept_seat_pose(0, here, 1), Err("a wreck"));
 }
 
+/// A coat of ooze slows a hull, so the validator holds an owned seat's
+/// coated hull to the slower pace (`Tank::slime_pace`) - from
+/// `POSE_SLIME_GRACE_TICKS` after the coat went on, the client's time to
+/// hear of it; until then a pose at the clean pace is the client's honest
+/// drive, and is taken.
+#[test]
+fn an_owned_pose_outrunning_its_coat_is_refused_once_its_client_knows() {
+    use super::{POSE_REACH_SLACK_PX, POSE_SLIME_GRACE_TICKS, SeatPose};
+    let mut game = game_on(&map_with(""), 0, PlayerCount::ONE, 7);
+    let from = game.seat_pose(0).expect("the seat");
+    // A puddle under the hull: the next tick coats it.
+    game.ooze.insert(crate::map::world_to_cell(from.position), crate::tower::OozePuddle { left: 10.0, total: 10.0 });
+    step(&mut game, Input::default());
+    assert!(game.events().iter().any(|e| matches!(e, Event::Slimed { slot: 0 })), "the seat was coated");
+    // A read that ends a stall: thirty ticks of driving in one pose, a
+    // step between what a coated hull and a clean one could cover.
+    let ticks = 30;
+    let seat = game.players()[0].expect("the seat");
+    let between = |game: &Game| {
+        let top = with_tank(&game.world, seat, |t| t.effective_speed());
+        let clean = top * PHYSICS_FIXED_DT * ticks as f32 + POSE_REACH_SLACK_PX;
+        let coated = top * tuning().bio_slime_speed_factor * PHYSICS_FIXED_DT * ticks as f32 + POSE_REACH_SLACK_PX;
+        let here = game.seat_pose(0).expect("the seat");
+        SeatPose { position: Position::new(here.position.x + (clean + coated) * 0.5, here.position.y), ..here }
+    };
+    // Straight after the coat: the clean pace is still the client's.
+    assert_eq!(game.accept_seat_pose(0, between(&game), ticks), Ok(()));
+    for _ in 0..POSE_SLIME_GRACE_TICKS {
+        step(&mut game, Input::default());
+    }
+    assert!(!game.slimed().is_empty(), "the coat still runs");
+    let here = game.seat_pose(0).expect("the seat").position;
+    assert_eq!(game.accept_seat_pose(0, between(&game), ticks), Err("further than the hull could have gone"));
+    assert_eq!(game.seat_pose(0).expect("the seat").position, here, "a refused pose leaves the hull");
+    // Washed clean, the same step is a clean hull's.
+    with_tank_mut(&game.world, seat, |t| t.slime_timer = 0.0);
+    assert_eq!(game.accept_seat_pose(0, between(&game), ticks), Ok(()));
+}
+
 /// A pose inside a solid tile is refused even when it is within reach:
 /// the client cannot say it is in a wall.
 #[test]

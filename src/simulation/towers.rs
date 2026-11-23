@@ -648,26 +648,16 @@ impl Game {
             if tank.is_wreck() {
                 continue;
             }
-            if self.water.depth_at(tank.position) != crate::ground::Depth::Dry {
-                if tank.is_slimed() {
-                    tank.slime_timer = 0.0;
-                    f.events.push(Event::SlimeWashed { slot: tank.owner_slot() });
-                }
-                continue;
-            }
-            if !self.ooze.is_empty() && over_ooze(&self.ooze, tank.hull_bbox_world()) {
-                if !tank.is_slimed() {
-                    f.events.push(Event::Slimed { slot: tank.owner_slot() });
-                }
-                tank.slime_timer = t.bio_slime_seconds;
-            }
-            if !tank.is_slimed() {
-                continue;
-            }
-            tank.slime_timer = (tank.slime_timer - f.dt).max(0.0);
-            let at = tank.position;
+            let coat = coat_tick(tank, &self.ooze, &self.water, f.dt);
+            let (slot, at) = (tank.owner_slot(), tank.position);
             drop(q);
-            if t.bio_slime_dps > 0.0 {
+            if coat.washed {
+                f.events.push(Event::SlimeWashed { slot });
+            }
+            if coat.coated {
+                f.events.push(Event::Slimed { slot });
+            }
+            if coat.wearing && t.bio_slime_dps > 0.0 {
                 self.hurt_tank(f, entity, Hurt::contact(t.bio_slime_dps * f.dt, super::HitCause::Slime, None, at));
             }
         }
@@ -922,6 +912,42 @@ fn near_segment(a: Position, b: Position, p: Position, reach: f32) -> bool {
     let ap = p - a;
     let u = (ap.x * ab.x + ap.y * ab.y) / len2;
     (0.0..=1.0).contains(&u) && (a + ab * u).distance_to(p) <= reach
+}
+
+/// What one tick of ooze did to a live hull (`coat_tick`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CoatTick {
+    /// It drove into water and its coat came off (`Event::SlimeWashed`).
+    pub washed: bool,
+    /// It was clean and drove onto ooze (`Event::Slimed`).
+    pub coated: bool,
+    /// It wore a coat this tick, so it corrodes.
+    pub wearing: bool,
+}
+
+/// One tick of ooze on one live hull, as `tick_ooze` runs it on every tank
+/// and a client's sandbox on its own hull (`Game::predict_seat_with`), so
+/// the two cannot drift: in any water the coat is washed off; on a puddle
+/// a coat is laid for `bio_slime_seconds`; a coat runs down by `dt`. The
+/// corrosion and the events are the caller's.
+pub(crate) fn coat_tick(tank: &mut Tank, ooze: &BTreeMap<(i32, i32), OozePuddle>, water: &crate::ground::WaterLayout, dt: f32) -> CoatTick {
+    if water.depth_at(tank.position) != crate::ground::Depth::Dry {
+        let washed = tank.is_slimed();
+        if washed {
+            tank.slime_timer = 0.0;
+        }
+        return CoatTick { washed, ..CoatTick::default() };
+    }
+    let mut out = CoatTick::default();
+    if !ooze.is_empty() && over_ooze(ooze, tank.hull_bbox_world()) {
+        out.coated = !tank.is_slimed();
+        tank.slime_timer = tuning().bio_slime_seconds;
+    }
+    if tank.is_slimed() {
+        tank.slime_timer = (tank.slime_timer - dt).max(0.0);
+        out.wearing = true;
+    }
+    out
 }
 
 /// Whether the hull box (`center`, `half`) overlaps a cell with ooze.

@@ -284,6 +284,7 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 | Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's); `despawn_timer` armed the first frame a wreck is seen, so the fade costs no bytes | `visual_rotation`, `turret_visual_rotation`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
 | Bong (two) | `position`, `health`, a state byte with phase, `hop_end` while hopping | animation frame | — |
 | Obstacle (one per solid cell: 578 on the default 34 x 17 field, more on a map with its own `size`) | layout in `Welcome`; then deltas: `health`, `burning`, `fuse` armed with total, `scorched` mask, `destroyed`, a ram-lean byte | `variant`, `edge_mask` (recomputed as `refresh_edge_masks` does), `burn_frame` from time since ignition | `burn_frame_timer`, `heat` (ignition is an event) |
+| Towers and ooze (docs/defence-towers-prd.md §13) | each standing tower's heading, charge and fire (`TowerState`); globs in the air with their lob tick, ooze cells with the tick they dry on, each tank's coat (`GlobState`, `OozeState`, `CoatState`); `TeslaStrike` per bolt | the turret's turn and the charge between snapshots (interpolated); the glob's arc from its age; a ruin and the wreck show from the tile's `ObstacleDestroyed` | `droop`, the bolt's display window, a glob's and a puddle's age between snapshots, the coat's last tenth |
 | Portals (docs/teleporting.md) | anchors in `Welcome`; a hop is `Teleported` plus the tank's new position in the next snapshot | whether the network is active (two or more anchors) | the spiral's turn, the arrival flash |
 | Pickups | bitmask of slot-backed pickups present; the Health slot's bonus shields and bong packs as explicit cells | kind and position from the map's slots | bob and spin |
 | Shells, bullets, plasma | stage 1: id, kind, position, heading, state per live projectile. Later, with `Ricochet`: spawn from `Fired`, removal from `Hit`, nothing between | choreography frame from state and interval | — |
@@ -318,6 +319,10 @@ Snapshot { tick: u32, server_ms: u32,
            tiles:  [{ cell: u16, hp: u8, flags: u8, faces: u8 }],
            fires:  [{ cell: u16, left: u8 }],
            grass_flat: [{ cell: u16, until: u32 }],  // grass a sonic wave or a rod flattened: hides nobody until tick `until`
+           towers: [{ cell: u16, heading: u8, charge: u8, flags: u8 /* burning */ }],  // every standing tower's weapon
+           globs:  [{ id: u16, x: i16, y: i16, to_x: i16, to_y: i16, tick: u32 }],    // ooze in the air, lobbed on `tick`
+           ooze:   [{ cell: u16, until: u32, total: u16 }],  // ooze on the ground, dry on tick `until`
+           coats:  [{ id: u16, left: u8 }],                   // a tank wearing ooze, tenths left
            round:  { wave: u8, alive: u8, pending: u8, intro: u8, outcome: u8 },
            events: [Event] }              // AI trace variants filtered out
 
@@ -335,7 +340,10 @@ A timed cell that decides what hides a hull travels as the tick it ends on,
 not the time left, so its entry changes only when it is set again:
 `grass_flat` is the room's `Game::grass_flat`, which a replica and a joiner
 take whole, so every client's arrows and minimap read the room's
-`cover_cells` (protocol 31).
+`cover_cells` (protocol 31). The ooze on the ground does the same, and a glob
+carries the tick it was lobbed, so neither changes in flight. The towers'
+four families (docs/defence-towers-prd.md §13, protocol 41) travel in a delta
+inside one optional `TowerDelta`, one byte while none of them changed.
 
 Positions in quarter pixels fit an `i16` on fields up to 8192 px wide. Encode
 with `postcard`; JSON for the lobby. Events and tile deltas are reliable by

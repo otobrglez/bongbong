@@ -419,6 +419,22 @@ impl Game {
         }
     }
 
+    /// One seat's coat of ooze, seconds left (`Tank::slime_timer`); 0 for
+    /// none.
+    pub fn seat_slime(&self, seat: usize) -> f32 {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return 0.0 };
+        self.world.get::<&Tank>(entity).map_or(0.0, |t| t.slime_timer)
+    }
+
+    /// Set one seat's coat of ooze: a client's sandbox weighing the room's
+    /// coat against its own across a reconciliation.
+    pub fn set_seat_slime(&mut self, seat: usize, seconds: f32) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.slime_timer = seconds.max(0.0);
+        }
+    }
+
     /// Flash `seat`'s laser lens on this replica (presentation only), for
     /// a beam this client drew (`Tank::kick_laser`).
     pub fn flash_seat_laser(&mut self, seat: u8) {

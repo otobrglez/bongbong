@@ -24,10 +24,11 @@
 //! applied at the frame boundary) before `welcome` runs, since `init`
 //! reads the knobs.
 //!
-//! Two things a snapshot states by omission: a fire is out once the
-//! list stops carrying its cell (burning out is the only way one ever
-//! leaves), and the tile a `DrumLaunched` names is in the air rather than
-//! anywhere on the field.
+//! What a snapshot states by omission: a fire is out once the list stops
+//! carrying its cell (burning out is the only way one ever leaves), the
+//! tile a `DrumLaunched` names is in the air rather than anywhere on the
+//! field, a glob the list drops has landed and a cell of ooze it drops has
+//! dried or burnt away.
 //!
 //! The spectacle a round lays down from inside its phases - a kill's
 //! fireball, mushroom cloud, shockwave, screen flash, scorch and thrown
@@ -56,8 +57,9 @@ use crate::net::events::WireEvent;
 use crate::net::events::WireHitTarget;
 use crate::net::wire::{
     AirState,
-    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_bank, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, bong_flags, tank_flags, tile_flags,
+    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, TowerState, WeaponKind, Welcome, dequantise_bank, dequantise_charge, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, bong_flags, tank_flags, tile_flags, tower_flags,
 };
+use crate::tower::{Glob, OozePuddle, TeslaBolt, TowerKind, TowerRuin};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Fuse, Obstacle};
 use crate::pickup::{Pickup, PickupKind};
@@ -202,7 +204,7 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     for p in &w.oil_prints {
         put_oil_print(&mut game, cols, p.cell, p.dir, p.fade);
     }
-    remove_tiles(&mut game, &w.dead_cells.iter().copied().collect(), cols);
+    remove_tiles(&mut game, &w.dead_cells.iter().copied().collect(), cols, false);
     game.grass_trampled = w.trampled_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
     // The grass fire charred before this client came in; a cell burning
     // now is charred again by its listed fire, which changes nothing.
@@ -370,26 +372,106 @@ fn apply_volcano_shifts(game: &mut Game, s: &Snapshot) {
     }
 }
 
+/// The towers' weapons as the snapshot has them (docs/defence-towers-prd.md
+/// §13): each standing tower's heading, charge and fire - what its top
+/// layer, its glow, its light and its hum are drawn from. Every standing
+/// tower is listed; one left out has lost its tile (`remove_tiles`).
+fn apply_towers(game: &mut Game, s: &Snapshot, cols: u16) {
+    let listed: BTreeMap<u16, &TowerState> = s.towers.iter().map(|t| (t.cell, t)).collect();
+    for (&cell, tower) in game.towers.iter_mut() {
+        let Some(t) = listed.get(&cell_index(cols, cell)) else { continue };
+        tower.heading = dequantise_heading(t.heading);
+        tower.charge = dequantise_charge(t.charge);
+        tower.burning = t.flags & tower_flags::BURNING != 0;
+    }
+}
+
+/// The globs of ooze in the air, by id: each from the mortar's mouth to
+/// where it lands, aged by the round clock since its lob - or by the
+/// replica's own clock where that has run further between snapshots
+/// (`Game::tick_presentation`), so a glob in flight never steps back. A
+/// replica never lands one: the room's snapshot dropping it does, and its
+/// `GlobSplashed` draws the splash.
+fn apply_globs(game: &mut Game, s: &Snapshot) {
+    let t = tuning();
+    let flight = t.bio_glob_flight_seconds;
+    let aged: BTreeMap<u32, f32> = game.globs.iter().map(|g| (g.id, g.age)).collect();
+    let at = |x: i16, y: i16| Position::new(dequantise_pos(x), dequantise_pos(y));
+    game.globs = s
+        .globs
+        .iter()
+        .map(|g| {
+            let id = g.id as u32;
+            let age = s.tick.saturating_sub(g.tick) as f32 * PHYSICS_FIXED_DT;
+            Glob {
+                id,
+                from: at(g.x, g.y),
+                to: at(g.to_x, g.to_y),
+                age: aged.get(&id).map_or(age, |&own| own.max(age)).min(flight),
+                flight,
+                apex: t.bio_glob_apex_px,
+                owner: REPLICA_OWNER,
+            }
+        })
+        .collect();
+}
+
+/// The ooze on the ground, whole: each cell with its time to the tick it
+/// dries on (`Game::tick_presentation` runs it down between snapshots) and
+/// the time it was laid for. A cell the list stops carrying dried or burnt
+/// away. What the sandbox's own hull is coated by (`Game::predict_seat_with`).
+fn apply_ooze(game: &mut Game, s: &Snapshot, cols: u16) {
+    game.ooze = s
+        .ooze
+        .iter()
+        .map(|o| {
+            let left = o.until.saturating_sub(s.tick) as f32 * PHYSICS_FIXED_DT;
+            (cell_from_index(cols, o.cell), OozePuddle { left, total: o.total as f32 * PHYSICS_FIXED_DT })
+        })
+        .collect();
+}
+
+/// Each tank's coat of ooze as the snapshot has it: its time left on every
+/// tank the list names, none on the rest. After `apply_tanks`, so a tank
+/// spawned this snapshot is coated too.
+fn apply_coats(game: &mut Game, s: &Snapshot) {
+    let coats: BTreeMap<u16, u8> = s.coats.iter().map(|c| (c.id, c.left)).collect();
+    for tank in game.world.query_mut::<&mut Tank>() {
+        let slot = tank.owner_slot().min(u16::MAX as usize) as u16;
+        tank.slime_timer = coats.get(&slot).map_or(0.0, |&left| dequantise_seconds(left));
+    }
+}
+
 /// Take the tiles in `dead` out of the world, bodies included, and recap
-/// the walls around the holes.
-fn remove_tiles(game: &mut Game, dead: &BTreeSet<u16>, cols: u16) {
+/// the walls around the holes. A tower's weapon goes with its tile and its
+/// ruin is left where it stood, smouldering from now if the tile died
+/// `fresh` - this snapshot - or long cold for one a joiner never saw stand.
+fn remove_tiles(game: &mut Game, dead: &BTreeSet<u16>, cols: u16, fresh: bool) {
     if dead.is_empty() {
         return;
     }
-    let gone: Vec<(Entity, _, _, _)> = game
+    let gone: Vec<(Entity, _, _, _, _, _)> = game
         .world
         .query::<(Entity, &Obstacle)>()
         .iter()
         .filter(|(_, o)| dead.contains(&cell_index(cols, o.key_cell())))
-        .map(|(e, o)| (e, o.body, o.material, o.position))
+        .map(|(e, o)| (e, o.body, o.material, o.position, o.cell(), o.variant))
         .collect();
     let removed = !gone.is_empty();
     for &(entity, body, ..) in &gone {
         game.physics_mut().remove_body(body);
         game.world.despawn(entity).ok();
     }
+    let cold = tuning().tower_ruin_smoke_seconds;
+    for &(_, _, material, at, cell, variant) in &gone {
+        if let Some(kind) = TowerKind::from_material(material) {
+            game.towers.remove(&cell);
+            let side = crate::tower::side_of_variant(variant);
+            game.tower_ruins.push(TowerRuin { kind, side, position: at, age: if fresh { 0.0 } else { cold } });
+        }
+    }
     // The bodies beside each hole let go of it, as the room's do.
-    for (_, _, material, at) in gone {
+    for (_, _, material, at, ..) in gone {
         game.refit_neighbours(material, at);
     }
     if removed {
@@ -440,6 +522,10 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     apply_volcano_shifts(game, s);
     game.smoke_cells = s.smoke_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
     apply_grass_flat(game, s, cols);
+    apply_towers(game, s, cols);
+    apply_globs(game, s);
+    apply_ooze(game, s, cols);
+    apply_coats(game, s);
     apply_round(game, s);
     game.show(spectacle);
     game.frame = s.tick as u64;
@@ -615,6 +701,11 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_presses: &BTre
                 if material.is_tree() {
                     game.woods.fell(cell);
                 }
+                // A tower goes up like a hull (`towers::tower_died`); its
+                // ruin is the state `remove_tiles` leaves.
+                if material.is_tower() {
+                    game.wreck_show(show, center);
+                }
             }
             _ => {}
         }
@@ -786,6 +877,15 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presse
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
                 game.bomb_in_flight(from, to);
             }
+            // A tesla's strike: its violet bolt, crackling on jags hashed
+            // from where it leapt and the tick, and faded by the replica's
+            // `tick_effects` as a local round's is.
+            WireEvent::TeslaStrike { x0, y0, x1, y1, chained } if show.drawn() => {
+                let start = Position::new(dequantise_pos(x0), dequantise_pos(y0));
+                let end = Position::new(dequantise_pos(x1), dequantise_pos(y1));
+                let seed = crate::blast::seed_at(start, s.tick.wrapping_mul(2).wrapping_add(u32::from(chained)));
+                game.tesla_bolts.push(TeslaBolt::new(start, end, seed));
+            }
             // An instant hit: the beam is the only trace, and the replica's
             // `tick_effects` fades it as a local round's does.
             WireEvent::LaserBeam { x0, y0, x1, y1, variant, .. } if show.drawn() && !own_presses.contains(&i) => {
@@ -819,7 +919,7 @@ fn apply_tiles(game: &mut Game, s: &Snapshot, cols: u16, mut dead: BTreeSet<u16>
         .filter(|t| t.flags & tile_flags::DESTROYED == 0)
         .map(|t| (t.cell, *t))
         .collect();
-    remove_tiles(game, &dead, cols);
+    remove_tiles(game, &dead, cols, true);
     // A tower offline (an EMP) while its tile carries the flag: held from
     // the room's word, run down between snapshots, off with the flag.
     let full = tuning().emp_tower_seconds;
@@ -2253,6 +2353,162 @@ mod tests {
             }
         }
         panic!("the drone never burst");
+    }
+
+    /// A seat dug in among three enemy towers (docs/defence-towers-prd.md
+    /// §13), each in its reach: a tesla, a gun tower and a mortar.
+    fn towers_round() -> Game {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.player_row_override = Some(1);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(
+            "version = 1\ntanks = 0\ncells.\"12,4\" = { kind = \"start\" }\n\
+             cells.\"16,4\" = { kind = \"gun_tower\", side = \"enemy\" }\n\
+             cells.\"12,8\" = { kind = \"bio_slush\", side = \"enemy\" }\n\
+             cells.\"8,4\" = { kind = \"tesla\", side = \"enemy\" }\n",
+        )
+        .expect("map parses");
+        let (width, height) = game.map.field_size();
+        game.init(width, height);
+        game
+    }
+
+    /// Set the tower tile at `cell` to `frac` of its health.
+    fn wound_tower(game: &mut Game, cell: (i32, i32), frac: f32) {
+        for o in game.world.query_mut::<&mut Obstacle>() {
+            if o.cell() == cell {
+                o.health = o.max_health * frac;
+            }
+        }
+    }
+
+    /// What a run of `towers_round` showed, so the test can say it
+    /// exercised every family it compares.
+    #[derive(Default, Debug)]
+    struct TowersSeen {
+        charging: usize,
+        strikes: usize,
+        turned: usize,
+        burning: usize,
+        globs: usize,
+        ooze: usize,
+        coats: usize,
+        bolts: usize,
+        ruins: usize,
+    }
+
+    /// The tesla charging and striking, the gun tower turning and firing,
+    /// the mortar lobbing globs whose ooze coats the hull - played the way
+    /// `round_trip` plays a round, a snapshot every third frame through the
+    /// codec and the replica's own `tick_presentation` between, with the
+    /// gun tower set on fire at frame 300 and the mortar burnt out at frame
+    /// 500 - draw the same on the replica: headings, charges, fires, globs,
+    /// ooze and coats after every apply, and re-encoding the replica gives
+    /// the room's bytes. The bolts and the ruin are drawn there too.
+    #[test]
+    fn towers_globs_ooze_and_coats_reach_the_replica() {
+        let mut game = towers_round();
+        let (width, height) = game.map.field_size();
+        let opening: Vec<u8> = game.drawable_state().towers.iter().map(|t| t.heading).collect();
+        let mut replica: Option<Game> = None;
+        let mut interval: Vec<WireEvent> = Vec::new();
+        let mut seen = TowersSeen::default();
+        for frame in 1..=720u32 {
+            // Nudge the seat so the banner ends, then let it sit and take
+            // fire, mended every frame so the round runs on.
+            let intent = if frame < 3 { Intent { move_dir: Some(Dir::Down), ..Intent::default() } } else { Intent::default() };
+            if let Some(seat) = game.players().first().copied().flatten() {
+                game.world.get::<&mut Tank>(seat).expect("the seat's tank").damage = 0.0;
+            }
+            match frame {
+                300 => wound_tower(&mut game, (16, 4), 0.2),
+                500 => wound_tower(&mut game, (12, 8), 0.004),
+                _ => {}
+            }
+            game.update(Input::single(intent), PHYSICS_FIXED_DT, width, height);
+            seen.strikes += game.events().iter().filter(|e| matches!(e, crate::simulation::Event::TeslaStrike { .. })).count();
+            interval.extend(enc::wire_events(game.events()));
+            if frame % 3 != 0 {
+                if let Some(replica) = replica.as_mut() {
+                    replica.tick_presentation(PHYSICS_FIXED_DT);
+                }
+                continue;
+            }
+            let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            snap.events = std::mem::take(&mut interval);
+            let replica = match replica.as_mut() {
+                None if frame >= 60 => replica.insert(welcome_through_the_codec(&game)),
+                None => continue,
+                Some(r) => {
+                    let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap.clone()))).expect("decodes") else { panic!("kind") };
+                    snapshot(r, &snap);
+                    r
+                }
+            };
+            let expected = game.drawable_state();
+            let drawn = replica.drawable_state();
+            assert_eq!(drawn.towers, expected.towers, "frame {frame}: the towers");
+            assert_eq!(drawn.globs, expected.globs, "frame {frame}: the globs");
+            assert_eq!(drawn.ooze, expected.ooze, "frame {frame}: the ooze");
+            assert_eq!(drawn, expected, "frame {frame}: the replica draws another picture");
+            assert_eq!(
+                state_only(enc::snapshot(replica, [0; MAX_SEATS])),
+                state_only(snap),
+                "frame {frame}: re-encoding the replica gives other bytes"
+            );
+            // What the painters and the hum read agrees too.
+            let views = |g: &Game| g.tower_views().iter().map(|v| (v.kind, v.heading.rem_euclid(360.0).round() as i32, v.burning)).collect::<Vec<_>>();
+            for ((kind, h, burning), (k, rh, rb)) in views(replica).into_iter().zip(views(&game)) {
+                assert_eq!((kind, burning), (k, rb), "frame {frame}");
+                assert!((h - rh).abs() <= 1 || (h - rh).abs() >= 359, "frame {frame}: {kind:?} drawn at {h} for {rh}");
+            }
+            assert_eq!(replica.slimed().len(), game.slimed().len(), "frame {frame}: the coats the drips and the light read");
+            seen.charging += expected.towers.iter().filter(|t| t.charge > 0 && t.cell == (8, 4)).count();
+            seen.turned += expected.towers.iter().zip(&opening).filter(|(t, h)| t.heading != **h).count();
+            seen.burning += expected.towers.iter().filter(|t| t.burning).count();
+            seen.globs += expected.globs.len();
+            seen.ooze += expected.ooze.len();
+            seen.coats += expected.tanks.iter().filter(|t| t.slime > 0).count();
+            seen.bolts += replica.tesla_bolts.len();
+            seen.ruins = replica.tower_ruins().len();
+        }
+        assert!(seen.charging > 0 && seen.strikes > 0, "{seen:?}: the tesla never charged and struck");
+        assert!(seen.turned > 0, "{seen:?}: no turret turned");
+        assert!(seen.burning > 0, "{seen:?}: no tower burned");
+        assert!(seen.globs > 0 && seen.ooze > 0 && seen.coats > 0, "{seen:?}: no glob, puddle or coat");
+        assert!(seen.bolts > 0, "{seen:?}: no bolt drawn on the replica");
+        assert_eq!(seen.ruins, 1, "{seen:?}: the burnt-out mortar's ruin");
+    }
+
+    /// A client that joins while a glob is in the air, ooze lies on the
+    /// ground and the seat wears a coat sees all three where the room has
+    /// them, and a tower that died before it came as a cold ruin.
+    #[test]
+    fn a_joiner_sees_the_globs_ooze_coats_and_ruins() {
+        let mut game = towers_round();
+        let (width, height) = game.map.field_size();
+        let mut joined = false;
+        for frame in 1..=900u32 {
+            let intent = if frame < 3 { Intent { move_dir: Some(Dir::Down), ..Intent::default() } } else { Intent::default() };
+            if let Some(seat) = game.players().first().copied().flatten() {
+                game.world.get::<&mut Tank>(seat).expect("the seat's tank").damage = 0.0;
+            }
+            if frame == 100 {
+                wound_tower(&mut game, (16, 4), 0.004);
+            }
+            game.update(Input::single(intent), PHYSICS_FIXED_DT, width, height);
+            let state = game.drawable_state();
+            if frame > 200 && !state.globs.is_empty() && !state.ooze.is_empty() && state.tanks.iter().any(|t| t.slime > 0) {
+                let replica = welcome_through_the_codec(&game);
+                assert_eq!(replica.drawable_state(), state, "frame {frame}");
+                assert_eq!(replica.tower_ruins().len(), 1, "the gun tower's ruin");
+                assert!(!replica.tower_ruins()[0].smouldering(), "a ruin the joiner never saw fall is cold");
+                joined = true;
+                break;
+            }
+        }
+        assert!(joined, "no frame had a glob, a puddle and a coat at once");
     }
 
     #[test]

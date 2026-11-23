@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    AirState, BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, WellDrumState, ZoneState, dir_index, bong_flags, quantise_bank, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags,
+    AirState, BonusPickup, CoatState, CraterState, GlobState, GrassFlatState, OozeState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, TowerState, Welcome, WellDrumState, ZoneState, dir_index, bong_flags, quantise_bank, quantise_charge, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags, tower_flags,
 };
 use crate::bullet::Bullet;
 use crate::bong::Bong;
@@ -111,6 +111,31 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         volcano_shifts: volcano_shifts(game),
         smoke_cells: game.smoke_cells.iter().map(|&c| cell_index(cols, c)).collect(),
         grass_flat: game.grass_flat.iter().map(|(&c, &left)| GrassFlatState { cell: cell_index(cols, c), until: tick.saturating_add(ticks_of(left)) }).collect(),
+        towers: towers(game, cols),
+        globs: game
+            .globs
+            .iter()
+            .map(|g| GlobState {
+                id: shot_wire_id(g.id),
+                x: quantise_pos(g.from.x),
+                y: quantise_pos(g.from.y),
+                to_x: quantise_pos(g.to.x),
+                to_y: quantise_pos(g.to.y),
+                tick: tick.saturating_sub(ticks_of(g.age)),
+            })
+            .collect(),
+        ooze: game
+            .ooze
+            .iter()
+            .map(|(&c, p)| OozeState { cell: cell_index(cols, c), until: tick.saturating_add(ticks_of(p.left)), total: ticks_of(p.total).min(u16::MAX as u32) as u16 })
+            .collect(),
+        coats: game
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| t.is_slimed() && !t.is_wreck())
+            .map(|t| CoatState { id: t.owner_slot().min(u16::MAX as usize) as u16, left: quantise_seconds(t.slime_timer).max(1) })
+            .collect(),
         round: round(game),
         events: wire_events_acked(game.events(), &acked),
     };
@@ -525,6 +550,22 @@ fn tiles(game: &Game, cols: u16) -> Vec<TileState> {
         out.push(TileState { cell: cell_index(cols, cell), hp: 0, flags: tile_flags::DESTROYED, faces: 0, chunks: 0, cage: 0 });
     }
     out
+}
+
+/// Every standing tower's weapon (`TowerState`), by cell: its heading, its
+/// charge and whether it burns. A tower whose tile is gone is left out,
+/// as its `Tower` is until `cleanup` drops the tile.
+fn towers(game: &Game, cols: u16) -> Vec<TowerState> {
+    game.towers
+        .iter()
+        .filter(|(_, tower)| game.world.get::<&Obstacle>(tower.entity).is_ok_and(|o| !o.destroyed))
+        .map(|(&cell, tower)| TowerState {
+            cell: cell_index(cols, cell),
+            heading: quantise_heading(tower.heading),
+            charge: quantise_charge(tower.charge),
+            flags: if tower.burning { tower_flags::BURNING } else { 0 },
+        })
+        .collect()
 }
 
 /// A tile's health in whole points, `quantise_health` by another name so

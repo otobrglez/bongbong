@@ -8,7 +8,10 @@
 //! entries that only moved by less than 32 px on each axis (`Moved`: the
 //! key and two `i8` quarter-pixel steps, the common case for every hull
 //! and projectile between two snapshots 50 ms apart), and the keys that
-//! disappeared. Unchanged entries cost nothing. The scalar families
+//! disappeared. Unchanged entries cost nothing. The towers' four families
+//! (`towers`, then `globs`, `ooze` and `coats` in a nested `OozeDelta`)
+//! travel the same way inside one optional `TowerDelta`, absent when none
+//! of them changed. The scalar families
 //! (`pickups`, `bonus_pickups`, `round`) travel whole when they differ and
 //! as `None` when not; `events` are always sent whole, since they are what
 //! happened since the previous snapshot rather than state.
@@ -25,7 +28,7 @@ use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
     AirState,
-    BonusPickup, CraterState, GrassFlatState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, RoundState, ShotState, Snapshot, TankState, WellDrumState,
+    BonusPickup, CoatState, CraterState, GlobState, GrassFlatState, OozeState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, RoundState, ShotState, Snapshot, TankState, TowerState, WellDrumState,
     ZoneState, TileState, side_code,
 };
 
@@ -110,8 +113,55 @@ pub struct SnapshotDelta {
     /// Newly flattened (or flattened again) grass, in full.
     pub grass_flat: Vec<GrassFlatState>,
     pub grass_flat_gone: Vec<u16>,
+    /// The towers' families, when any of them changed.
+    pub towers: Option<TowerDelta>,
     pub round: Option<RoundState>,
     pub events: Vec<WireEvent>,
+}
+
+/// The defence towers' families (docs/defence-towers-prd.md §13): the
+/// weapons, and behind them the bio slush's globs, ooze and coats. Kept
+/// behind one `Option` so a delta in which none of them changed - every
+/// delta on a map without towers, and most on one with them - pays one
+/// byte for all four rather than two per family; and the bio slush's three
+/// behind a second, so a tick on which only a turret turned or a charge
+/// rose - most of the ticks a tower is in a fight - pays one for those.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TowerDelta {
+    /// New or changed towers, in full.
+    pub towers: Vec<TowerState>,
+    pub towers_gone: Vec<u16>,
+    /// The bio slush's families, when any of them changed.
+    pub ooze: Option<OozeDelta>,
+}
+
+/// The bio slush's families: the globs in the air, the ooze on the ground
+/// and the coats on the tanks.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OozeDelta {
+    /// New globs, in full (a glob never changes; it only comes and goes).
+    pub globs: Vec<GlobState>,
+    pub globs_gone: Vec<u16>,
+    /// New or splashed-again ooze, in full.
+    pub ooze: Vec<OozeState>,
+    pub ooze_gone: Vec<u16>,
+    /// New or changed coats, in full.
+    pub coats: Vec<CoatState>,
+    pub coats_gone: Vec<u16>,
+}
+
+impl TowerDelta {
+    /// The difference in the towers' families from `prev` to `next`, or
+    /// `None` when there is none.
+    fn between(prev: &Snapshot, next: &Snapshot) -> Option<TowerDelta> {
+        let (towers, towers_gone) = diff_keyed(&prev.towers, &next.towers);
+        let (globs, globs_gone) = diff_keyed(&prev.globs, &next.globs);
+        let (ooze, ooze_gone) = diff_keyed(&prev.ooze, &next.ooze);
+        let (coats, coats_gone) = diff_keyed(&prev.coats, &next.coats);
+        let bio = OozeDelta { globs, globs_gone, ooze, ooze_gone, coats, coats_gone };
+        let d = TowerDelta { towers, towers_gone, ooze: (bio != OozeDelta::default()).then_some(bio) };
+        (d != TowerDelta::default()).then_some(d)
+    }
 }
 
 /// An entry of a keyed family.
@@ -298,6 +348,30 @@ impl Keyed for RubbleState {
     }
 }
 
+impl Keyed for TowerState {
+    fn key(&self) -> u16 {
+        self.cell
+    }
+}
+
+impl Keyed for GlobState {
+    fn key(&self) -> u16 {
+        self.id
+    }
+}
+
+impl Keyed for OozeState {
+    fn key(&self) -> u16 {
+        self.cell
+    }
+}
+
+impl Keyed for CoatState {
+    fn key(&self) -> u16 {
+        self.id
+    }
+}
+
 fn by_key<T: Keyed>(entries: &[T]) -> BTreeMap<u16, &T> {
     entries.iter().map(|e| (e.key(), e)).collect()
 }
@@ -440,6 +514,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         smoke_cells: (next.smoke_cells != prev.smoke_cells).then(|| next.smoke_cells.clone()),
         grass_flat,
         grass_flat_gone,
+        towers: TowerDelta::between(prev, next),
         round: (next.round != prev.round).then_some(next.round),
         events: next.events.clone(),
     }
@@ -455,6 +530,9 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
     };
     bonus_pickups.sort();
     bonus_pickups.dedup();
+    let (none, no_ooze) = (TowerDelta::default(), OozeDelta::default());
+    let towers = delta.towers.as_ref().unwrap_or(&none);
+    let bio = towers.ooze.as_ref().unwrap_or(&no_ooze);
     Snapshot {
         tick: delta.tick,
         server_ms: delta.server_ms,
@@ -481,6 +559,10 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         volcano_shifts: delta.volcano_shifts.clone().unwrap_or_else(|| prev.volcano_shifts.clone()),
         smoke_cells: delta.smoke_cells.clone().unwrap_or_else(|| prev.smoke_cells.clone()),
         grass_flat: apply_keyed(&prev.grass_flat, &delta.grass_flat, &delta.grass_flat_gone),
+        towers: apply_keyed(&prev.towers, &towers.towers, &towers.towers_gone),
+        globs: apply_keyed(&prev.globs, &bio.globs, &bio.globs_gone),
+        ooze: apply_keyed(&prev.ooze, &bio.ooze, &bio.ooze_gone),
+        coats: apply_keyed(&prev.coats, &bio.coats, &bio.coats_gone),
         round: delta.round.unwrap_or(prev.round),
         events: delta.events.clone(),
     }
@@ -560,6 +642,18 @@ mod tests {
             hop_x: rng.random_range(0..4000),
             hop_y: rng.random_range(0..2000),
         }
+    }
+
+    fn random_tower(rng: &mut RoundRng, cell: u16) -> TowerState {
+        TowerState { cell, heading: rng.random(), charge: rng.random_range(0..=32), flags: rng.random_range(0..2) }
+    }
+
+    fn random_glob(rng: &mut RoundRng, id: u16) -> GlobState {
+        GlobState { id, x: rng.random(), y: rng.random(), to_x: rng.random(), to_y: rng.random(), tick: rng.random_range(0..200_000) }
+    }
+
+    fn random_ooze(rng: &mut RoundRng, cell: u16) -> OozeState {
+        OozeState { cell, until: rng.random_range(0..200_000), total: [360, 720][rng.random_range(0..2)] }
     }
 
     fn random_keys(rng: &mut RoundRng, max: usize, range: u16) -> Vec<u16> {
@@ -660,6 +754,10 @@ mod tests {
         let volcano_shifts = if rng.random() { vec![rng.random_range(-4000..4000)] } else { Vec::new() };
         let smoke_cells = random_keys(rng, 3, 600);
         let grass_flat = random_keys(rng, 6, 600).into_iter().map(|cell| GrassFlatState { cell, until: rng.random_range(0..200_000) }).collect();
+        let towers = random_keys(rng, 8, 600).into_iter().map(|cell| random_tower(rng, cell)).collect();
+        let globs = random_keys(rng, 3, 400).into_iter().map(|id| random_glob(rng, id)).collect();
+        let ooze = random_keys(rng, 9, 600).into_iter().map(|cell| random_ooze(rng, cell)).collect();
+        let coats = random_keys(rng, 3, 40).into_iter().map(|id| CoatState { id, left: rng.random_range(1..=40) }).collect();
         let mut s = Snapshot {
             tick: rng.random_range(0..200_000),
             server_ms: rng.random(),
@@ -686,6 +784,10 @@ mod tests {
             volcano_shifts,
             smoke_cells,
             grass_flat,
+            towers,
+            globs,
+            ooze,
+            coats,
             round: RoundState {
                 wave: rng.random_range(0..10),
                 alive: rng.random_range(0..40),
@@ -840,9 +942,44 @@ mod tests {
         for cell in random_keys(rng, 2, 600) {
             next.grass_flat.push(GrassFlatState { cell, until: next.tick + rng.random_range(1..600) });
         }
+        // Towers turning, charging and catching fire, one gone with its
+        // tile; a glob landed and one lobbed; ooze dried, splashed again
+        // and new; coats running down, washed off and new.
+        for tower in next.towers.iter_mut() {
+            match rng.random_range(0..4) {
+                0 => tower.heading = tower.heading.wrapping_add(rng.random_range(1..6)),
+                1 => tower.charge = rng.random_range(0..=32),
+                2 if rng.random_ratio(1, 4) => tower.flags ^= crate::net::wire::tower_flags::BURNING,
+                _ => {}
+            }
+        }
+        next.towers.retain(|_| !rng.random_ratio(1, 10));
+        next.globs.retain(|_| !rng.random_ratio(1, 3));
+        for id in random_keys(rng, 1, 400) {
+            next.globs.push(random_glob(rng, id));
+        }
+        next.ooze.retain(|_| !rng.random_ratio(1, 4));
+        for o in next.ooze.iter_mut() {
+            if rng.random_ratio(1, 4) {
+                o.until = next.tick + rng.random_range(1..720);
+            }
+        }
+        for cell in random_keys(rng, 3, 600) {
+            next.ooze.push(random_ooze(rng, cell));
+        }
+        for c in next.coats.iter_mut() {
+            c.left = c.left.saturating_sub(rng.random_range(0..2)).max(1);
+        }
+        next.coats.retain(|_| !rng.random_ratio(1, 4));
+        for id in random_keys(rng, 1, 40) {
+            next.coats.push(CoatState { id, left: 40 });
+        }
         next.events = random_events(rng);
         // Later pushes of an existing key must win, the way the server's
         // fresh state would; normalise keeps the first, so drop the older.
+        next.globs.reverse();
+        next.ooze.reverse();
+        next.coats.reverse();
         next.tanks.reverse();
         next.shots.reverse();
         next.tiles.reverse();
@@ -896,6 +1033,48 @@ mod tests {
         assert_eq!(d.pickups, None);
         assert_eq!(d.round, None);
         assert_eq!(d.bonus_pickups, None);
+        assert_eq!(d.towers, None);
+    }
+
+    /// Twenty towers standing idle cost a delta one byte for all of the
+    /// towers' families; one turning travels alone, without the ooze's
+    /// lists, and a glob, a puddle and a coat each go once, when they come.
+    #[test]
+    fn idle_towers_cost_a_byte_and_a_turning_one_travels_alone() {
+        let towers: Vec<TowerState> = (0..20u16).map(|i| TowerState { cell: 100 + i * 37, heading: 64, charge: 32, flags: 0 }).collect();
+        let a = Snapshot { towers, ..Default::default() };
+        let idle = delta(&a, &a);
+        assert_eq!(idle.towers, None);
+        let bare = encode(&Msg::Delta(delta(&Snapshot::default(), &Snapshot::default()))).len();
+        assert_eq!(encode(&Msg::Delta(idle)).len(), bare, "idle towers cost what no towers do");
+        let mut b = a.clone();
+        b.towers[7].heading = 66;
+        b.towers[3].charge = 5;
+        let d = delta(&a, &b);
+        let t = d.towers.as_ref().expect("two towers changed");
+        assert_eq!(t.towers, vec![b.towers[3], b.towers[7]]);
+        assert!(t.towers_gone.is_empty() && t.ooze.is_none(), "a turret's turn carries none of the ooze's lists");
+        assert_eq!(apply_delta(&a, &d), b);
+        // A lob: its glob, then a splash's puddles and the coat it put on.
+        let mut c = b.clone();
+        c.globs.push(GlobState { id: 9, x: 400, y: 400, to_x: 900, to_y: 600, tick: 100 });
+        let d = delta(&b, &c);
+        let t = d.towers.as_ref().expect("a lob");
+        assert!(t.towers.is_empty());
+        assert_eq!(t.ooze.as_ref().map(|o| o.globs.len()), Some(1));
+        let mut e = c.clone();
+        e.globs.clear();
+        e.ooze = vec![OozeState { cell: 300, until: 460, total: 360 }, OozeState { cell: 301, until: 460, total: 360 }];
+        e.coats = vec![CoatState { id: 0, left: 40 }];
+        let d = delta(&c, &e);
+        let o = d.towers.as_ref().and_then(|t| t.ooze.as_ref()).expect("a splash");
+        assert_eq!((o.globs_gone.clone(), o.ooze.len(), o.coats.len()), (vec![9], 2, 1));
+        let back: SnapshotDelta = postcard::from_bytes(&postcard::to_stdvec(&d).unwrap()).unwrap();
+        assert_eq!(apply_delta(&c, &back), e);
+        // The puddles drying on their own clock change nothing.
+        let mut f = e.clone();
+        f.tick += 60;
+        assert_eq!(delta(&e, &f).towers, None);
     }
 
     #[test]
@@ -1063,10 +1242,12 @@ mod tests {
         // them (protocol 29); air support's list one, the delta three for it
         // (protocol 30); the flattened grass's list one, the delta two for
         // it (protocol 31); the loose drums' list one, the delta two for
-        // them (protocol 37).
-        assert!(full <= 504, "full snapshot {full} B");
+        // them (protocol 37); the towers', the globs', the ooze's and the
+        // coats' lists one each, the delta one for all four while none of
+        // them changed (protocol 41).
+        assert!(full <= 508, "full snapshot {full} B");
         assert!(moving <= 218, "moving delta {moving} B");
         assert!(busy <= 284, "busy delta {busy} B");
-        assert!(idle <= 69, "idle delta {idle} B");
+        assert!(idle <= 70, "idle delta {idle} B");
     }
 }

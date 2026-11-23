@@ -818,8 +818,11 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     (lobs a `Glob` between its minimum and maximum range, scatter hashed). `resolve_globs` splashes
     the landed ones (a coat - `Tank::slime_timer`, `slime_pace` - and ooze on dry cells),
     `tick_ooze` dries the puddles in `Game::ooze`, coats any hull over one and washes a coat off in
-    water; `tower_died` (from `obstacle_died`) leaves a `TowerRuin` and discharges, cooks off or
-    spills. Enemies route round the player's towers' reach (`player_tower_reach`,
+    water - one hull's tick of that is `coat_tick`, which a client's sandbox runs on its own hull
+    too (`predict_seat_with`), so the two cannot drift; `tower_died` (from `obstacle_died`) leaves a
+    `TowerRuin` and discharges, cooks off or spills. Online (protocol 41) the weapons, globs, ooze
+    and coats are the snapshot's `towers`/`globs`/`ooze`/`coats`; `accept_seat_pose` holds an
+    owned coated hull to `slime_pace` from `POSE_SLIME_GRACE_TICKS` after its coat went on. Enemies route round the player's towers' reach (`player_tower_reach`,
     `route_tower_cost`) and the ooze (`ooze_route_cells`) and fire back at a tower that hurt them
     (`Ai::notify_tower_hit`, the `grudge` tier). The tower pack (`PickupKind::TowerPack`) mends the
     collector's side. An enemy tower picks a seat only from inside that seat's sight box
@@ -2811,7 +2814,11 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   docs/rod-from-god.md), the volcanoes' shifts, `smoke_cells` (the cells thick smoke hides a hull in
   under `smoke_cover`, docs/aftermath.md; protocol 29), `GrassFlatState` (a cell a sonic wave or a
   rod flattened, `Game::grass_flat`, with the round tick it hides again - a tick, not the time
-  left, so an entry changes only when the cell is flattened again; protocol 31) -, `RoundState` (the wave, the live and pending
+  left, so an entry changes only when the cell is flattened again; protocol 31), the towers'
+  families (docs/defence-towers-prd.md §13, protocol 41: `TowerState` - every standing tower's
+  heading, charge in `CHARGE_STEPS` and `tower_flags::BURNING` -, `GlobState` with the tick it was
+  lobbed, `OozeState` with the tick it dries, `CoatState` - a tank's coat, apart from `TankState`
+  so a coat running down costs two bytes) -, `RoundState` (the wave, the live and pending
   counts, the mission banner's, the `WAVE N` breather's and the end screen's restart countdown's
   time left, the outcome), `events`), `Welcome` (`WireOverrides` mirrors `LevelOverrides`), the JSON
   `Lobby` enum, and the quantisation helpers (positions quarter pixels as `i16`, velocities `i8` at
@@ -2828,7 +2835,8 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   `Msg::ForeignWelcome { protocol }` with the rest unread - `Welcome::protocol` stays the first
   field in every version so a client can always read it.
   `delta.rs`: `delta`/`apply_delta` - per family the changed entries in full, short moves as `Moved
-  {key, dx, dy}`, removals as keys; scalars as `Option`; events whole - `Hit` with its shooter,
+  {key, dx, dy}`, removals as keys; scalars as `Option`; the towers' four families together in one
+  optional `TowerDelta`, one byte while none changed; events whole - `Hit` with its shooter,
   `Ricochet` with its shot, what it came off and its id, `MissileLocked`, `DryFired` and `AirHit`
   among them (protocol 40). `PROTOCOL_VERSION` (bump on
   any postcard layout, enum order, kind tag or quantisation change), `MAX_SEATS`. Measured sizes in
@@ -2851,8 +2859,10 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   effect), then
   `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
   the replica already stands in that round at frame 0, which is every welcome; `ObstacleDestroyed`
-  removes the tile; `DrumLaunched` puts the drum in the air; `OilPrinted` lays the room's print,
-  drawn or not; `GrassTrampled`, quiet or drawn, takes the cell out of the cover), then tiles
+  removes the tile - a tower's with its weapon, leaving its ruin, cold for a joiner's
+  `dead_cells` -; `DrumLaunched` puts the drum in the air; `OilPrinted` lays the room's print,
+  drawn or not; `GrassTrampled`, quiet or drawn, takes the cell out of the cover; `TeslaStrike`
+  draws its bolt), then tiles
   (absent = fresh), tanks
   (spawned without `Ai`, body placed with `Physics::set_position`/`set_velocity`; the hull's facing
   snaps and the *drawn* angles stay put, for `tick_presentation` to swing across), shots by id,
@@ -2860,8 +2870,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   the one way a fire ever leaves the list, so the replica darkens the ground and spends the oil
   there), the flattened grass whole (`Game::grass_flat` with each cell's time to its `until`, run
   down by `tick_presentation` between snapshots; a replica's sonic picture lays tufts and never adds
-  cover, and `welcome` pins the tufts of every flat cell, so a joiner's grass lies down too), round
-  scalars, `frame`, and
+  cover, and `welcome` pins the tufts of every flat cell, so a joiner's grass lies down too), the
+  towers' weapons, the globs (aged by the round clock since their lob, or the replica's own clock
+  where that ran further), the ooze and the coats, round scalars, `frame`, and
   the round clock as `tick * PHYSICS_FIXED_DT` - exact because a room server's round runs without
   the mission banner. Never `update`d, no RNG; what the wire omits is hashed (wreck art, shadow
   heights), a full timer (a flag) or the replica's own to run (`Game::tick_presentation` between
@@ -2993,7 +3004,11 @@ docs/sound-system-prd.md is the design; this is what each part owns.
     ahead of the room and pulled back by each snapshot. The sandbox is a whole `Game` built the way
     `apply::welcome` builds the replica, so the statics a replay steps against are the server's *by
     construction*; `Game::predict_seat` is the only thing ever called on it - `drive_tank` plus one
-    solver step, no RNG, nothing ages, nothing fires. **A reconciliation applies the whole snapshot
+    solver step and the room's ooze rule on the one hull (`towers::coat_tick`: a puddle the
+    snapshots laid coats it, water washes it, the coat runs down, so a coated hull slows as the
+    room's does), no RNG, nothing else ages, nothing fires. An owned hull keeps its own coat across
+    a reconciliation or takes the room's (a splash) run down over the ticks it stands ahead,
+    whichever lasts longer. **A reconciliation applies the whole snapshot
     to the sandbox** through `net::apply::snapshot`, the same call the replica takes, so the sandbox
     is a *projection* of the server's world rather than one of its own - every other hull, a
     destroyed wall, a speed boost, all of it, by one already-tested path. Syncing only the own hull
