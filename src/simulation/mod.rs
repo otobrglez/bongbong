@@ -99,7 +99,7 @@ mod weapons;
 
 pub use director::Pacing;
 pub use waves::{RollIn, WaveStatus};
-pub use weapons::{laser_reach, FlameJet};
+pub use weapons::{laser_reach, FlameJet, ShotKey};
 
 /// Which projectile a client's provisional shot is drawn as
 /// (`net::predict`): the three the wire also carries.
@@ -1086,6 +1086,13 @@ pub struct Game {
     /// (`set_seat_view`, docs/online-coop-prd.md §4.16). `None` for a seat
     /// with no client view (a local round, a bot).
     seat_view: [Option<(u32, u8)>; MAX_SEATS],
+    /// The input tick each seat's trigger pull this tick answers - the one
+    /// its `Fired` names (`set_seat_press`) - and the pull a seat's shots
+    /// are keyed by, with how many of them have left (`ShotKey`). `None`
+    /// for a seat with no client (a local round, a bot): its shots roll
+    /// their pass-overs from the round's RNG.
+    seat_press: [Option<u32>; MAX_SEATS],
+    seat_pull: [Option<(u32, u16)>; MAX_SEATS],
     /// The update a seat's client owns its hull for (`accept_seat_pose`),
     /// by the frame number that update will run as; `drive_player` puts
     /// nothing on it that frame, since the pose already did. One update
@@ -1911,6 +1918,8 @@ impl Game {
         // last round's nav grid goes with them.
         self.nav.clear();
         self.seat_view = [None; MAX_SEATS];
+        self.seat_press = [None; MAX_SEATS];
+        self.seat_pull = [None; MAX_SEATS];
         // `frame` starts over, so an update number held from the last
         // round would name one of this round's.
         self.seat_owned = [0; MAX_SEATS];
@@ -3182,6 +3191,30 @@ impl Game {
         }
     }
 
+    /// The input tick a trigger pull of this seat's this tick would answer
+    /// - what the room stamps its `Fired` with (`Mailbox::press_tick`;
+    /// a client's first input is tick 0, so 0 is a tick like any other),
+    /// `None` for a seat with no client; set by the room before the update.
+    /// A pull that fires keys its shells, bolts and bullets by it
+    /// (`ShotKey`), so their pass-overs are the ones the seat's client
+    /// draws.
+    pub fn set_seat_press(&mut self, seat: usize, press_tick: Option<u32>) {
+        if let Some(press) = self.seat_press.get_mut(seat) {
+            *press = press_tick;
+        }
+    }
+
+    /// The key for the next shell, bolt or bullet a seat-owned `owner`
+    /// spawns: its seat's last pull and that pull's next ordinal. `None`
+    /// for an enemy's, and a seat's with no pull keyed.
+    fn take_shot_key(&mut self, owner: Owner) -> Option<ShotKey> {
+        let Owner::Player(seat) = owner else { return None };
+        let (press, ordinal) = self.seat_pull.get_mut(seat as usize)?.as_mut()?;
+        let key = ShotKey { seat, press: *press, ordinal: *ordinal };
+        *ordinal = ordinal.saturating_add(1);
+        Some(key)
+    }
+
     /// How many whole ticks behind this update the world a shot's owner
     /// was drawing stands: lag compensation's rewind, "favor the shooter"
     /// (docs/online-coop-prd.md §4.16). The update's frame less the seat's
@@ -4217,7 +4250,15 @@ impl Game {
             }
         } else if should_fire && tank.fire_cooldown <= 0.0 {
             tank.flame_held = false;
+            let before = f.events.len();
             dispatch_fire(&mut self.physics, f, tank, owner, 0.0);
+            // A pull that fired keys every shot it sends, its queued ones
+            // too, by the press its `Fired` names (`take_shot_key`, at
+            // spawn). A twin's second shot leaves before the next pull can:
+            // the fire interval outlasts the twin's delay.
+            if f.events[before..].iter().any(|e| matches!(e, Event::Fired { .. })) {
+                self.seat_pull[index] = self.seat_press[index].map(|press| (press, 0));
+            }
         }
         drop(q);
         self.lamp_key(f, index, entity, intent);
@@ -5037,22 +5078,26 @@ impl Game {
     /// (`seat_rewind`, carried as a `Rewind` beside it when it is not
     /// zero) and keeps it for its whole flight: the client that fired it
     /// goes on drawing the enemies that far in the past for as long as the
-    /// shot flies.
+    /// shot flies. In a round whose seat presses are stamped it takes its
+    /// `ShotKey` here too (`take_shot_key`), in the order its pull sent it.
     fn spawn_pending(&mut self, f: &mut Frame) {
         for mut shell in f.pending_shells.drain(..) {
             shell.set_id(self.take_shot_id());
             let rewind = self.seat_rewind(shell.owner);
-            self.spawn_shot(shell, rewind);
+            let key = self.take_shot_key(shell.owner);
+            self.spawn_shot(shell, rewind, key);
         }
         for mut plasma in f.pending_plasmas.drain(..) {
             plasma.set_id(self.take_shot_id());
             let rewind = self.seat_rewind(plasma.owner);
-            self.spawn_shot(plasma, rewind);
+            let key = self.take_shot_key(plasma.owner);
+            self.spawn_shot(plasma, rewind, key);
         }
         for mut bullet in f.pending_bullets.drain(..) {
             bullet.set_id(self.take_shot_id());
             let rewind = self.seat_rewind(bullet.owner);
-            self.spawn_shot(bullet, rewind);
+            let key = self.take_shot_key(bullet.owner);
+            self.spawn_shot(bullet, rewind, key);
         }
         for mut missile in f.pending_missiles.drain(..) {
             missile.set_id(self.take_shot_id());
@@ -5070,12 +5115,15 @@ impl Game {
     /// Put one projectile in the world, with its `Rewind` only when it has
     /// one: a shot judged in the present spawns as a bare projectile. One
     /// fired inside a portal's swirl is leaving that portal
-    /// (`portals::ShotPortals`).
-    fn spawn_shot<P: Projectile>(&mut self, shot: P, rewind: u8) {
+    /// (`portals::ShotPortals`); a keyed seat's shot carries its `ShotKey`.
+    fn spawn_shot<P: Projectile>(&mut self, shot: P, rewind: u8, key: Option<ShotKey>) {
         let leaving = self.fired_inside_portal(shot.position());
         let entity = if rewind > 0 { self.world.spawn((shot, Rewind(rewind))) } else { self.world.spawn((shot,)) };
         if let Some(state) = leaving {
             self.world.insert_one(entity, state).ok();
+        }
+        if let Some(key) = key {
+            self.world.insert_one(entity, key).ok();
         }
     }
 
@@ -5407,16 +5455,20 @@ impl Game {
             dmg: (f32, f32),
             rewind: u8,
             portals: portals::ShotPortals,
+            key: Option<ShotKey>,
         }
         // By shot id: a pass-over roll and a hit's damage draw the RNG, and
-        // a shot carrying a `Rewind` or a portal's mark is stored apart
-        // from one that does not.
+        // a shot carrying a `Rewind`, a `ShotKey` or a portal's mark is
+        // stored apart from one that does not.
         let flying: Vec<Flight> = ordered(
-            self.world.query::<(Entity, &P, Option<&Rewind>, Option<&portals::ShotPortals>)>().iter().filter(|(_, p, _, _)| p.is_flying()),
-            |(_, p, _, _)| p.id(),
+            self.world
+                .query::<(Entity, &P, Option<&Rewind>, Option<&portals::ShotPortals>, Option<&ShotKey>)>()
+                .iter()
+                .filter(|(_, p, _, _, _)| p.is_flying()),
+            |(_, p, _, _, _)| p.id(),
         )
             .into_iter()
-            .map(|(entity, p, rewind, portals)| Flight {
+            .map(|(entity, p, rewind, portals, key)| Flight {
                 entity,
                 prev: p.prev_position(),
                 pos: p.position(),
@@ -5425,13 +5477,14 @@ impl Game {
                 dmg: p.damage_range(),
                 rewind: rewind.map_or(0, |r| r.0),
                 portals: portals.copied().unwrap_or_default(),
+                key: key.copied(),
             })
             .collect();
         let (portal_radius, max_passes) = (tuning().portal_shot_radius, tuning().portal_shot_max_passes.max(0) as u8);
         // What is in the air for a shot that strikes it (`air.rs`): none on
         // the end screen, where a bullet passes a drone by.
         let mut air = if live && P::strikes_air() { self.air_targets() } else { Vec::new() };
-        for Flight { entity, prev, pos, vel, owner, dmg, rewind, portals: through } in flying {
+        for Flight { entity, prev, pos, vel, owner, dmg, rewind, portals: through, key } in flying {
             // Into a portal on the way: judged only up to where it goes in.
             let entry = if through.passes < max_passes {
                 portals::shot_entry(prev, pos, self.shot_portals(), portal_radius, through.leaving)
@@ -5455,7 +5508,9 @@ impl Game {
             // pass-over on (`Material::pass_over_chance`) - remembered on
             // the projectile, since a segment ending inside the tile would
             // otherwise re-roll it next frame. Bounded by the props along
-            // the segment. A zero chance draws no RNG.
+            // the segment. A zero chance draws no RNG, and nor does a
+            // keyed seat's shot (`ShotKey`): its roll is its key's, the one
+            // its client draws the shot with.
             let mut ignored: Vec<Entity> = {
                 let mut q = self.world.query_one::<&P>(entity);
                 q.get().expect("projectile collected this frame still exists").passed_over().to_vec()
@@ -5464,8 +5519,13 @@ impl Game {
                 let swept = f.terrain.sweep_rewound(&self.world, players, owner, prev, pos, P::hit_half_extent(), &ignored, past);
                 let Some((target, t)) = swept else { break None };
                 if let ShellTarget::Obstacle(e) = target {
-                    let chance = f.terrain.obstacle(e).map_or(0.0, |b| b.material.pass_over_chance());
-                    if chance > 0.0 && f.rng.random_bool(chance) {
+                    let tile = f.terrain.obstacle(e);
+                    let chance = tile.map_or(0.0, |b| b.material.pass_over_chance());
+                    let passes = match (key, tile) {
+                        (Some(key), Some(tile)) => key.passes_over_tile(self.round_seed, tile),
+                        _ => chance > 0.0 && f.rng.random_bool(chance),
+                    };
+                    if passes {
                         ignored.push(e);
                         let mut q = self.world.query_one::<&mut P>(entity);
                         q.get().expect("projectile collected this frame still exists").note_passed_over(e);
@@ -5534,10 +5594,13 @@ impl Game {
                 let mut q = self.world.query_one::<&mut P>(entity);
                 q.get().expect("projectile collected this frame still exists").deflect(center, new_owner);
                 drop(q);
-                // Turned back, the shot is the shield's and is judged in
-                // the present.
+                // Turned back, the shot is the shield's: judged in the
+                // present, and rolling its pass-overs from the RNG.
                 if let Ok(mut rewind) = self.world.get::<&mut Rewind>(entity) {
                     rewind.0 = 0;
+                }
+                if key.is_some() {
+                    self.world.remove_one::<ShotKey>(entity).ok();
                 }
                 f.events.push(Event::Deflected { slot: new_owner.slot(), x: hit_pos.x, y: hit_pos.y });
                 continue;

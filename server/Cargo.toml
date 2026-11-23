@@ -15,7 +15,8 @@ publish = false
 # The dev surface (`devserver.rs`): a loopback JSON socket `bbmcp rooms`
 # drives, and the room-task seam it answers through. Off by default, so
 # the release image carries none of it - `just run-server-dev` and CI's
-# test build are what turn it on.
+# second server test run (`cargo test -p bongbong-server --features
+# dev-tools`, ci.yml's `check` job) are what turn it on.
 default = []
 dev-tools = ["bongbong/dev-tools", "dep:serde_json"]
 

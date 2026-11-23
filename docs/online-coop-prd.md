@@ -1262,7 +1262,31 @@ The pieces, each with its owner module:
   copy was due in the picture and never came (the snapshot carrying it
   stepped over, the copy dead between two) is orphaned - left out of the
   pairing, so the next shot's copy is not taken for it - and goes as soon
-  as it is off the picture.
+  as it is off the picture. A second rule netlab added, on the campaign's
+  tiled maps: **the provisional meets the tiles the room's copy meets**.
+  Its contact is the room's sweep on the drawn world - every tile and the
+  field's edge grown by the shot's half-width, through the same
+  `TerrainBox::entry` - and the pass-over roll a shell, bolt or bullet makes
+  at a sandbag, fence, lamp, sapling or loose prop is no longer the round's
+  RNG for a seat's shot in a room but a hash of its `ShotKey` (the seat,
+  the input tick its `Fired` names, which the room hands the round with
+  `Game::set_seat_press`, and its place among the pull's shots), the
+  round's seed and the tile's cell, which the client works out the same
+  way: the two sail over the same tiles. And it leaves from where the
+  room's copy leaves: the room fires before its tick's step, from where an
+  owned hull's pose puts its copy (one tick back along the speed it went
+  into the step at), so the provisional's muzzle is moved back by the
+  sandbox's step (`Predictor::launch_shift`) - otherwise a hull drifting
+  across its line of fire (turning out of a run, strafing) launched its
+  provisional 2-3 px to the side of the room's copy, enough to graze a
+  tile's edge the copy missed. Before, a provisional stopped at
+  a fence its room copy then flew on past (a 25-33 px hand-off, up to
+  seven a run, on the typical-link shoot and duel runs on Grand Campaign,
+  Wildwood and Black Gold), and one that grazed a tile's edge flew on
+  where the room's copy burst (86 px). Every unkeyed shot - an enemy's, every local round's - rolls
+  from the RNG as before, so no seeded stream moved. Ricochets and
+  deflections (iron, a barrel) are still the room's alone: the
+  provisional bursts there and the room's copy is shown bouncing off.
 - **Lag compensation, favor the shooter** (the simulation's hit test):
   each intent carries the tick the client was drawing
   (`IntentMsg::view_tick`); the room keeps the last 250 ms of enemy and

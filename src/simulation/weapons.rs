@@ -629,6 +629,62 @@ pub(super) trait Projectile: hecs::Component {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Rewind(pub u8);
 
+/// A seat's shell, bolt or bullet as the room and that seat's client both
+/// know it: the seat, the input tick of the trigger pull it left on (the
+/// one its `Fired` names) and which of that pull's shots it is - 0, and 1
+/// for a twin barrel's second. What its pass-over rolls are made from
+/// (`passes_over`), so a client drawing the shot from the press
+/// (`net::predict`) sails it over the same sandbags and fences the room
+/// does, rather than stopping at one the room's copy then flies on past.
+///
+/// A component beside the projectile, attached only in a round whose seat
+/// presses are stamped (`Game::set_seat_press`: a room, the rig) - so an
+/// enemy's shot and every shot of a local round roll their pass-overs from
+/// the round's RNG, and a local round's stream does not depend on keys -
+/// and taken off when a shield turns the shot back, since it is the
+/// shield's from then on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShotKey {
+    pub seat: u8,
+    pub press: u32,
+    pub ordinal: u16,
+}
+
+impl ShotKey {
+    /// Whether this shot passes over the tile on `cell` (its box's cell,
+    /// `battlefield::pos_to_cell`) at odds `chance`, in the round seeded
+    /// `seed`: a hash of the four, the same on every machine, drawing no
+    /// RNG. Its own answer for each tile, however often it is asked.
+    pub fn passes_over(self, seed: u64, cell: (i32, i32), chance: f64) -> bool {
+        if chance <= 0.0 {
+            return false;
+        }
+        let mut h = seed ^ 0x5348_4F54_4B45_5900;
+        for word in [self.seat as u64, self.press as u64, self.ordinal as u64, cell.0 as u32 as u64, cell.1 as u32 as u64] {
+            h = mix64(h.wrapping_add(word).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        }
+        ((h >> 11) as f64 / (1u64 << 53) as f64) < chance
+    }
+
+    /// Whether this shot passes over `tile` - its cell, its material's
+    /// `pass_over_chance` - in the round seeded `seed`: what the room's
+    /// sweep (`Game::resolve_projectiles`) and the client's drawn shot
+    /// (`PresentWorld::shot_contact`) both ask of a tile it meets.
+    pub(super) fn passes_over_tile(self, seed: u64, tile: &TerrainBox) -> bool {
+        self.passes_over(seed, crate::battlefield::pos_to_cell(tile.center), tile.material.pass_over_chance())
+    }
+}
+
+/// SplitMix64's mixing step: every bit of `h` stirred into every bit of
+/// the answer, the same on every machine.
+fn mix64(mut h: u64) -> u64 {
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^ (h >> 31)
+}
+
 /// Velocity of a projectile bouncing off a shield centred at `center`: the
 /// approach velocity mirrored across the radial normal from the centre to
 /// where the projectile was before this frame's motion, so a shot straight

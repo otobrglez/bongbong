@@ -171,7 +171,9 @@ things when forgotten; this is the detail. Update it with the tool.
   clippy --lib --no-default-features --features dev-tools` has no errors (its warnings are not a
   gate). CI (`.github/workflows/ci.yml`) runs, in `test`, `cargo test --lib` and the headless
   `cargo test --lib --no-default-features --features dev-tools`, and in `check`, `cargo check
-  --workspace`, that clippy command (an error fails it), `cargo test -p bongbong-server`, `cargo
+  --workspace`, that clippy command (an error fails it), `cargo test -p bongbong-server -p netlab`
+  (one build of the game crate for both), `cargo test -p bongbong-server --features dev-tools` (the
+  room server's dev surface and the tests behind it), `cargo
   test --test waves_sanity --no-default-features` and `just probe-fixtures`, `probe-survive` and
   `probe-fields`. Dependencies
   build at opt-level 3 in the dev profile (`[profile.dev.package."*"]`), and CI's two jobs build
@@ -195,8 +197,11 @@ things when forgotten; this is the detail. Update it with the tool.
   `--blackhole-after S` swallows everything both ways from S seconds on without closing a socket (a
   path that died silently - `tests/silent_link.rs` holds both clients to noticing it); `--remote
   URL` points the clients at a real rooms host (a PR preview) with no proxy or tap. `just netlab run
-  ...`, `just netlab-suite [--quick]` (each run its own process - the tuning table is process-wide).
-  `cargo test -p netlab` covers the link model, the tap's parser and one LAN drive.
+  ...`, `just netlab-suite [--quick]` (each run its own process - the tuning table is process-wide;
+  after the arena legs it plays `shoot` and `duel` on Wildwood, `suite::TILED_MAP`, hull on, where
+  an own shot's hand-off is a disagreement about a tile). `cargo test -p netlab` (CI runs it)
+  covers the link model, the tap's parser, the report and the suite plan, and three whole runs: a
+  LAN drive, a server that comes up late, a link that dies silently.
 - **The offline rig** (`src/net/rig.rs`, docs/online-coop-prd.md §4.13): `cargo run -- --rig --delay
   80 --jitter 20 --loss 0.02` puts an authoritative `Game` on a background thread, a `net::loopback`
   link with those dials between it and the window, and the replica on screen - the whole online

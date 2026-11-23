@@ -580,6 +580,15 @@ impl Terrain {
         self.first_along(p0, p1, pad, Entry::Shot)
     }
 
+    /// `first_shot_along` for a shot that sails over every tile `passes`
+    /// says it does (a keyed seat's shot, `ShotKey::passes_over_tile`):
+    /// the first tile it enters and does not pass over.
+    pub fn first_shot_along_past(&self, p0: Position, p1: Position, pad: f32, passes: impl Fn(&TerrainBox) -> bool) -> Option<f32> {
+        self.tiles_along(p0, p1, pad)
+            .filter_map(|b| b.entry(p0, p1, pad, Entry::Shot).filter(|_| !passes(b)))
+            .min_by(|a, b| a.total_cmp(b))
+    }
+
     /// The first tile the segment `p0..p1`, `pad` wide, enters as `mode`
     /// meets tiles (`TerrainBox::entry`), as a fraction of it.
     pub fn first_along(&self, p0: Position, p1: Position, pad: f32, mode: Entry) -> Option<f32> {

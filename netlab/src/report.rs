@@ -573,7 +573,7 @@ pub fn summary(r: &Report) -> String {
 }
 
 /// The suite's table header.
-pub const TABLE_HEADER: &str = "| profile | scenario | mode | own input p50/p95 ms (p95 frames) | remote lag p50/p95 ms | stall % | jump % | back % | cv | shot drawn p50 ms | fired p50 ms | hit p50 ms | hand-offs n (gap p95 px) | drawn twice | burst from afar p95 px (n) | struck / phantom / unseen | nudges+snaps | rtt p50 ms | snap gap p99/max ms | verdict |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+pub const TABLE_HEADER: &str = "| map | profile | scenario | mode | own input p50/p95 ms (p95 frames) | remote lag p50/p95 ms | stall % | jump % | back % | cv | shot drawn p50 ms | fired p50 ms | hit p50 ms | hand-offs n (gap p95 px) | drawn twice | burst from afar p95 px (n) | struck / phantom / unseen | nudges+snaps | rtt p50 ms | snap gap p99/max ms | verdict |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
 /// One row of the suite's table: the online view of `r`, or its twin.
 pub fn table_row(r: &Report, twin: bool) -> String {
@@ -592,8 +592,9 @@ pub fn table_row(r: &Report, twin: bool) -> String {
         _ => "-".into(),
     };
     let verdict = if twin { "reference".to_string() } else { r.verdict.clone() };
+    let map = std::path::Path::new(&r.map).file_stem().map_or_else(|| r.map.clone(), |s| s.to_string_lossy().into_owned());
     format!(
-        "| {profile} | {} | {mode} | {}/{} ({}) | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {}/{}/{} | {corrections} | {rtt} | {gap} | {verdict} |",
+        "| {map} | {profile} | {} | {mode} | {}/{} ({}) | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {}/{}/{} | {corrections} | {rtt} | {gap} | {verdict} |",
         r.scenario.name(),
         ms(m.own_input_ms.p50),
         ms(m.own_input_ms.p95),

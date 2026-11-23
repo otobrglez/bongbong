@@ -74,7 +74,9 @@ occupied one). **Difficulty follows the seat count** (docs/online-coop-prd.md §
 docs/maps-to-levels.md "Difficulty by seat count"): `tuning_patch(seats)` is the round's whole
 tuning diff - `wave_size_scale = 1 + (seats - 1) * online_wave_size_per_seat` and `wave_tier_step =
 (seats - 1) / online_wave_tier_seats_per_step`, the two dials read from the build's table - and one
-seat is the empty patch, so a room of one plays the offline round down to the bytes. `init_under`
+seat is the empty patch, so a room of one plays the offline round's rules down to the bytes (its
+seats' shots roll their pass-overs from their `ShotKey`s rather than the RNG - the same odds - so
+its client draws them, docs/online-coop-prd.md §4.16). `init_under`
 puts it on the process-wide table on top of `Tuning::DEFAULT` and calls `Game::init` under
 `ROUND_TUNING`, a mutex: both rows are `Restart` rows read only where the spawn plan is resolved, so
 the lock has to cover nothing else and a room already playing reads nothing that moves. The same
@@ -109,6 +111,8 @@ four-seat round with a replica per client held to the wire, and - through whole
 both seats of a co-op room and counts the shells back (the intersection of `OnlineRound`'s real-time
 pacing and the ordered mailbox is the one lane neither `Lockstep` nor `net::rig` covers, since both
 call `RoomClient::send_intent` directly and feed the rig's mailbox from the same thread).
+`cargo test -p bongbong-server --features dev-tools` adds the dev surface's tests (`tests/devtools.rs`
+and the units behind the feature); CI runs both.
 
 **Its dev surface** (`server/src/devserver.rs`, feature `dev-tools`, `just run-server-dev`):
 newline-delimited JSON on `127.0.0.1:4849` (`--dev-port`), the same framing and the same

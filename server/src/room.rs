@@ -1397,6 +1397,12 @@ impl Room {
         for &(i, (tick, frac)) in &views {
             game.set_seat_view(i, tick, frac);
         }
+        // The press each client's pull this tick answers: its shots are
+        // keyed by it, so their pass-overs are the ones the seat's client
+        // draws (`bongbong::simulation::ShotKey`).
+        for (i, &press) in presses.iter().enumerate() {
+            game.set_seat_press(i, self.seats.get(i).is_some_and(|s| s.is_some()).then_some(press));
+        }
         // A charge counts the client's ticks of trigger held, not the
         // room's reads (docs/gauss-rail.md "The hold report").
         for &(i, hold) in &holds {

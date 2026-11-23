@@ -24,7 +24,8 @@ struct Cli {
 enum Cmd {
     /// One run: a link, a scenario, a hull mode.
     Run(RunArgs),
-    /// Profiles x scenarios x hull modes, as one markdown table.
+    /// Profiles x scenarios x hull modes on the map, then shoot and duel on
+    /// a tiled map, as one markdown table.
     Suite(SuiteArgs),
     /// Measure a run's `--frames-out` dump again, offline.
     Replay(ReplayArgs),
@@ -54,7 +55,7 @@ struct Common {
     #[arg(long, default_value_t = 60.0)]
     fps: f64,
     /// The map played, before netlab pins its enemies, spawn plan and
-    /// chassis.
+    /// chassis. The suite's tiled leg plays its own (`suite::TILED_MAP`).
     #[arg(long, default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/maps/arena.toml"))]
     map: PathBuf,
     /// The round's seed, decimal or 0x-hex.
@@ -201,8 +202,6 @@ fn suite_cmd(args: SuiteArgs) -> Result<(), String> {
     let mut extra = vec![
         "--fps".to_string(),
         c.fps.to_string(),
-        "--map".into(),
-        c.map.display().to_string(),
         "--seed".into(),
         c.seed.to_string(),
         "--tank".into(),
@@ -214,7 +213,7 @@ fn suite_cmd(args: SuiteArgs) -> Result<(), String> {
         extra.extend(["--remote".to_string(), remote.clone()]);
     }
     let scratch = std::env::temp_dir().join(format!("netlab-suite-{}", std::process::id()));
-    let reports = suite::run(&plan, &extra, &scratch);
+    let reports = suite::run(&plan, &c.map, &extra, &scratch);
     println!("{}", suite::table(&reports));
     if let Some(path) = &args.json_out {
         let ok: Vec<&report::Report> = reports.iter().filter_map(|r| r.as_ref().ok()).collect();

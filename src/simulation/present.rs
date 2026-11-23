@@ -31,7 +31,7 @@ use crate::math::Vec2;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::simulation::hits::Terrain;
-use crate::simulation::{Game, ProvisionalKind, ProvisionalShot};
+use crate::simulation::{Game, ProvisionalKind, ProvisionalShot, ShotKey};
 use crate::tank::Tank;
 use crate::tuning::tuning;
 
@@ -84,6 +84,9 @@ pub struct PresentWorld {
     /// The air targets as drawn (`Game::air_targets`): what a seat's own
     /// bullets stop at (`air_contact`).
     air: Vec<crate::air::AirTarget>,
+    /// The round's seed, which a keyed shot's pass-overs are made from
+    /// (`ShotKey::passes_over`): the room's, since a replica starts on it.
+    seed: u64,
 }
 
 impl Game {
@@ -111,7 +114,7 @@ impl Game {
             .flatten()
             .filter_map(|e| self.world.get::<&crate::bong::Bong>(e).ok().filter(|f| !f.is_dead()).map(|f| f.position))
             .collect();
-        PresentWorld { terrain, tanks, bongs, width, height, portals: self.shot_portals().to_vec(), air: self.air_targets() }
+        PresentWorld { terrain, tanks, bongs, width, height, portals: self.shot_portals().to_vec(), air: self.air_targets(), seed: self.round_seed }
     }
 
     /// Kick one seat's hull back from a shot it just fired along
@@ -521,8 +524,14 @@ impl PresentWorld {
     /// Where a shot `shooter` fired, `half` wide, first meets something
     /// along `p0..p1` - a tank that is not the shooter's (grown by the
     /// player shot's pad against enemies, as the room grows it), a bong, a
-    /// tile or the field's edge - or `None` if the segment is clear.
-    pub fn shot_contact(&self, shooter: Option<u8>, p0: Position, p1: Position, half: f32) -> Option<(Position, Contact)> {
+    /// tile or the field's edge - or `None` if the segment is clear. The
+    /// room's sweep (`Terrain::sweep_rewound`) on the drawn world: a tile
+    /// by its box grown by `half` (`TerrainBox::entry`, `Entry::Shot`), the
+    /// edge by the room's walls grown alike, and a shot keyed as the room
+    /// keys it (`ShotKey`: a seat's shell, bolt or bullet) sails over the
+    /// tiles its key passes it over, as its room copy does. A beam has no
+    /// key: every tile on its line stops it.
+    pub fn shot_contact(&self, shooter: Option<u8>, p0: Position, p1: Position, half: f32, key: Option<ShotKey>) -> Option<(Position, Contact)> {
         let pad = Position::new(half, half);
         let enemy_pad = if shooter.is_some() {
             let p = tuning().player_shot_hit_pad_px;
@@ -552,8 +561,14 @@ impl PresentWorld {
         for &bong in &self.bongs {
             consider(segment_box(p0, p1, bong, bong_half + pad), Contact::Bong);
         }
-        consider(self.terrain.first_shot_along(p0, p1, 0.0), Contact::Tile);
-        consider(self.edge_along(p0, p1), Contact::Edge);
+        let tile = match key {
+            Some(key) => self.terrain.first_shot_along_past(p0, p1, half, |tile| key.passes_over_tile(self.seed, tile)),
+            None => self.terrain.first_shot_along(p0, p1, half),
+        };
+        consider(tile, Contact::Tile);
+        for (center, wall) in self.terrain.edge_boxes() {
+            consider(crate::shape::segment_hits_aabb(p0, p1, center, wall + pad), Contact::Edge);
+        }
         best.map(|(t, c)| (Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t), c))
     }
 
@@ -862,12 +877,12 @@ mod tests {
         game.debug_teleport(1, target, Some(0.0)).expect("an enemy");
         let world = game.present_world();
         let (at, contact) = world
-            .shot_contact(Some(0), seat.position, Position::new(seat.position.x + 400.0, seat.position.y), 3.0)
+            .shot_contact(Some(0), seat.position, Position::new(seat.position.x + 400.0, seat.position.y), 3.0, None)
             .expect("the enemy is in the way");
         assert_eq!(contact, Contact::Tank { seat: None });
         assert!(at.x < target.x && at.x > target.x - 60.0, "stopped at the enemy's near face: {at:?} vs {target:?}");
         // Straight through its own hull from the centre: nothing.
-        let own = world.shot_contact(Some(0), seat.position, Position::new(seat.position.x + 1.0, seat.position.y), 3.0);
+        let own = world.shot_contact(Some(0), seat.position, Position::new(seat.position.x + 1.0, seat.position.y), 3.0, None);
         assert!(own.is_none_or(|(_, c)| c != Contact::Tank { seat: Some(0) }), "a shot never meets its own hull");
     }
 
@@ -903,5 +918,151 @@ mod tests {
             shot.advance(1.0 / 60.0);
         }
         assert!(shot.done, "the impact frames end it");
+    }
+
+    use crate::simulation::{Event, HitTarget, Input};
+
+    const W: f32 = 1280.0;
+    const H: f32 = 720.0;
+
+    /// A field with `extra` cells on it, the seat on (20,15) facing up and
+    /// the one enemy boxed in iron in the far corner, out of every line
+    /// these tests shoot along.
+    fn field_with(extra: &str, seed: u64, row: i32) -> Game {
+        let mut text = String::from("version = 1\ntanks = 1\ncells.\"2,2\" = { kind = \"bong\" }\ncells.\"20,18\" = { kind = \"start\" }\n");
+        for (c, r) in [(36, 19), (37, 19), (38, 19), (36, 20), (38, 20), (36, 21), (37, 21), (38, 21)] {
+            text.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        text.push_str(extra);
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(seed);
+        game.player_row_override = Some(row);
+        game.map = MapFile::from_toml_str(&text).expect("test map parses");
+        game.init(W, H);
+        game.debug_teleport(1, crate::map::cell_to_world(37, 20), Some(0.0)).expect("the enemy");
+        game.debug_teleport(0, crate::map::cell_to_world(20, 15), Some(0.0)).expect("the seat");
+        game
+    }
+
+    /// A shell grazing a fence, a sandbag or a tree - its line just
+    /// outside the tile's box, inside the shell's own half-width - stops
+    /// where the room's sweep stops it, at the same point, and one that
+    /// clears the box by more than its half-width passes both alike: the
+    /// client grows a tile by the shot's half-width, as the room does.
+    #[test]
+    fn a_shot_grazing_a_fence_a_sandbag_or_a_tree_stops_where_the_rooms_sweep_does() {
+        let game = field_with("cells.\"10,6\" = { kind = \"fence\" }\ncells.\"16,6\" = { kind = \"sandbag\" }\ncells.\"24,6\" = { kind = \"tree\" }\n", 7, 0);
+        let room = Terrain::build(&game.world, W, H, &[], &game.water);
+        let client = game.present_world();
+        let half = tuning().shell_hit_half_extent;
+        for (cell, what) in [((10, 6), "fence"), ((16, 6), "sandbag"), ((24, 6), "tree")] {
+            let c = crate::map::cell_to_world(cell.0, cell.1);
+            let edge = game
+                .world
+                .query::<&crate::obstacle::Obstacle>()
+                .iter()
+                .find(|o| crate::map::world_to_cell(o.position) == cell)
+                .map(|o| o.hull_size() * 0.5)
+                .expect("the tile");
+            for (p0, p1, grazes) in [
+                // Along its bottom edge, a hair inside the shell's reach.
+                (Position::new(c.x - 64.0, c.y + edge + half - 1.0), Position::new(c.x + 64.0, c.y + edge + half - 1.0), true),
+                // Down its left edge.
+                (Position::new(c.x - edge - half + 0.5, c.y - 64.0), Position::new(c.x - edge - half + 0.5, c.y + 64.0), true),
+                // Clear of it by half a pixel more than the shell's reach.
+                (Position::new(c.x - 64.0, c.y + edge + half + 0.5), Position::new(c.x + 64.0, c.y + edge + half + 0.5), false),
+            ] {
+                let swept = room.sweep(&game.world, game.players(), Owner::Player(0), p0, p1, half);
+                let drawn = client.shot_contact(Some(0), p0, p1, half, None);
+                match (swept, drawn) {
+                    (Some((crate::simulation::hits::ShellTarget::Obstacle(_), t)), Some((at, Contact::Tile))) => {
+                        assert!(grazes, "{what}: the shot clear of it met it: {at:?}");
+                        let rooms = Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t);
+                        assert!(rooms.distance_to(at) < 1e-3, "{what}: the room stops it at {rooms:?}, the client at {at:?}");
+                    }
+                    (None, None) => assert!(!grazes, "{what}: neither met the grazing shot along {p0:?}..{p1:?}"),
+                    other => panic!("{what}: the room and the client disagree along {p0:?}..{p1:?}: {other:?}"),
+                }
+            }
+        }
+    }
+
+    /// The press tick and ordinal a seat's shot leaves with, read back off
+    /// the room's world.
+    fn keys_of(game: &Game) -> Vec<(u32, ShotKey)> {
+        let mut keys: Vec<(u32, ShotKey)> = game.world.query::<(&Shell, &ShotKey)>().iter().map(|(s, k)| (s.id, *k)).collect();
+        keys.sort_by_key(|&(id, _)| id);
+        keys
+    }
+
+    /// A seat's shell in a room whose presses are stamped carries its key
+    /// - the press's tick, and 0 and 1 for a twin barrel's two shells, as a
+    /// client counts its press's shots - and a local round's carries none.
+    #[test]
+    fn a_rooms_seat_shells_are_keyed_by_their_press_and_a_local_rounds_are_not() {
+        let twin = tuning().tank_barrel_lateral_offset.iter().position(|&l| l > 0.0).expect("a twin-barrel chassis") as i32;
+        let mut room = field_with("", 3, twin);
+        let fire = Input::single(crate::ai::Intent { fire: true, ..crate::ai::Intent::default() });
+        room.set_seat_press(0, Some(412));
+        room.update(fire, crate::PHYSICS_FIXED_DT, W, H);
+        for _ in 0..6 {
+            room.set_seat_press(0, Some(413));
+            room.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        }
+        let keys: Vec<ShotKey> = keys_of(&room).into_iter().map(|(_, k)| k).collect();
+        assert_eq!(keys, vec![ShotKey { seat: 0, press: 412, ordinal: 0 }, ShotKey { seat: 0, press: 412, ordinal: 1 }], "both shells of the pull, in order");
+
+        let mut local = field_with("", 3, twin);
+        local.update(fire, crate::PHYSICS_FIXED_DT, W, H);
+        for _ in 0..6 {
+            local.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        }
+        assert!(keys_of(&local).is_empty(), "a local round keys nothing");
+        assert_eq!(local.world.query::<&Shell>().iter().count(), 2, "and fired both");
+    }
+
+    /// The room's pass-over rolls for a keyed seat's shell are its
+    /// client's: over a fence and a sandbag to the brick behind them, the
+    /// shell bursts where the client's drawn copy of it stops
+    /// (`shot_contact` with the shell's key) for every press, whichever of
+    /// the three that is.
+    #[test]
+    fn a_keyed_shell_passes_over_what_its_client_draws_it_passing_over() {
+        let map = "cells.\"20,11\" = { kind = \"fence\" }\ncells.\"20,9\" = { kind = \"sandbag\" }\ncells.\"20,6\" = { kind = \"wall\", material = \"brick\" }\n";
+        let fire = Input::single(crate::ai::Intent { fire: true, ..crate::ai::Intent::default() });
+        let mut stopped_at = std::collections::BTreeMap::<i32, usize>::new();
+        // A client's first input is tick 0: a press on it is keyed too.
+        for press in 0..40u32 {
+            let mut game = field_with(map, 11, 0);
+            let client = game.present_world();
+            game.set_seat_press(0, Some(press));
+            game.update(fire, crate::PHYSICS_FIXED_DT, W, H);
+            let (id, key) = *keys_of(&game).first().expect("the shell, keyed");
+            let (from, dir) = {
+                let shell = game.world.query::<&Shell>().iter().find(|s| s.id == id).map(|s| (s.position, s.velocity)).expect("the shell");
+                (shell.0, shell.1 * (1.0 / shell.1.length()))
+            };
+            let (drawn, contact) = client
+                .shot_contact(Some(0), from, from + dir * 400.0, tuning().shell_hit_half_extent, Some(key))
+                .expect("the brick stops it at the latest");
+            assert_eq!(contact, Contact::Tile, "press {press}");
+            let mut burst = None;
+            for _ in 0..120 {
+                game.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+                burst = game.events().iter().find_map(|e| match e {
+                    Event::Hit { target: HitTarget::Obstacle { .. }, x, y, .. } => Some(Position::new(*x, *y)),
+                    _ => None,
+                });
+                if burst.is_some() {
+                    break;
+                }
+            }
+            let burst = burst.expect("the room's shell bursts on a tile");
+            assert!(burst.distance_to(drawn) < 0.5, "press {press}: the room bursts it at {burst:?}, its client at {drawn:?}");
+            *stopped_at.entry(crate::map::world_to_cell(drawn).1).or_default() += 1;
+        }
+        // The fence's face is in row 11's box, the sandbag's in row 9's.
+        assert!(stopped_at.len() == 3, "every press stopped at the fence, the sandbag or the brick, some at each: {stopped_at:?}");
     }
 }

@@ -35,12 +35,15 @@
 //! second shell `tank_twin_shot_delay_seconds` on, a minigun burst's
 //! bullets `Tuning::minigun_round_ticks` apart after the barrels' spin-up,
 //! which this client counts as the room does), each spawned from the sandbox's
-//! pose on the frame it is due, as the server's `tick_queued_shots` would.
-//! A provisional runs its projectile's own state machine - the muzzle
-//! frames, then flight (`ProvisionalShot::advance`) - and is swept every
-//! frame against the drawn world through the contact `advance_shots` is
-//! handed: where it meets a tile, the field's edge, a tank or a bong it
-//! stops and plays its impact at once. Damage stays the room's.
+//! pose on the frame it is due, as the server's `tick_queued_shots` would,
+//! and from where the room's copy leaves, before the tick's step
+//! (`launch_shift`). A provisional runs its projectile's own state machine -
+//! the muzzle frames, then flight (`ProvisionalShot::advance`) - and is
+//! swept every frame against the drawn world through the contact
+//! `advance_shots` is handed: where it meets a tile, the field's edge, a
+//! tank or a bong it stops and plays its impact at once, sailing over the
+//! tiles its `ShotKey` passes it over as the room's copy does. Damage stays
+//! the room's.
 //!
 //! **Into a portal** (`ShotStop::Portal`) a provisional goes no further:
 //! which portal it comes out of is the room's draw. It leaves the picture
@@ -105,7 +108,7 @@ use crate::math::Vec2 as Position;
 use crate::net::apply;
 use crate::net::wire::{Snapshot, WeaponKind};
 use crate::simulation::portals;
-use crate::simulation::{Game, ProvisionalKind, ProvisionalShot};
+use crate::simulation::{Game, ProvisionalKind, ProvisionalShot, ShotKey};
 use crate::tank::ActiveWeapon;
 use crate::tuning::tuning;
 
@@ -226,6 +229,10 @@ struct Live {
     /// This client's own number for the shot, fixed for its life: the id
     /// it is drawn under is `PROVISIONAL_ID_BASE` plus it.
     id: u32,
+    /// The shot as the room keys its copy (`ShotKey`): this seat, its
+    /// press's input tick and its place among the press's shots. What its
+    /// pass-overs are rolled from, here and in the room alike.
+    key: ShotKey,
     shot: ProvisionalShot,
     /// Seconds since it left the muzzle: how long its room copy has had to
     /// turn up.
@@ -332,6 +339,9 @@ struct Press {
     /// Shots of an undrawn press that have left the muzzle: owed against
     /// the gate as a drawn press's live shots are.
     undrawn: usize,
+    /// Shots that have left the muzzle, drawn or not: the next one's place
+    /// among the press's shots (`ShotKey::ordinal`), as the room counts it.
+    launched: u16,
     /// Its first drawn shot has left and rippled the muzzle.
     muzzled: bool,
 }
@@ -558,6 +568,9 @@ pub struct Predictor {
     /// first shot, the first barrel of a twin - and what it fired, for the
     /// round's muzzle ripple and the turret's kick.
     muzzles: Vec<(Position, ProvisionalKind)>,
+    /// How far from the stepped sandbox hull the room's copy of a shot
+    /// leaving on the tick being stepped leaves (`launch_shift`).
+    launch_shift: Position,
     /// Shell and plasma presses since the last frame that found too little
     /// ammo for their shot - the room's `Event::DryFired` - for their click.
     dry_presses: u32,
@@ -632,6 +645,7 @@ impl Predictor {
             reticle: None,
             impacts: Vec::new(),
             muzzles: Vec::new(),
+            launch_shift: Position::new(0.0, 0.0),
             dry_presses: 0,
             unpaired: std::collections::BTreeMap::new(),
             teleported: std::collections::BTreeSet::new(),
@@ -714,7 +728,9 @@ impl Predictor {
         let trigger = (pressed, self.charge_gate_open());
         // The round tick this input lands on, for a well's pull.
         self.sandbox.set_zone_lead(tick.wrapping_sub(self.last_acked).min(HISTORY_TICKS as u32) as f32 * PHYSICS_FIXED_DT);
+        let before = self.sandbox.seat_pose(self.seat).map(|p| p.position);
         let charged = self.sandbox.predict_seat_with(self.seat, intent, PHYSICS_FIXED_DT, Some(trigger));
+        self.launch_shift = self.launch_shift(before);
         self.history.push_back((tick, intent, trigger));
         while self.history.len() > HISTORY_TICKS {
             self.history.pop_front();
@@ -734,6 +750,26 @@ impl Predictor {
             Some(charge) => self.charge_edge(tick, charge),
             None => self.pull_trigger(tick, pressed, intent.fire),
         }
+    }
+
+    /// How far from the sandbox's hull, just stepped, the room's copy of a
+    /// shot leaving on this tick leaves. The room fires before its tick's
+    /// step (`drive_player` ahead of the solver): a hull it drives from
+    /// where it stood, `before` the step here, and an owned hull from where
+    /// its pose puts it - one tick back along the speed it went into the
+    /// step at (`Game::accept_seat_pose`), read off the pose as the wire
+    /// carries it. Square to the line of fire that is the hull's sideways
+    /// drift, which decides whether a shot grazing a tile's edge meets it.
+    fn launch_shift(&self, before: Option<Position>) -> Position {
+        let Some(pose) = self.sandbox.seat_pose(self.seat) else { return Position::new(0.0, 0.0) };
+        let from = if self.owned {
+            use crate::net::wire::{dequantise_pos, dequantise_velocity, quantise_pos, quantise_velocity};
+            let at = |p: f32, v: f32| dequantise_pos(quantise_pos(p)) - dequantise_velocity(quantise_velocity(v)) * PHYSICS_FIXED_DT;
+            Position::new(at(pose.position.x, pose.ram.x), at(pose.position.y, pose.ram.y))
+        } else {
+            before.unwrap_or(pose.position)
+        };
+        Position::new(from.x - pose.position.x, from.y - pose.position.y)
     }
 
     /// One tick of this seat's minigun barrels, the room's
@@ -1066,6 +1102,7 @@ impl Predictor {
             pending,
             live: Vec::new(),
             undrawn: 0,
+            launched: 0,
             muzzled: false,
         };
         self.next_press = self.next_press.wrapping_add(1);
@@ -1089,8 +1126,9 @@ impl Predictor {
     /// Move every pending shot whose tick has come out of the muzzle,
     /// from the sandbox's pose right now - the twin's second shell and a
     /// burst's later bullets leave from where the hull is *then*, which
-    /// is how `tick_queued_shots` fires them. An owned hull is kicked back
-    /// by every one, drawn or not.
+    /// is how `tick_queued_shots` fires them - moved to where the room's
+    /// copy leaves, before the tick's step (`launch_shift`). An owned hull
+    /// is kicked back by every one, drawn or not.
     fn launch_due(&mut self, press: &mut Press) {
         let mut i = 0;
         while i < press.pending.len() {
@@ -1100,7 +1138,10 @@ impl Predictor {
                 continue;
             }
             press.pending.remove(i);
-            if let Some(shot) = self.sandbox.seat_shot(self.seat, press.kind, p.aim, p.lateral) {
+            if let Some(mut shot) = self.sandbox.seat_shot(self.seat, press.kind, p.aim, p.lateral) {
+                // From where the room's copy leaves, not the stepped hull.
+                shot.position = shot.position + self.launch_shift;
+                shot.prev_position = shot.prev_position + self.launch_shift;
                 // The kick lands on the launch, as the room's does in a
                 // local round. The room sends no `Shoved` for it
                 // (`weapons::apply_recoil`), so this is the owned hull's
@@ -1108,6 +1149,8 @@ impl Predictor {
                 if self.owned {
                     self.sandbox.seat_recoil(self.seat, press.kind, shot.velocity);
                 }
+                let key = ShotKey { seat: self.seat as u8, press: press.tick, ordinal: press.launched };
+                press.launched = press.launched.saturating_add(1);
                 if press.drawn {
                     // The press's first shot ripples the muzzle, as the
                     // room's does - once a press.
@@ -1120,6 +1163,7 @@ impl Predictor {
                     let leaving = portals::inside(shot.position, self.sandbox.shot_portals(), tuning().portal_shot_radius);
                     press.live.push(Live {
                         id,
+                        key,
                         shot,
                         age: 0.0,
                         server: None,
@@ -1404,12 +1448,13 @@ impl Predictor {
     /// claimed within the refusal wait goes, counted, and so does a drawn
     /// beam whose `Fired` never came.
     ///
-    /// `contact` is handed the shot's kind, its stretch of the frame and
-    /// the portal it is leaving, if any (`Live::leaving`).
+    /// `contact` is handed the shot's kind, its stretch of the frame, the
+    /// portal it is leaving, if any (`Live::leaving`), and its key
+    /// (`Live::key`), which its pass-overs are rolled from.
     pub fn advance_shots(
         &mut self,
         dt: f32,
-        mut contact: impl FnMut(ProvisionalKind, Position, Position, Option<usize>) -> Option<(Position, ShotStop)>,
+        mut contact: impl FnMut(ProvisionalKind, Position, Position, Option<usize>, ShotKey) -> Option<(Position, ShotStop)>,
     ) {
         let portal_radius = tuning().portal_shot_radius;
         let t = tuning();
@@ -1469,7 +1514,7 @@ impl Predictor {
                     let to = live.shot.position;
                     let span = from.distance_to(to).max(f32::EPSILON);
                     let core = wells.core_hit(from, to, &t).map(|(_, k)| k);
-                    let met = contact(live.shot.kind, from, to, live.leaving);
+                    let met = contact(live.shot.kind, from, to, live.leaving, live.key);
                     match (met, core) {
                         (Some((at, stop)), core) if core.is_none_or(|k| from.distance_to(at) / span <= k) => {
                             if stop == ShotStop::Portal {
@@ -2068,7 +2113,7 @@ mod tests {
     }
 
     /// No contact anywhere: a frame of flight in open air.
-    fn open_air(_: ProvisionalKind, _: Position, _: Position, _: Option<usize>) -> Option<(Position, ShotStop)> {
+    fn open_air(_: ProvisionalKind, _: Position, _: Position, _: Option<usize>, _: ShotKey) -> Option<(Position, ShotStop)> {
         None
     }
 
@@ -2187,6 +2232,40 @@ mod tests {
         assert_eq!(predictor.report(0, 0).shots_drawn, 1);
     }
 
+    /// Each shot is keyed as the room keys its copy (`ShotKey`, what both
+    /// roll its pass-overs from): this seat, the input tick its press
+    /// travelled on - the first input's, tick 0, included - and 0 and 1
+    /// for a twin barrel's two shells.
+    #[test]
+    fn a_press_keys_its_shots_by_its_tick_and_their_order() {
+        let mut predictor = Predictor::new(round_with(twin_barrel_row(), 0), 0, 0);
+        predictor.set_shots_enabled(true);
+        let ticks = (tuning().tank_twin_shot_delay_seconds / PHYSICS_FIXED_DT).ceil() as usize;
+        predictor.step(press());
+        idle_ticks(&mut predictor, ticks + 20);
+        predictor.step(press());
+        idle_ticks(&mut predictor, ticks);
+        let mut keys: Vec<ShotKey> = Vec::new();
+        for _ in 0..30 {
+            predictor.advance_shots(1.0 / 60.0, |_, _, _, _, key| {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+                None
+            });
+        }
+        let second = 1 + ticks as u32 + 20;
+        assert_eq!(
+            keys,
+            vec![
+                ShotKey { seat: 0, press: 0, ordinal: 0 },
+                ShotKey { seat: 0, press: 0, ordinal: 1 },
+                ShotKey { seat: 0, press: second, ordinal: 0 },
+                ShotKey { seat: 0, press: second, ordinal: 1 },
+            ]
+        );
+    }
+
     /// The server's ammo is the sandbox's, and a press the server would
     /// refuse for want of it draws nothing - including one the sandbox
     /// has not been told about yet, whose cost is still owed.
@@ -2250,7 +2329,7 @@ mod tests {
         fly(&mut predictor, 12);
         let (_, shot) = predictor.shots().next().expect("the first shell in flight");
         let wall = shot.position;
-        predictor.advance_shots(1.0 / 60.0, |_, _, _, _| Some((wall, ShotStop::Struck)));
+        predictor.advance_shots(1.0 / 60.0, |_, _, _, _, _| Some((wall, ShotStop::Struck)));
         fly(&mut predictor, 30);
         assert_eq!(predictor.provisional_count(), 0, "the first shell has played its impact out");
         // A second press, flying.
@@ -2324,7 +2403,7 @@ mod tests {
         // A's shell - in flight, while B's is still in its muzzle frames -
         // meets a wall and plays its impact out; it goes the moment it is
         // off the picture, well inside the refusal wait.
-        predictor.advance_shots(1.0 / 60.0, |_, _, to, _| Some((to, ShotStop::Struck)));
+        predictor.advance_shots(1.0 / 60.0, |_, _, to, _, _| Some((to, ShotStop::Struck)));
         assert!(predictor.presses[1].live[0].local_hit.is_none(), "B's shell was not in flight yet");
         let mut frames = 0;
         while predictor.presses_waiting() > 1 && frames < 120 {
@@ -2428,7 +2507,7 @@ mod tests {
         fly(&mut predictor, 12);
         let (_, shot) = predictor.shots().next().expect("a shell in flight");
         let wall = Position::new(shot.position.x + shot.velocity.x * 0.05, shot.position.y + shot.velocity.y * 0.05);
-        predictor.advance_shots(1.0 / 60.0, |_, _, _, _| Some((wall, ShotStop::Body)));
+        predictor.advance_shots(1.0 / 60.0, |_, _, _, _, _| Some((wall, ShotStop::Body)));
         let (_, stopped) = predictor.shots().next().expect("its impact frames");
         assert!(stopped.is_impact(), "stopped and playing its impact");
         assert_eq!(stopped.position, wall);
@@ -2458,7 +2537,7 @@ mod tests {
             fly(&mut predictor, 12);
             let (_, shot) = predictor.shots().next().expect("a shell in flight");
             let mouth = Position::new(shot.position.x + shot.velocity.x * 0.05, shot.position.y + shot.velocity.y * 0.05);
-            predictor.advance_shots(1.0 / 60.0, |_, _, _, _| Some((mouth, ShotStop::Portal)));
+            predictor.advance_shots(1.0 / 60.0, |_, _, _, _, _| Some((mouth, ShotStop::Portal)));
             assert_eq!(predictor.shots().count(), 0, "off the picture");
             assert!(predictor.take_impacts().is_empty(), "no impact: it went in");
             assert_eq!(predictor.report(0, 0).crossings, 0);
@@ -2496,7 +2575,7 @@ mod tests {
             fly(&mut predictor, 12);
             let (_, shot) = predictor.shots().next().expect("a shell in flight");
             let at = Position::new(shot.position.x + shot.velocity.x * 0.05, shot.position.y + shot.velocity.y * 0.05);
-            predictor.advance_shots(1.0 / 60.0, |_, _, _, _| Some((at, ShotStop::Body)));
+            predictor.advance_shots(1.0 / 60.0, |_, _, _, _, _| Some((at, ShotStop::Body)));
             assert_eq!(predictor.report(0, 0).crossings, 1, "a tank hit this client drew");
             // The room's copy bursts `off` short of that point.
             let speed = (shot.velocity.x * shot.velocity.x + shot.velocity.y * shot.velocity.y).sqrt();
@@ -2770,7 +2849,7 @@ mod tests {
         predictor.step(press());
         // The held hull's near face, just short of the core.
         let face = core - ahead * (tuning().well_core_px + 3.0);
-        let hull = |_: ProvisionalKind, from: Position, to: Position, _: Option<usize>| {
+        let hull = |_: ProvisionalKind, from: Position, to: Position, _: Option<usize>, _: ShotKey| {
             let (s0, s1) = ((from - face).dot(ahead), (to - face).dot(ahead));
             (s0 < 0.0 && s1 >= 0.0).then(|| (from + (to - from) * (-s0 / (s1 - s0)), ShotStop::Body))
         };
@@ -2995,7 +3074,7 @@ mod tests {
         predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
         predictor.step(press());
         assert!(predictor.offline_left() > 0.0);
-        predictor.advance_shots(PROVISIONAL_SECONDS + 0.1, |_, _, _, _| None);
+        predictor.advance_shots(PROVISIONAL_SECONDS + 0.1, |_, _, _, _, _| None);
         assert_eq!(predictor.offline_left(), 0.0, "the refused press's offline is lifted");
     }
 

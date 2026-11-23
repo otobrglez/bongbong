@@ -87,7 +87,11 @@ knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
   is not firing into a wall it cannot see. The roll is a lobbed shot's:
   shells, bullets, plasma. A laser's beam and a gauss rail's slug fly flat
   at the muzzle's height, roll neither a pass-over nor a deflection, and
-  strike every tile on their line.
+  strike every tile on their line. Online, a seat's shot rolls from its
+  `ShotKey` (its press, its place in the pull, the round's seed and the
+  tile's cell, hashed - no RNG) rather than the round's RNG, so the client
+  drawing it from the press sails it over the same tiles the room does
+  (docs/online-coop-prd.md §4.16); the odds are the same.
 - **Fences**: a hit on a pristine fence destroys it at
   `fence_one_shot_chance` (0.7) odds, else it goes to its damaged keyframe
   and the next hit finishes it; rammed through in `fence_ram_seconds`
