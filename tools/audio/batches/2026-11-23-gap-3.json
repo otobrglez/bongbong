@@ -1,0 +1,23 @@
+{
+  "flow": "LBqWHgJ7nBQ5yVMGLsZZ",
+  "name": "bongbong sfx 2026-11-23 gap-3",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 1113,
+  "charged_credits": 344,
+  "note": "run in one call (12 nodes); every one of the 48 takes started and completed, one take waited out a concurrency limit and finished on the automatic retry",
+  "nodes": {
+    "T5EtlufSkbxf6mO8BgqL": "grenade_bounce",
+    "vEqAhUI6kWlHRZ3FrYKQ": "ground_lava_loop",
+    "xp3evNaoc8kevNK31ljb": "ground_mud_loop",
+    "KCdniC14ejSdxfoAHs4p": "hit_drone",
+    "T5iwqX84h85D9Y3Vjwif": "ice_creak_loop",
+    "bjpqZQZYspPEwA0fYQr7": "ricochet_whine_loop",
+    "U7OW4NYypg5pqwyybvJN": "rubble_crunch_loop",
+    "BQyTCdvaCwqlJUBYKwzO": "splash_out",
+    "r0OwKyKgBw8WFHEiwSUa": "stream_babble_loop",
+    "p4D9HfEPESe0k3cArWIp": "track_pivot_loop",
+    "YFPbFVZkUJFoOuAv2eKe": "water_lap_loop",
+    "UK4gccYkwq3MHAhp4wIO": "water_plop"
+  },
+  "sessions": ["GLy6x6NWTcwZWwsFFlpX","OhVaXSnmmavMcNAzVWt7","UH4Sv4d21xMLiSI7vq3R","O2HPGRfA2M21mvw8mL9k","IsHAPUSclgnrw58ewy8M","WgtSYrMdLr36QYc0uSKt","7D9Wl3PSxzVSsDhjGdnl","pocaNNk99Zj0WGeaOqty","SFsMQya3ebF47ycmOWF1","5Py4X5Rqm0h45qylaqqh","mcuOVXuI3MrBfz5e8GCQ","KBEZo0HdVFEImkb7wW2D","CMLuLl1Yn3soOm9tomIU","cwFYjen56yYp5zYsc7mF","KP8FESKHaRJULw5mUFfx","NWEAnIphQVVVhrTIxAgX","2Oe0t9bZK79DlY88k2ZR","17gWyhAXpXey8FQYleXZ","RGFX8bPnCdqPV6Rr7Oqu","9qtrazMuf0ueUdz8FrpG","8qq9ZNb1EaeHoBcLM793","GZ5kpfqDeBD4LonbZL5M","nGBwWUOtterxIBVd2rA5","Ev5Div7OVEcsUnp5XOs3","SvdpZveaARcMLuXymSGH","OAGdhDJ0Wdfx5SdmKiux","dj2ayK9Rbqn73GqGkpjg","ubT2OLKUn8bD90FD08Yg","51II6OXabluD619McisP","0TIsZJyFBrbBS5a3bT70","EW2UeGwDRN62Zo2HtOIU","XlsRRMsCTGZqyuhSTK7p","SiNjNcEBfXIZjYmAF3F9","BeXpYmpwz5J6J0Txz9mh","wgHZ3iv0E88S7e9diXKe","AhCX6Qq4B59uUv9LqS7g","oDA2wHZhc8rxMze8MFwt","9aJgONaKe0r4TwWestAW","OXjgL5Px4ZxH6kYKQbY9","RiEVZ1V3DxbAVafF5xvc","iVTNCqoTwhpw3GgaO1ra","05ISWYIX4al0t2wBsxQR","i4YtQIEJyZtt46XAKneZ","IidEwzmSw14lO59woNQ3","db7qxxV1KGLYhLVvhWUF","7YfGRNKlH51B4Cp6Ocj6","CLUZCGV0jQcmJvqGSzO9","bY9YCCorAHyEODRPSP6o"]
+}

@@ -1,0 +1,31 @@
+{
+  "flow": "ItawTA03ScBOuKU6mNbO",
+  "name": "bongbong sfx 2026-11-23 gap-2",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 1228,
+  "charged_credits": 388,
+  "note": "run in two calls (14 + 6 nodes); every one of the 80 takes started and completed, none hit the queue limit",
+  "nodes": {
+    "LD0jPBNpfY0RRI3MaSfg": "steam_hiss",
+    "RSvLSHyRPdeNsTrah2Ki": "bong_splash",
+    "pT5HyKqlsw8B4wjvy4Un": "flame_sputter",
+    "YBYy9bzL7C0Ysx0IBn1x": "flame_valve",
+    "PLSWaoHeinT0cvm3pqJL": "flyby_laser",
+    "3V3Lw17H3Dq5B7Bcj8kB": "flyby_plasma",
+    "w4uJkVLBWlUUpmoEuOz7": "ground_snow_loop",
+    "eFjmcmrFDwNjTelwEZXq": "lava_sizzle_loop",
+    "q9EojVTr2T2Lec6JTrtZ": "missile_motor_loop",
+    "WtllKnDCARs950w04M99": "ricochet_shell",
+    "dJdIQvt3mfQ3FOTAfenM": "rod_cancel",
+    "5LnsSdmxAd6XfKvZLv90": "rod_uplink_loop",
+    "YumPkvP8uyClt8w9m3YT": "shell_rack",
+    "Hb91S5n1GipmJ7igLom6": "shield_hit",
+    "SNvO2TaUanh6G8OptXrw": "skid_turf_loop",
+    "vhgliOZpffaW9PRtF6RH": "splash_in",
+    "OMk3BosLpDhtBYq89Pyf": "track_slip_ice_loop",
+    "JnGV8AulujV6LjLmlwDM": "track_slip_mud_loop",
+    "4p1r6WEH2t24UvHDo1K4": "drip_loop",
+    "WmBV7ojKaMBjhcAobR6m": "grass_trample"
+  },
+  "sessions": ["x8EaiLhFRlmudDqeYt3t","QSyqYaQMq3NY3ZTqglvV","87fBlrC3HrVitqzqTCrV","nQlals8THbMaDSU9zUdT","6s8RptWppB3lpMmAGPIf","chKvw2zwsjWzRo32Zriu","j0A7qRAFAjABh6BXpIgU","SUzALI4EUAQ2ZdAg8KF0","cdF1AbQWlmD5i7KUgSbd","lE0ODhnnq4dXvt2SxXv3","WtrvpC0Fl0FhGYlOxaCA","jeZVYrLMgXd2iA6RnPrd","Xe4cP8eZN0b4ieT4MaJe","yrpO1LdPiUEqF1YVVVNP","SJ2v2D3xzCRqfcp0BeUv","cHrYTLMwiN3kGL2DKy3Y","OFLRRdHszwenTGiDZoqM","RZwROQknIYbmnrgaAVMl","AW519jsbsa3syCAbxk4c","f9j3UNYrthb4v8aSGLdN","plkv1Uyt3gub1NjaFaZQ","rr6brDARrCtVjuXCKwi5","us7ulIEMIGhmnBRYrkMn","Kfbv5dGogZlq4foIXoRY","o6aSy4R9hL0EZfNaJOyg","q7vb7Tlzc0W2kqHiiQeR","wVKELrHOKDt5jGkxGI8s","16EV6wD9YyymBwp7sLcB","YHxI4wWmdLCyJafJ4xDg","YYBMD0VONUyp5lq0W8yg","Goe6iMpyIQQgVFWCb58Q","G1TKtfW9jVFciw5eALGx","BiLQQtoMlheFQbBcF5tV","MfehkY5uX9AReeRbrHTu","uQTuVxxroIURWf1nLxAX","oGJzjV7vfRD44QlnC4Db","oQLocM4rM2cWN86N890v","XVjZLGWV7oAHtNH2OTR8","cUpoxPCsxQ2wiV2Tx87t","MvauBzc08sJRBe1NhfdY","hDjwxR1W7pOArSw6UUXV","czUng2YnCoW4jAVsKgIV","0yjOCtwZRtvA564UPSoO","n9ecXcR62CeVUhsodg9b","u92ZLqkwYbKVIGrCGGc7","ypAxLSj5Q931soBrsqsL","qI1xWqMhZLUtxRI3FuDk","7WSLrxhDORV0cq7KZT2z","lTUcxwWeCF8YEZTk68sZ","nzNlrqEuYs5OjUIaF1K8","6folGDyj5lLNIQ2thxQ1","6D7MBhP3k01uwOyerhKf","SZnHhyYJQyh2nnOd0hAp","q8NR0W7O6evCBlxlHoq9","LNBDU4u6PDYeLDs3kYoB","O7KMSHP10JM1YjssMVwX","uShZr8PPMKkzZsM0D6V6","Hc9m1z5dfPERjPBK9Aej","uCZ9HnrDGHc2VydpMZlB","UyzDM0qafUOgxmNOOMWJ","JH2yNJB2vvOdMzj2lzwk","LuCVwe82OrMojt9ufeBx","jNJFvjDX7t4xCuS1htPB","qiJKrEIuBoyDAlpNOA8k","7m3H8LRUHsL0ltg8Us4z","lajeESuO87CWp1tGP9p6","7jakuWZpDmKPofcKtVJB","ZrUSNAlRIYUjgUq65n9h","9NpB9XEXufmSyArS4UGP","ptx18Kzmkv3vFYj1vSIA","z7uaz1T2zyXuxYGDOnR4","pxQLcM9Pxbu1vEDALDr7","T3JlqvdlJWFQDsuZM2fi","h4TXx97K6FzG5hkBTqyB","t97yMewZsmzPU26nRGFX","xWYLkKq5RlFfUXAZACyT","42XmyaGcVZQ9Ao1VYME0","ihlPBiUQRH0d7apC5zMj","fheOWwBxeZ3o4GGx2gdv","5tawjPfyJMR8UYR3LIXW"]
+}
