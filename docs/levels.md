@@ -205,7 +205,7 @@ enemy there carries one of the six BB-36 weapons.
 | 10 Harbor Lights | laser (6,7), plasma, missiles, gauss rail (4,20) | gauss rail - through brick and glass warehouses, little iron |
 | 11 No Man's Land | gauss rail (15,17), gauss rail (16,17), helicopter and jet strikes, grenades, missiles, minigun, plasma, flamethrower | |
 | 12 Scrapyard | flamethrower, missiles, minigun | |
-| 13 Vulkan | sonic hammer (68,37), missiles, plasma, minigun, sonic hammer (48,21) | the hammer again - shove a tank into the lava |
+| 13 Vulkan | sonic hammer (68,37), helicopter strikes (three in the station), missiles, plasma, minigun, sonic hammer (48,21) | the hammer again - shove a tank into the lava |
 | 14 Black Gold | flamethrower, plasma, minigun, missiles, gravity well (1,13) | the well again - drums pulled together on the fuse lines |
 | 15 Castle Moat | laser, minigun, missiles | |
 | 16 Grand Campaign | plasma, laser, flamethrower, missiles, minigun, rod from god (31,17) | rod from god - against the super-heavies |
