@@ -8,6 +8,7 @@
 //! resolves it to the nearest one it has (`Manifest::resolve`).
 
 use crate::bong::Side;
+use crate::laser::LaserVariant;
 use crate::math::Vec2;
 use crate::obstacle::{Drum, Material};
 use crate::simulation::{Event, Game, HitCause, HitTarget, Outcome};
@@ -151,9 +152,10 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         Event::Fired { slot, weapon } => fired(game, slot, weapon),
         Event::DryFired { slot, .. } => one(Play::new(ids::DRY_FIRE.0, At::Slot(slot)).source(slot as u64).for_seat(slot)),
         Event::Placed { .. } => Binding::Silent("a seat placed by the dev tools or a restart"),
-        Event::LaserBeam { x0, y0, leg, .. } => {
+        Event::LaserBeam { x0, y0, leg, variant, .. } => {
             if leg == 0 {
-                one(Play::new("weapon.laser.fire", point(x0, y0)))
+                let pitch = LaserVariant::parse(variant).map_or(1.0, source::laser_pitch);
+                one(Play::new("weapon.laser.fire", point(x0, y0)).pitch(pitch))
             } else {
                 Binding::Silent("a beam's leg through a portal: its first leg sounded")
             }
@@ -174,12 +176,18 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
                 Binding::Silent("a slug's leg through a portal: its first leg sounded")
             }
         }
-        Event::ChargeStarted { .. } => Binding::Watched("charge"),
-        Event::ChargeEnded { slot, end, .. } => {
-            let cue = match end {
-                ChargeEnd::Fizzled => "weapon.gauss_rail.vent.fizzle",
-                ChargeEnd::Vented => "weapon.gauss_rail.vent",
-                ChargeEnd::Lapsed => "weapon.gauss_rail.vent.lapse",
+        Event::ChargeStarted { weapon, .. } => Binding::Watched(if weapon == ActiveWeapon::RodFromGod.name() { "rod" } else { "charge" }),
+        Event::ChargeEnded { slot, weapon, end } => {
+            // A rail vents its charge; a rod's reticle goes down with an
+            // abort blip, and with static when it timed out.
+            let rod = weapon == ActiveWeapon::RodFromGod.name();
+            let cue = match (rod, end) {
+                (false, ChargeEnd::Fizzled) => "weapon.gauss_rail.vent.fizzle",
+                (false, ChargeEnd::Vented) => "weapon.gauss_rail.vent",
+                (false, ChargeEnd::Lapsed) => "weapon.gauss_rail.vent.lapse",
+                (true, ChargeEnd::Fizzled) => "weapon.rod_from_god.cancel",
+                (true, ChargeEnd::Vented) => "weapon.rod_from_god.cancel.timeout",
+                (true, ChargeEnd::Lapsed) => "weapon.rod_from_god.cancel.lapse",
             };
             one(Play::new(cue, At::Slot(slot)))
         }
@@ -191,7 +199,7 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
             one(Play::new(cue.0, point(x, y)).source(key(id as u64, aircraft as u64)))
         }
         Event::DroneCrashed { x, y, .. } => on_water(game, x, y, Play::new("weapon.fpv_swarm.downed.crash", point(x, y)), ids::WATER_PLOP.0, 0.7),
-        Event::DroneLockLost { .. } => Binding::Silent("the drone flies on; its lock tone stops with the watcher"),
+        Event::DroneLockLost { .. } => Binding::Watched("drone_lock"),
         Event::AirSupportCalled { .. } => one(Play::new("air.called", At::Nowhere)),
         Event::AirSupportArrived { x, y, .. } => one(Play::new("air.arrive", point(x, y))),
         Event::AirSalvo { x, y, .. } => one(Play::new("air.salvo", point(x, y))),
@@ -436,9 +444,11 @@ fn marker(h: &Landed) -> Option<Play> {
     Some(Play::new(cue.0, At::Nowhere).source(by as u64).for_seat(by))
 }
 
-/// A tank's shot: the cannon tiered by its calibre; a twin gun's shells
-/// and plasma bolts each sound as their own shot (`twin_shots`); a weapon a
-/// watcher drives or another event carries is not played here.
+/// A tank's shot: the cannon tiered by its calibre, a plasma bolt pitched
+/// by its colour (`source::plasma_pitch`); a twin gun's shells and plasma
+/// bolts each sound as their own shot (`twin_shots`); a weapon a watcher
+/// drives - the minigun, the flamethrower, each missile of a volley - or
+/// another event carries is not played here.
 fn fired(game: &Game, slot: usize, weapon: &str) -> Binding {
     let Some(weapon) = ActiveWeapon::parse(weapon) else {
         return Binding::Silent("a weapon the sound maps do not know");
@@ -449,6 +459,10 @@ fn fired(game: &Game, slot: usize, weapon: &str) -> Binding {
     let twin = matches!(weapon, ActiveWeapon::Shell | ActiveWeapon::Plasma) && tank.as_ref().is_some_and(|tank| tank.twin_gun());
     let rotation = tank.as_ref().map_or(0.0, |tank| tank.rotation);
     let first = match source::weapon_sound(weapon) {
+        FireSound::Cue(cue) if weapon == ActiveWeapon::Plasma => {
+            let pitch = tank.as_ref().map_or(1.0, |tank| source::plasma_pitch(tank.plasma_variant));
+            Play::new(cue, At::Slot(slot)).pitch(pitch).source(slot as u64)
+        }
         FireSound::Cue(cue) => Play::new(cue, At::Slot(slot)).source(slot as u64),
         FireSound::Watched(watcher) => return Binding::Watched(watcher),
         FireSound::Elsewhere(_) => return Binding::Silent("its own event carries the sound"),

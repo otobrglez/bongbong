@@ -5223,6 +5223,32 @@ tunables! {
         /// the second sits, as a share of its pitch.
         audio_twin_spread: f32 = 0.35 in 0.0 ..= 1.0;
         audio_twin_detune: f32 = 0.05 in 0.0 ..= 0.5;
+        /// The lock beeps a seat hears while it stands in a charging rail's
+        /// lane (`warning.lock.rail`): seconds between two as the charge
+        /// starts and once it is full.
+        audio_lane_beep_slow_s: f32 = 0.45 in 0.05 ..= 2.0;
+        audio_lane_beep_fast_s: f32 = 0.1 in 0.02 ..= 1.0;
+        /// A seat's own rail beeps to be let go this many seconds before it
+        /// vents (`weapon.gauss_rail.vent.alarm`), a beep every
+        /// `audio_vent_beep_s`.
+        audio_vent_warn_s: f32 = 1.0 in 0.0 ..= 5.0;
+        audio_vent_beep_s: f32 = 0.12 in 0.02 ..= 1.0;
+        /// How far off (px) a drone locked on a seat holds its lock tone
+        /// (`warning.lock.drone`) at its lowest; it rises to its highest as
+        /// the drone closes in.
+        audio_drone_lock_far_px: f32 = 500.0 in 50.0 ..= 3000.0;
+        /// The seconds a diving drone's rotors take to rise to their scream
+        /// (`weapon.fpv_swarm.dive`).
+        audio_dive_rise_s: f32 = 0.6 in 0.05 ..= 5.0;
+        /// The ground speed (px/s) at which a missile's motor
+        /// (`weapon.missiles.motor`) reaches its top pitch.
+        audio_missile_motor_px_s: f32 = 345.0 in 10.0 ..= 3000.0;
+        /// A fly-by's strength at the edge of `audio_flyby_px`, as a share
+        /// of a pass straight over the seat's tank.
+        audio_flyby_edge_strength: f32 = 0.4 in 0.0 ..= 1.0;
+        /// The seconds between a spent special's empty clunk and the cannon
+        /// re-arming.
+        audio_rearm_s: f32 = 0.35 in 0.0 ..= 3.0;
         /// An engine's pitch at idle and at top speed, before the chassis's
         /// own offset (section 4.4).
         audio_engine_idle_pitch: f32 = 0.8 in 0.25 ..= 2.0;

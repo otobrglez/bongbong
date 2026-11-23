@@ -61,9 +61,86 @@ pub const WATCHERS: &[WatcherSpec] = &[
         cues: &["engine.light", "engine.medium", "engine.heavy", "engine.twin", "vehicle.treads"],
         online: "the same: positions replicate",
     },
-    WatcherSpec { id: "minigun", entity: "tank", reads: "new bullet ids per owner slot", cues: &["weapon.minigun.loop", "weapon.minigun.spin_down"], online: "the same: bullets replicate" },
-    WatcherSpec { id: "flame", entity: "flamethrower", reads: "Game::flames", cues: &["weapon.flamethrower.loop"], online: "the same: flame jets replicate" },
-    WatcherSpec { id: "charge", entity: "tank", reads: "Tank::charge", cues: &["weapon.gauss_rail.charge"], online: "from the replicated charge ticks" },
+    WatcherSpec {
+        id: "minigun",
+        entity: "tank",
+        reads: "new bullet ids per owner slot; Tank::minigun_spin leaving rest",
+        cues: &["weapon.minigun.loop", "weapon.minigun.spin_down", "weapon.minigun.spin_up"],
+        online: "the same: bullets replicate, and a replica spins its barrels on the room's Fired",
+    },
+    WatcherSpec {
+        id: "flame",
+        entity: "flamethrower",
+        reads: "Game::flames, and each slot's jet starting and stopping against Tank::flame_fuel",
+        cues: &["weapon.flamethrower.loop", "weapon.flamethrower.start", "weapon.flamethrower.stop", "weapon.flamethrower.stop.dry"],
+        online: "the same: flame jets and the fuel replicate",
+    },
+    WatcherSpec {
+        id: "charge",
+        entity: "tank",
+        reads: "Tank::charge of a rail: its progress, its stage (Charge::stage) and, for a seat's own, Charge::vent_in",
+        cues: &["weapon.gauss_rail.charge", "weapon.gauss_rail.ready", "weapon.gauss_rail.charge.overcharged", "weapon.gauss_rail.vent.alarm"],
+        online: "from the replicated charge ticks",
+    },
+    WatcherSpec {
+        id: "rod",
+        entity: "tank",
+        reads: "Tank::charge of a rod, and a seat's own Tank::reticle stepping a cell",
+        cues: &["weapon.rod_from_god.uplink", "weapon.rod_from_god.reticle"],
+        online: "from the replicated charge ticks and reticle",
+    },
+    WatcherSpec {
+        id: "rail_lane",
+        entity: "tank",
+        reads: "Game::rail_lanes holding a seat's own tank, and the charging tank's Charge::progress",
+        cues: &["warning.lock.rail"],
+        online: "the same: the charge replicates",
+    },
+    WatcherSpec {
+        id: "drone_lock",
+        entity: "fpv drone",
+        reads: "Drone::lock on a seat's own tank, and the nearest such drone's distance",
+        cues: &["warning.lock.drone"],
+        online: "the same: the lock replicates (DroneState::lock)",
+    },
+    WatcherSpec {
+        id: "kill",
+        entity: "tank",
+        reads: "RoundStats::by_seat rising for a seat this window plays",
+        cues: &["ui.kill"],
+        online: "silent: a replica keeps no wreck tally",
+    },
+    WatcherSpec {
+        id: "missile",
+        entity: "missile",
+        reads: "new missile ids, and each missile's position over time",
+        cues: &["weapon.missiles.fire", "weapon.missiles.motor"],
+        online: "the same: missiles replicate",
+    },
+    WatcherSpec { id: "dive", entity: "fpv drone", reads: "DroneStage::Dive and its stage clock", cues: &["weapon.fpv_swarm.dive"], online: "the same: the stage replicates" },
+    WatcherSpec { id: "grenade_fuse", entity: "grenade", reads: "Grenade::lamp_lit turning on", cues: &["weapon.grenades.beep"], online: "the same: the fuse replicates" },
+    WatcherSpec {
+        id: "special",
+        entity: "tank",
+        reads: "for a seat's own: Tank::special_down, Tank::special, shells_ammo, missile_tubes_empty",
+        cues: &[
+            "weapon.offline",
+            "weapon.online",
+            "weapon.spent",
+            "weapon.shell.reload",
+            "weapon.shell.reload.full",
+            "weapon.missiles.reload",
+            "weapon.missiles.reload.ready",
+        ],
+        online: "the same but the missile pod's reload, which a replica does not run",
+    },
+    WatcherSpec {
+        id: "near_miss",
+        entity: "rail slug, laser beam",
+        reads: "Event::RailSlug and Event::LaserBeam segments against a seat's own tank, less the step's hits of their kind",
+        cues: &["flyby.rail", "flyby.laser"],
+        online: "the same: both events are sent",
+    },
     WatcherSpec { id: "tell", entity: "tank", reads: "Tank::tell turning on", cues: &["warning.windup"], online: "from the replicated tell" },
     WatcherSpec { id: "fire", entity: "fire", reads: "Game::burning_cells, burning_tiles, burning_wrecks, clustered", cues: &["world.fire"], online: "the same" },
     WatcherSpec { id: "wreck", entity: "wreck", reads: "burning wrecks, inside the fire clusters", cues: &["world.fire"], online: "the same" },
@@ -128,7 +205,7 @@ pub const WATCHERS: &[WatcherSpec] = &[
         online: "silent: a client steps no physics (a slam is `Event::HullStruck`, which is sent)",
     },
     WatcherSpec { id: "aircraft", entity: "aircraft", reads: "Game::aircraft", cues: &["air.heli", "air.jet"], online: "the same" },
-    WatcherSpec { id: "flyby", entity: "shell, bullet", reads: "projectiles' closest approach to a seat's own tank", cues: &["flyby.shell", "flyby.bullet"], online: "the same: projectiles replicate" },
+    WatcherSpec { id: "flyby", entity: "shell, bullet, plasma bolt, missile", reads: "projectiles' closest approach to a seat's own tank", cues: &["flyby.shell", "flyby.bullet", "flyby.plasma", "flyby.missile"], online: "the same: projectiles replicate" },
     WatcherSpec {
         id: "ricochet",
         entity: "shell, bullet",
@@ -170,6 +247,23 @@ pub struct Watchers {
     bullets_seen: HashSet<u32>,
     last_round: HashMap<usize, f64>,
     spinning: HashSet<usize>,
+    /// Each tank's charge as last read (`ChargeEar`), by owner slot.
+    charge_ears: HashMap<usize, ChargeEar>,
+    /// What each tank's weapons were doing last frame (`ArmsEar`), by owner
+    /// slot.
+    arm_ears: HashMap<usize, ArmsEar>,
+    /// When each warning that beeps on a schedule - a seat in a rail's
+    /// lane, a seat's rail about to vent - beeps next, on the director's
+    /// clock, by its key.
+    beeps: HashMap<u64, f64>,
+    /// Each grenade's fuse lamp last frame, by id.
+    lamps: HashMap<u32, bool>,
+    /// Each missile and each diving drone, followed by id.
+    tracks: HashMap<u32, Track>,
+    /// The wrecks each seat has dealt (`RoundStats::by_seat`), once read.
+    kills: Option<[u32; crate::MAX_SEATS]>,
+    /// The beams the steps since the last frame drew (`Watchers::beam`).
+    beams: Vec<Beam>,
     /// Each projectile's nearest pass so far by a seat's own tank (px), and
     /// whether it already whooshed.
     passes: HashMap<u32, (f32, bool)>,
@@ -195,6 +289,14 @@ const HISS: u64 = 38 << 56;
 const RAIN_WATER: u64 = 39 << 56;
 const MINIGUN: u64 = 4 << 56;
 const FLAME: u64 = 5 << 56;
+const LOCK_DRONE: u64 = 40 << 56;
+const DIVE: u64 = 41 << 56;
+const MOTOR: u64 = 42 << 56;
+const OVERCHARGE: u64 = 43 << 56;
+const UPLINK: u64 = 44 << 56;
+const OFFLINE: u64 = 45 << 56;
+const LANE_BEEP: u64 = 46 << 56;
+const VENT_BEEP: u64 = 47 << 56;
 const FIRE: u64 = 6 << 56;
 const SKY: u64 = 7 << 56;
 const PLACE: u64 = 8 << 56;
@@ -374,6 +476,11 @@ impl Watchers {
         self.landings(game, t, plays);
         self.minigun(game, own, now, wishes, plays);
         self.flames(game, own, wishes);
+        self.charges(game, own, now, t, wishes, plays);
+        self.arms(game, own, now, t, wishes, plays);
+        self.warnings(game, own, now, t, wishes, plays);
+        self.ordnance(game, t, wishes, plays);
+        self.near_misses(game, own, t, plays);
         self.fires(game, wishes);
         self.beds(game, t, wishes);
         self.scrapes(game, t, wishes);
@@ -705,21 +812,6 @@ impl Watchers {
             let slot = jet.owner.slot();
             wishes.push(Wish { key: FLAME | slot as u64, cue: ids::FLAME_LOOP.0, at: Some(jet.nozzle), velocity: Vec2::new(0.0, 0.0), gain: 1.0, pitch: 1.0, own: own.contains(&slot) });
         }
-        for tank in game.world.query::<&Tank>().iter() {
-            if let Some(charge) = &tank.charge {
-                let slot = tank.owner_slot();
-                let progress = charge.progress();
-                wishes.push(Wish {
-                    key: CHARGE | slot as u64,
-                    cue: ids::CHARGE_GAUSS.0,
-                    at: Some(tank.position),
-                    velocity: Vec2::new(0.0, 0.0),
-                    gain: 0.6 + 0.4 * progress,
-                    pitch: 0.8 + 0.8 * progress,
-                    own: own.contains(&slot),
-                });
-            }
-        }
     }
 
     /// Fires, gathered into clusters of 4 x 4 cells: one loop a cluster,
@@ -835,9 +927,13 @@ impl Watchers {
         });
     }
 
-    /// A shell or a round passing close by a seat's own tank whooshes once,
-    /// as it starts to move away (`audio_flyby_px`); a seat's own shots
-    /// never do.
+    /// A shell, a round, a plasma bolt or a missile passing close by a
+    /// seat's own tank whooshes once, as it starts to move away
+    /// (`audio_flyby_px`), the louder the closer it came
+    /// (`audio_flyby_edge_strength` at the edge). A seat's own shots never
+    /// do, nor a shot first seen already that close - one leaving a tank
+    /// beside the seat, or the seat's own on a replica, which names no
+    /// shot's owner.
     fn flybys(&mut self, game: &Game, own: &[usize], t: &Tuning, plays: &mut Vec<Play>) {
         let seats: Vec<Vec2> = game.world.query::<&Tank>().iter().filter(|tk| own.contains(&tk.owner_slot()) && !tk.is_wreck()).map(|tk| tk.position).collect();
         let reach = t.audio_flyby_px;
@@ -853,17 +949,287 @@ impl Watchers {
                 shots.push((b.id, b.position, b.velocity, ids::FLYBY_BULLET.0));
             }
         }
+        for p in game.world.query::<&crate::plasma::Plasma>().iter() {
+            if !own.contains(&p.owner.slot()) {
+                shots.push((p.id, p.position, p.velocity, ids::FLYBY_PLASMA.0));
+            }
+        }
+        // A missile's velocity is measured (`ordnance`): a replica's has
+        // none of its own.
+        for m in game.world.query::<&crate::missile::Missile>().iter() {
+            if !own.contains(&m.owner.slot()) && !m.is_dead() {
+                let velocity = self.tracks.get(&m.id).map_or(Vec2::new(0.0, 0.0), |track| track.velocity);
+                shots.push((m.id, m.position, velocity, ids::FLYBY_MISSILE.0));
+            }
+        }
         for (id, at, velocity, cue) in shots {
             live.insert(id);
             let near = seats.iter().map(|s| s.distance_to(at)).fold(f32::INFINITY, f32::min);
-            let pass = self.passes.entry(id).or_insert((f32::INFINITY, false));
+            let pass = self.passes.entry(id).or_insert((near, near <= reach));
             if !pass.1 && pass.0 <= reach && near > pass.0 {
                 pass.1 = true;
-                plays.push(Play::new(cue, At::Point(at - velocity * crate::PHYSICS_FIXED_DT)).source(id as u64));
+                let strength = flyby_strength(pass.0, t);
+                plays.push(Play::new(cue, At::Point(at - velocity * crate::PHYSICS_FIXED_DT)).strength(strength).source(id as u64));
             }
             pass.0 = pass.0.min(near);
         }
         self.passes.retain(|id, _| live.contains(id));
+    }
+
+    /// The charge-and-hold weapons while their trigger is held
+    /// (`Tank::charge`). A rail whines, rising as it fills; pings once full
+    /// (`Charge::stage`); crackles once overcharged; and, a seat's own,
+    /// beeps to be let go in its last `audio_vent_warn_s` before it vents
+    /// (`Charge::vent_in`). A rod holds its uplink's carrier tone while its
+    /// reticle is up, and a seat's own ticks for each cell its reticle
+    /// steps.
+    fn charges(&mut self, game: &Game, own: &[usize], now: f64, t: &Tuning, wishes: &mut Vec<Wish>, plays: &mut Vec<Play>) {
+        use crate::tank::{ActiveWeapon, ChargeStage};
+        let still = Vec2::new(0.0, 0.0);
+        let mut live = HashSet::new();
+        for tank in game.world.query::<&Tank>().iter() {
+            let Some(charge) = tank.charge.filter(|_| !tank.is_wreck()) else {
+                continue;
+            };
+            let slot = tank.owner_slot();
+            let mine = own.contains(&slot);
+            live.insert(slot);
+            let reticle = tank.reticle.map(|r| r.cell).filter(|_| charge.weapon == ActiveWeapon::RodFromGod);
+            let now_ear = ChargeEar { weapon: charge.weapon, stage: charge.stage(), reticle };
+            let was = self.charge_ears.insert(slot, now_ear).filter(|was| was.weapon == charge.weapon);
+            if charge.weapon == ActiveWeapon::RodFromGod {
+                wishes.push(Wish { key: UPLINK | slot as u64, cue: ids::ROD_UPLINK.0, at: Some(tank.position), velocity: still, gain: 0.8, pitch: 1.0, own: mine });
+                if mine && reticle.is_some() && was.is_some_and(|was| was.reticle.is_some() && was.reticle != reticle) {
+                    plays.push(Play::new(ids::ROD_RETICLE.0, At::Slot(slot)).source(slot as u64));
+                }
+                continue;
+            }
+            let progress = charge.progress();
+            wishes.push(Wish { key: CHARGE | slot as u64, cue: ids::CHARGE_GAUSS.0, at: Some(tank.position), velocity: still, gain: 0.6 + 0.4 * progress, pitch: 0.8 + 0.8 * progress, own: mine });
+            if now_ear.stage == ChargeStage::Full && was.is_some_and(|was| was.stage == ChargeStage::Charging) {
+                plays.push(Play::new(ids::GAUSS_READY.0, At::Slot(slot)).source(slot as u64));
+            }
+            if now_ear.stage == ChargeStage::Overcharged {
+                wishes.push(Wish { key: OVERCHARGE | slot as u64, cue: ids::GAUSS_OVERCHARGED.0, at: Some(tank.position), velocity: still, gain: 1.0, pitch: 1.0, own: mine });
+            }
+            let key = VENT_BEEP | slot as u64;
+            let vent = charge.vent_in();
+            if mine && vent > 0.0 && vent <= t.audio_vent_warn_s {
+                if due(&mut self.beeps, key, now, t.audio_vent_beep_s) {
+                    plays.push(Play::new(ids::VENT_ALARM.0, At::Slot(slot)).source(slot as u64));
+                }
+            } else {
+                self.beeps.remove(&key);
+            }
+        }
+        self.charge_ears.retain(|slot, _| live.contains(slot));
+    }
+
+    /// What a weapon does between its shots. Any tank's: a minigun's
+    /// barrels spinning up from rest; a flamethrower lighting as its jet
+    /// starts and going out as it stops - its valve shut, or sputtering
+    /// dry. A seat's own: static while its special is offline
+    /// (`Tank::special_down`) and a chime when it is back; an empty clunk
+    /// when its special is spent, then the cannon re-arming
+    /// (`audio_rearm_s`); the magazine racking a shell as it gets back to a
+    /// shot's cost and a firmer clunk once full; the missile pod refilling
+    /// tube by tube and a tick once it is full.
+    fn arms(&mut self, game: &Game, own: &[usize], now: f64, t: &Tuning, wishes: &mut Vec<Wish>, plays: &mut Vec<Play>) {
+        use crate::tank::ActiveWeapon;
+        let jets: HashSet<usize> = game.flames().iter().map(|jet| jet.owner.slot()).collect();
+        let mut live = HashSet::new();
+        for tank in game.world.query::<&Tank>().iter() {
+            if tank.is_wreck() {
+                continue;
+            }
+            let slot = tank.owner_slot();
+            let mine = own.contains(&slot);
+            live.insert(slot);
+            let down = tank.special_down();
+            let was = self.arm_ears.get(&slot).copied();
+            let ear = ArmsEar {
+                spinning: tank.minigun_spin > 0.0 || tank.minigun_burst.is_some() || tank.minigun_show > 0.0,
+                jetting: jets.contains(&slot),
+                down,
+                down_at: if down { now } else { was.map_or(f64::NEG_INFINITY, |was| was.down_at) },
+                special: tank.special(),
+                shells: tank.shells_ammo,
+                tubes: tank.missile_tubes_empty,
+            };
+            self.arm_ears.insert(slot, ear);
+            if mine && down {
+                wishes.push(Wish { key: OFFLINE | slot as u64, cue: ids::OFFLINE.0, at: Some(tank.position), velocity: Vec2::new(0.0, 0.0), gain: 0.7, pitch: 1.0, own: true });
+            }
+            let Some(was) = was else {
+                continue;
+            };
+            let (at, source) = (At::Slot(slot), slot as u64);
+            if ear.spinning && !was.spinning {
+                plays.push(Play::new(ids::MINIGUN_SPIN_UP.0, at).source(source));
+            }
+            if ear.jetting && !was.jetting {
+                plays.push(Play::new(ids::FLAME_START.0, at).source(source));
+            } else if was.jetting && !ear.jetting {
+                let dry = tank.flame_fuel <= 0.0 && !down;
+                plays.push(Play::new(if dry { ids::FLAME_DRY.0 } else { ids::FLAME_STOP.0 }, at).source(source));
+            }
+            if !mine {
+                continue;
+            }
+            // Back: a special that fires again, offline a moment ago - not
+            // one a crate just brought.
+            if ear.usable() && !was.usable() && now - was.down_at < BACK_ONLINE_S {
+                plays.push(Play::new(ids::ONLINE.0, at).source(source));
+            }
+            // Spent: gone while it fired, not hidden by an outage (a
+            // replica's wire names no special while it is offline).
+            if was.usable() && ear.special.is_none() && !down {
+                plays.push(Play::new(ids::SPENT.0, at).source(source));
+                plays.push(Play::new(ids::SHELL_RELOAD.0, at).after(t.audio_rearm_s).source(source));
+            }
+            let cost = if tank.twin_gun() { 2 } else { 1 };
+            if ear.shells == was.shells + 1 && tank.active_weapon() == ActiveWeapon::Shell {
+                if ear.shells >= t.max_shells {
+                    plays.push(Play::new(ids::SHELL_FULL.0, at).pitch(0.8).source(source));
+                } else if was.shells < cost && ear.shells >= cost {
+                    plays.push(Play::new(ids::SHELL_RELOAD.0, at).source(source));
+                }
+            }
+            // The pod refills between volleys (`Tank::tick_missile_pod`);
+            // a volley's next salvo empties it again at once.
+            if ear.tubes < was.tubes && tank.missile_volley.is_none() && tank.missile_ammo > 0 {
+                for i in 0..(was.tubes - ear.tubes) {
+                    plays.push(Play::new(ids::MISSILE_RELOAD.0, at).pitch(1.15).after(0.08 * i as f32).source(source));
+                }
+                if ear.tubes == 0 {
+                    plays.push(Play::new(ids::MISSILE_READY.0, at).after(0.1).source(source));
+                }
+            }
+        }
+        self.arm_ears.retain(|slot, _| live.contains(slot));
+    }
+
+    /// The warnings meant for a seat this window plays. Lock beeps while it
+    /// stands in another tank's charging rail lane (`Game::rail_lanes`),
+    /// quicker as that charge fills (`audio_lane_beep_slow_s` to
+    /// `audio_lane_beep_fast_s`); a thin tone while a drone's lock is on it,
+    /// rising as the nearest such drone closes in
+    /// (`audio_drone_lock_far_px`) and gone with the lock; and a sting when
+    /// it wrecks an enemy (`RoundStats::by_seat`, the count
+    /// `feedback.rs`'s hold on a kill reads).
+    fn warnings(&mut self, game: &Game, own: &[usize], now: f64, t: &Tuning, wishes: &mut Vec<Wish>, plays: &mut Vec<Play>) {
+        let seats: Vec<(usize, Vec2)> =
+            game.world.query::<&Tank>().iter().filter(|tk| own.contains(&tk.owner_slot()) && !tk.is_wreck()).map(|tk| (tk.owner_slot(), tk.position)).collect();
+        let lanes = if seats.is_empty() || !game.any_rail_charging() { Vec::new() } else { game.rail_lanes() };
+        let fill: HashMap<usize, f32> =
+            if lanes.is_empty() { HashMap::new() } else { game.world.query::<&Tank>().iter().filter_map(|tk| tk.charge.map(|c| (tk.owner_slot(), c.progress()))).collect() };
+        for &(slot, at) in &seats {
+            let key = LANE_BEEP | slot as u64;
+            let threat = lanes.iter().filter(|l| l.slot != slot && l.depth(at) >= 0.0).map(|l| fill.get(&l.slot).copied().unwrap_or(0.0)).reduce(f32::max);
+            let Some(p) = threat else {
+                self.beeps.remove(&key);
+                continue;
+            };
+            let every = t.audio_lane_beep_slow_s + (t.audio_lane_beep_fast_s - t.audio_lane_beep_slow_s) * p;
+            if due(&mut self.beeps, key, now, every) {
+                plays.push(Play::new(ids::LOCK_RAIL.0, At::Slot(slot)).pitch(1.0 + 0.25 * p).source(slot as u64));
+            }
+        }
+        let drones = if seats.is_empty() { Vec::new() } else { game.drones() };
+        for &(slot, at) in &seats {
+            let near = drones.iter().filter(|d| d.in_air() && d.lock.slot() == Some(slot)).map(|d| d.ground.distance_to(at)).fold(f32::INFINITY, f32::min);
+            if near.is_finite() {
+                let close = 1.0 - (near / t.audio_drone_lock_far_px.max(1.0)).clamp(0.0, 1.0);
+                wishes.push(Wish { key: LOCK_DRONE | slot as u64, cue: ids::LOCK_DRONE.0, at: Some(at), velocity: Vec2::new(0.0, 0.0), gain: 0.6 + 0.4 * close, pitch: 0.8 + 0.8 * close, own: true });
+            }
+        }
+        let by_seat = game.round_stats().by_seat;
+        if let Some(before) = self.kills {
+            for &slot in own {
+                if by_seat.get(slot).zip(before.get(slot)).is_some_and(|(now, before)| now > before) {
+                    plays.push(Play::new(ids::KILL.0, At::Nowhere).source(slot as u64));
+                }
+            }
+        }
+        self.kills = Some(by_seat);
+    }
+
+    /// What flies on its own. Each missile is heard leaving its tube - one
+    /// launch a missile, so a volley is heard tube by tube at its own
+    /// spacing - and its motor while it flies, pitched by its measured
+    /// speed (`audio_missile_motor_px_s`) and gone when an EMP kills it.
+    /// Each drone's dive rises to a scream (`audio_dive_rise_s`). Each
+    /// grenade's fuse beeps with its lamp, quicker as it nears going off
+    /// (`Grenade::lamp_lit_at`).
+    fn ordnance(&mut self, game: &Game, t: &Tuning, wishes: &mut Vec<Wish>, plays: &mut Vec<Play>) {
+        let frame = game.frame();
+        let mut live = HashSet::new();
+        for m in game.world.query::<&crate::missile::Missile>().iter() {
+            live.insert(m.id);
+            let track = match self.tracks.get_mut(&m.id) {
+                Some(track) => {
+                    track.follow(m.position, frame);
+                    *track
+                }
+                None => {
+                    plays.push(Play::new(ids::MISSILE_LAUNCH.0, At::Point(m.position)).source(m.id as u64));
+                    *self.tracks.entry(m.id).or_insert(Track::new(m.position, frame))
+                }
+            };
+            if m.is_dead() {
+                continue;
+            }
+            let pitch = 0.85 + 0.35 * (track.velocity.length() / t.audio_missile_motor_px_s.max(1.0)).clamp(0.0, 1.0);
+            wishes.push(Wish { key: MOTOR | m.id as u64, cue: ids::MISSILE_MOTOR.0, at: Some(m.position), velocity: track.velocity, gain: 0.8, pitch, own: false });
+        }
+        for d in game.world.query::<&crate::fpv::Drone>().iter() {
+            if d.stage != crate::fpv::DroneStage::Dive || d.landed {
+                continue;
+            }
+            live.insert(d.id);
+            let track = self.tracks.entry(d.id).or_insert(Track::new(d.ground, frame));
+            track.follow(d.ground, frame);
+            let rise = (d.stage_time / t.audio_dive_rise_s.max(0.01)).clamp(0.0, 1.0);
+            wishes.push(Wish { key: DIVE | d.id as u64, cue: ids::FPV_DIVE.0, at: Some(d.ground), velocity: track.velocity, gain: 0.6 + 0.4 * rise, pitch: 1.0 + 0.5 * rise, own: false });
+        }
+        self.tracks.retain(|id, _| live.contains(id));
+        let mut lamps = HashSet::new();
+        for g in game.world.query::<&crate::grenade::Grenade>().iter() {
+            lamps.insert(g.id);
+            let lit = crate::grenade::Grenade::lamp_lit_at(t.grenade_fuse_seconds - g.fuse, t.grenade_fuse_seconds, t);
+            if self.lamps.insert(g.id, lit).is_some_and(|was| lit && !was) {
+                plays.push(Play::new(ids::GRENADE_BEEP.0, At::Point(g.position)).pitch(1.5).source(g.id as u64));
+            }
+        }
+        self.lamps.retain(|id, _| lamps.contains(id));
+    }
+
+    /// A rail slug or a laser beam passing close by a seat's own tank
+    /// without striking it cracks or zaps past, heard where it came
+    /// nearest - within `audio_flyby_px`, the louder the closer, as a
+    /// fly-by is; the seat that fired it hears none of its own.
+    fn near_misses(&mut self, game: &Game, own: &[usize], t: &Tuning, plays: &mut Vec<Play>) {
+        if self.beams.is_empty() {
+            return;
+        }
+        let seats: Vec<(usize, Vec2)> =
+            game.world.query::<&Tank>().iter().filter(|tk| own.contains(&tk.owner_slot()) && !tk.is_wreck()).map(|tk| (tk.owner_slot(), tk.position)).collect();
+        for (i, beam) in std::mem::take(&mut self.beams).into_iter().enumerate() {
+            for &(slot, at) in &seats {
+                if beam.shooter == Some(slot) || beam.struck.contains(&slot) {
+                    continue;
+                }
+                let (near, d) = nearest_on(beam.from, beam.to, at);
+                if d <= t.audio_flyby_px {
+                    plays.push(Play::new(beam.cue, At::Point(near)).strength(flyby_strength(d, t)).source(((i as u64) << 8) | slot as u64));
+                }
+            }
+        }
+    }
+
+    /// A beam a step drew (`Beam::of`), for the next frame's near misses.
+    pub fn beam(&mut self, beam: Beam) {
+        self.beams.push(beam);
     }
 
     /// Thunder after a storm's lightning: the flash comes off the round
@@ -921,4 +1287,139 @@ impl Watchers {
             wishes.push(Wish { key: AIR | a.id as u64, cue, at: Some(a.ground), velocity: a.velocity, gain: 1.0, pitch: 1.0, own: false });
         }
     }
+}
+
+/// What the charge watcher keeps about a tank's charge between frames.
+#[derive(Clone, Copy, Debug)]
+struct ChargeEar {
+    weapon: crate::tank::ActiveWeapon,
+    stage: crate::tank::ChargeStage,
+    /// A rod's reticle's cell.
+    reticle: Option<(i32, i32)>,
+}
+
+/// What the weapon watcher keeps about a tank between frames.
+#[derive(Clone, Copy, Debug)]
+struct ArmsEar {
+    /// Its minigun running: the barrels turning, or a burst on.
+    spinning: bool,
+    /// Its flamethrower's jet on.
+    jetting: bool,
+    /// Its special offline (`Tank::special_down`).
+    down: bool,
+    /// When it was last offline, on the director's clock.
+    down_at: f64,
+    special: Option<crate::tank::ActiveWeapon>,
+    shells: i32,
+    tubes: u8,
+}
+
+impl ArmsEar {
+    /// Carrying a special that fires.
+    fn usable(&self) -> bool {
+        self.special.is_some() && !self.down
+    }
+}
+
+/// How soon after an outage (s) a special that fires again is heard back
+/// online, rather than as one a crate brought: a replica's wire names the
+/// special again a snapshot after its outage runs out.
+const BACK_ONLINE_S: f64 = 1.0;
+
+/// Faster than this (px/s) between two frames, a followed projectile
+/// jumped (a portal) rather than flew.
+const JUMP_PX_S: f32 = 2000.0;
+
+/// A projectile followed from frame to frame by where it is, so its
+/// velocity is measured: a replica's as well as a round's.
+#[derive(Clone, Copy, Debug)]
+struct Track {
+    at: Vec2,
+    frame: u64,
+    velocity: Vec2,
+}
+
+impl Track {
+    fn new(at: Vec2, frame: u64) -> Track {
+        Track { at, frame, velocity: Vec2::new(0.0, 0.0) }
+    }
+
+    /// On to `at` on `frame`: the velocity over the steps between.
+    fn follow(&mut self, at: Vec2, frame: u64) {
+        let steps = frame.saturating_sub(self.frame);
+        if steps == 0 {
+            return;
+        }
+        let v = (at - self.at) * (1.0 / (steps as f32 * crate::PHYSICS_FIXED_DT));
+        self.velocity = if v.length() > JUMP_PX_S { Vec2::new(0.0, 0.0) } else { v };
+        self.at = at;
+        self.frame = frame;
+    }
+}
+
+/// A beam a step drew, for the near misses (`Watchers::near_misses`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Beam {
+    pub from: Vec2,
+    pub to: Vec2,
+    /// The owner slot that fired it, where the event names it: a rail
+    /// slug's always, a laser's when a seat fired it.
+    pub shooter: Option<usize>,
+    /// What it sounds like going by.
+    pub cue: &'static str,
+    /// The seats its step's hits of its kind struck.
+    pub struck: Vec<usize>,
+}
+
+impl Beam {
+    /// The beam `event` drew, if it is one - a rail slug's leg or a laser
+    /// beam's - with the seats `events`, its step's, have its kind
+    /// striking.
+    pub fn of(event: &crate::simulation::Event, events: &[crate::simulation::Event]) -> Option<Beam> {
+        use crate::simulation::{Event, HitCause, HitTarget};
+        let (from, to, shooter, cue, kind) = match *event {
+            Event::RailSlug { slot, x0, y0, x1, y1, .. } => (Vec2::new(x0, y0), Vec2::new(x1, y1), Some(slot), ids::FLYBY_RAIL.0, HitCause::Rail),
+            Event::LaserBeam { x0, y0, x1, y1, seat, .. } => {
+                (Vec2::new(x0, y0), Vec2::new(x1, y1), (seat != crate::net::wire::NO_SEAT).then_some(seat as usize), ids::FLYBY_LASER.0, HitCause::Laser)
+            }
+            _ => return None,
+        };
+        let struck = events
+            .iter()
+            .filter_map(|e| match *e {
+                Event::Hit { target: HitTarget::Player { player }, cause, .. } if cause == kind => Some(player as usize),
+                _ => None,
+            })
+            .collect();
+        Some(Beam { from, to, shooter, cue, struck })
+    }
+}
+
+/// Whether the warning keyed `key` beeps now, every `every` seconds from
+/// its first: a beep moves its next on.
+fn due(beeps: &mut HashMap<u64, f64>, key: u64, now: f64, every: f32) -> bool {
+    let next = beeps.entry(key).or_insert(now);
+    if now < *next {
+        return false;
+    }
+    *next = now + every.max(0.02) as f64;
+    true
+}
+
+/// A fly-by's or a near miss's strength for a pass `d` px from the seat's
+/// tank: full straight over it, `audio_flyby_edge_strength` at
+/// `audio_flyby_px`.
+fn flyby_strength(d: f32, t: &Tuning) -> f32 {
+    let close = 1.0 - (d / t.audio_flyby_px.max(1.0)).clamp(0.0, 1.0);
+    t.audio_flyby_edge_strength + (1.0 - t.audio_flyby_edge_strength) * close
+}
+
+/// The point of the segment `a..b` nearest `p`, and how far it is from `p`.
+fn nearest_on(a: Vec2, b: Vec2, p: Vec2) -> (Vec2, f32) {
+    let ab = b - a;
+    let ap = p - a;
+    let len2 = ab.x * ab.x + ab.y * ab.y;
+    let s = if len2 > 1e-6 { ((ap.x * ab.x + ap.y * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    let q = a + ab * s;
+    (q, q.distance_to(p))
 }
