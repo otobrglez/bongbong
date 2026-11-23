@@ -132,6 +132,7 @@ keys! {
     LEVELS_TITLE = "levels-title";
     LEVELS_SUB = "levels-sub";
     LEVELS_BACK = "levels-back";
+    LEVELS_EXIT = "levels-exit";
     BAR_LEVEL = "bar-level";
     SEAT_LABEL = "seat-label";
     TOUCH_STEER = "touch-steer";
@@ -1098,6 +1099,7 @@ mod text_tests {
             (keys::LEVELS_TITLE, 22, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
             (keys::LEVELS_SUB, UI_SMALL_TEXT, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
             (keys::LEVELS_BACK, HUD_TEXT_SIZE, SELECT_BACK_W as i32 - 12, vec![]),
+            (keys::LEVELS_EXIT, HUD_TEXT_SIZE, SELECT_BACK_W as i32 - 12, vec![]),
             (
                 keys::BAR_LEVEL,
                 UI_SMALL_TEXT,

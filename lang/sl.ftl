@@ -96,6 +96,7 @@ result-again-in = ŠE ENKRAT ČEZ { $seconds }
 levels-title = STOPNJE
 levels-sub = Izberi stopnjo. Zmaga odpre naslednjo.
 levels-back = NAZAJ
+levels-exit = IZHOD
 bar-level = STOPNJA
 
 level-boot-camp = Vadišče

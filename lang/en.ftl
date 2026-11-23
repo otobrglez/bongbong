@@ -179,6 +179,8 @@ result-again-in = PLAY AGAIN IN { $seconds }
 levels-title = LEVELS
 levels-sub = Pick a level to play. Winning one opens the next.
 levels-back = BACK
+# Beside BACK on a desktop window: quits the game, through the goodbye.
+levels-exit = EXIT
 
 # The bar's level button, in the mission word's place on a level: this
 # word small (10 px) with the level's number after it, in about 44 px.

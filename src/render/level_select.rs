@@ -6,7 +6,7 @@ use sola_raylib::prelude::*;
 
 use crate::hud::{UiFrame, BUILD_COLOR, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
 use crate::level_select::{
-    back_rect, content_rect, panel_rect, tile_rect, LevelSelectView, TileState, TileView, TILE_NUMBER_SIZE, TILE_NUMBER_TOP,
+    back_rect, content_rect, exit_rect, panel_rect, tile_rect, LevelSelectView, TileState, TileView, TILE_NUMBER_SIZE, TILE_NUMBER_TOP,
     TILE_TITLE_LEADING, TILE_TITLE_SIZE, TILE_TITLE_TOP,
 };
 use crate::math::{Color, Rectangle};
@@ -43,13 +43,20 @@ pub fn draw_level_select<D: RaylibDraw>(d: &mut D, ui: &UiFrame, view: &LevelSel
         draw_tile(d, tile_rect(area, i), tile);
     }
 
-    let back = back_rect(area);
-    crate::render::shapes::rounded_outline(d, back, 0.2, 8, 2.0, TEXT);
-    let w = width(&view.back, HUD_TEXT_SIZE);
+    draw_button(d, back_rect(area), &view.back);
+    if let (Some(exit), Some(word)) = (exit_rect(area), &view.exit) {
+        draw_button(d, exit, word);
+    }
+}
+
+/// `BACK` or `EXIT`: an outlined button with its word centred.
+fn draw_button<D: RaylibDraw>(d: &mut D, r: Rectangle, word: &str) {
+    crate::render::shapes::rounded_outline(d, r, 0.2, 8, 2.0, TEXT);
+    let w = width(word, HUD_TEXT_SIZE);
     d.draw_text(
-        &view.back,
-        (back.x + (back.width - w as f32) / 2.0) as i32,
-        (back.y + (back.height - HUD_TEXT_SIZE as f32) / 2.0) as i32,
+        word,
+        (r.x + (r.width - w as f32) / 2.0) as i32,
+        (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32,
         HUD_TEXT_SIZE,
         TEXT,
     );
