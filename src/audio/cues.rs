@@ -253,7 +253,6 @@ macro_rules! cue_ids {
 cue_ids! {
     UI_CLICK = "ui.click";
     UI_REFUSE = "ui.refuse";
-    ROUND_START = "round.start";
     ROUND_WON = "round.won";
     ROUND_LOST = "round.lost";
     WAVE_START = "round.wave";

@@ -3351,61 +3351,223 @@ loop = true
 # fireflies watchers, audio::life).
 
 [sample.crow_caw]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "a single crow on open farmland cawing two or three times, hoarse natural caws with short pauses, outdoors, no music"
 duration_seconds = 2.0
+  [[sample.crow_caw.take]]
+  file = "world/crow_caw_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "agRJnDIAzHp7nT8oezGF"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.03
+  peak_dbtp = -9.19
+  seconds = 1.78
+  [[sample.crow_caw.take]]
+  file = "world/crow_caw_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "98OfKZYfGkJsc2KgXMUu"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.18
+  peak_dbtp = -9.57
+  seconds = 1.47
 
 [sample.crow_flush_wings]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "a small flock of crows bursting up off a field, a sudden flurry of heavy wing flaps rushing away, no music"
 duration_seconds = 1.5
+  [[sample.crow_flush_wings.take]]
+  file = "world/crow_flush_wings_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "UFj0RwjHvKU0CXaQVuys"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.12
+  peak_dbtp = -4.67
+  seconds = 1.30
+  [[sample.crow_flush_wings.take]]
+  file = "world/crow_flush_wings_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "YAaOQUNWlXnF0evnMO5P"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.11
+  peak_dbtp = -11.33
+  seconds = 1.19
 
 [sample.crow_alarm]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "several startled crows taking flight, harsh overlapping alarm caws, agitated, no music"
 duration_seconds = 1.5
+  [[sample.crow_alarm.take]]
+  file = "world/crow_alarm_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "9b5sChLQpfB4cMnVB24g"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.12
+  peak_dbtp = -6.90
+  seconds = 1.48
+  [[sample.crow_alarm.take]]
+  file = "world/crow_alarm_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "H6LCqEcm4RMGTDtx9gNg"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.65
+  peak_dbtp = -9.56
+  seconds = 1.48
 
 [sample.crow_caw_far]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "a crow cawing as it flies away overhead, two caws fading into the distance, outdoors, no music"
 duration_seconds = 2.5
+  [[sample.crow_caw_far.take]]
+  file = "world/crow_caw_far_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "kbXUoyPjsCnEh3gMoC0y"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.86
+  peak_dbtp = -8.99
+  seconds = 2.23
+  [[sample.crow_caw_far.take]]
+  file = "world/crow_caw_far_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "iyP7rWnfxP0jPeSyRde5"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.74
+  peak_dbtp = -8.60
+  seconds = 2.30
 
 [sample.duck_quack]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "a mallard duck on a calm pond, a few soft contented quacks and low chuckles, no music"
 duration_seconds = 2.0
+  [[sample.duck_quack.take]]
+  file = "world/duck_quack_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "gPxLMy97PVqIqt6qmv8k"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.33
+  peak_dbtp = -8.15
+  seconds = 1.68
+  [[sample.duck_quack.take]]
+  file = "world/duck_quack_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "5n0Cf5WmEmGizTjsPoBN"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.78
+  peak_dbtp = -8.19
+  seconds = 1.75
 
 [sample.duck_dabble]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "a duck dipping its head into still pond water, a small soft splash and gentle paddling ripples, no music"
 duration_seconds = 1.0
+  [[sample.duck_dabble.take]]
+  file = "world/duck_dabble_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "QF6Sjr8PV1rEzx7JEFZ1"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.65
+  peak_dbtp = -1.00
+  seconds = 0.83
+  [[sample.duck_dabble.take]]
+  file = "world/duck_dabble_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "7pejUiTfSIaGBjMXRcJr"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.52
+  peak_dbtp = -1.87
+  seconds = 0.72
 
 [sample.duck_takeoff]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "mallard ducks taking off from a pond, a splashing run across the water and loud whistling wing beats, no music"
 duration_seconds = 2.0
+  [[sample.duck_takeoff.take]]
+  file = "world/duck_takeoff_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "kVid2ly8nJthS13lLNpC"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.77
+  peak_dbtp = -5.06
+  seconds = 1.75
+  [[sample.duck_takeoff.take]]
+  file = "world/duck_takeoff_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "ZC48wFGznQLoRg2tU16o"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -26.63
+  peak_dbtp = -1.00
+  seconds = 1.74
 
 [sample.duck_alarm]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "startled mallard ducks quacking loudly in alarm as they flee, no music"
 duration_seconds = 1.5
+  [[sample.duck_alarm.take]]
+  file = "world/duck_alarm_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "WONj0Y5ezMocZ27ucRHF"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.96
+  peak_dbtp = -7.12
+  seconds = 1.48
+  [[sample.duck_alarm.take]]
+  file = "world/duck_alarm_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "bVxpa5Rhr1ci68y4GorX"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.26
+  peak_dbtp = -6.53
+  seconds = 1.48
 
 [sample.duck_land]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "a duck landing on a pond, a short skidding splash-down and a settling ripple, no music"
 duration_seconds = 1.0
+  [[sample.duck_land.take]]
+  file = "world/duck_land_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "DlEgOWkFGnQ2Gu2l1uq8"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.83
+  peak_dbtp = -1.00
+  seconds = 1.00
+  [[sample.duck_land.take]]
+  file = "world/duck_land_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "VxNH0sGpTvfcNRoCzGad"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.36
+  peak_dbtp = -1.00
+  seconds = 0.98
 
 [sample.firefly_loop]
-status = "planned"
+status = "approved"
 bus = "world"
 prompt = "a warm summer night, a very faint delicate shimmer of tiny soft twinkles over a high airy hum, sparse and even, no melody, no music"
 # Generated without the style prefix: "close-mic, dry, punchy" fights a faint
@@ -3413,6 +3575,24 @@ prompt = "a warm summer night, a very faint delicate shimmer of tiny soft twinkl
 duration_seconds = 8.0
 prompt_influence = 0.35
 loop = true
+  [[sample.firefly_loop.take]]
+  file = "world/firefly_loop_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "GADdA671NVIx6SGjHYwh"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -10.29
+  seconds = 8.00
+  [[sample.firefly_loop.take]]
+  file = "world/firefly_loop_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "9ZLlAXRSllPBw19vM4Y6"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -8.74
+  seconds = 8.00
 
 [sample.thunder]
 status = "approved"
@@ -4000,21 +4180,6 @@ duration_seconds = 0.8
   peak_dbtp = -1.20
   seconds = 0.70
 
-[sample.round_start]
-status = "approved"
-bus = "ui"
-prompt = "battle start horn, short brassy military signal, no music"
-duration_seconds = 1.5
-  [[sample.round_start.take]]
-  file = "ui/round_start_1.ogg"
-  flow = "bWSh3NEAkd74zwRwIStm"
-  generation = "A9vY5MLCU74EDHTUa356"
-  made = "2026-11-22"
-  plan = "creator"
-  rms_db = -19.81
-  peak_dbtp = -9.44
-  seconds = 1.26
-
 [sample.round_won]
 status = "approved"
 bus = "ui"
@@ -4048,17 +4213,18 @@ duration_seconds = 2.0
 [sample.wave_start]
 status = "approved"
 bus = "ui"
-prompt = "incoming wave warning, short rising siren blast, no music"
+# Not a siren: a wave round's first wave lands on its first frame, so this opens every wave level.
+prompt = "incoming wave signal, two quick heavy war drum booms, deep and punchy, no siren, no horn, no music"
 duration_seconds = 1.5
   [[sample.wave_start.take]]
   file = "ui/wave_start_1.ogg"
-  flow = "bWSh3NEAkd74zwRwIStm"
-  generation = "41p4ehpU98rpLABz3Zuy"
-  made = "2026-11-22"
+  flow = "v8Y3qwVgN7l4mpmeQk6s"
+  generation = "5KqsrOikGP79wF5Y8Zzp"
+  made = "2026-11-23"
   plan = "creator"
-  rms_db = -19.97
-  peak_dbtp = -8.06
-  seconds = 1.44
+  rms_db = -19.54
+  peak_dbtp = -4.25
+  seconds = 1.19
 
 [sample.ui_refuse]
 status = "approved"
@@ -4192,16 +4358,6 @@ class = "huge"
 polyphony = 1
 layers = [{ sample = "ui_beat" }]
 note = "A training beat done."
-
-[cue."round.start"]
-kind = "stinger"
-bus = "ui"
-priority = "critical"
-class = "huge"
-polyphony = 1
-jitter = false
-layers = [{ sample = "round_start" }]
-note = "A round begins."
 
 [cue."round.won"]
 kind = "stinger"

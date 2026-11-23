@@ -143,7 +143,7 @@ pub fn tank_in<'g>(game: &'g Game, slot: usize) -> Option<hecs::Ref<'g, Tank>> {
 
 pub fn bind(event: &Event, game: &Game) -> Binding {
     match *event {
-        Event::RoundStarted { .. } => one(Play::new(ids::ROUND_START.0, At::Nowhere)),
+        Event::RoundStarted { .. } => Binding::Silent("a round opens quietly: a wave round's first call lands on its first frame"),
         Event::RoundEnded { outcome } => match outcome {
             Outcome::Won => one(Play::new(ids::ROUND_WON.0, At::Nowhere)),
             Outcome::Lost => one(Play::new(ids::ROUND_LOST.0, At::Nowhere)),

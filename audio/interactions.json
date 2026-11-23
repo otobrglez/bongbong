@@ -19011,9 +19011,9 @@
    "online_work": true,
    "needs_data": true,
    "manifest": {
-    "cue": "round.start.go",
+    "cue": null,
     "proposed": null,
-    "fit": "covered"
+    "fit": "missing"
    }
   },
   {
@@ -19618,10 +19618,11 @@
    "online_work": true,
    "needs_data": true,
    "manifest": {
-    "cue": "round.start",
+    "cue": null,
     "proposed": null,
-    "fit": "exact"
-   }
+    "fit": "missing"
+   },
+   "note": "Silent on purpose (Oto, 2026-11-23): the start horn was dropped; a wave round's first call opens it."
   },
   {
    "cue": "mortar_gloop",
