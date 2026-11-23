@@ -342,4 +342,13 @@ cue_ids! {
     VOLCANO = "world.volcano";
     PORTAL_HUM = "world.portal";
     BONG_BABBLE = "voice.bong";
+    CROW_CAW = "world.crow.caw";
+    CROW_FLUSH = "world.crow.flush";
+    CROW_CAW_FAR = "world.crow.caw.far";
+    DUCK_QUACK = "world.duck.quack";
+    DUCK_WARY = "world.duck.quack.wary";
+    DUCK_DABBLE = "world.duck.dabble";
+    DUCK_TAKEOFF = "world.duck.takeoff";
+    DUCK_LAND = "world.duck.land";
+    FIREFLY = "world.firefly";
 }

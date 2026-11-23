@@ -218,6 +218,27 @@ pub const WATCHERS: &[WatcherSpec] = &[
     WatcherSpec { id: "fuse", entity: "barrel", reads: "Game::fused_barrels", cues: &["world.fuse"], online: "the same" },
     WatcherSpec { id: "portal", entity: "portal", reads: "Game::portals", cues: &["world.portal"], online: "the same" },
     WatcherSpec { id: "volcano", entity: "volcano", reads: "Volcano::phase on the round clock", cues: &["world.volcano"], online: "the same: the clock is the round's" },
+    WatcherSpec {
+        id: "crows",
+        entity: "crow",
+        reads: "the director's own fauna::Fauna (audio::life): a flock's first bird lifting off, its first flier's age, a flock all down; calls hashed on the round clock",
+        cues: &["world.crow.flush", "world.crow.caw.far", "world.crow.caw"],
+        online: "the same: the director steps its creatures on the replica, as the window draws them",
+    },
+    WatcherSpec {
+        id: "ducks",
+        entity: "mallard",
+        reads: "the director's own fauna::Fauna (audio::life): a group running to take off, a duck's fright from a hull, a duck landing, Duck::dabbling; quacks hashed on the round clock; none on ice",
+        cues: &["world.duck.takeoff", "world.duck.quack.wary", "world.duck.land", "world.duck.quack", "world.duck.dabble"],
+        online: "the same: the director steps its creatures on the replica, as the window draws them",
+    },
+    WatcherSpec {
+        id: "fireflies",
+        entity: "firefly",
+        reads: "the director's own fauna::Fauna (audio::life): the fireflies gathered into swarms, fireflies::shown and each one's glow",
+        cues: &["world.firefly"],
+        online: "the same: the sky and the creatures are the replica's",
+    },
 ];
 
 /// What a watcher keeps about a tank between frames.
