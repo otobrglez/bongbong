@@ -195,7 +195,7 @@ enemy there carries one of the six BB-36 weapons.
 | 0 Boot Camp | minigun | minigun |
 | 1 Lotus Lagoon | missiles (26,23), plasma (39,23), minigun, sonic hammer (41,23) | missiles, plasma; the sonic hammer - shove a tank off a bridge or into the drums |
 | 2 Serpent River | laser (25,27), helicopter (21,27), jet (22,37), grenades (26,30), sonic hammer (25,38), missiles, plasma, minigun | laser, air support (helicopter and jet) and grenades - in the base's east yard by the start, the grenades by its gate; the second laser on the island |
-| 3 Glasshouses | plasma, laser, minigun, missiles, flamethrower, sonic hammer (8,7) | flamethrower; the sonic hammer again - to break the glass |
+| 3 Glasshouses | sonic hammer (28,22), flamethrower (39,22), minigun, laser, missiles, plasma (six, all round the garden); more of each in the corner houses' stashes | flamethrower, in the Palm House beside the start; the sonic hammer again - to break the glass |
 | 4 Oasis Bazaar | minigun (seven), plasma, flamethrower, laser, grenades (17,18), (30,7) and (47,30), missiles, sonic hammer, jet (19,23) and helicopter strikes - six, scattered by a seeded draw | grenades again - by the yard's east gate, more by the khan's south postern to lob over its walls; the air strikes again - the jet by the yard's east gate, the rest out over the market; 34 oil and fuel drums in clusters |
 | 5 Carnival | EMP burst (13,21), laser, missiles, plasma, flamethrower, minigun, grenades, sonic hammer | EMP - six waves of light tanks among a hundred drums, enemies arming from the crates |
 | 6 Jungle Temple | plasma, laser, minigun, flamethrower, missiles, FPV swarm (13,23) | FPV swarm - over the temple walls; the miniguns beside it are the counter |
