@@ -130,6 +130,20 @@ impl Duck {
         pyro::unit(self.seed ^ self.leg.wrapping_mul(0x9E37_79B9), k)
     }
 
+    /// The group it belongs to, for the round: what takes off with it, and
+    /// what the sound calls and alarms by (`audio::life`).
+    pub fn group(&self) -> usize {
+        self.group
+    }
+
+    /// Whether it has its head under at the round's clock `time`: calm on
+    /// the water, in about one of its hashed windows in seven. The one rule
+    /// `water_shapes` draws the dip by and the sound dabbles by.
+    pub fn dabbling(&self, time: f32) -> bool {
+        let window = (time / 0.9 + pyro::unit(self.seed, 6) * 5.0).floor() as i64 as u32;
+        self.state == State::Swim && self.fright == 0.0 && pyro::unit(self.seed ^ window.wrapping_mul(0x9E37_79B9), 8) < 0.15
+    }
+
     /// Pick where to paddle next: away from what scared it while it is
     /// frightened, else toward `target` most of the time, a wander or a
     /// rest otherwise (the fish's legs, `fish::Fish::next_leg`).
@@ -401,8 +415,8 @@ impl Ducks {
     }
 
     /// The ducks on the water, to draw over the water's tiles: each one's
-    /// wake or spray, then the duck - dabbling in about one of its hashed
-    /// windows in eight - at the round's clock `time`. Nothing on ice.
+    /// wake or spray, then the duck - dabbling now and then
+    /// (`Duck::dabbling`) - at the round's clock `time`. Nothing on ice.
     pub fn water_shapes(&self, water: &WaterLayout, time: f32, cull: Option<Rectangle>, t: &Tuning) -> Vec<Shape> {
         let mut out = Vec::new();
         if water.is_frozen() {
@@ -436,9 +450,7 @@ impl Ducks {
                     if d.splash > 0.0 {
                         spray(&mut out, water, d, time, 1.0);
                     }
-                    let window = (time / 0.9 + pyro::unit(d.seed, 6) * 5.0).floor() as i64 as u32;
-                    let dip = d.fright == 0.0 && pyro::unit(d.seed ^ window.wrapping_mul(0x9E37_79B9), 8) < 0.15;
-                    fauna::compose_grid(&mut out, d.pos, d.heading, if dip { &DIP } else { &SWIM }, color);
+                    fauna::compose_grid(&mut out, d.pos, d.heading, if d.dabbling(time) { &DIP } else { &SWIM }, color);
                 }
                 State::Run { age } if d.alt < 1.0 => {
                     if age >= 0.0 {

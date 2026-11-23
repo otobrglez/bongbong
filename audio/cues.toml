@@ -1,0 +1,6896 @@
+# The cue manifest (docs/sound-system-prd.md section 4.8): every sound the
+# game plays, and how. Read by `audio::cues`, embedded in the binary.
+#
+# A [sample.<id>] is a set of sound files (its takes, under static/audio/)
+# and the recipe that made them: the prompt after the style prefix, the
+# ElevenLabs parameters, and each take's provenance. `status` is where it
+# stands: planned (wanted, not made), review (takes made, not picked),
+# approved (picked, processed, shipped), placeholder, rejected.
+#
+# A [cue."<id>"] is a behaviour: its bus, kind, priority, audibility class
+# (section 4.3), polyphony, cooldown, level, and the samples it layers by
+# distance. Ids are dotted, general to specific; a cue the game asks for
+# that is not here falls back to its parent (`hit.shell.metal.iron` ->
+# `hit.shell.metal` -> `hit.shell`).
+#
+# The `sound-gen` skill makes the planned samples; the `sound-audit` skill
+# adds what a new feature needs. Edit by hand freely: a dev build reloads
+# this file while it runs.
+
+[style]
+model = "eleven_text_to_sound_v3"
+prefix = "close-mic, dry, punchy, realistic"
+
+# ---------------------------------------------------------------- samples
+
+[sample.cannon_medium_near]
+status = "approved"
+bus = "weapons"
+prompt = "tank main gun firing, sharp concussive crack, deep body, metallic breech clank, no music, no reverb"
+duration_seconds = 1.2
+  [[sample.cannon_medium_near.take]]
+  file = "weapons/cannon_medium_near_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "GAfNVBilApkT8uNwwqbp"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.72
+  peak_dbtp = -1.00
+  seconds = 0.98
+  [[sample.cannon_medium_near.take]]
+  file = "weapons/cannon_medium_near_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "sOhWmgw6tYZxX4hyIKza"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.98
+  peak_dbtp = -1.00
+  seconds = 0.94
+
+[sample.cannon_far]
+status = "approved"
+bus = "weapons"
+prompt = "distant tank cannon shot across open country, low muffled thump then a rolling boom, no music"
+duration_seconds = 2.0
+  [[sample.cannon_far.take]]
+  file = "weapons/cannon_far_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "QPeiRwn4TSRUsTUE75j3"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.08
+  peak_dbtp = -1.00
+  seconds = 1.88
+  [[sample.cannon_far.take]]
+  file = "weapons/cannon_far_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "pRvyLoU8mBTK6iAe48ZE"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.67
+  peak_dbtp = -1.00
+  seconds = 1.81
+
+[sample.minigun_loop]
+status = "approved"
+bus = "weapons"
+prompt = "rotary minigun firing continuously, fast buzzing roar of rounds, mechanical whine, steady, no music"
+duration_seconds = 2.0
+prompt_influence = 0.5
+loop = true
+  [[sample.minigun_loop.take]]
+  file = "weapons/minigun_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "05aXuG7XTJ9ZygsJxXPh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.26
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.minigun_loop.take]]
+  file = "weapons/minigun_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "viyHoH6XhKRgDLAGiMRB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.52
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.minigun_spin_down]
+status = "approved"
+bus = "weapons"
+prompt = "rotary minigun barrels spinning down after firing, falling mechanical whir with light clicks, no music"
+duration_seconds = 1.2
+  [[sample.minigun_spin_down.take]]
+  file = "weapons/minigun_spin_down_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "PJZyyRsliU3e3Lu78mQA"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.75
+  peak_dbtp = -1.00
+  seconds = 1.03
+  [[sample.minigun_spin_down.take]]
+  file = "weapons/minigun_spin_down_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "ydekfA1Hxy6DDuOcuCqt"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.21
+  peak_dbtp = -1.00
+  seconds = 1.20
+
+[sample.hit_shell_metal]
+status = "approved"
+bus = "impacts"
+prompt = "heavy shell striking thick steel armour, hard metallic clang, short rattle, no music, no reverb"
+duration_seconds = 0.8
+  [[sample.hit_shell_metal.take]]
+  file = "impacts/hit_shell_metal_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "FUmfCP0R30j3OC5NcCGu"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.09
+  peak_dbtp = -1.00
+  seconds = 0.60
+  [[sample.hit_shell_metal.take]]
+  file = "impacts/hit_shell_metal_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "yaxIkfwaLcvOs75gLS11"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.61
+  peak_dbtp = -1.52
+  seconds = 0.64
+
+[sample.hit_shell_masonry]
+status = "approved"
+bus = "impacts"
+prompt = "shell smashing into a brick wall, crunchy thud, falling grit and chips, no music, no reverb"
+duration_seconds = 0.8
+  [[sample.hit_shell_masonry.take]]
+  file = "impacts/hit_shell_masonry_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "9Vo6wijCj1f5OuR3juNP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.47
+  peak_dbtp = -1.00
+  seconds = 0.80
+  [[sample.hit_shell_masonry.take]]
+  file = "impacts/hit_shell_masonry_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "jnl20tO7AmCbXeUnALG0"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.46
+  peak_dbtp = -1.00
+  seconds = 0.62
+
+[sample.wreck_tank]
+status = "approved"
+bus = "explosions"
+prompt = "armoured vehicle exploding, deep heavy boom, metal debris clatter, crackling fire tail, no music"
+duration_seconds = 2.5
+  [[sample.wreck_tank.take]]
+  file = "explosions/wreck_tank_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "Ur96yHYryBQVFwlbrWRq"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.38
+  peak_dbtp = -1.00
+  seconds = 2.14
+  [[sample.wreck_tank.take]]
+  file = "explosions/wreck_tank_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "NOa0usstaoHgmptMZQul"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.73
+  peak_dbtp = -1.00
+  seconds = 2.22
+
+[sample.blast_barrel_oil]
+status = "approved"
+bus = "explosions"
+prompt = "oil drum exploding, quick fiery whoomp, steel barrel clatter and scattering debris, no music"
+duration_seconds = 2.0
+  [[sample.blast_barrel_oil.take]]
+  file = "explosions/blast_barrel_oil_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "RXKOrEzZJQ16Yzq3hTEh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.46
+  peak_dbtp = -1.00
+  seconds = 1.51
+  [[sample.blast_barrel_oil.take]]
+  file = "explosions/blast_barrel_oil_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "wc18ME4JqhPfJzOeqgCR"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.40
+  peak_dbtp = -1.00
+  seconds = 1.56
+
+[sample.explosion_far]
+status = "approved"
+bus = "explosions"
+prompt = "distant explosion far across open fields, deep muffled boom rolling away, no music"
+duration_seconds = 2.5
+  [[sample.explosion_far.take]]
+  file = "explosions/explosion_far_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "kDEiM67RG03LPXyWXfkL"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.70
+  peak_dbtp = -1.00
+  seconds = 2.10
+  [[sample.explosion_far.take]]
+  file = "explosions/explosion_far_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "KjYOdLKZ2ntW0DLLEEh8"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.44
+  peak_dbtp = -1.00
+  seconds = 2.26
+
+[sample.engine_light_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "small light tank engine running steadily, fast rattling petrol engine putter, constant revs, no music"
+duration_seconds = 3.0
+prompt_influence = 0.5
+loop = true
+  [[sample.engine_light_loop.take]]
+  file = "vehicles/engine_light_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "ZOxGFKXe7RKudih3uekb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -4.16
+  seconds = 3.00
+  [[sample.engine_light_loop.take]]
+  file = "vehicles/engine_light_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "zQwj79biNl2XprCAx3F6"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.01
+  peak_dbtp = -5.68
+  seconds = 3.00
+
+[sample.engine_medium_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "medium diesel tank engine running steadily, throaty rumble with a mechanical knock, constant revs, no music"
+duration_seconds = 3.0
+prompt_influence = 0.5
+loop = true
+  [[sample.engine_medium_loop.take]]
+  file = "vehicles/engine_medium_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "0XHmTpIWj3roJkA8WMr5"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.10
+  seconds = 3.00
+  [[sample.engine_medium_loop.take]]
+  file = "vehicles/engine_medium_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "kmXoTD67KeI6peIWHqFw"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -7.29
+  seconds = 3.00
+
+[sample.engine_heavy_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "huge heavy tank diesel engine running steadily, deep slow powerful rumble, constant revs, no music"
+duration_seconds = 3.0
+prompt_influence = 0.5
+loop = true
+  [[sample.engine_heavy_loop.take]]
+  file = "vehicles/engine_heavy_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "fRNgWNrxV2RSYritet3D"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -9.59
+  seconds = 3.00
+  [[sample.engine_heavy_loop.take]]
+  file = "vehicles/engine_heavy_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "1bQudT204oD5BsH8gxx4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -9.34
+  seconds = 3.00
+
+[sample.treads_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "steel tank tracks rolling over dirt, rhythmic clanking links and squeaking road wheels, steady, no engine, no music"
+duration_seconds = 2.0
+prompt_influence = 0.5
+loop = true
+  [[sample.treads_loop.take]]
+  file = "vehicles/treads_loop_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "j9Xyzt9c91yxicg1QcjP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -7.47
+  seconds = 2.00
+  [[sample.treads_loop.take]]
+  file = "vehicles/treads_loop_2.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "BTMCtM0d7IgeSQTyWuEH"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.05
+  peak_dbtp = -2.69
+  seconds = 2.00
+
+[sample.ui_click]
+status = "approved"
+bus = "ui"
+prompt = "short clean tactile button click, small mechanical switch, dry, no music"
+duration_seconds = 0.5
+prompt_influence = 0.5
+
+# Planned: weapons.
+  [[sample.ui_click.take]]
+  file = "ui/ui_click_1.ogg"
+  flow = "SgNxbu30VDEi7UIUocBy"
+  generation = "UlhVyRyfAD9tukjvMlNJ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.85
+  peak_dbtp = -1.00
+  seconds = 0.26
+
+[sample.laser_fire]
+status = "approved"
+bus = "weapons"
+prompt = "sci-fi tank laser cannon firing, bright electric zap with a searing hum tail, no music"
+duration_seconds = 0.8
+  [[sample.laser_fire.take]]
+  file = "weapons/laser_fire_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "a30wpQ26tF85WN83eM14"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.00
+  peak_dbtp = -1.12
+  seconds = 0.76
+  [[sample.laser_fire.take]]
+  file = "weapons/laser_fire_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "MPld8wHLjaJxY0XSBLmV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.84
+  peak_dbtp = -1.00
+  seconds = 0.71
+
+[sample.plasma_fire]
+status = "approved"
+bus = "weapons"
+prompt = "plasma cannon firing a glowing bolt, deep electric whump with a crackling hiss, no music"
+duration_seconds = 0.8
+  [[sample.plasma_fire.take]]
+  file = "weapons/plasma_fire_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "A1Ix0jlyl4Us2eRZnQnP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.02
+  peak_dbtp = -1.00
+  seconds = 0.69
+  [[sample.plasma_fire.take]]
+  file = "weapons/plasma_fire_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "EgUoyKMV1hgasvTYJoo9"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.16
+  peak_dbtp = -1.00
+  seconds = 0.73
+
+[sample.missiles_fire]
+status = "approved"
+bus = "weapons"
+prompt = "small guided missile launching from a tube, sharp pop then a rushing rocket whoosh, no music"
+duration_seconds = 1.2
+  [[sample.missiles_fire.take]]
+  file = "weapons/missiles_fire_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "DTSwVJ20gAs6fAChwi2K"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.41
+  peak_dbtp = -1.00
+  seconds = 0.79
+  [[sample.missiles_fire.take]]
+  file = "weapons/missiles_fire_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "EM7XTf0lVch7SGoh20dx"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.95
+  peak_dbtp = -1.00
+  seconds = 0.98
+
+[sample.grenade_launch]
+status = "approved"
+bus = "weapons"
+prompt = "grenade launcher firing, hollow thunk of a launched grenade, metallic action, no music"
+duration_seconds = 0.6
+  [[sample.grenade_launch.take]]
+  file = "weapons/grenade_launch_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ABLFzCL7ifdcz0iGypKM"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.59
+  peak_dbtp = -1.00
+  seconds = 0.38
+  [[sample.grenade_launch.take]]
+  file = "weapons/grenade_launch_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "cqdHcD6Y80KKKiFUfhM2"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.83
+  peak_dbtp = -1.00
+  seconds = 0.28
+
+[sample.flamethrower_loop]
+status = "approved"
+bus = "weapons"
+prompt = "flamethrower spraying a continuous jet of fire, roaring whoosh of burning fuel, steady, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.flamethrower_loop.take]]
+  file = "weapons/flamethrower_loop_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "e1iMLqoo9zEuF1VFCuPF"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.00
+  peak_dbtp = -3.60
+  seconds = 2.00
+  [[sample.flamethrower_loop.take]]
+  file = "weapons/flamethrower_loop_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "fGH05KSU4cWUJJ9GX2sj"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.82
+  peak_dbtp = -1.44
+  seconds = 2.00
+
+[sample.sonic_hammer]
+status = "approved"
+bus = "weapons"
+prompt = "massive sonic blast weapon, deep concussive whomp of compressed air with a ringing shock, no music"
+duration_seconds = 1.5
+  [[sample.sonic_hammer.take]]
+  file = "weapons/sonic_hammer_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "YmNeV0vK03oWXMRHNTwh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.47
+  peak_dbtp = -1.00
+  seconds = 0.85
+  [[sample.sonic_hammer.take]]
+  file = "weapons/sonic_hammer_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "aNgTukOlMunAtxK326bN"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.04
+  peak_dbtp = -1.00
+  seconds = 0.85
+
+[sample.emp_burst]
+status = "approved"
+bus = "weapons"
+prompt = "electromagnetic pulse discharge, rising electric whine then a heavy crackling burst, no music"
+duration_seconds = 1.5
+  [[sample.emp_burst.take]]
+  file = "weapons/emp_burst_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "cH8BFTWw6wPhDo82Wd1X"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.53
+  peak_dbtp = -1.00
+  seconds = 1.28
+  [[sample.emp_burst.take]]
+  file = "weapons/emp_burst_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "TUah1RRns1XrDauWtJm6"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.64
+  peak_dbtp = -1.00
+  seconds = 1.00
+
+[sample.emp_disabled]
+status = "approved"
+bus = "impacts"
+prompt = "electronics shorting out, sputtering sparks and a dying electric buzz, no music"
+duration_seconds = 0.8
+  [[sample.emp_disabled.take]]
+  file = "impacts/emp_disabled_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "AAx25JwvkPR7pGatYuuL"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.39
+  peak_dbtp = -1.00
+  seconds = 0.66
+  [[sample.emp_disabled.take]]
+  file = "impacts/emp_disabled_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "qjViNsBy2276vgiwyeQK"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.21
+  peak_dbtp = -1.00
+  seconds = 0.74
+
+[sample.gauss_fire]
+status = "approved"
+bus = "weapons"
+prompt = "railgun firing, violent electromagnetic crack with a supersonic snap and a metallic ring, no music"
+duration_seconds = 1.2
+  [[sample.gauss_fire.take]]
+  file = "weapons/gauss_fire_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "5sySfknlHl7jMJ9Hy47h"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.10
+  peak_dbtp = -1.00
+  seconds = 1.16
+  [[sample.gauss_fire.take]]
+  file = "weapons/gauss_fire_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "JjtwNXIlQFEACTMx7cIU"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.95
+  peak_dbtp = -1.00
+  seconds = 1.00
+
+# Weapon feedback and warnings: each calibre's cannon, what a weapon does
+# between its shots, reloads, near misses, and the warnings a seat hears.
+
+[sample.cannon_light_near]
+status = "approved"
+bus = "weapons"
+prompt = "light tank cannon firing, sharp snappy crack with a short tight body and a light breech clack, no music, no reverb"
+duration_seconds = 1.0
+  [[sample.cannon_light_near.take]]
+  file = "weapons/cannon_light_near_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "0k1X9Ez3rbXxLX6U4ZdQ"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.98
+  peak_dbtp = -1.00
+  seconds = 0.54
+  [[sample.cannon_light_near.take]]
+  file = "weapons/cannon_light_near_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "wgjUaDtsASSyItyyE07B"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.86
+  peak_dbtp = -1.00
+  seconds = 0.63
+
+[sample.cannon_heavy_near]
+status = "approved"
+bus = "weapons"
+prompt = "heavy tank cannon firing, deep concussive boom with a hard crack and a heavy breech clank, no music, no reverb"
+duration_seconds = 1.4
+  [[sample.cannon_heavy_near.take]]
+  file = "weapons/cannon_heavy_near_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "udtdkGgXFAq8n9d1591c"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -14.87
+  peak_dbtp = -1.21
+  seconds = 0.93
+  [[sample.cannon_heavy_near.take]]
+  file = "weapons/cannon_heavy_near_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "5pWsH5O6g2Fa2RSCu3Ae"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -14.51
+  peak_dbtp = -1.78
+  seconds = 0.97
+
+[sample.cannon_super_near]
+status = "approved"
+bus = "weapons"
+prompt = "super heavy tank main gun firing, enormous thunderous blast with a chest-deep low boom and a massive breech slam, no music, no reverb"
+duration_seconds = 1.8
+  [[sample.cannon_super_near.take]]
+  file = "weapons/cannon_super_near_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "wynfGbzIusncoSLlax5X"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.45
+  peak_dbtp = -1.00
+  seconds = 1.37
+  [[sample.cannon_super_near.take]]
+  file = "weapons/cannon_super_near_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "3MqJRS2FSBS5NipZk0qg"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.12
+  peak_dbtp = -1.00
+  seconds = 1.56
+
+[sample.shell_rack]
+status = "approved"
+bus = "weapons"
+prompt = "tank cannon breech racking a fresh shell, crisp mechanical clack and slide, no music"
+duration_seconds = 0.5
+  [[sample.shell_rack.take]]
+  file = "weapons/shell_rack_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "4bZBK7ebXgCQ0TzwMn7g"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.54
+  peak_dbtp = -1.00
+  seconds = 0.48
+  [[sample.shell_rack.take]]
+  file = "weapons/shell_rack_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "SDv2WstDeFpCVk2ADVUN"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.99
+  peak_dbtp = -1.00
+  seconds = 0.38
+
+[sample.special_empty]
+status = "approved"
+bus = "weapons"
+prompt = "weapon feed running empty, hollow metallic clunk of an empty mechanism, no music"
+duration_seconds = 0.5
+  [[sample.special_empty.take]]
+  file = "weapons/special_empty_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "8kUqa0wygMxhPfHYGVVU"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.82
+  peak_dbtp = -1.00
+  seconds = 0.40
+  [[sample.special_empty.take]]
+  file = "weapons/special_empty_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "5wNpQr3yxxDCkTp4DXtD"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.17
+  peak_dbtp = -1.00
+  seconds = 0.34
+
+[sample.minigun_spin_up]
+status = "approved"
+bus = "weapons"
+prompt = "rotary minigun barrels spinning up from rest, quick rising electric motor whine and mechanical whir, no music"
+duration_seconds = 0.5
+  [[sample.minigun_spin_up.take]]
+  file = "weapons/minigun_spin_up_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "VBbQaUD1SME959jgOswJ"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.42
+  peak_dbtp = -1.00
+  seconds = 0.48
+  [[sample.minigun_spin_up.take]]
+  file = "weapons/minigun_spin_up_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "8QkVBhSOIsvH0bVOSBbQ"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.05
+  peak_dbtp = -1.00
+  seconds = 0.42
+
+[sample.missile_motor_loop]
+status = "approved"
+bus = "weapons"
+prompt = "small rocket motor burning in flight, roaring exhaust hiss with a rough rumble, steady, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.missile_motor_loop.take]]
+  file = "weapons/missile_motor_loop_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "N434EszFCaBlnTngMFxu"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.00
+  peak_dbtp = -2.54
+  seconds = 2.00
+  [[sample.missile_motor_loop.take]]
+  file = "weapons/missile_motor_loop_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "jKpCMbbfUYmBge7kJDgN"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.04
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.flame_valve]
+status = "approved"
+bus = "weapons"
+prompt = "flamethrower trigger released, sharp metallic valve snap and a short dying gasp of gas, no music"
+duration_seconds = 0.5
+  [[sample.flame_valve.take]]
+  file = "weapons/flame_valve_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "WPWDDGOfd64pTBkOnEkj"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.90
+  peak_dbtp = -1.00
+  seconds = 0.43
+  [[sample.flame_valve.take]]
+  file = "weapons/flame_valve_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "cp1BTAHyi0QlG768XQZ4"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.11
+  peak_dbtp = -1.48
+  seconds = 0.47
+
+[sample.flame_sputter]
+status = "approved"
+bus = "weapons"
+prompt = "flamethrower running out of fuel, sputtering coughs of flame and a fading gas hiss, no music"
+duration_seconds = 1.0
+  [[sample.flame_sputter.take]]
+  file = "weapons/flame_sputter_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "RIFsxIN5BEMZowoZWoMH"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -14.90
+  peak_dbtp = -2.20
+  seconds = 1.00
+  [[sample.flame_sputter.take]]
+  file = "weapons/flame_sputter_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "oltS4Mk7u3wEKcsV1Keg"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -14.78
+  peak_dbtp = -2.79
+  seconds = 1.00
+
+[sample.offline_static_loop]
+status = "approved"
+bus = "weapons"
+prompt = "shorted electronics crackling, electrical static with sputtering snaps and a low buzz, steady, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.offline_static_loop.take]]
+  file = "weapons/offline_static_loop_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "qI3HbCWMUhuaAEvTMbH3"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.01
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.offline_static_loop.take]]
+  file = "weapons/offline_static_loop_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "EC139s88QB4AzSFwfDZd"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.37
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.gauss_ready_ping]
+status = "approved"
+bus = "weapons"
+prompt = "railgun fully charged, crisp high electronic lock-on ping with a short ring, no music"
+duration_seconds = 0.5
+  [[sample.gauss_ready_ping.take]]
+  file = "weapons/gauss_ready_ping_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "8VDxdjpUcoR7ObCEC2uh"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.81
+  peak_dbtp = -1.00
+  seconds = 0.43
+  [[sample.gauss_ready_ping.take]]
+  file = "weapons/gauss_ready_ping_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "R68L8cdq6Zw3kFgitBbN"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.24
+  peak_dbtp = -1.00
+  seconds = 0.32
+
+[sample.rod_uplink_loop]
+status = "approved"
+bus = "weapons"
+prompt = "satellite uplink carrier tone, soft electronic hum with faint digital chirps, steady, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.rod_uplink_loop.take]]
+  file = "weapons/rod_uplink_loop_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "NJhnDF4WQiJn7QlA8i1d"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -13.10
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.rod_uplink_loop.take]]
+  file = "weapons/rod_uplink_loop_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "eUgqWJr3yawsUHq3wh7t"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -14.62
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.rod_cancel]
+status = "approved"
+bus = "weapons"
+prompt = "targeting uplink aborted, short descending two-note electronic blip, no music"
+duration_seconds = 0.5
+  [[sample.rod_cancel.take]]
+  file = "weapons/rod_cancel_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "E9LwnzhWGC9szvqQFnhg"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.00
+  peak_dbtp = -1.39
+  seconds = 0.24
+  [[sample.rod_cancel.take]]
+  file = "weapons/rod_cancel_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "v2leRqwckvQgTXClwrGc"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.00
+  peak_dbtp = -4.43
+  seconds = 0.27
+
+[sample.fpv_dive_loop]
+status = "approved"
+bus = "weapons"
+prompt = "small racing drone diving at full throttle, screaming high-pitched rotor whine, steady, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.fpv_dive_loop.take]]
+  file = "weapons/fpv_dive_loop_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "gzmYF6Y417KFfpNYvbvN"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.00
+  peak_dbtp = -2.92
+  seconds = 2.00
+  [[sample.fpv_dive_loop.take]]
+  file = "weapons/fpv_dive_loop_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "ggbvioHsPIQbKUfLxr6e"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.01
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.lock_beep]
+status = "approved"
+bus = "warnings"
+prompt = "single urgent electronic target-lock beep, short high square-wave tone, no music"
+duration_seconds = 0.5
+  [[sample.lock_beep.take]]
+  file = "warnings/lock_beep_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "dkeUB1FrEB1XPa4tgFsZ"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.00
+  peak_dbtp = -6.50
+  seconds = 0.14
+
+[sample.drone_lock_loop]
+status = "approved"
+bus = "warnings"
+prompt = "thin high electronic warning tone, pure whine with a faint pulse, steady, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.drone_lock_loop.take]]
+  file = "warnings/drone_lock_loop_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "O2KcNEfIO2Dwm25HdKu0"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.00
+  peak_dbtp = -6.25
+  seconds = 2.00
+
+[sample.kill_confirm]
+status = "approved"
+bus = "ui"
+prompt = "short rewarding confirmation sting for a destroyed enemy, bright metallic double chime over a soft low thump, no music"
+duration_seconds = 0.6
+  [[sample.kill_confirm.take]]
+  file = "ui/kill_confirm_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "AIJAGQTOfE7NXhTsnZI8"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -4.67
+  seconds = 0.44
+
+[sample.pickup_energy]
+status = "approved"
+bus = "ui"
+prompt = "energy weapon armed, capacitor charging with a quick rising electric whine and a lock click, no music"
+duration_seconds = 0.7
+  [[sample.pickup_energy.take]]
+  file = "ui/pickup_energy_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "me1bAeSUrTQ8Jz2v6DUD"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -4.35
+  seconds = 0.56
+
+[sample.pickup_fuel]
+status = "approved"
+bus = "ui"
+prompt = "flamethrower fuel tank fitted, heavy liquid slosh and a valve clunk, no music"
+duration_seconds = 0.6
+  [[sample.pickup_fuel.take]]
+  file = "ui/pickup_fuel_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "V0FfYZmr92e5zlwVY91A"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -22.96
+  peak_dbtp = -8.73
+  seconds = 0.50
+
+[sample.pickup_field]
+status = "approved"
+bus = "ui"
+prompt = "exotic field weapon armed, deep resonant hum swelling with a heavy latch, no music"
+duration_seconds = 0.7
+  [[sample.pickup_field.take]]
+  file = "ui/pickup_field_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "iBviLUyXd2k0XiaoHCOO"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -19.70
+  peak_dbtp = -1.79
+  seconds = 0.37
+
+[sample.flyby_plasma]
+status = "approved"
+bus = "impacts"
+prompt = "plasma bolt flying past close by, crackling electric whoosh with a buzzing hum, no music"
+duration_seconds = 0.6
+  [[sample.flyby_plasma.take]]
+  file = "impacts/flyby_plasma_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "hZYBeNnVYLDWxjjRKawL"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.81
+  peak_dbtp = -3.58
+  seconds = 0.49
+  [[sample.flyby_plasma.take]]
+  file = "impacts/flyby_plasma_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "1kNbfRxMzvKFoKai1drB"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.00
+  peak_dbtp = -3.85
+  seconds = 0.54
+
+[sample.flyby_rail]
+status = "approved"
+bus = "impacts"
+prompt = "railgun slug tearing past close by, violent supersonic crack and electric sizzle, no music"
+duration_seconds = 0.6
+  [[sample.flyby_rail.take]]
+  file = "impacts/flyby_rail_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "9LV7hPScM9KsMWMMy6VH"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.93
+  peak_dbtp = -1.00
+  seconds = 0.53
+  [[sample.flyby_rail.take]]
+  file = "impacts/flyby_rail_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "wvUkl6862zl6ePCz3ZI2"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.02
+  peak_dbtp = -1.00
+  seconds = 0.60
+
+[sample.flyby_laser]
+status = "approved"
+bus = "impacts"
+prompt = "laser beam searing past close by, sharp electric zap and crackling hiss, no music"
+duration_seconds = 0.5
+  [[sample.flyby_laser.take]]
+  file = "impacts/flyby_laser_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "OYf05ZevRc1jUkqVXL9h"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.91
+  peak_dbtp = -1.00
+  seconds = 0.45
+  [[sample.flyby_laser.take]]
+  file = "impacts/flyby_laser_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "R0996SbsEj6PwzHzHqTA"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.48
+  peak_dbtp = -1.00
+  seconds = 0.42
+
+[sample.gauss_charge_loop]
+status = "approved"
+bus = "weapons"
+prompt = "railgun capacitor charging, steady rising electric whine and hum, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.gauss_charge_loop.take]]
+  file = "weapons/gauss_charge_loop_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "uB0tI8skIKJRHwU91Pa6"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.51
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.gauss_charge_loop.take]]
+  file = "weapons/gauss_charge_loop_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "LnpqGYUJch6syeu4jAUA"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.67
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.gauss_vent]
+status = "approved"
+bus = "weapons"
+prompt = "high pressure steam and electric discharge venting from a weapon, hissing sputter, no music"
+duration_seconds = 1.0
+  [[sample.gauss_vent.take]]
+  file = "weapons/gauss_vent_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "2BEUhPhwknBlUgpe6XTY"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.15
+  peak_dbtp = -1.00
+  seconds = 0.91
+  [[sample.gauss_vent.take]]
+  file = "weapons/gauss_vent_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "jg8uP92aiacfXlGnr8SO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.62
+  peak_dbtp = -1.00
+  seconds = 0.91
+
+[sample.drone_launch]
+status = "approved"
+bus = "weapons"
+prompt = "small quadcopter drones launching, rising buzz of tiny rotors and a release clack, no music"
+duration_seconds = 1.0
+  [[sample.drone_launch.take]]
+  file = "weapons/drone_launch_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "zW90U8I3PGPsPRXAq0qG"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.63
+  peak_dbtp = -1.00
+  seconds = 0.98
+  [[sample.drone_launch.take]]
+  file = "weapons/drone_launch_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "BZ4kkrWjheL6idybJZ1T"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.19
+  peak_dbtp = -1.00
+  seconds = 0.96
+
+[sample.drone_burst]
+status = "approved"
+bus = "explosions"
+prompt = "small drone exploding, sharp crack of a light charge and plastic debris, no music"
+duration_seconds = 1.0
+  [[sample.drone_burst.take]]
+  file = "explosions/drone_burst_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "AtRzhAdeQkf0pYErf98M"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.23
+  peak_dbtp = -1.00
+  seconds = 0.56
+  [[sample.drone_burst.take]]
+  file = "explosions/drone_burst_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "5DtShtUAv8idtz98aNbe"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.31
+  peak_dbtp = -1.00
+  seconds = 0.40
+
+[sample.drone_downed]
+status = "approved"
+bus = "impacts"
+prompt = "small drone shot down, rotor sputter and a plastic crunch, no music"
+duration_seconds = 0.8
+  [[sample.drone_downed.take]]
+  file = "impacts/drone_downed_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "CJqWNOoF5wUrRahJ9CFX"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.62
+  peak_dbtp = -1.00
+  seconds = 0.65
+  [[sample.drone_downed.take]]
+  file = "impacts/drone_downed_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "2kU69mzRMBPma3lsvrG7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.62
+  peak_dbtp = -1.07
+  seconds = 0.66
+
+[sample.rod_call]
+status = "approved"
+bus = "warnings"
+prompt = "orbital strike designator locking on, rising electronic tone with a radio blip, no music"
+duration_seconds = 1.2
+  [[sample.rod_call.take]]
+  file = "warnings/rod_call_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "tmZ95YPXmXriEckV9BmD"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.65
+  peak_dbtp = -5.38
+  seconds = 0.63
+
+[sample.rod_incoming]
+status = "approved"
+bus = "warnings"
+prompt = "incoming projectile falling from the sky, descending shrill whistle growing louder, no music"
+duration_seconds = 3.0
+  [[sample.rod_incoming.take]]
+  file = "warnings/rod_incoming_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "jI9bycICutte5nmrfawC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.00
+  peak_dbtp = -9.08
+  seconds = 3.00
+
+[sample.rod_impact]
+status = "approved"
+bus = "explosions"
+prompt = "huge kinetic orbital impact, earth shaking boom, crushing crack and rumbling debris, no music"
+duration_seconds = 3.5
+  [[sample.rod_impact.take]]
+  file = "explosions/rod_impact_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "tIroNWQc7InlKtU64XNU"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.06
+  peak_dbtp = -1.00
+  seconds = 3.03
+  [[sample.rod_impact.take]]
+  file = "explosions/rod_impact_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "VaxdLgGgT1nsy1EQqZ6X"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.03
+  peak_dbtp = -1.00
+  seconds = 2.71
+
+[sample.well_fire]
+status = "approved"
+bus = "weapons"
+prompt = "dark energy orb launching, low warping whoosh with a subsonic hum, no music"
+duration_seconds = 1.0
+  [[sample.well_fire.take]]
+  file = "weapons/well_fire_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "iIviJA0mk3IvTagBMWzG"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.13
+  peak_dbtp = -1.00
+  seconds = 0.85
+  [[sample.well_fire.take]]
+  file = "weapons/well_fire_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "VsPHJzwDTCuT6wU10e9D"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.90
+  peak_dbtp = -3.88
+  seconds = 0.93
+
+[sample.well_anchor]
+status = "approved"
+bus = "weapons"
+prompt = "gravity well forming, deep pulling hum that bends and warbles, sucking air, no music"
+duration_seconds = 2.0
+  [[sample.well_anchor.take]]
+  file = "weapons/well_anchor_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "kgzeRgplcF450BpGBepb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.58
+  peak_dbtp = -1.00
+  seconds = 1.16
+  [[sample.well_anchor.take]]
+  file = "weapons/well_anchor_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "FnhNjinYRpf2wwYmVN88"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.86
+  peak_dbtp = -1.00
+  seconds = 1.06
+
+[sample.well_collapse]
+status = "approved"
+bus = "explosions"
+prompt = "gravity well collapsing, imploding whomp then a reversed boom, no music"
+duration_seconds = 1.5
+  [[sample.well_collapse.take]]
+  file = "explosions/well_collapse_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "LxxMUwTcgVyD4McfWGA9"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.50
+  peak_dbtp = -1.00
+  seconds = 1.01
+  [[sample.well_collapse.take]]
+  file = "explosions/well_collapse_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "C5bKRDvxtGZp4z4UrZ1t"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.00
+  peak_dbtp = -1.72
+  seconds = 0.29
+
+[sample.missile_dud]
+status = "approved"
+bus = "impacts"
+prompt = "dud missile clanking to the ground without exploding, metallic thud and fizzle, no music"
+duration_seconds = 0.8
+
+# Planned: impacts.
+  [[sample.missile_dud.take]]
+  file = "impacts/missile_dud_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "ksaEvIrKl9Y8WHSdMPQX"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.89
+  peak_dbtp = -1.00
+  seconds = 0.73
+  [[sample.missile_dud.take]]
+  file = "impacts/missile_dud_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "le2sHzrrD1cEuahfiFH4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.47
+  peak_dbtp = -1.00
+  seconds = 0.69
+
+[sample.hit_shell_wood]
+status = "approved"
+bus = "impacts"
+prompt = "shell smashing through a wooden wall, splintering crack of planks, no music, no reverb"
+duration_seconds = 0.8
+  [[sample.hit_shell_wood.take]]
+  file = "impacts/hit_shell_wood_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "63x0Vs7EWfGZ7VfUmKR4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.42
+  peak_dbtp = -1.00
+  seconds = 0.74
+  [[sample.hit_shell_wood.take]]
+  file = "impacts/hit_shell_wood_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "On5ZU8t4IGuvZu25homS"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.77
+  peak_dbtp = -1.00
+  seconds = 0.49
+
+[sample.hit_glass]
+status = "approved"
+bus = "impacts"
+prompt = "thick glass pane shattering from a hit, bright crash and tinkling shards, no music"
+duration_seconds = 1.0
+  [[sample.hit_glass.take]]
+  file = "impacts/hit_glass_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "LKtHrvwgNAYBG2ZB3Oux"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.31
+  peak_dbtp = -1.00
+  seconds = 0.83
+  [[sample.hit_glass.take]]
+  file = "impacts/hit_glass_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "zQlmgCa0MEoAaZrcQllP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.20
+  peak_dbtp = -1.00
+  seconds = 0.79
+
+[sample.hit_earth]
+status = "approved"
+bus = "impacts"
+prompt = "shell thudding into sandbags, dull heavy thump and pouring sand, no music"
+duration_seconds = 0.7
+  [[sample.hit_earth.take]]
+  file = "impacts/hit_earth_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ZLscOkLh7OUCoTztz30F"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.12
+  peak_dbtp = -1.00
+  seconds = 0.41
+  [[sample.hit_earth.take]]
+  file = "impacts/hit_earth_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "nT6aV07n6ywogugX5NIb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.25
+  peak_dbtp = -1.00
+  seconds = 0.40
+
+[sample.hit_foliage]
+status = "approved"
+bus = "impacts"
+prompt = "shell ripping through a tree, cracking branches and rustling leaves, no music"
+duration_seconds = 0.8
+  [[sample.hit_foliage.take]]
+  file = "impacts/hit_foliage_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "dCgt34XDLCxot02HRhZm"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.62
+  peak_dbtp = -1.00
+  seconds = 0.59
+  [[sample.hit_foliage.take]]
+  file = "impacts/hit_foliage_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "Orutz7tYMZJzrPtbHYqu"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.63
+  peak_dbtp = -1.00
+  seconds = 0.65
+
+[sample.hit_bullet_metal]
+status = "approved"
+bus = "impacts"
+prompt = "bullets pinging off steel armour, sharp metallic ping, no music"
+duration_seconds = 0.5
+  [[sample.hit_bullet_metal.take]]
+  file = "impacts/hit_bullet_metal_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "C3PClurWZw0UnRPUXo44"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.43
+  peak_dbtp = -1.00
+  seconds = 0.38
+  [[sample.hit_bullet_metal.take]]
+  file = "impacts/hit_bullet_metal_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "kjLzk7R1pswLED495n5k"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.63
+  peak_dbtp = -1.00
+  seconds = 0.38
+
+[sample.hit_bullet_masonry]
+status = "approved"
+bus = "impacts"
+prompt = "bullet striking a stone wall, short crack and chip of stone, no music"
+duration_seconds = 0.5
+  [[sample.hit_bullet_masonry.take]]
+  file = "impacts/hit_bullet_masonry_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "RITmh0nnz78fQJhVju5W"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.20
+  peak_dbtp = -1.00
+  seconds = 0.35
+  [[sample.hit_bullet_masonry.take]]
+  file = "impacts/hit_bullet_masonry_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "xswE1mogDoBPMIXjP7Gu"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.06
+  peak_dbtp = -1.00
+  seconds = 0.38
+
+[sample.hit_energy]
+status = "approved"
+bus = "impacts"
+prompt = "energy bolt striking metal, sizzling electric splash and hiss, no music"
+duration_seconds = 0.6
+  [[sample.hit_energy.take]]
+  file = "impacts/hit_energy_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "U6lHDCFh2T93luT5DWBg"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.81
+  peak_dbtp = -3.13
+  seconds = 0.54
+  [[sample.hit_energy.take]]
+  file = "impacts/hit_energy_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "BP9PmsbhQ5SiXPD1LsW3"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.00
+  peak_dbtp = -3.51
+  seconds = 0.51
+
+[sample.hit_flame]
+status = "approved"
+bus = "impacts"
+prompt = "flames licking against metal, short fiery whoosh and sizzle, no music"
+duration_seconds = 0.6
+  [[sample.hit_flame.take]]
+  file = "impacts/hit_flame_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "rpj99kdMQoFrLVtrVpcV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.00
+  peak_dbtp = -2.54
+  seconds = 0.48
+  [[sample.hit_flame.take]]
+  file = "impacts/hit_flame_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "PvyUwtSUe2RDikVSiLnr"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.71
+  peak_dbtp = -1.76
+  seconds = 0.50
+
+[sample.shield_hit]
+status = "approved"
+bus = "impacts"
+prompt = "energy shield taking a hit, deep resonant force field bwong with a shimmering electric hum, no music"
+duration_seconds = 0.8
+  [[sample.shield_hit.take]]
+  file = "impacts/shield_hit_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "a8oe0IzPELEeCJd6VEij"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.04
+  peak_dbtp = -1.00
+  seconds = 0.64
+  [[sample.shield_hit.take]]
+  file = "impacts/shield_hit_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "k5hvjLcYuoEPhWpwffjA"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.94
+  peak_dbtp = -1.00
+  seconds = 0.73
+
+[sample.hit_sonic_hull]
+status = "approved"
+bus = "impacts"
+prompt = "pressure wave slamming into a steel tank hull, hollow booming thud like a struck steel drum, short metal ring, no music"
+duration_seconds = 0.8
+  [[sample.hit_sonic_hull.take]]
+  file = "impacts/hit_sonic_hull_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "BobfhhYzKEYbiFU92jZy"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.78
+  peak_dbtp = -1.00
+  seconds = 0.54
+  [[sample.hit_sonic_hull.take]]
+  file = "impacts/hit_sonic_hull_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "l4OF1YNspXpVq9LxnQy8"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.96
+  peak_dbtp = -1.00
+  seconds = 0.61
+
+[sample.ricochet_shell]
+status = "approved"
+bus = "impacts"
+prompt = "heavy tank shell glancing off thick iron plate, loud ringing clang and a howling whine flying away, no music"
+duration_seconds = 1.2
+  [[sample.ricochet_shell.take]]
+  file = "impacts/ricochet_shell_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "f5fQ6uY32MZ9JCzvn5N1"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.40
+  peak_dbtp = -1.00
+  seconds = 0.96
+  [[sample.ricochet_shell.take]]
+  file = "impacts/ricochet_shell_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "gZv5AqJ550tguk52XJ4T"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.38
+  peak_dbtp = -1.00
+  seconds = 1.01
+
+[sample.ricochet_whine_loop]
+status = "approved"
+bus = "impacts"
+prompt = "spinning projectile tumbling through the air, steady wavering high whine and whistle, no impact, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.ricochet_whine_loop.take]]
+  file = "impacts/ricochet_whine_loop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "82UOhMuvRCoxNMuhHdGo"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.00
+  peak_dbtp = -3.78
+  seconds = 2.00
+  [[sample.ricochet_whine_loop.take]]
+  file = "impacts/ricochet_whine_loop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "FXXElxzePJ7ReZcNtSyG"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.00
+  peak_dbtp = -4.26
+  seconds = 2.00
+
+[sample.hit_hull_inside]
+status = "approved"
+bus = "impacts"
+prompt = "heard from inside a steel tank as a shell strikes the outside of the hull, deep muffled bell-like clang ringing through the cabin, no music"
+duration_seconds = 1.0
+  [[sample.hit_hull_inside.take]]
+  file = "impacts/hit_hull_inside_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "7G3bsMQMlO8D6Ldykz0M"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -19.59
+  peak_dbtp = -1.00
+  seconds = 0.88
+  [[sample.hit_hull_inside.take]]
+  file = "impacts/hit_hull_inside_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "a97KVrURpVqHfcB6x1OV"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -19.54
+  peak_dbtp = -1.00
+  seconds = 0.77
+
+[sample.bong_death]
+status = "approved"
+bus = "voice"
+prompt = "small cute creature defeated, sad squeaky wail that sputters out into a soft pop, no words, no music"
+duration_seconds = 1.2
+  [[sample.bong_death.take]]
+  file = "voice/bong_death_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "1mPxtiS7HrWhSZLTDFIa"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.00
+  peak_dbtp = -8.59
+  seconds = 1.08
+  [[sample.bong_death.take]]
+  file = "voice/bong_death_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "IoNYpomEK9Zg0hcaQEZj"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.96
+  peak_dbtp = -8.53
+  seconds = 1.03
+
+[sample.dry_fire]
+status = "approved"
+bus = "weapons"
+prompt = "empty tank cannon breech clicking on nothing, dull heavy mechanical clack of a firing pin with no shot, no music"
+duration_seconds = 0.5
+  [[sample.dry_fire.take]]
+  file = "weapons/dry_fire_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "wZTDtTEd0opCHNsLgY1T"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.46
+  peak_dbtp = -1.00
+  seconds = 0.42
+  [[sample.dry_fire.take]]
+  file = "weapons/dry_fire_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "JEHzFZXStCcBA0u9O5aa"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.36
+  peak_dbtp = -1.00
+  seconds = 0.37
+
+[sample.hit_drone]
+status = "approved"
+bus = "impacts"
+prompt = "bullet clipping a small plastic quadcopter drone in flight, sharp plastic crack and a stuttering rotor blip, no music"
+duration_seconds = 0.5
+  [[sample.hit_drone.take]]
+  file = "impacts/hit_drone_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "rh6rksK8fSBlopZRsReY"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.21
+  peak_dbtp = -1.00
+  seconds = 0.28
+  [[sample.hit_drone.take]]
+  file = "impacts/hit_drone_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "v7ur99F8SXDk8FPt7Vp5"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.02
+  peak_dbtp = -1.00
+  seconds = 0.23
+
+[sample.ricochet]
+status = "approved"
+bus = "impacts"
+prompt = "bullet ricochet off steel, sharp whining zing that flies away, no music"
+duration_seconds = 0.6
+  [[sample.ricochet.take]]
+  file = "impacts/ricochet_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "c14wDVVC6hGEGyYyonv7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.25
+  peak_dbtp = -1.00
+  seconds = 0.48
+  [[sample.ricochet.take]]
+  file = "impacts/ricochet_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "lMmEwZpPT7RRnhI5wjHF"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.68
+  peak_dbtp = -1.00
+  seconds = 0.60
+
+[sample.shield_break]
+status = "approved"
+bus = "impacts"
+prompt = "energy shield shattering, crystalline crack and a collapsing electric hum, no music"
+duration_seconds = 1.0
+  [[sample.shield_break.take]]
+  file = "impacts/shield_break_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "EZG3UfRm0V5HErgIKSoU"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.11
+  peak_dbtp = -1.61
+  seconds = 0.90
+  [[sample.shield_break.take]]
+  file = "impacts/shield_break_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "NO3qLHD2nP7sq8exmQV8"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.95
+  peak_dbtp = -2.68
+  seconds = 0.94
+
+[sample.shells_collide]
+status = "approved"
+bus = "impacts"
+prompt = "two shells colliding in mid air, sharp metallic clang and a small burst, no music"
+duration_seconds = 0.7
+
+# Planned: explosions.
+  [[sample.shells_collide.take]]
+  file = "impacts/shells_collide_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "vukAn16JfFI2NR5mvdtl"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.24
+  peak_dbtp = -1.00
+  seconds = 0.31
+  [[sample.shells_collide.take]]
+  file = "impacts/shells_collide_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "zFVXyIsxzqNfNXbrG9kB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.97
+  peak_dbtp = -1.00
+  seconds = 0.27
+
+[sample.blast_fuel]
+status = "approved"
+bus = "explosions"
+prompt = "fuel tank exploding, big fiery roaring fireball, burning debris, no music"
+duration_seconds = 2.5
+  [[sample.blast_fuel.take]]
+  file = "explosions/blast_fuel_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "PpvEkElLRbsp9FxVXeRN"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.24
+  peak_dbtp = -1.00
+  seconds = 2.16
+  [[sample.blast_fuel.take]]
+  file = "explosions/blast_fuel_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "OS06fF6XM2B8gexhGacY"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.12
+  peak_dbtp = -1.00
+  seconds = 2.11
+
+[sample.blast_small]
+status = "approved"
+bus = "explosions"
+prompt = "small missile explosion, sharp punchy blast with a short crackle, no music"
+duration_seconds = 1.2
+  [[sample.blast_small.take]]
+  file = "explosions/blast_small_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ZSBXWjAUyweaBngG8JvC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.98
+  peak_dbtp = -1.00
+  seconds = 1.10
+  [[sample.blast_small.take]]
+  file = "explosions/blast_small_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "BNW9EhhVgH5ZBthSN9HB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.35
+  peak_dbtp = -1.00
+  seconds = 0.95
+
+[sample.blast_grenade]
+status = "approved"
+bus = "explosions"
+prompt = "grenade explosion, sharp crack, dirt and shrapnel spray, no music"
+duration_seconds = 1.5
+  [[sample.blast_grenade.take]]
+  file = "explosions/blast_grenade_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "9rNveXrk3W41gKr6amBp"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.85
+  peak_dbtp = -1.00
+  seconds = 1.11
+  [[sample.blast_grenade.take]]
+  file = "explosions/blast_grenade_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "g6SEC7ReWkjLzmJOWOYP"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.70
+  peak_dbtp = -1.00
+  seconds = 0.97
+
+[sample.lava_bomb]
+status = "approved"
+bus = "explosions"
+prompt = "molten lava bomb hitting the ground, heavy splat and sizzling burst, no music"
+duration_seconds = 1.5
+  [[sample.lava_bomb.take]]
+  file = "explosions/lava_bomb_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "FRC8LbhiDhznbVh17PWJ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.30
+  peak_dbtp = -1.00
+  seconds = 1.27
+  [[sample.lava_bomb.take]]
+  file = "explosions/lava_bomb_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ewzIvSRrnpgESSm8F4o7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.61
+  peak_dbtp = -1.00
+  seconds = 1.15
+
+[sample.drum_launch]
+status = "approved"
+bus = "explosions"
+prompt = "steel drum blown into the air, hollow metallic clang and whoosh, no music"
+duration_seconds = 1.0
+  [[sample.drum_launch.take]]
+  file = "explosions/drum_launch_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "wvlG4RfIgXLHIgej8R5d"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.27
+  peak_dbtp = -1.00
+  seconds = 0.65
+  [[sample.drum_launch.take]]
+  file = "explosions/drum_launch_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "1qfaiL7nkoFb15uGVfYr"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.46
+  peak_dbtp = -1.00
+  seconds = 0.85
+
+[sample.cookoff]
+status = "approved"
+bus = "explosions"
+prompt = "ammunition cooking off inside a burning vehicle, rapid popping and crackling bursts, no music"
+duration_seconds = 2.0
+  [[sample.cookoff.take]]
+  file = "explosions/cookoff_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "EI1G6774070hWuI2Cnzw"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.11
+  peak_dbtp = -1.00
+  seconds = 1.63
+  [[sample.cookoff.take]]
+  file = "explosions/cookoff_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "nvhiVZSyOWI8efY3rkY4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.58
+  peak_dbtp = -1.00
+  seconds = 1.50
+
+[sample.air_bomb]
+status = "approved"
+bus = "explosions"
+prompt = "aircraft bomb detonating, massive deep blast, ground shaking, no music"
+duration_seconds = 2.5
+
+# Planned: vehicles.
+  [[sample.air_bomb.take]]
+  file = "explosions/air_bomb_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "vKgHc5KeXWir8CXyLDlO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -14.93
+  peak_dbtp = -1.00
+  seconds = 2.10
+  [[sample.air_bomb.take]]
+  file = "explosions/air_bomb_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "blMPyrA4GKLTbcfzKUNz"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.56
+  peak_dbtp = -1.00
+  seconds = 1.97
+
+[sample.engine_twin_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "two huge diesel engines running together in a super heavy tank, deep layered growl, constant revs, no music"
+duration_seconds = 3.0
+loop = true
+  [[sample.engine_twin_loop.take]]
+  file = "vehicles/engine_twin_loop_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "hyP8Az2QA6uKuZmvDSlm"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.28
+  seconds = 3.00
+  [[sample.engine_twin_loop.take]]
+  file = "vehicles/engine_twin_loop_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "AtFd9QK5USEEFrRErGnL"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.49
+  seconds = 3.00
+
+[sample.ground_lava_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy steel tank tracks wading through thick molten lava, slow viscous gloop and heavy sucking blorps, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.ground_lava_loop.take]]
+  file = "vehicles/ground_lava_loop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "3xUzj8cJbi4doISXl7iK"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.67
+  peak_dbtp = -1.98
+  seconds = 2.00
+  [[sample.ground_lava_loop.take]]
+  file = "vehicles/ground_lava_loop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "y6ZPhtiFgougv14lQSEr"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.39
+  peak_dbtp = -1.18
+  seconds = 2.00
+
+[sample.lava_sizzle_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "steel armour standing in molten lava, loud steady hissing sizzle with crackling spits of burning paint, no music"
+duration_seconds = 3.0
+loop = true
+  [[sample.lava_sizzle_loop.take]]
+  file = "vehicles/lava_sizzle_loop_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "IXdv9eYmIDd8FtDQ1U0Q"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -21.56
+  peak_dbtp = -1.00
+  seconds = 3.00
+  [[sample.lava_sizzle_loop.take]]
+  file = "vehicles/lava_sizzle_loop_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "WrAcoZagZwjsljWv7UtA"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.16
+  peak_dbtp = -1.00
+  seconds = 3.00
+
+[sample.ground_mud_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy tank tracks churning through thick wet mud, sucking squelch and wet slaps, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.ground_mud_loop.take]]
+  file = "vehicles/ground_mud_loop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "l6fv5BeOmqrrx0o2DRE5"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -19.84
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.ground_mud_loop.take]]
+  file = "vehicles/ground_mud_loop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "nHEeYHcfasAmPiyv0aaB"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.56
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.ground_snow_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy tank tracks rolling over packed snow, steady crisp squeaking crunch, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.ground_snow_loop.take]]
+  file = "vehicles/ground_snow_loop_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "SQkzglKz8Dja2UjKI35m"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -6.57
+  seconds = 2.00
+  [[sample.ground_snow_loop.take]]
+  file = "vehicles/ground_snow_loop_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "mGbHcMJYLIs4gNRLySQk"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -6.08
+  seconds = 2.00
+
+[sample.rubble_crunch_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy steel tracks rolling over broken bricks and rubble, crunching masonry and clattering stones, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.rubble_crunch_loop.take]]
+  file = "vehicles/rubble_crunch_loop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "xgzk9jswnzIum9e8EPPi"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -22.95
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.rubble_crunch_loop.take]]
+  file = "vehicles/rubble_crunch_loop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "sZFtxcu4CujBw9SJ2CWv"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -21.00
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.track_pivot_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "steel tank tracks pivoting in place, links scrubbing sideways over dirt with a grinding squeal, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.track_pivot_loop.take]]
+  file = "vehicles/track_pivot_loop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "ATEHZX8jTeeAztNR7b0Q"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -21.76
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.track_pivot_loop.take]]
+  file = "vehicles/track_pivot_loop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "DaGPcgqWFjfjGXWSRqoH"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.69
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.track_slip_ice_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "steel tank tracks spinning and sliding on ice, high scraping screech and an icy hiss, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.track_slip_ice_loop.take]]
+  file = "vehicles/track_slip_ice_loop_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "AFMIVNVCsadXUUfLsuiW"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.28
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.track_slip_ice_loop.take]]
+  file = "vehicles/track_slip_ice_loop_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "xl4mcdwfGRQVCnz5vxZ4"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -2.91
+  seconds = 2.00
+
+[sample.track_slip_mud_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "steel tank tracks spinning in deep mud, slushy whirr and flung wet slaps, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.track_slip_mud_loop.take]]
+  file = "vehicles/track_slip_mud_loop_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "uPSBfCGsig3pAIHRP5L4"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -15.62
+  peak_dbtp = -3.25
+  seconds = 2.00
+  [[sample.track_slip_mud_loop.take]]
+  file = "vehicles/track_slip_mud_loop_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "lWXsxHmwcTYdchjiCayu"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.13
+  peak_dbtp = -1.59
+  seconds = 2.00
+
+[sample.skid_turf_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy steel tank sliding sideways across a grass field, tearing turf and ripping roots, steady, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.skid_turf_loop.take]]
+  file = "vehicles/skid_turf_loop_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "qSOmmf6qZTCPihTF2bgm"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.13
+  peak_dbtp = -1.38
+  seconds = 2.00
+  [[sample.skid_turf_loop.take]]
+  file = "vehicles/skid_turf_loop_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "mRBXzA9O5H3KBgdC0rql"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -16.71
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.splash_in]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy tank plunging into a shallow river, big slosh and a heavy splash of displaced water, no engine, no music"
+duration_seconds = 1.2
+  [[sample.splash_in.take]]
+  file = "vehicles/splash_in_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "IiXyLdyqs97x2DItAgOw"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.87
+  peak_dbtp = -1.00
+  seconds = 1.15
+  [[sample.splash_in.take]]
+  file = "vehicles/splash_in_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "MWvc6SWqDT7eUbdzvcU1"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.87
+  peak_dbtp = -3.48
+  seconds = 1.08
+
+[sample.splash_out]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy tank climbing out of a river onto the bank, water pouring and streaming off its tracks and hull, no engine, no music"
+duration_seconds = 1.5
+  [[sample.splash_out.take]]
+  file = "vehicles/splash_out_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "Ru77Rt54LDyuyrYTOxRU"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.44
+  peak_dbtp = -1.00
+  seconds = 1.11
+  [[sample.splash_out.take]]
+  file = "vehicles/splash_out_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "VOWYmbTFySYPc7FLZiuD"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -19.72
+  peak_dbtp = -2.83
+  seconds = 1.08
+
+[sample.drip_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "water dripping off a wet steel vehicle onto dirt, irregular drips and small trickles, steady, no engine, no music"
+duration_seconds = 3.0
+loop = true
+  [[sample.drip_loop.take]]
+  file = "vehicles/drip_loop_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "IiS5t2RiSdIMGHU1vFGb"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.35
+  peak_dbtp = -1.00
+  seconds = 3.00
+  [[sample.drip_loop.take]]
+  file = "vehicles/drip_loop_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "d0RX5c1mXQgnu7nEFUXM"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.32
+  peak_dbtp = -1.00
+  seconds = 3.00
+
+[sample.steam_hiss]
+status = "approved"
+bus = "world"
+prompt = "red hot metal plunged into water, violent steam hiss and a short bubbling boil, no music"
+duration_seconds = 1.5
+  [[sample.steam_hiss.take]]
+  file = "world/steam_hiss_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "oWiDR30CperIWmTScIPy"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -22.97
+  peak_dbtp = -7.89
+  seconds = 0.96
+  [[sample.steam_hiss.take]]
+  file = "world/steam_hiss_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "8kjfhVRkwmPVFgjWvFRG"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -22.88
+  peak_dbtp = -4.40
+  seconds = 1.30
+
+[sample.water_geyser]
+status = "approved"
+bus = "explosions"
+prompt = "explosion in shallow water, heavy geyser slap of water thrown up then a rain of droplets splashing down, no music"
+duration_seconds = 2.0
+  [[sample.water_geyser.take]]
+  file = "explosions/water_geyser_1.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "6cXSUxouTKPewFYGtR6f"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -18.18
+  peak_dbtp = -1.00
+  seconds = 1.74
+  [[sample.water_geyser.take]]
+  file = "explosions/water_geyser_2.ogg"
+  flow = "SVHiZqQIAUEaCvjOwPpO"
+  generation = "ND54RiowaPzjeTvWZ5QD"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.58
+  peak_dbtp = -1.00
+  seconds = 1.82
+
+[sample.water_plop]
+status = "approved"
+bus = "impacts"
+prompt = "heavy metal object dropping into shallow water, deep plunk and a fizzling bubble, no music"
+duration_seconds = 0.8
+  [[sample.water_plop.take]]
+  file = "impacts/water_plop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "RlcI14JnryvsJsBSAktX"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.95
+  peak_dbtp = -1.00
+  seconds = 0.46
+  [[sample.water_plop.take]]
+  file = "impacts/water_plop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "MM04lAeopSKvVG7PIbPb"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -17.34
+  peak_dbtp = -1.00
+  seconds = 0.52
+
+[sample.grenade_bounce]
+status = "approved"
+bus = "impacts"
+prompt = "small heavy metal grenade landing on hard ground, dull metallic clunk and a short skitter, no music"
+duration_seconds = 0.5
+  [[sample.grenade_bounce.take]]
+  file = "impacts/grenade_bounce_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "0xu0DCk1bnZ6oMimUzhl"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.78
+  peak_dbtp = -1.00
+  seconds = 0.42
+  [[sample.grenade_bounce.take]]
+  file = "impacts/grenade_bounce_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "qosaHVxbLPGI6sJr4APg"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -20.10
+  peak_dbtp = -1.00
+  seconds = 0.37
+
+[sample.bong_splash]
+status = "approved"
+bus = "impacts"
+prompt = "small rubbery cartoon creature landing in a puddle, comic bloop and a bright little splash, no music"
+duration_seconds = 0.8
+  [[sample.bong_splash.take]]
+  file = "impacts/bong_splash_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "ujHABxD7tNaAkYtt3rfS"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -21.12
+  peak_dbtp = -1.00
+  seconds = 0.55
+  [[sample.bong_splash.take]]
+  file = "impacts/bong_splash_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "EiKhbmoAYdJP5ykilaj8"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -21.05
+  peak_dbtp = -1.00
+  seconds = 0.46
+
+[sample.grass_trample]
+status = "approved"
+bus = "world"
+prompt = "tall grass and reeds pressed flat under a heavy tank, crunchy rustle and a sweeping swish of stalks going down, no music"
+duration_seconds = 0.8
+  [[sample.grass_trample.take]]
+  file = "world/grass_trample_1.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "Tr92zK6XVLwcZZYMDGPi"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -21.43
+  peak_dbtp = -4.49
+  seconds = 0.58
+  [[sample.grass_trample.take]]
+  file = "world/grass_trample_2.ogg"
+  flow = "ItawTA03ScBOuKU6mNbO"
+  generation = "uyhbjDYI15xxQs3slUiU"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.40
+  peak_dbtp = -6.01
+  seconds = 0.45
+
+[sample.water_lap_loop]
+status = "approved"
+bus = "world"
+prompt = "small waves lapping gently against a muddy lake shore, soft slaps and trickles, steady, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.water_lap_loop.take]]
+  file = "world/water_lap_loop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "ZLzoixbwKaIZjCAPDHED"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -1.28
+  seconds = 4.00
+  [[sample.water_lap_loop.take]]
+  file = "world/water_lap_loop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "kIMymTYqolUHDXX8Rkcx"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.98
+  peak_dbtp = -2.55
+  seconds = 4.00
+
+[sample.stream_babble_loop]
+status = "approved"
+bus = "world"
+prompt = "shallow stream babbling over stones, steady bright trickling and gurgling, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.stream_babble_loop.take]]
+  file = "world/stream_babble_loop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "gYa0p8vudokL7ihL8Qxf"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -3.93
+  seconds = 4.00
+  [[sample.stream_babble_loop.take]]
+  file = "world/stream_babble_loop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "awDsYZRLi5k7Ba6i7JIU"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -3.67
+  seconds = 4.00
+
+[sample.ice_creak_loop]
+status = "approved"
+bus = "world"
+prompt = "frozen lake at rest, sparse faint deep creaks of ice under a low cold hush, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.ice_creak_loop.take]]
+  file = "world/ice_creak_loop_1.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "Ad16lfYc5LlPLNGYbaiU"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -26.73
+  peak_dbtp = -1.00
+  seconds = 4.00
+  [[sample.ice_creak_loop.take]]
+  file = "world/ice_creak_loop_2.ogg"
+  flow = "LBqWHgJ7nBQ5yVMGLsZZ"
+  generation = "GBK55enuWsHjPTkjIpGW"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.01
+  peak_dbtp = -1.00
+  seconds = 4.00
+
+[sample.ground_grass_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy tracks rolling through grass, steady swishing and soft crunching, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.ground_grass_loop.take]]
+  file = "vehicles/ground_grass_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "CdpH2Q8GpIdo7WD7Z0oI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -1.13
+  seconds = 2.00
+  [[sample.ground_grass_loop.take]]
+  file = "vehicles/ground_grass_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "O5ZbLUx3SwoVOWCnWb23"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.08
+  peak_dbtp = -1.00
+  seconds = 1.96
+
+[sample.ground_sand_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy tracks churning through dry sand, steady hissing grind, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.ground_sand_loop.take]]
+  file = "vehicles/ground_sand_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "gugo5QVnbiUu7ndrKHXV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -2.76
+  seconds = 2.00
+  [[sample.ground_sand_loop.take]]
+  file = "vehicles/ground_sand_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "mwwnFsgqnic8CGvGD4jX"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -1.10
+  seconds = 2.00
+
+[sample.ground_water_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy vehicle driving through shallow water, continuous splashing and sloshing, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.ground_water_loop.take]]
+  file = "vehicles/ground_water_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "7TVHBavccaQ4RCcptuXw"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.07
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.ground_water_loop.take]]
+  file = "vehicles/ground_water_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "z9ybwECGvbVaDFGK3fnc"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -3.42
+  seconds = 2.00
+
+[sample.ground_ice_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "heavy tracks grinding over ice, steady crunching and cracking, no engine, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.ground_ice_loop.take]]
+  file = "vehicles/ground_ice_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "JJdWAz64L1bdZbsw11qM"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.26
+  peak_dbtp = -1.00
+  seconds = 2.00
+  [[sample.ground_ice_loop.take]]
+  file = "vehicles/ground_ice_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "wzA2PgykwDS2jLFfOObf"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.78
+  peak_dbtp = -1.00
+  seconds = 2.00
+
+[sample.slam]
+status = "approved"
+bus = "impacts"
+prompt = "heavy tank slamming into a wall, deep crunching metal impact, no music"
+duration_seconds = 1.0
+  [[sample.slam.take]]
+  file = "impacts/slam_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "k6GeLz3w2WEqM0NDVeHo"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.78
+  peak_dbtp = -1.00
+  seconds = 1.00
+  [[sample.slam.take]]
+  file = "impacts/slam_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "wv6XSlrmxA3uXzVDq0Pf"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.48
+  peak_dbtp = -1.00
+  seconds = 0.97
+
+[sample.slam_glass]
+status = "approved"
+bus = "impacts"
+prompt = "heavy steel vehicle bumping into a thick glass window, sharp glassy crack and rattle, no music"
+duration_seconds = 1.0
+  [[sample.slam_glass.take]]
+  file = "impacts/slam_glass_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "2e6oAcC5GXELOio9ObWF"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.36
+  peak_dbtp = -1.00
+  seconds = 0.70
+  [[sample.slam_glass.take]]
+  file = "impacts/slam_glass_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "Fj3i1hETOhNiLRPPxwID"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.65
+  peak_dbtp = -1.00
+  seconds = 0.72
+
+[sample.slam_wood]
+status = "approved"
+bus = "impacts"
+prompt = "heavy steel vehicle ramming a thick timber wall, deep wooden thud and creak, no music"
+duration_seconds = 1.0
+  [[sample.slam_wood.take]]
+  file = "impacts/slam_wood_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "vcs34dUaEza5ZLV2whyi"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.48
+  peak_dbtp = -1.00
+  seconds = 0.56
+  [[sample.slam_wood.take]]
+  file = "impacts/slam_wood_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "dMpqQPnITdORUjkPjnun"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.04
+  peak_dbtp = -1.00
+  seconds = 0.63
+
+[sample.slam_tree]
+status = "approved"
+bus = "impacts"
+prompt = "heavy vehicle bumping a young tree, trunk creaking and leaves shaking and rustling, no music"
+duration_seconds = 1.5
+  [[sample.slam_tree.take]]
+  file = "impacts/slam_tree_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "qHPpDbRu6jMIQ8QWpsN1"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.73
+  peak_dbtp = -1.00
+  seconds = 0.97
+  [[sample.slam_tree.take]]
+  file = "impacts/slam_tree_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "NWbUgqx3QDooDQWN2bE4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.86
+  peak_dbtp = -1.03
+  seconds = 0.83
+
+[sample.slam_soft]
+status = "approved"
+bus = "impacts"
+prompt = "heavy steel vehicle pushing into sandbags and hay bales, dull soft thump with gritty rustle, no music"
+duration_seconds = 0.8
+  [[sample.slam_soft.take]]
+  file = "impacts/slam_soft_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "7HSUHtcT15D8RTS0Sv4W"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.95
+  peak_dbtp = -1.00
+  seconds = 0.61
+  [[sample.slam_soft.take]]
+  file = "impacts/slam_soft_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "Yx5BAEkjBf77hC3JCc1P"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.14
+  peak_dbtp = -1.00
+  seconds = 0.60
+
+[sample.slam_rubber]
+status = "approved"
+bus = "impacts"
+prompt = "heavy vehicle bouncing off a stack of old rubber tyres, springy rubber boing and thump, no music"
+duration_seconds = 1.0
+  [[sample.slam_rubber.take]]
+  file = "impacts/slam_rubber_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "l4OBjqOb1jOFNaqWHJgY"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.57
+  peak_dbtp = -1.00
+  seconds = 0.81
+  [[sample.slam_rubber.take]]
+  file = "impacts/slam_rubber_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "I7h16lIwqQKuHP0eFe3v"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.97
+  peak_dbtp = -1.00
+  seconds = 0.71
+
+[sample.hit_rubber]
+status = "approved"
+bus = "impacts"
+prompt = "bullet and small shell striking a stack of rubber tyres, dull rubbery thwack, no music"
+duration_seconds = 0.6
+  [[sample.hit_rubber.take]]
+  file = "impacts/hit_rubber_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "fyxTlsTNjMicfVdMRqqQ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.54
+  peak_dbtp = -2.76
+  seconds = 0.31
+  [[sample.hit_rubber.take]]
+  file = "impacts/hit_rubber_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "zcl3QxgBymAiRb6WsJkq"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.61
+  peak_dbtp = -2.61
+  seconds = 0.60
+
+[sample.destroy_rubber]
+status = "approved"
+bus = "impacts"
+prompt = "stack of rubber tyres blown apart and tumbling down, rubbery thumps and bounces, no music"
+duration_seconds = 1.5
+  [[sample.destroy_rubber.take]]
+  file = "impacts/destroy_rubber_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "yu34eB8MKjGoNst8IucI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.51
+  peak_dbtp = -1.00
+  seconds = 0.33
+  [[sample.destroy_rubber.take]]
+  file = "impacts/destroy_rubber_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "rhIa0JaPwko443brtkxw"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.06
+  peak_dbtp = -1.00
+  seconds = 0.20
+
+[sample.crate_land]
+status = "approved"
+bus = "impacts"
+prompt = "small wooden supply crate thrown through the air landing on dirt, short hollow wooden thump, no music"
+duration_seconds = 0.6
+  [[sample.crate_land.take]]
+  file = "impacts/crate_land_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "9wKefD1cgJWOEWI6OWBz"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.45
+  peak_dbtp = -1.00
+  seconds = 0.38
+  [[sample.crate_land.take]]
+  file = "impacts/crate_land_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "uRryBzoqxYbU6Z6agM3c"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.05
+  peak_dbtp = -1.00
+  seconds = 0.40
+
+[sample.scrape_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "steel hull scraping along a stone wall, continuous grinding screech, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.scrape_loop.take]]
+  file = "vehicles/scrape_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "V32jiv4h2QFXc742QUz0"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -5.03
+  seconds = 2.00
+  [[sample.scrape_loop.take]]
+  file = "vehicles/scrape_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "Uh9dxqWq0sXMzzbuF8Uk"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -4.66
+  seconds = 2.00
+
+[sample.ram]
+status = "approved"
+bus = "impacts"
+prompt = "two heavy tanks ramming each other, huge clanging metal crash, no music"
+duration_seconds = 1.0
+
+# Planned: pickups, the bong, towers, the world.
+  [[sample.ram.take]]
+  file = "impacts/ram_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "2RkXAYECl4R0ppq9CEWX"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.94
+  peak_dbtp = -1.00
+  seconds = 0.97
+  [[sample.ram.take]]
+  file = "impacts/ram_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "S2NHhpOUUXHDZcF5qmFK"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.46
+  peak_dbtp = -1.00
+  seconds = 0.79
+
+[sample.pickup_weapon]
+status = "approved"
+bus = "ui"
+prompt = "picking up a weapon crate, solid mechanical cha-chunk of a gun being loaded, no music"
+duration_seconds = 0.6
+  [[sample.pickup_weapon.take]]
+  file = "ui/pickup_weapon_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "mlUjrmTdm2AAdbVTmY9y"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.81
+  peak_dbtp = -5.36
+  seconds = 0.55
+
+[sample.pickup_health]
+status = "approved"
+bus = "ui"
+prompt = "health pickup, warm rising chime with a soft mechanical click, no music"
+duration_seconds = 0.6
+  [[sample.pickup_health.take]]
+  file = "ui/pickup_health_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "V9YUEXPEIPjB5qEezwJj"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.88
+  peak_dbtp = -7.42
+  seconds = 0.40
+
+[sample.pickup_ammo]
+status = "approved"
+bus = "ui"
+prompt = "ammunition box picked up, rattle of shells and a latch snap, no music"
+duration_seconds = 0.5
+  [[sample.pickup_ammo.take]]
+  file = "ui/pickup_ammo_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "FVLlOclAP9UVeltmlRGT"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.20
+  peak_dbtp = -4.51
+  seconds = 0.45
+
+[sample.pickup_boost]
+status = "approved"
+bus = "ui"
+prompt = "power-up activating, short rising electric whoosh, no music"
+duration_seconds = 0.6
+  [[sample.pickup_boost.take]]
+  file = "ui/pickup_boost_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "23akbeQiHz2Z08JpbkNS"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -6.01
+  seconds = 0.50
+
+[sample.crate_break]
+status = "approved"
+bus = "impacts"
+prompt = "wooden supply crate smashed open, splintering crack and scattering contents, no music"
+duration_seconds = 0.8
+  [[sample.crate_break.take]]
+  file = "impacts/crate_break_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "g7F3D9vvLjQrUwgP8yU7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.06
+  peak_dbtp = -1.00
+  seconds = 0.50
+  [[sample.crate_break.take]]
+  file = "impacts/crate_break_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "CJ3NRV2shKge3OkJzHEi"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.04
+  peak_dbtp = -1.00
+  seconds = 0.59
+
+[sample.crate_drop]
+status = "approved"
+bus = "world"
+prompt = "supply crate landing on the ground from a parachute, heavy wooden thud, no music"
+duration_seconds = 0.7
+  [[sample.crate_drop.take]]
+  file = "world/crate_drop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "hMz8CMZBU0Qj9PdIP1Qr"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.99
+  peak_dbtp = -9.03
+  seconds = 0.57
+  [[sample.crate_drop.take]]
+  file = "world/crate_drop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "LP40updbUEak2N0bG8D1"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.98
+  peak_dbtp = -7.01
+  seconds = 0.55
+
+[sample.bong_bite]
+status = "approved"
+bus = "voice"
+prompt = "small cute creature biting, snappy chomp with a squeaky growl, no music"
+duration_seconds = 0.5
+  [[sample.bong_bite.take]]
+  file = "voice/bong_bite_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "fBBSeOfAjikll3pjEHEA"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.22
+  peak_dbtp = -1.25
+  seconds = 0.32
+  [[sample.bong_bite.take]]
+  file = "voice/bong_bite_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "ZI7HBxST7J7Tug0SPan0"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.54
+  peak_dbtp = -1.00
+  seconds = 0.39
+
+[sample.bong_heal]
+status = "approved"
+bus = "voice"
+prompt = "small cute creature healed, happy sparkling chime and a coo, no music"
+duration_seconds = 0.8
+  [[sample.bong_heal.take]]
+  file = "voice/bong_heal_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "MMVu6ahsKyaRa1RKMc8s"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.00
+  peak_dbtp = -5.53
+  seconds = 0.50
+  [[sample.bong_heal.take]]
+  file = "voice/bong_heal_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "yZXgGuKhsod9HOP6uzKq"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.67
+  peak_dbtp = -4.35
+  seconds = 0.66
+
+[sample.bong_babble]
+status = "approved"
+bus = "voice"
+prompt = "cute small creature babbling gibberish, playful chirpy nonsense syllables, no words, no music"
+duration_seconds = 2.0
+  [[sample.bong_babble.take]]
+  file = "voice/bong_babble_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "5EpwAiKFJqaPrxPcmCnR"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.45
+  peak_dbtp = -1.00
+  seconds = 1.85
+  [[sample.bong_babble.take]]
+  file = "voice/bong_babble_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "iGkLcpKPxQAb1IJRFrY6"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.00
+  peak_dbtp = -1.69
+  seconds = 1.62
+
+[sample.tesla_strike]
+status = "approved"
+bus = "weapons"
+prompt = "tesla coil lightning strike, violent electric crackle and zap, no music"
+duration_seconds = 0.8
+  [[sample.tesla_strike.take]]
+  file = "weapons/tesla_strike_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "qnADnvMljl3rj6oopxqO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.45
+  peak_dbtp = -1.00
+  seconds = 0.64
+  [[sample.tesla_strike.take]]
+  file = "weapons/tesla_strike_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "B7Y0YHuve1D2fvj3ktb7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.02
+  peak_dbtp = -1.00
+  seconds = 0.75
+
+[sample.tesla_charge_loop]
+status = "approved"
+bus = "world"
+prompt = "tesla coil charging, steady rising electric buzz and crackle, no music"
+duration_seconds = 2.0
+loop = true
+  [[sample.tesla_charge_loop.take]]
+  file = "world/tesla_charge_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "538ub1uuja1CA5clJLNW"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.98
+  seconds = 1.96
+  [[sample.tesla_charge_loop.take]]
+  file = "world/tesla_charge_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "47ms6acDs3vhoEbfKVhS"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -8.58
+  seconds = 1.96
+
+[sample.gun_tower_fire]
+status = "approved"
+bus = "weapons"
+prompt = "automatic gun turret firing a short burst, rapid mechanical bangs, no music"
+duration_seconds = 0.8
+  [[sample.gun_tower_fire.take]]
+  file = "weapons/gun_tower_fire_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "YhZomjTa9kuoUL9KTt1E"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.07
+  peak_dbtp = -1.31
+  seconds = 0.80
+  [[sample.gun_tower_fire.take]]
+  file = "weapons/gun_tower_fire_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "BwXcEgFt1vIHxFt5VFuV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.13
+  peak_dbtp = -1.00
+  seconds = 0.80
+
+[sample.bio_fire]
+status = "approved"
+bus = "weapons"
+prompt = "slime cannon firing a glob, wet gloopy launch, no music"
+duration_seconds = 0.6
+  [[sample.bio_fire.take]]
+  file = "weapons/bio_fire_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "fExOg1347N33HzYesp2g"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.69
+  peak_dbtp = -1.00
+  seconds = 0.52
+  [[sample.bio_fire.take]]
+  file = "weapons/bio_fire_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "GfEn9VobJ9bkWVx5ABMh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.55
+  peak_dbtp = -1.00
+  seconds = 0.59
+
+[sample.bio_splash]
+status = "approved"
+bus = "impacts"
+prompt = "glob of thick slime splattering on the ground, wet splat and bubbling, no music"
+duration_seconds = 0.6
+  [[sample.bio_splash.take]]
+  file = "impacts/bio_splash_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "5dxzV7cP7JhnDWNenlUN"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.23
+  peak_dbtp = -1.00
+  seconds = 0.48
+  [[sample.bio_splash.take]]
+  file = "impacts/bio_splash_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "7V2EwFuFfnNwqyuKGy8C"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.81
+  peak_dbtp = -1.00
+  seconds = 0.38
+
+[sample.fire_loop]
+status = "approved"
+bus = "world"
+prompt = "large fire burning steadily outdoors, crackling and roaring flames, no music"
+duration_seconds = 3.0
+loop = true
+  [[sample.fire_loop.take]]
+  file = "world/fire_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "sPN2CooDMQ4AZWGuIA9f"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -8.31
+  seconds = 3.00
+  [[sample.fire_loop.take]]
+  file = "world/fire_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "2YEbf7Npt9UlvqkZ0zQL"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.58
+  peak_dbtp = -1.00
+  seconds = 3.00
+
+[sample.fire_ignite]
+status = "approved"
+bus = "world"
+prompt = "fire catching quickly, sudden whoosh of igniting flames, no music"
+duration_seconds = 0.8
+  [[sample.fire_ignite.take]]
+  file = "world/fire_ignite_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "RyfwFNwfniybyDkgMFHn"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.16
+  peak_dbtp = -9.47
+  seconds = 0.65
+  [[sample.fire_ignite.take]]
+  file = "world/fire_ignite_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "8FflaYf2rC30fKAMumc7"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.90
+  peak_dbtp = -7.69
+  seconds = 0.56
+
+[sample.fuse]
+status = "approved"
+bus = "world"
+prompt = "burning fuse fizzing and sparking, steady hiss, no music"
+duration_seconds = 1.5
+loop = true
+  [[sample.fuse.take]]
+  file = "world/fuse_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "jCnmPOv2rFHNIbyhLq5i"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -3.47
+  seconds = 1.48
+  [[sample.fuse.take]]
+  file = "world/fuse_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "eaHrfQE7dc5W6tMQbvZC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.20
+  peak_dbtp = -1.00
+  seconds = 1.48
+
+[sample.rain_loop]
+status = "approved"
+bus = "world"
+prompt = "steady heavy rain falling on open ground, constant downpour, no thunder, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.rain_loop.take]]
+  file = "world/rain_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "bnalxAPjYholCuTQNlEI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -7.23
+  seconds = 4.00
+  [[sample.rain_loop.take]]
+  file = "world/rain_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "Cr6ysd69biyoxQiYg1Me"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.50
+  seconds = 4.00
+
+[sample.wind_loop]
+status = "approved"
+bus = "world"
+prompt = "strong gusty wind blowing sand across a desert, steady howl and hiss, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.wind_loop.take]]
+  file = "world/wind_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "DihOeCDEMX0FqLqZxb8J"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -6.48
+  seconds = 4.00
+  [[sample.wind_loop.take]]
+  file = "world/wind_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "8vw93Hpylnv9KgbgZmlM"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.99
+  peak_dbtp = -5.61
+  seconds = 4.00
+
+[sample.night_loop]
+status = "approved"
+bus = "world"
+prompt = "quiet night in the countryside, crickets chirping, gentle breeze, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.night_loop.take]]
+  file = "world/night_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "88yDAkQEtlaM4wavNoXI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -28.65
+  peak_dbtp = -1.00
+  seconds = 4.00
+  [[sample.night_loop.take]]
+  file = "world/night_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "ToAsJU5RwnBk3jXuHcQJ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.13
+  seconds = 4.00
+
+# The field's creatures (docs/field-life.md; the crows, ducks and
+# fireflies watchers, audio::life).
+
+[sample.crow_caw]
+status = "approved"
+bus = "world"
+prompt = "a single crow on open farmland cawing two or three times, hoarse natural caws with short pauses, outdoors, no music"
+duration_seconds = 2.0
+  [[sample.crow_caw.take]]
+  file = "world/crow_caw_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "agRJnDIAzHp7nT8oezGF"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.03
+  peak_dbtp = -9.19
+  seconds = 1.78
+  [[sample.crow_caw.take]]
+  file = "world/crow_caw_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "98OfKZYfGkJsc2KgXMUu"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.18
+  peak_dbtp = -9.57
+  seconds = 1.47
+
+[sample.crow_flush_wings]
+status = "approved"
+bus = "world"
+prompt = "a small flock of crows bursting up off a field, a sudden flurry of heavy wing flaps rushing away, no music"
+duration_seconds = 1.5
+  [[sample.crow_flush_wings.take]]
+  file = "world/crow_flush_wings_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "UFj0RwjHvKU0CXaQVuys"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.12
+  peak_dbtp = -4.67
+  seconds = 1.30
+  [[sample.crow_flush_wings.take]]
+  file = "world/crow_flush_wings_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "YAaOQUNWlXnF0evnMO5P"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.11
+  peak_dbtp = -11.33
+  seconds = 1.19
+
+[sample.crow_alarm]
+status = "approved"
+bus = "world"
+prompt = "several startled crows taking flight, harsh overlapping alarm caws, agitated, no music"
+duration_seconds = 1.5
+  [[sample.crow_alarm.take]]
+  file = "world/crow_alarm_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "9b5sChLQpfB4cMnVB24g"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.12
+  peak_dbtp = -6.90
+  seconds = 1.48
+  [[sample.crow_alarm.take]]
+  file = "world/crow_alarm_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "H6LCqEcm4RMGTDtx9gNg"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.65
+  peak_dbtp = -9.56
+  seconds = 1.48
+
+[sample.crow_caw_far]
+status = "approved"
+bus = "world"
+prompt = "a crow cawing as it flies away overhead, two caws fading into the distance, outdoors, no music"
+duration_seconds = 2.5
+  [[sample.crow_caw_far.take]]
+  file = "world/crow_caw_far_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "kbXUoyPjsCnEh3gMoC0y"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.86
+  peak_dbtp = -8.99
+  seconds = 2.23
+  [[sample.crow_caw_far.take]]
+  file = "world/crow_caw_far_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "iyP7rWnfxP0jPeSyRde5"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.74
+  peak_dbtp = -8.60
+  seconds = 2.30
+
+[sample.duck_quack]
+status = "approved"
+bus = "world"
+prompt = "a mallard duck on a calm pond, a few soft contented quacks and low chuckles, no music"
+duration_seconds = 2.0
+  [[sample.duck_quack.take]]
+  file = "world/duck_quack_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "gPxLMy97PVqIqt6qmv8k"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.33
+  peak_dbtp = -8.15
+  seconds = 1.68
+  [[sample.duck_quack.take]]
+  file = "world/duck_quack_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "5n0Cf5WmEmGizTjsPoBN"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.78
+  peak_dbtp = -8.19
+  seconds = 1.75
+
+[sample.duck_dabble]
+status = "approved"
+bus = "world"
+prompt = "a duck dipping its head into still pond water, a small soft splash and gentle paddling ripples, no music"
+duration_seconds = 1.0
+  [[sample.duck_dabble.take]]
+  file = "world/duck_dabble_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "QF6Sjr8PV1rEzx7JEFZ1"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.65
+  peak_dbtp = -1.00
+  seconds = 0.83
+  [[sample.duck_dabble.take]]
+  file = "world/duck_dabble_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "7pejUiTfSIaGBjMXRcJr"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.52
+  peak_dbtp = -1.87
+  seconds = 0.72
+
+[sample.duck_takeoff]
+status = "approved"
+bus = "world"
+prompt = "mallard ducks taking off from a pond, a splashing run across the water and loud whistling wing beats, no music"
+duration_seconds = 2.0
+  [[sample.duck_takeoff.take]]
+  file = "world/duck_takeoff_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "kVid2ly8nJthS13lLNpC"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.77
+  peak_dbtp = -5.06
+  seconds = 1.75
+  [[sample.duck_takeoff.take]]
+  file = "world/duck_takeoff_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "ZC48wFGznQLoRg2tU16o"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -26.63
+  peak_dbtp = -1.00
+  seconds = 1.74
+
+[sample.duck_alarm]
+status = "approved"
+bus = "world"
+prompt = "startled mallard ducks quacking loudly in alarm as they flee, no music"
+duration_seconds = 1.5
+  [[sample.duck_alarm.take]]
+  file = "world/duck_alarm_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "WONj0Y5ezMocZ27ucRHF"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -23.96
+  peak_dbtp = -7.12
+  seconds = 1.48
+  [[sample.duck_alarm.take]]
+  file = "world/duck_alarm_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "bVxpa5Rhr1ci68y4GorX"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.26
+  peak_dbtp = -6.53
+  seconds = 1.48
+
+[sample.duck_land]
+status = "approved"
+bus = "world"
+prompt = "a duck landing on a pond, a short skidding splash-down and a settling ripple, no music"
+duration_seconds = 1.0
+  [[sample.duck_land.take]]
+  file = "world/duck_land_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "DlEgOWkFGnQ2Gu2l1uq8"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.83
+  peak_dbtp = -1.00
+  seconds = 1.00
+  [[sample.duck_land.take]]
+  file = "world/duck_land_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "VxNH0sGpTvfcNRoCzGad"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -25.36
+  peak_dbtp = -1.00
+  seconds = 0.98
+
+[sample.firefly_loop]
+status = "approved"
+bus = "world"
+prompt = "a warm summer night, a very faint delicate shimmer of tiny soft twinkles over a high airy hum, sparse and even, no melody, no music"
+# Generated without the style prefix: "close-mic, dry, punchy" fights a faint
+# night shimmer.
+duration_seconds = 8.0
+prompt_influence = 0.35
+loop = true
+  [[sample.firefly_loop.take]]
+  file = "world/firefly_loop_1.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "GADdA671NVIx6SGjHYwh"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -10.29
+  seconds = 8.00
+  [[sample.firefly_loop.take]]
+  file = "world/firefly_loop_2.ogg"
+  flow = "WErd50iG3vc79J7GEq16"
+  generation = "9ZLlAXRSllPBw19vM4Y6"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -8.74
+  seconds = 8.00
+
+[sample.thunder]
+status = "approved"
+bus = "world"
+prompt = "distant thunder clap rolling across the sky, deep rumble, no music"
+duration_seconds = 3.5
+  [[sample.thunder.take]]
+  file = "world/thunder_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "iXcErSb0aLNiIPiQAYHW"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -26.37
+  peak_dbtp = -1.63
+  seconds = 3.39
+  [[sample.thunder.take]]
+  file = "world/thunder_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "XY7SKbhHTEovv0U8n7Jq"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.49
+  peak_dbtp = -5.88
+  seconds = 3.07
+
+[sample.bed_grass_loop]
+status = "approved"
+bus = "world"
+prompt = "open green meadow ambience, light wind in grass, distant birds, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.bed_grass_loop.take]]
+  file = "world/bed_grass_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "jJ7Bq5eLmvatVyJL5s8N"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.50
+  seconds = 4.00
+  [[sample.bed_grass_loop.take]]
+  file = "world/bed_grass_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "egHlXsK4lgpaCYZbWuaC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.47
+  seconds = 4.00
+
+[sample.bed_desert_loop]
+status = "approved"
+bus = "world"
+prompt = "empty desert ambience, dry wind, faint shifting sand, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.bed_desert_loop.take]]
+  file = "world/bed_desert_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "uvaPmhLAN8qnvXTa7CfW"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -7.43
+  seconds = 4.00
+  [[sample.bed_desert_loop.take]]
+  file = "world/bed_desert_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "nma0Z95O06bD1JudXXiR"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.61
+  peak_dbtp = -1.00
+  seconds = 4.00
+
+[sample.bed_valley_loop]
+status = "approved"
+bus = "world"
+prompt = "river valley ambience, flowing water of a mill race, birds, light wind, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.bed_valley_loop.take]]
+  file = "world/bed_valley_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "xw1bBWGGXwTlGIQ9g1Yj"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.56
+  seconds = 4.00
+  [[sample.bed_valley_loop.take]]
+  file = "world/bed_valley_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "ZUADeODizNtgpxH04JRV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -9.83
+  seconds = 4.00
+
+[sample.bed_floodplain_loop]
+status = "approved"
+bus = "world"
+prompt = "marshy floodplain ambience, frogs croaking, still water, insects, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.bed_floodplain_loop.take]]
+  file = "world/bed_floodplain_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "xBg46xyG3oIgyMMqXLwh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -4.70
+  seconds = 4.00
+  [[sample.bed_floodplain_loop.take]]
+  file = "world/bed_floodplain_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "MrQ8VM4jhHPnj4QSMKlB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.66
+  peak_dbtp = -1.00
+  seconds = 4.00
+
+[sample.bed_karst_loop]
+status = "approved"
+bus = "world"
+prompt = "rocky karst plateau ambience, wind whistling over limestone, sparse birds, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.bed_karst_loop.take]]
+  file = "world/bed_karst_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "qsKkVhBtwB1KaosyM5bv"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -10.50
+  seconds = 4.00
+  [[sample.bed_karst_loop.take]]
+  file = "world/bed_karst_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "YYx2Kqom2CGsv8sPjoyo"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -7.44
+  seconds = 4.00
+
+[sample.volcano_rumble_loop]
+status = "approved"
+bus = "world"
+prompt = "volcano rumbling, deep continuous earth rumble with hissing vents, no music"
+duration_seconds = 4.0
+loop = true
+  [[sample.volcano_rumble_loop.take]]
+  file = "world/volcano_rumble_loop_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "NsHZotiR4P7vU472jDSG"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.24
+  peak_dbtp = -10.12
+  seconds = 4.00
+  [[sample.volcano_rumble_loop.take]]
+  file = "world/volcano_rumble_loop_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "Bhbxy9a1cFkHaRYmPRQz"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.19
+  peak_dbtp = -9.51
+  seconds = 4.00
+
+[sample.lava_whistle]
+status = "approved"
+bus = "world"
+prompt = "lava bomb flying through the air, falling whoosh and crackle, no music"
+duration_seconds = 1.2
+  [[sample.lava_whistle.take]]
+  file = "world/lava_whistle_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "Dw2nyu8Yttpku7FZZQal"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.70
+  peak_dbtp = -5.41
+  seconds = 1.19
+  [[sample.lava_whistle.take]]
+  file = "world/lava_whistle_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "4IbgshfyZC6XJWm9vNmC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.22
+  peak_dbtp = -6.66
+  seconds = 1.06
+
+[sample.portal_hum_loop]
+status = "approved"
+bus = "world"
+prompt = "sci-fi teleport portal humming, steady warbling energy drone, no music"
+duration_seconds = 3.0
+loop = true
+  [[sample.portal_hum_loop.take]]
+  file = "world/portal_hum_loop_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "vjee2YTWm0LIp7orLAIk"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -24.00
+  peak_dbtp = -12.22
+  seconds = 3.00
+  [[sample.portal_hum_loop.take]]
+  file = "world/portal_hum_loop_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "3PLr6BEtaphxnCIVeQa1"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.99
+  peak_dbtp = -10.58
+  seconds = 3.00
+
+[sample.portal_teleport]
+status = "approved"
+bus = "world"
+prompt = "teleporter whoosh, swirling energy zap with a quick swoosh, no music"
+duration_seconds = 0.8
+  [[sample.portal_teleport.take]]
+  file = "world/portal_teleport_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "PIAaSR0pJWYKbLZxW7CZ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.70
+  peak_dbtp = -8.64
+  seconds = 0.60
+  [[sample.portal_teleport.take]]
+  file = "world/portal_teleport_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "b90BEBB7qdU9XUXKo31r"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.52
+  peak_dbtp = -7.70
+  seconds = 0.64
+
+[sample.door_open]
+status = "approved"
+bus = "world"
+prompt = "heavy metal gate sliding open, grinding steel and a clunk, no music"
+duration_seconds = 1.2
+  [[sample.door_open.take]]
+  file = "world/door_open_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "zbi66PgOgAPt2EvJafvz"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.99
+  peak_dbtp = -7.06
+  seconds = 1.00
+  [[sample.door_open.take]]
+  file = "world/door_open_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "S11MFk8C9MmiNHrjF17l"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.79
+  peak_dbtp = -6.28
+  seconds = 0.96
+
+[sample.lantern]
+status = "approved"
+bus = "world"
+prompt = "glass lantern breaking, small crash of glass and a fizzling flame, no music"
+duration_seconds = 0.6
+  [[sample.lantern.take]]
+  file = "world/lantern_1.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "QB2okn2x6cflsErZHwvI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -26.19
+  peak_dbtp = -8.65
+  seconds = 0.38
+  [[sample.lantern.take]]
+  file = "world/lantern_2.ogg"
+  flow = "TH7xVLSklAXTtmh38jU5"
+  generation = "w19CQkiG1VqEhw6eJnU5"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.15
+  peak_dbtp = -2.72
+  seconds = 0.51
+
+[sample.destroy_masonry]
+status = "approved"
+bus = "impacts"
+prompt = "brick wall collapsing, heavy crumbling bricks and dust, no music"
+duration_seconds = 1.5
+  [[sample.destroy_masonry.take]]
+  file = "impacts/destroy_masonry_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "byhb73N54byuN5XRLSmi"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.39
+  peak_dbtp = -1.00
+  seconds = 0.95
+  [[sample.destroy_masonry.take]]
+  file = "impacts/destroy_masonry_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "YifBOKeHIXsGj7kzK6Sh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.38
+  peak_dbtp = -1.00
+  seconds = 1.33
+
+[sample.destroy_metal]
+status = "approved"
+bus = "impacts"
+prompt = "steel structure torn apart, crunching twisted metal and a clattering fall, no music"
+duration_seconds = 1.2
+  [[sample.destroy_metal.take]]
+  file = "impacts/destroy_metal_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "pav9xsgvxhUV1qx51pK1"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.68
+  peak_dbtp = -1.00
+  seconds = 0.98
+  [[sample.destroy_metal.take]]
+  file = "impacts/destroy_metal_2.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "mtoLRBUXBN104mzBtcqa"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.18
+  peak_dbtp = -1.00
+  seconds = 0.87
+
+[sample.destroy_wood]
+status = "approved"
+bus = "impacts"
+prompt = "wooden fence smashed to pieces, splintering crash of planks, no music"
+duration_seconds = 1.0
+  [[sample.destroy_wood.take]]
+  file = "impacts/destroy_wood_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "E4stAlXroc6d9yzwHJBl"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -23.31
+  peak_dbtp = -1.00
+  seconds = 0.93
+  [[sample.destroy_wood.take]]
+  file = "impacts/destroy_wood_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "PpkkJdEahpX5pcH91lsH"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.89
+  peak_dbtp = -1.00
+  seconds = 0.87
+
+[sample.destroy_tree]
+status = "approved"
+bus = "impacts"
+prompt = "tree snapping and falling, cracking trunk and crashing branches, no music"
+duration_seconds = 1.5
+  [[sample.destroy_tree.take]]
+  file = "impacts/destroy_tree_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "ZXcSsJJI5rBTbxTOVLL8"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.22
+  peak_dbtp = -1.00
+  seconds = 1.03
+  [[sample.destroy_tree.take]]
+  file = "impacts/destroy_tree_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "PnCtzS7B5i5owYuZu1Oi"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.89
+  peak_dbtp = -1.00
+  seconds = 0.87
+
+[sample.chunk_masonry]
+status = "approved"
+bus = "impacts"
+prompt = "chunk of brick wall breaking off, short crumble and falling stones, no music"
+duration_seconds = 0.6
+
+# Planned: air support.
+  [[sample.chunk_masonry.take]]
+  file = "impacts/chunk_masonry_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "EFurTr1w2Aqm9xNjG5Ve"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -21.08
+  peak_dbtp = -1.00
+  seconds = 0.50
+  [[sample.chunk_masonry.take]]
+  file = "impacts/chunk_masonry_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "lRDocmy8U47q4gJQJ3Br"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -22.10
+  peak_dbtp = -1.00
+  seconds = 0.50
+
+[sample.heli_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "attack helicopter hovering close by, steady thumping rotor blades and turbine whine, no music"
+duration_seconds = 3.0
+loop = true
+  [[sample.heli_loop.take]]
+  file = "vehicles/heli_loop_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "IaBCkmVjX3vBgZTTigzY"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -5.58
+  seconds = 3.00
+  [[sample.heli_loop.take]]
+  file = "vehicles/heli_loop_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "yqoFE2VI9Km1NyN2MJ3z"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.09
+  seconds = 3.00
+
+[sample.jet_loop]
+status = "approved"
+bus = "vehicles"
+prompt = "ground attack jet flying overhead, roaring turbofan engine, steady, no music"
+duration_seconds = 3.0
+loop = true
+  [[sample.jet_loop.take]]
+  file = "vehicles/jet_loop_1.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "aaEgulyyItyO48SX9DHC"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -7.33
+  seconds = 3.00
+  [[sample.jet_loop.take]]
+  file = "vehicles/jet_loop_2.ogg"
+  flow = "F5W1XyVDYWXoVRgA07Nd"
+  generation = "hLToANEhMdIeUFF39CAl"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.00
+  peak_dbtp = -8.27
+  seconds = 3.00
+
+[sample.air_cannon]
+status = "approved"
+bus = "weapons"
+prompt = "aircraft rotary cannon strafing run, ripping burst of heavy rounds, no music"
+duration_seconds = 1.2
+  [[sample.air_cannon.take]]
+  file = "weapons/air_cannon_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "pgFB15XBvyMFl5KqJbtA"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.70
+  peak_dbtp = -1.00
+  seconds = 1.14
+  [[sample.air_cannon.take]]
+  file = "weapons/air_cannon_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "w65HjmEsyrG4E4E7zDvR"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.84
+  peak_dbtp = -1.00
+  seconds = 1.05
+
+[sample.air_salvo]
+status = "approved"
+bus = "weapons"
+prompt = "helicopter firing a pair of rockets, double whoosh launch, no music"
+duration_seconds = 1.0
+  [[sample.air_salvo.take]]
+  file = "weapons/air_salvo_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "snjGvrrX9RigISxPqwgQ"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.66
+  peak_dbtp = -1.00
+  seconds = 0.79
+  [[sample.air_salvo.take]]
+  file = "weapons/air_salvo_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "aZOGC4whaDlcIHJn2YyO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.29
+  peak_dbtp = -1.00
+  seconds = 0.80
+
+[sample.aircraft_downed]
+status = "approved"
+bus = "explosions"
+prompt = "aircraft shot down, engine sputter, explosion and crashing wreckage, no music"
+duration_seconds = 2.5
+
+# Planned: warnings, the round, the UI.
+  [[sample.aircraft_downed.take]]
+  file = "explosions/aircraft_downed_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "pi1XGDCAVymLWTFBJ5mH"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.28
+  peak_dbtp = -1.00
+  seconds = 2.42
+  [[sample.aircraft_downed.take]]
+  file = "explosions/aircraft_downed_2.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "bxZwtzzfmDyS0sLUbTJb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.70
+  peak_dbtp = -1.00
+  seconds = 2.24
+
+[sample.lock_warning]
+status = "approved"
+bus = "warnings"
+prompt = "missile lock warning, fast insistent electronic beeping alarm, no music"
+duration_seconds = 1.0
+  [[sample.lock_warning.take]]
+  file = "warnings/lock_warning_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "qGjytsPKc3Alw4dzs8Ew"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.00
+  peak_dbtp = -2.77
+  seconds = 0.99
+
+[sample.windup]
+status = "approved"
+bus = "warnings"
+prompt = "weapon charging up to fire, short rising electric whine, no music"
+duration_seconds = 0.6
+  [[sample.windup.take]]
+  file = "warnings/windup_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "Ar8HrMfHrqu0F6P28JNh"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.47
+  peak_dbtp = -1.00
+  seconds = 0.54
+
+[sample.air_radio]
+status = "approved"
+bus = "warnings"
+prompt = "military radio squelch and a short beep of a call acknowledged, no voice, no music"
+duration_seconds = 0.8
+  [[sample.air_radio.take]]
+  file = "warnings/air_radio_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "nLKu05bMQgA1AqPfUdsB"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -15.93
+  peak_dbtp = -1.20
+  seconds = 0.70
+
+[sample.round_won]
+status = "approved"
+bus = "ui"
+prompt = "victory fanfare sting, short triumphant brass flourish"
+duration_seconds = 2.0
+  [[sample.round_won.take]]
+  file = "ui/round_won_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "ohKozQTJdjk7yloT3sqV"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.11
+  peak_dbtp = -3.96
+  seconds = 1.48
+
+[sample.round_lost]
+status = "approved"
+bus = "ui"
+prompt = "defeat sting, short low descending brass phrase"
+duration_seconds = 2.0
+  [[sample.round_lost.take]]
+  file = "ui/round_lost_1.ogg"
+  flow = "bWSh3NEAkd74zwRwIStm"
+  generation = "eugqvTxOMU9h2oqPGFoI"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.56
+  peak_dbtp = -4.50
+  seconds = 1.62
+
+[sample.wave_start]
+status = "approved"
+bus = "ui"
+# Not a siren: a wave round's first wave lands on its first frame, so this opens every wave level.
+prompt = "incoming wave signal, two quick heavy war drum booms, deep and punchy, no siren, no horn, no music"
+duration_seconds = 1.5
+  [[sample.wave_start.take]]
+  file = "ui/wave_start_1.ogg"
+  flow = "v8Y3qwVgN7l4mpmeQk6s"
+  generation = "5KqsrOikGP79wF5Y8Zzp"
+  made = "2026-11-23"
+  plan = "creator"
+  rms_db = -19.54
+  peak_dbtp = -4.25
+  seconds = 1.19
+
+[sample.ui_refuse]
+status = "approved"
+bus = "ui"
+prompt = "soft negative buzz of a refused button press, short, no music"
+duration_seconds = 0.5
+  [[sample.ui_refuse.take]]
+  file = "ui/ui_refuse_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "M1KtR4eine9HcHK1A2tx"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -20.51
+  peak_dbtp = -1.00
+  seconds = 0.30
+
+[sample.ui_beat]
+status = "approved"
+bus = "ui"
+prompt = "small positive chime for a task completed, bright short ding"
+duration_seconds = 0.6
+  [[sample.ui_beat.take]]
+  file = "ui/ui_beat_1.ogg"
+  flow = "OBN6Ep0t8D4clZahHQSQ"
+  generation = "EJoUrPWOZLHHvq5aPmZO"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.75
+  peak_dbtp = -4.60
+  seconds = 0.42
+
+[sample.flyby_shell]
+status = "approved"
+bus = "impacts"
+prompt = "artillery shell flying past close by, fast tearing whoosh, no music"
+duration_seconds = 0.6
+  [[sample.flyby_shell.take]]
+  file = "impacts/flyby_shell_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "W4VmmnMLYINGMI6NRSCH"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.09
+  peak_dbtp = -1.00
+  seconds = 0.44
+  [[sample.flyby_shell.take]]
+  file = "impacts/flyby_shell_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "BXvKSmU2EckUBBWG31z4"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -16.79
+  peak_dbtp = -1.45
+  seconds = 0.51
+
+[sample.flyby_bullet]
+status = "approved"
+bus = "impacts"
+prompt = "bullets whizzing past the ear, quick supersonic snaps, no music"
+duration_seconds = 0.5
+  [[sample.flyby_bullet.take]]
+  file = "impacts/flyby_bullet_1.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "hdwCPfC2fVtmMQ1DjZ4h"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -19.20
+  peak_dbtp = -1.00
+  seconds = 0.34
+  [[sample.flyby_bullet.take]]
+  file = "impacts/flyby_bullet_2.ogg"
+  flow = "tWI5vRzldo8LPFsXKR6H"
+  generation = "LPRdVMVcdEvYPBVAkjnb"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -18.30
+  peak_dbtp = -1.00
+  seconds = 0.32
+
+[sample.flyby_missile]
+status = "approved"
+bus = "impacts"
+prompt = "rocket streaking past close by, roaring whoosh moving away, no music"
+duration_seconds = 1.0
+
+# ------------------------------------------------------------------- cues
+  [[sample.flyby_missile.take]]
+  file = "impacts/flyby_missile_1.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "pVWwc7R99a9IELA4oUS0"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.26
+  peak_dbtp = -1.00
+  seconds = 0.88
+  [[sample.flyby_missile.take]]
+  file = "impacts/flyby_missile_2.ogg"
+  flow = "ypzlS26Ca7qT91nSSIyO"
+  generation = "uQljbuTxsGX8MR35Os0o"
+  made = "2026-11-22"
+  plan = "creator"
+  rms_db = -17.60
+  peak_dbtp = -1.00
+  seconds = 0.75
+
+[cue."ui.click"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+jitter = false
+layers = [{ sample = "ui_click" }]
+note = "A button pressed."
+
+[cue."ui.refuse"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "ui_refuse" }]
+note = "A press the game refuses."
+
+[cue."ui.beat"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 1
+layers = [{ sample = "ui_beat" }]
+note = "A training beat done."
+
+[cue."round.won"]
+kind = "stinger"
+bus = "ui"
+priority = "critical"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "round_won" }]
+note = "The round is won."
+
+[cue."round.lost"]
+kind = "stinger"
+bus = "ui"
+priority = "critical"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "round_lost" }]
+note = "The round is lost."
+
+[cue."round.wave"]
+kind = "stinger"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 1
+layers = [{ sample = "wave_start" }]
+note = "A wave rolls in."
+
+# Weapons.
+
+[cue."weapon.shell.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "cannon_medium_near", until_px = 700 }, { sample = "cannon_far", from_px = 450 }]
+note = "A tank's main gun; tiered by calibre (light, medium, heavy, super) and pitched by mass."
+
+[cue."weapon.laser.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "laser_fire" }]
+note = "A laser beam fired."
+
+[cue."weapon.plasma.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "plasma_fire" }]
+note = "A plasma bolt fired."
+
+[cue."weapon.minigun.loop"]
+kind = "loop"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 4
+layers = [{ sample = "minigun_loop" }]
+note = "A minigun firing: one loop while rounds leave, never one sound a round."
+
+[cue."weapon.minigun.spin_down"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "minigun_spin_down" }]
+note = "A minigun's barrels winding down after a burst."
+
+[cue."weapon.missiles.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 8
+steal = "oldest"
+layers = [{ sample = "missiles_fire" }]
+note = "A seeker missile leaving its tube: a volley is heard tube by tube (the missile watcher)."
+
+[cue."weapon.missiles.dud"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "missile_dud" }]
+note = "A missile that came down without going off."
+
+[cue."weapon.flamethrower.loop"]
+kind = "loop"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "flamethrower_loop" }]
+note = "A flamethrower's jet."
+
+[cue."weapon.grenades.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "grenade_launch" }]
+note = "A grenade launched."
+
+[cue."weapon.sonic_hammer.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "sonic_hammer" }]
+note = "The sonic hammer's wave."
+
+[cue."weapon.emp_burst.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "emp_burst" }]
+note = "An EMP burst."
+
+[cue."weapon.emp_burst.disabled"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 200
+layers = [{ sample = "emp_disabled" }]
+note = "A tank's electrics knocked out."
+
+[cue."tower.disabled"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "emp_disabled" }]
+note = "A tower's electrics knocked out."
+
+[cue."weapon.gauss_rail.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "gauss_fire" }]
+note = "A rail slug fired; overcharged is its own child cue."
+
+# Weapon feedback and warnings: each calibre's cannon, what a weapon does
+# between its shots, reloads, near misses, and the warnings a seat hears.
+
+[cue."weapon.shell.fire.light"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "cannon_light_near", until_px = 700 }, { sample = "cannon_far", from_px = 450 }]
+note = "A light chassis's main gun (scout, wraith), pitched by mass."
+
+[cue."weapon.shell.fire.heavy"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "cannon_heavy_near", until_px = 700 }, { sample = "cannon_far", from_px = 450 }]
+note = "A heavy chassis's main gun (breaker, longbow, ravager, obelisk), pitched by mass."
+
+[cue."weapon.shell.fire.super"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "cannon_super_near", until_px = 800 }, { sample = "cannon_far", from_px = 550 }]
+note = "A super-heavy chassis's main gun (titan, leviathan), pitched by mass."
+
+[cue."weapon.shell.reload"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "shell_rack" }]
+note = "A seat's magazine back to a shot's cost, or its cannon re-arming after a special is spent: a shell racked."
+
+[cue."weapon.shell.reload.full"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "shell_rack", gain_db = 2.0 }]
+note = "A seat's magazine full again: the rack, lower and firmer."
+
+[cue."weapon.spent"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "special_empty" }]
+note = "A seat's special spent - its last charge, the minigun dry, the fuel out - before the cannon re-arms."
+
+[cue."weapon.offline"]
+kind = "loop"
+bus = "weapons"
+priority = "high"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "offline_static_loop" }]
+note = "A seat's special offline - its electrics out under an EMP, or its own EMP's cost - as static."
+
+[cue."weapon.online"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "pickup_boost", gain_db = -4.0 }]
+note = "A seat's special back online."
+
+[cue."weapon.minigun.spin_up"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "minigun_spin_up" }]
+note = "A minigun's barrels spinning up from rest, before the first round."
+
+[cue."weapon.missiles.motor"]
+kind = "modulated_loop"
+bus = "weapons"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "missile_motor_loop" }]
+note = "A missile's rocket in flight, pitched by its speed: the loudest four roar."
+
+[cue."weapon.missiles.reload"]
+kind = "one_shot"
+bus = "weapons"
+priority = "low"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "shell_rack", gain_db = -8.0 }]
+note = "A seat's missile pod refilling a tube: a soft clunk each."
+
+[cue."weapon.missiles.reload.ready"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "tiny"
+polyphony = 1
+jitter = false
+layers = [{ sample = "ui_click", gain_db = -4.0 }]
+note = "A seat's missile pod full again: a ready tick."
+
+[cue."weapon.flamethrower.start"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "fire_ignite", gain_db = -2.0 }]
+note = "A flamethrower lighting as a hold starts: the whoomp of its fuel catching."
+
+[cue."weapon.flamethrower.stop"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "flame_valve" }]
+note = "A flamethrower let go: its valve snapping shut."
+
+[cue."weapon.flamethrower.stop.dry"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "flame_sputter" }]
+note = "A flamethrower run dry: it sputters out."
+
+[cue."weapon.grenades.beep"]
+kind = "one_shot"
+bus = "warnings"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "lock_beep", gain_db = -10.0 }]
+note = "A grenade's fuse lamp flashing, a beep a flash, quicker as it nears going off."
+
+[cue."weapon.gauss_rail.ready"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "small"
+polyphony = 2
+layers = [{ sample = "gauss_ready_ping" }]
+note = "A rail's charge reaching full."
+
+[cue."weapon.gauss_rail.charge.overcharged"]
+kind = "loop"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "tesla_charge_loop", gain_db = -2.0 }]
+note = "An overcharged rail crackling, unstable, over its charge's whine."
+
+[cue."weapon.gauss_rail.vent.alarm"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "lock_beep", gain_db = -4.0 }]
+note = "A seat's rail in its last second before it vents: fast beeps to let go."
+
+[cue."weapon.rod_from_god.uplink"]
+kind = "loop"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "rod_uplink_loop" }]
+note = "A rod's uplink open while its reticle is up."
+
+[cue."weapon.rod_from_god.reticle"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+jitter = false
+layers = [{ sample = "ui_click", gain_db = -8.0 }]
+note = "A seat's rod reticle stepping a cell."
+
+[cue."weapon.rod_from_god.cancel"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "rod_cancel" }]
+note = "A rod's reticle put down without a call: let go early or on its own cell, or lost to another weapon."
+
+[cue."weapon.rod_from_god.cancel.timeout"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "rod_cancel" }, { sample = "emp_disabled", gain_db = -8.0 }]
+note = "A rod's reticle held past its time: the abort, with static."
+
+[cue."weapon.fpv_swarm.dive"]
+kind = "modulated_loop"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "fpv_dive_loop" }]
+note = "A drone committed to its dive, its rotors rising to a scream."
+
+[cue."warning.lock.rail"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "small"
+polyphony = 2
+layers = [{ sample = "lock_beep" }]
+note = "A seat standing in a charging rail's lane: lock beeps, quicker as the charge fills."
+
+[cue."warning.lock.drone"]
+kind = "modulated_loop"
+bus = "warnings"
+priority = "warning"
+class = "small"
+polyphony = 2
+layers = [{ sample = "drone_lock_loop" }]
+note = "A drone's lock on a seat: a thin tone rising as it nears, cut when the lock breaks."
+
+[cue."ui.kill"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+jitter = false
+layers = [{ sample = "kill_confirm" }]
+note = "A seat wrecked an enemy."
+
+[cue."pickup.weapon.energy"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_energy" }]
+note = "An energy weapon picked up: the laser, plasma, the rail or the EMP."
+
+[cue."pickup.weapon.fuel"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_fuel" }]
+note = "The flamethrower picked up."
+
+[cue."pickup.weapon.field"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_field" }]
+note = "A field weapon picked up: the sonic hammer or the gravity well."
+
+[cue."pickup.weapon.drones"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "drone_launch", gain_db = -4.0 }]
+note = "The FPV swarm picked up: its rotors spinning up."
+
+[cue."pickup.weapon.uplink"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "air_radio" }]
+note = "The rod from god picked up: its uplink acknowledged."
+
+[cue."flyby.plasma"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "tiny"
+polyphony = 3
+layers = [{ sample = "flyby_plasma" }]
+note = "A plasma bolt passing close by a seat."
+
+[cue."flyby.rail"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "flyby_rail" }]
+note = "A rail slug passing close by a seat without going through it."
+
+[cue."flyby.laser"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "flyby_laser" }]
+note = "A laser beam passing close by a seat without striking it."
+
+[cue."weapon.gauss_rail.charge"]
+kind = "modulated_loop"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "gauss_charge_loop" }]
+note = "The rail's charge, rising in pitch as it fills."
+
+[cue."weapon.gauss_rail.vent"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "gauss_vent" }]
+note = "A charge vented, fizzled or let lapse."
+
+[cue."weapon.fpv_swarm.launch"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "drone_launch" }]
+note = "FPV drones launched."
+
+[cue."weapon.fpv_swarm.burst"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "drone_burst" }]
+note = "A drone's charge going off."
+
+[cue."weapon.fpv_swarm.downed"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "drone_downed" }]
+note = "A drone shot down or crashed."
+
+[cue."weapon.rod_from_god.call"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "rod_call" }]
+note = "The rod's designator locks a cell."
+
+[cue."weapon.rod_from_god.impact"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "rod_impact", until_px = 900 }, { sample = "explosion_far", from_px = 700 }]
+note = "The rod lands."
+
+[cue."weapon.gravity_well.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "well_fire" }]
+note = "The gravity well's orb launched."
+
+[cue."weapon.gravity_well.anchor"]
+kind = "one_shot"
+bus = "weapons"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "well_anchor" }]
+note = "The well forms."
+
+[cue."weapon.gravity_well.collapse"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "well_collapse" }]
+note = "The well collapses."
+
+[cue."weapon.gravity_well.swallow"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 80
+layers = [{ sample = "well_collapse", gain_db = -12.0 }]
+note = "The well swallows a shot or a drone."
+
+[cue."weapon.gravity_well.fizzle"]
+kind = "one_shot"
+bus = "weapons"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "gauss_vent", gain_db = -6.0 }]
+note = "An orb fizzles out."
+
+# Impacts: hit.<shot>.<what>, what = hull, bong, wall, or <family>.<material>.
+
+[cue."hit"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 6
+cooldown_ms = 30
+layers = [{ sample = "hit_shell_masonry", gain_db = -4.0 }]
+note = "Any hit with nothing more specific."
+
+[cue."hit.shell"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_masonry" }]
+note = "A shell hitting something."
+
+[cue."hit.shell.hull"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_metal" }]
+note = "A shell on a tank's hull."
+
+[cue."hit.shell.metal"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_metal" }]
+note = "A shell on iron, a door, a drum, a tower."
+
+[cue."hit.shell.masonry"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_masonry" }]
+note = "A shell on brick, concrete or rock."
+
+[cue."hit.shell.wall"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_masonry" }]
+note = "A shell on the field's edge."
+
+[cue."hit.shell.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_shell_wood" }]
+note = "A shell on wood."
+
+[cue."hit.shell.glass"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "hit_glass" }]
+note = "A shell on glass or a lamp."
+
+[cue."hit.shell.earth"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_earth" }]
+note = "A shell on sandbags."
+
+[cue."hit.shell.foliage"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_foliage" }]
+note = "A shell through a tree."
+
+[cue."hit.shell.bong"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "hit_earth" }]
+note = "A shell on a bong."
+
+[cue."hit.bullet"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_bullet_masonry" }]
+note = "A round hitting something."
+
+[cue."hit.bullet.hull"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_bullet_metal" }]
+note = "A round pinging off a hull."
+
+[cue."hit.bullet.metal"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_bullet_metal" }]
+note = "A round on metal."
+
+[cue."hit.plasma"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 6
+cooldown_ms = 30
+layers = [{ sample = "hit_energy" }]
+note = "A plasma bolt splashing."
+
+[cue."hit.laser"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 60
+layers = [{ sample = "hit_energy" }]
+note = "A beam searing what it hits."
+
+[cue."hit.rail"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 6
+layers = [{ sample = "hit_shell_metal" }]
+note = "A rail slug punching through."
+
+[cue."hit.flame"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 250
+layers = [{ sample = "hit_flame" }]
+note = "Flame licking what it reaches."
+
+[cue."hit.tesla"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 3
+cooldown_ms = 100
+layers = [{ sample = "hit_energy" }]
+note = "A tesla bolt landing."
+
+[cue."hit.spall"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 60
+layers = [{ sample = "hit_bullet_metal", gain_db = -6.0 }]
+note = "Spall off a broken shell."
+
+[cue."hit.deflect"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "shield_hit" }, { sample = "flyby_shell", gain_db = -6.0 }]
+note = "A shot turned away by a shield: the shield's bwong and the shot whooshing back."
+
+# Shots and hits (BB-102 gap pass): a shield's thrum, the inside of a
+# seat's own hull, a ricochet by shot and surface with its whine, rounds on
+# each material, what the air takes, and the shooter's own word on a hit.
+
+[cue."hit.shield"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 60
+layers = [{ sample = "shield_hit", pitch = 0.85, gain_db = -2.0 }]
+note = "A rainbow shield taking a hit whole: a beam, a slug, a bolt, a stream."
+
+[cue."hit.hull_inside"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "tiny"
+polyphony = 2
+cooldown_ms = 40
+layers = [{ sample = "hit_hull_inside" }]
+note = "A hit heard from inside the seat's own hull, by its player only."
+
+[cue."hit.sonic.hull"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "hit_sonic_hull" }]
+note = "A sonic hammer's wave booming on a hull."
+
+[cue."hit.well"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam", pitch = 0.85, gain_db = -4.0 }]
+note = "A gravity well's collapse flinging a hull or a bong: a body thud."
+
+[cue."hit.shell.slime"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 20
+layers = [{ sample = "bio_splash" }]
+note = "A shell into a bio slush tower."
+
+[cue."hit.bullet.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_shell_wood", pitch = 1.45, gain_db = -6.0 }]
+note = "A round splintering wood."
+
+[cue."hit.bullet.glass"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 45
+layers = [{ sample = "hit_glass", pitch = 1.3, gain_db = -6.0 }]
+note = "A round through glass or a lamp."
+
+[cue."hit.bullet.earth"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_earth", pitch = 1.4, gain_db = -6.0 }]
+note = "A round thudding into sandbags or hay."
+
+[cue."hit.bullet.foliage"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 60
+layers = [{ sample = "hit_foliage", pitch = 1.4, gain_db = -8.0 }]
+note = "A round through leaves."
+
+[cue."hit.bullet.rubber"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 6
+cooldown_ms = 45
+layers = [{ sample = "hit_rubber", pitch = 1.15, gain_db = -3.0 }]
+note = "A round into a tyre stack."
+
+[cue."hit.bullet.slime"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 45
+layers = [{ sample = "bio_splash", pitch = 1.5, gain_db = -8.0 }]
+note = "A round into a bio slush tower."
+
+[cue."hit.bullet.bong"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 3
+cooldown_ms = 45
+layers = [{ sample = "hit_earth", pitch = 1.6, gain_db = -6.0 }]
+note = "A round on a bong."
+
+[cue."hit.air.drone"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_drone" }]
+note = "A round clipping a drone that flies on (Event::AirHit)."
+
+[cue."hit.air.heli"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_bullet_metal", pitch = 0.9, gain_db = -2.0 }]
+note = "A round pinging off a helicopter's armour (Event::AirHit)."
+
+[cue."hit.ricochet.shell"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "ricochet_shell" }]
+note = "A shell glancing off iron: a ringing clang and a howl."
+
+[cue."hit.ricochet.shell.masonry"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_shell_masonry", pitch = 1.15 }]
+note = "A shell glancing off a volcano's cone: a crack of stone."
+
+[cue."hit.ricochet.shell.metal.barrel"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "drum_launch", pitch = 1.1, gain_db = -2.0 }]
+note = "A shell glancing off a drum: a hollow bong."
+
+[cue."hit.ricochet.shell.metal.tesla"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_shell_metal", pitch = 1.35 }]
+note = "A shell glancing off a tesla tower: a ping."
+
+[cue."hit.ricochet.shell.metal.gun_tower"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_shell_metal", pitch = 1.35 }]
+note = "A shell glancing off a gun tower: a ping."
+
+[cue."hit.ricochet.shell.slime"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "bio_splash", pitch = 0.9 }]
+note = "A shell glancing off a bio slush tower."
+
+[cue."hit.ricochet.bullet"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "ricochet" }]
+note = "A round glancing off a hull, iron or stone: a zing."
+
+[cue."hit.ricochet.bullet.metal.barrel"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "drum_launch", pitch = 1.6, gain_db = -8.0 }]
+note = "A round glancing off a drum."
+
+[cue."hit.ricochet.bullet.metal.tesla"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_bullet_metal", pitch = 1.25 }]
+note = "A round glancing off a tesla tower: a ping."
+
+[cue."hit.ricochet.bullet.metal.gun_tower"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_bullet_metal", pitch = 1.25 }]
+note = "A round glancing off a gun tower: a ping."
+
+[cue."hit.ricochet.bullet.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_shell_wood", pitch = 1.9, gain_db = -10.0 }]
+note = "A round glancing off wood: a tick."
+
+[cue."hit.ricochet.bullet.foliage"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "hit_foliage", pitch = 1.8, gain_db = -10.0 }]
+note = "A round glancing off a tree: a tick."
+
+[cue."hit.ricochet.whine"]
+kind = "modulated_loop"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 6
+layers = [{ sample = "ricochet_whine_loop" }]
+note = "A ricocheted shot's whine, following it away (the ricochet watcher)."
+
+[cue."vehicle.scrape.water"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "ground_water_loop", gain_db = -4.0 }]
+note = "A hull pressed against deep water's edge: water slapping the hull."
+
+[cue."bong.death"]
+kind = "one_shot"
+bus = "voice"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "bong_death" }]
+note = "A bong killed."
+
+[cue."weapon.dry_fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "tiny"
+polyphony = 2
+cooldown_ms = 80
+layers = [{ sample = "dry_fire" }]
+note = "A seat's shell or plasma press with too little ammo, by its player only."
+
+[cue."ui.hit_marker"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+cooldown_ms = 60
+jitter = false
+layers = [{ sample = "ui_click", pitch = 1.5, gain_db = -3.0 }]
+note = "The shooter's tick on a hit on the other side, by its player only."
+
+[cue."ui.friendly_fire"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 1
+cooldown_ms = 400
+jitter = false
+layers = [{ sample = "ui_refuse" }]
+note = "The shooter's buzz on a hit on its own side, by its player only."
+
+[cue."warning.lock.acquired"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+cooldown_ms = 600
+jitter = false
+layers = [{ sample = "rod_call", pitch = 1.3, gain_db = -8.0 }]
+note = "A seat's own missile locking on a tank: a soft chirp, by its player only."
+
+[cue."hit.ricochet"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "ricochet" }]
+note = "A shell glancing off."
+
+[cue."hit.shield_break"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "shield_break" }]
+note = "A shield breaking."
+
+[cue."hit.shells_collide"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "shells_collide" }]
+note = "Two shells meeting in the air."
+
+# Explosions.
+
+[cue."explosion.wreck"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 4
+steal = "oldest"
+layers = [{ sample = "wreck_tank", until_px = 800 }, { sample = "explosion_far", from_px = 550 }]
+note = "A tank wrecked."
+
+[cue."explosion.barrel.oil"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 4
+steal = "oldest"
+layers = [{ sample = "blast_barrel_oil", until_px = 800 }, { sample = "explosion_far", from_px = 550 }]
+note = "An oil drum goes up; each link of a chain plays a step quieter."
+
+[cue."explosion.barrel.fuel"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 4
+steal = "oldest"
+layers = [{ sample = "blast_fuel", until_px = 800 }, { sample = "explosion_far", from_px = 550 }]
+note = "A fuel drum goes up."
+
+[cue."explosion.lava_bomb"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 4
+layers = [{ sample = "lava_bomb" }]
+note = "A lava bomb landing."
+
+[cue."explosion.drum_launch"]
+kind = "one_shot"
+bus = "explosions"
+priority = "medium"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "drum_launch" }]
+note = "A drum thrown by a blast."
+
+[cue."explosion.missile"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "blast_small", until_px = 700 }, { sample = "explosion_far", from_px = 500, gain_db = -6.0 }]
+note = "A missile's blast."
+
+[cue."explosion.grenade"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 4
+layers = [{ sample = "blast_grenade", until_px = 700 }, { sample = "explosion_far", from_px = 500, gain_db = -4.0 }]
+note = "A grenade's blast."
+
+[cue."explosion.cookoff"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 2
+layers = [{ sample = "cookoff" }]
+note = "Ammunition cooking off."
+
+# Vehicles.
+
+[cue."engine.light"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 8
+jitter = false
+layers = [{ sample = "engine_light_loop" }]
+note = "Scout, wraith, flak, glacier: revs and level from speed, pitch from mass."
+
+[cue."engine.medium"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 8
+jitter = false
+layers = [{ sample = "engine_medium_loop" }]
+note = "Assault, warden, longbow, obelisk."
+
+[cue."engine.heavy"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 8
+jitter = false
+layers = [{ sample = "engine_heavy_loop" }]
+note = "Breaker, ravager."
+
+[cue."engine.twin"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 4
+jitter = false
+layers = [{ sample = "engine_twin_loop" }]
+note = "Titan, leviathan: two engine decks."
+
+[cue."vehicle.treads"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 8
+jitter = false
+layers = [{ sample = "treads_loop" }]
+note = "Tracks rolling, louder and faster with speed."
+
+[cue."vehicle.ground.lava"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "ground_lava_loop" }]
+note = "Tracks wading lava, or a hull skidding through it: a thick gloop."
+
+[cue."world.lava.sizzle"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "lava_sizzle_loop" }]
+note = "A hull in lava sizzling, faint on a hot bank (Game::heat_at); none under a heat shield."
+
+[cue."vehicle.ground.mud"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -4.0
+layers = [{ sample = "ground_mud_loop" }]
+note = "Tracks in mud: rain on anything but sand, or tracks wet from a ford (wear::muddy)."
+
+[cue."vehicle.ground.puddle"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+layers = [{ sample = "ground_water_loop", gain_db = -10.0 }]
+note = "A road's puddles under rain, over its mud."
+
+[cue."vehicle.ground.snow"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -5.0
+layers = [{ sample = "ground_snow_loop" }]
+note = "Tracks under a snowy sky."
+
+[cue."vehicle.ground.dust"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -6.0
+layers = [{ sample = "ground_sand_loop", gain_db = -4.0 }]
+note = "The desert's pale dust where the tileset's grass is: the sand's hiss, lighter."
+
+[cue."vehicle.ground.rubble"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+gain_db = -3.0
+layers = [{ sample = "rubble_crunch_loop" }]
+note = "Tracks over rubble, louder on heavy (Rubble::level)."
+
+[cue."vehicle.ground.brush"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+gain_db = -2.0
+layers = [{ sample = "ground_grass_loop" }]
+note = "A hull pushing through tall grass, reeds or a bush; quieter once the cell is trampled."
+
+[cue."vehicle.pivot"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_pivot_loop" }]
+note = "Tracks pivoting in place (Roll::Pivoting): a grind and a squeal."
+
+[cue."vehicle.slip"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "scrape_loop", gain_db = -6.0 }]
+note = "Tracks sliding across their runs on dry ground (Roll::Sliding): a scrub."
+
+[cue."vehicle.slip.ice"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_ice_loop" }]
+note = "Tracks spinning on a start or sliding on ice: a screech."
+
+[cue."vehicle.slip.mud"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_mud_loop" }]
+note = "Tracks spinning on a start or sliding in mud: a slushy whirr."
+
+[cue."vehicle.coast.ice"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_ice_loop", gain_db = -8.0 }]
+note = "A hull coasting to a stop on ice: a long hiss."
+
+[cue."vehicle.skid"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "scrape_loop", gain_db = -2.0 }]
+note = "A hull knocked off its tracks sliding over a road (Game::skidding): steel scraping."
+
+[cue."vehicle.skid.grass"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "skid_turf_loop" }]
+note = "A hull skidding across grass: torn turf."
+
+[cue."vehicle.skid.sand"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "ground_sand_loop" }]
+note = "A hull skidding across sand or the desert's dust: a sand hiss."
+
+[cue."vehicle.skid.ice"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_ice_loop" }]
+note = "A hull skidding across ice: an icy hiss."
+
+[cue."vehicle.skid.water"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "ground_water_loop" }]
+note = "A hull skidding through a ford: a wash of water."
+
+[cue."vehicle.skid.snow"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "ground_snow_loop" }]
+note = "A hull skidding across snow."
+
+[cue."vehicle.skid.mud"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "medium"
+class = "small"
+polyphony = 4
+jitter = false
+layers = [{ sample = "track_slip_mud_loop" }]
+note = "A hull skidding through mud."
+
+[cue."vehicle.splash"]
+kind = "one_shot"
+bus = "vehicles"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "splash_in" }]
+note = "A hull wading into a ford: a heavy slosh by its speed and mass."
+
+[cue."vehicle.splash.out"]
+kind = "one_shot"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "splash_out" }]
+note = "A hull climbing out of a ford: water pouring off the runs."
+
+[cue."vehicle.drip"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "tiny"
+polyphony = 4
+jitter = false
+layers = [{ sample = "drip_loop" }]
+note = "Drips off the runs after a ford, following Tread::wet and dying away (audio_drip_seconds)."
+
+[cue."world.fire.douse"]
+kind = "one_shot"
+bus = "world"
+priority = "medium"
+class = "small"
+polyphony = 3
+layers = [{ sample = "steam_hiss" }]
+note = "A burning hull's fire put out by the water: a steam hiss."
+
+[cue."world.fire.hiss"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "fuse", gain_db = -2.0 }, { sample = "fire_loop", gain_db = -12.0 }]
+note = "A wreck burning in a ford or in rain: a hiss in place of the crackle (the fuse's fizz pitched down from code)."
+
+[cue."pickup.boost.fizzle"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "emp_disabled", gain_db = -6.0 }]
+note = "A speed boost the water takes, fizzling out (pitched up from code)."
+
+[cue."explosion.water"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "large"
+polyphony = 4
+layers = [{ sample = "water_geyser" }]
+note = "A blast on liquid water, under the blast's own sound: a geyser slap and a rain of droplets."
+
+[cue."explosion.water.steam"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "steam_hiss" }]
+note = "A lava bomb landing in water: a burst of steam."
+
+[cue."explosion.water.plop"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 3
+layers = [{ sample = "water_plop" }]
+note = "A dud missile or a downed drone falling in water: a plop and a fizzle."
+
+[cue."explosion.water.column"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "water_geyser", gain_db = 4.0 }]
+note = "The rod striking water: a column of it thrown up."
+
+[cue."weapon.grenades.bounce"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "grenade_bounce" }]
+note = "A grenade touching down on dry ground, smaller each hop."
+
+[cue."weapon.grenades.bounce.water"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "water_plop", gain_db = -6.0 }]
+note = "A grenade touching down in water: a small plop (the plop pitched up from code)."
+
+[cue."weapon.grenades.bounce.ice"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "grenade_bounce" }]
+note = "A grenade touching down on ice: the clunk pitched up into a skitter from code."
+
+[cue."bong.land.water"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "bong_splash" }]
+note = "The bong's hop landing in water: a comic plop, pitched by its kind."
+
+[cue."world.grass.trample"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 120
+layers = [{ sample = "grass_trample" }]
+note = "Tall grass, a bush or reeds trampled flat for the round (Event::GrassTrampled)."
+
+[cue."world.water.lap"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+layers = [{ sample = "water_lap_loop" }]
+note = "A lake's or a ford's shore lapping, one a cluster of its cells near the ears."
+
+[cue."world.water.stream"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+layers = [{ sample = "stream_babble_loop" }]
+note = "A stream babbling where its current runs, one a cluster."
+
+[cue."world.water.ice"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 4
+jitter = false
+gain_db = -4.0
+layers = [{ sample = "ice_creak_loop" }]
+note = "A frozen shore's hush and faint creak."
+
+[cue."world.rain.water"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "rain_loop", gain_db = -6.0 }]
+note = "Rain on the water in earshot, by how much of it there is (the rain bed pitched up from code)."
+
+[cue."vehicle.ground.grass"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -6.0
+layers = [{ sample = "ground_grass_loop" }]
+note = "Tracks through grass."
+
+[cue."vehicle.ground.sand"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -6.0
+layers = [{ sample = "ground_sand_loop" }]
+note = "Tracks through sand."
+
+[cue."vehicle.ground.water"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+layers = [{ sample = "ground_water_loop" }]
+note = "Wading a ford."
+
+[cue."vehicle.ground.ice"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 6
+jitter = false
+gain_db = -4.0
+layers = [{ sample = "ground_ice_loop" }]
+note = "Tracks on ice."
+
+[cue."vehicle.slam"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam" }]
+note = "A hull slamming into a wall, as loud as the impulse."
+
+[cue."vehicle.slam.glass"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam_glass" }]
+note = "A hull slamming into glass (Surface::Brittle)."
+
+[cue."vehicle.slam.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam_wood" }]
+note = "A hull slamming into timber or a firm tree (Surface::Firm)."
+
+[cue."vehicle.slam.tree"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "slam_tree" }]
+note = "A hull shaking a birch, a willow or a snag (Surface::Yielding)."
+
+[cue."vehicle.slam.soft"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "slam_soft" }]
+note = "A hull into sandbags, a fence, hay (Surface::Soft)."
+
+[cue."vehicle.slam.rubber"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "slam_rubber" }]
+note = "A hull thrown back off a tyre stack (Surface::Springy)."
+
+[cue."hit.shell.rubber"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 6
+cooldown_ms = 20
+layers = [{ sample = "hit_rubber" }]
+note = "A shell on a tyre stack."
+
+[cue."destroy.rubber"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "destroy_rubber" }]
+note = "A tyre stack shot apart."
+
+[cue."pickup.crate.land"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "crate_land" }]
+note = "A supply crate a blast tossed, landing (Event::CrateTossed)."
+
+[cue."vehicle.scrape"]
+kind = "modulated_loop"
+bus = "vehicles"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "scrape_loop" }]
+note = "A hull grinding along a wall."
+
+[cue."vehicle.ram"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "medium"
+polyphony = 3
+cooldown_ms = 300
+layers = [{ sample = "ram" }]
+note = "Two tanks ramming."
+
+# Pickups and the bong.
+
+[cue."pickup.weapon"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_weapon" }]
+note = "A weapon crate picked up."
+
+[cue."pickup.health"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_health" }]
+note = "A health pack picked up."
+
+[cue."pickup.ammo"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_ammo" }]
+note = "Ammunition picked up."
+
+[cue."pickup.boost"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_boost" }]
+note = "A speed-up or a shield picked up."
+
+[cue."pickup.tower"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_boost" }]
+note = "A tower pack picked up."
+
+[cue."pickup.air"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "air_radio" }]
+note = "An air support call picked up."
+
+[cue."pickup.crate.break"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 3
+layers = [{ sample = "crate_break" }]
+note = "A crate shot open."
+
+[cue."pickup.crate.cookoff"]
+kind = "one_shot"
+bus = "explosions"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "cookoff" }]
+note = "A crate's contents cooking off."
+
+[cue."pickup.respawn"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "crate_drop" }]
+note = "A crate dropped in again."
+
+[cue."bong.bite"]
+kind = "one_shot"
+bus = "voice"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "bong_bite" }]
+note = "A bong biting a tank."
+
+[cue."bong.heal"]
+kind = "one_shot"
+bus = "voice"
+priority = "medium"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "bong_heal" }]
+note = "A bong healed."
+
+[cue."bong.pack"]
+kind = "one_shot"
+bus = "voice"
+priority = "medium"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "bong_heal" }]
+note = "A bong taking a health pack."
+
+[cue."bong.revive"]
+kind = "one_shot"
+bus = "voice"
+priority = "high"
+class = "medium"
+polyphony = 1
+layers = [{ sample = "bong_heal" }]
+note = "A bong revived in training."
+
+[cue."voice.bong"]
+kind = "voice"
+bus = "voice"
+priority = "high"
+class = "medium"
+polyphony = 1
+layers = [{ sample = "bong_babble" }]
+note = "The bong's babble with its bubble: no words, a pitch per kind."
+
+# Towers.
+
+[cue."tower.tesla.strike"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "tesla_strike" }]
+note = "A tesla tower's bolt."
+
+[cue."world.tesla.charge"]
+kind = "modulated_loop"
+bus = "world"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "tesla_charge_loop" }]
+note = "A tesla tower charging toward a strike."
+
+[cue."tower.gun.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "gun_tower_fire" }]
+note = "A gun tower's burst."
+
+[cue."tower.bio.fire"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "bio_fire" }]
+note = "A bio tower's glob."
+
+[cue."tower.bio.splash"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 3
+layers = [{ sample = "bio_splash" }]
+note = "A glob landing."
+
+[cue."tower.bio.slimed"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "bio_splash" }]
+note = "A tank coated in slime."
+
+[cue."tower.bio.washed"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "ground_water_loop", gain_db = -6.0 }]
+note = "Slime washed off in water."
+
+[cue."tower.repaired"]
+kind = "one_shot"
+bus = "world"
+priority = "medium"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_boost" }]
+note = "A tower repaired."
+
+# Air support.
+
+[cue."air.called"]
+kind = "stinger"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 1
+layers = [{ sample = "air_radio" }]
+note = "Air support called in."
+
+[cue."air.arrive"]
+kind = "one_shot"
+bus = "warnings"
+priority = "high"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "air_radio" }]
+note = "Air support on station."
+
+[cue."air.heli"]
+kind = "loop"
+bus = "vehicles"
+priority = "high"
+class = "large"
+polyphony = 2
+layers = [{ sample = "heli_loop" }]
+note = "The helicopter's rotor, doppler-bent as it passes."
+
+[cue."air.jet"]
+kind = "loop"
+bus = "vehicles"
+priority = "high"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "jet_loop" }]
+note = "The jet's engine, doppler-bent as it passes."
+
+[cue."air.salvo"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 2
+layers = [{ sample = "air_salvo" }]
+note = "The helicopter's rockets."
+
+[cue."air.cannon"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 3
+layers = [{ sample = "air_cannon" }]
+note = "The jet's gun run."
+
+[cue."air.bomb"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "huge"
+polyphony = 3
+layers = [{ sample = "air_bomb", until_px = 900 }, { sample = "explosion_far", from_px = 700 }]
+note = "The jet's bombs."
+
+[cue."air.downed"]
+kind = "one_shot"
+bus = "explosions"
+priority = "critical"
+class = "large"
+polyphony = 2
+layers = [{ sample = "aircraft_downed" }]
+note = "An aircraft shot down."
+
+# Warnings.
+
+[cue."warning.lock"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 2
+cooldown_ms = 1500
+layers = [{ sample = "lock_warning" }]
+note = "A missile locked on a tank."
+
+[cue."warning.windup"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "large"
+polyphony = 3
+layers = [{ sample = "windup" }]
+note = "An enemy's sonic or EMP winding up."
+
+[cue."warning.rod"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "rod_incoming" }]
+note = "The rod falling."
+
+# Destruction: destroy.<family>.<material>, chunk.<family>.
+
+[cue."destroy"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+cooldown_ms = 30
+layers = [{ sample = "destroy_masonry" }]
+note = "A tile destroyed."
+
+[cue."destroy.metal"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "destroy_metal" }]
+note = "Iron, a door, a tower torn apart."
+
+[cue."destroy.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "destroy_wood" }]
+note = "Wood, a fence, a target smashed."
+
+[cue."destroy.glass"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "hit_glass" }]
+note = "Glass or a lamp shattered."
+
+[cue."destroy.earth"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "hit_earth" }]
+note = "Sandbags burst."
+
+[cue."destroy.foliage"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "destroy_tree" }]
+note = "A tree felled."
+
+[cue."destroy.slime"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "bio_splash" }]
+note = "A bio tower destroyed."
+
+[cue."chunk"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "chunk_masonry" }]
+note = "A chunk broken off a wall."
+
+[cue."chunk.wood"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "small"
+polyphony = 4
+cooldown_ms = 40
+layers = [{ sample = "destroy_wood", gain_db = -8.0 }]
+note = "A plank broken off a wooden wall."
+
+# The world.
+
+[cue."world.fire"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "medium"
+polyphony = 6
+layers = [{ sample = "fire_loop" }]
+note = "A fire cluster burning, louder the more it burns."
+
+[cue."world.fire.ignite"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 250
+layers = [{ sample = "fire_ignite" }]
+note = "Something catching fire."
+
+[cue."world.fuse"]
+kind = "loop"
+bus = "world"
+priority = "medium"
+class = "small"
+polyphony = 3
+layers = [{ sample = "fuse" }]
+note = "A fused barrel's fuse."
+
+[cue."world.rain"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "rain_loop" }]
+note = "Rain, by the sky's rain."
+
+[cue."world.wind"]
+kind = "modulated_loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+layers = [{ sample = "wind_loop" }]
+note = "A sandstorm's wind; snow's softer wind is its child."
+
+[cue."world.night"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -6.0
+layers = [{ sample = "night_loop" }]
+note = "Night's insects."
+
+[cue."world.thunder"]
+kind = "one_shot"
+bus = "world"
+priority = "medium"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "thunder" }]
+note = "Thunder after lightning, from the round clock."
+
+[cue."world.volcano"]
+kind = "modulated_loop"
+bus = "world"
+priority = "medium"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "volcano_rumble_loop" }]
+note = "A volcano rumbling toward an eruption."
+
+[cue."world.volcano.bomb"]
+kind = "one_shot"
+bus = "world"
+priority = "medium"
+class = "large"
+polyphony = 4
+layers = [{ sample = "lava_whistle" }]
+note = "A lava bomb thrown."
+
+[cue."world.portal"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 4
+layers = [{ sample = "portal_hum_loop" }]
+note = "A portal's hum."
+
+[cue."world.portal.teleport"]
+kind = "one_shot"
+bus = "world"
+priority = "high"
+class = "medium"
+polyphony = 3
+layers = [{ sample = "portal_teleport" }]
+note = "A tank through a portal."
+
+[cue."world.portal.shot"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 60
+layers = [{ sample = "portal_teleport", gain_db = -8.0 }]
+note = "A shot through a portal."
+
+[cue."world.door"]
+kind = "one_shot"
+bus = "world"
+priority = "high"
+class = "medium"
+polyphony = 1
+layers = [{ sample = "door_open" }]
+note = "A training door opening."
+
+[cue."world.flag"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 1
+layers = [{ sample = "ui_beat" }]
+note = "A training flag taken."
+
+[cue."world.lantern"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+layers = [{ sample = "lantern" }]
+note = "A lantern set or broken."
+
+[cue."bed.grass"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_grass_loop" }]
+note = "A grass map's air."
+
+[cue."bed.desert"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_desert_loop" }]
+note = "A desert map's air."
+
+[cue."bed.valley"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_valley_loop" }]
+note = "The valley biome's air."
+
+[cue."bed.floodplain"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_floodplain_loop" }]
+note = "The floodplain biome's air."
+
+[cue."bed.karst"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "huge"
+polyphony = 1
+jitter = false
+gain_db = -8.0
+layers = [{ sample = "bed_karst_loop" }]
+note = "The karst biome's air."
+
+# The field's creatures (the crows, ducks and fireflies watchers,
+# audio::life): quiet, sparse, every one `audio_critters_db` under its cue.
+
+[cue."world.crow.caw"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+steal = "none"
+gain_db = -10.0
+layers = [{ sample = "crow_caw" }]
+note = "A crow flock at rest - on the grass or in a crown - cawing now and then, hashed on the round clock: one creature's call in earshot every audio_critter_gap_s at most, while the mix is calm."
+
+[cue."world.crow.flush"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+cooldown_ms = 1500
+gain_db = -6.0
+layers = [{ sample = "crow_flush_wings" }, { sample = "crow_alarm", gain_db = -3.0 }]
+note = "A crow flock lifting off from a hull, a shot, a blast or a struck tree: a burst of wings and alarmed caws, fuller the more birds."
+
+[cue."world.crow.caw.far"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 1
+steal = "none"
+gain_db = -9.0
+layers = [{ sample = "crow_caw_far" }]
+note = "A flushed flock cawing once more as it wheels away, audio_crow_wheel_s into its flight, where its first bird flies."
+
+[cue."world.duck.quack"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+steal = "none"
+gain_db = -11.0
+layers = [{ sample = "duck_quack" }]
+note = "A calm mallard group quacking now and then, hashed on the round clock, under the creatures' gap and calm."
+
+[cue."world.duck.quack.wary"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+cooldown_ms = 6000
+gain_db = -12.0
+layers = [{ sample = "duck_alarm" }]
+note = "A hull on the bank frightening a mallard group: a few agitated quacks as it paddles off."
+
+[cue."world.duck.dabble"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 1
+steal = "none"
+gain_db = -14.0
+layers = [{ sample = "duck_dabble" }]
+note = "A duck tipping its head under (Duck::dabbling, the dip the window draws), audio_duck_dabble_share of its dips, under the creatures' gap and calm."
+
+[cue."world.duck.takeoff"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+cooldown_ms = 1500
+gain_db = -6.0
+layers = [{ sample = "duck_takeoff" }, { sample = "duck_alarm", gain_db = -3.0 }]
+note = "A mallard group put up by a shot or a blast: the splashing run, loud wing beats and alarmed quacks, fuller the more ducks."
+
+[cue."world.duck.land"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 120
+gain_db = -10.0
+layers = [{ sample = "duck_land" }]
+note = "A duck splashing down on open water; a group's landings patter at least 120 ms apart."
+
+[cue."world.firefly"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+jitter = false
+gain_db = -18.0
+layers = [{ sample = "firefly_loop" }]
+note = "Fireflies at night: a faint shimmer over the nearest swarms, as strong as the sky shows them and as lit as they glow."
+
+# Fly-bys (the flyby watcher).
+
+[cue."flyby.shell"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "tiny"
+polyphony = 3
+layers = [{ sample = "flyby_shell" }]
+note = "A shell passing close by a seat."
+
+[cue."flyby.bullet"]
+kind = "one_shot"
+bus = "impacts"
+priority = "low"
+class = "tiny"
+polyphony = 3
+cooldown_ms = 80
+layers = [{ sample = "flyby_bullet" }]
+note = "Rounds snapping past a seat."
+
+[cue."flyby.missile"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "flyby_missile" }]
+note = "A missile streaking past a seat."

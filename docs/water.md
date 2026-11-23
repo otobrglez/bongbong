@@ -133,6 +133,13 @@ pack (docs/bong-health-pack-prd.md).
   water, paddling off from a hull and taking off from a shot or a blast;
   none under ice.
 
+- **Sound** (docs/sound-system-prd.md): a hull splashes going into a ford and
+  pours off coming out, then drips while its tracks are wet; lakes lap and
+  streams babble from beds placed along the water, a frozen shore creaks;
+  a blast on water throws a geyser, a dud or a downed drone plops, rain
+  patters on the water in earshot. A hull carried by a current
+  (`Game::drift_at`) is not driving, so its tracks stay quiet.
+
 ## Knobs
 
 All in `tuning.rs`'s ground group: `water_speed_factor`,

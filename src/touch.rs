@@ -779,6 +779,7 @@ mod touch_tests {
             build: true,
             leave: false,
             pause: true,
+            sound: true,
             lines: 1,
             // A phone draws no minimap (`minimap::MinimapRules::is_phone`).
             minimap: None,

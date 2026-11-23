@@ -281,8 +281,7 @@ pub(super) fn press_treads(wear: &mut WearGrid, tank: &mut Tank, before: Positio
             }
         }
     }
-    let muddy = !surface.is_water() && surface != Surface::Ice && ((look.sky == Sky::Rain && surface != Surface::Sand) || tread.wet > 0.15);
-    if muddy {
+    if crate::wear::muddy(look, surface, tread.wet) {
         tread.splat_due += moved;
         let spacing = t.wear_splat_spacing_px.max(1.0);
         while tread.splat_due >= spacing {

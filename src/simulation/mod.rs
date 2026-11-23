@@ -485,6 +485,11 @@ pub enum Event {
     /// A trigger pull that launched something. A twin barrel's queued
     /// second shot and a burst's later bullets are part of the same pull.
     Fired { slot: usize, weapon: &'static str },
+    /// A seat's press of a shell or plasma trigger, its cooldown run out,
+    /// with less ammo than the shot costs (a twin barrel's two): nothing
+    /// left the gun. Only a seat's is logged - an enemy holds its trigger
+    /// and would log one a frame.
+    DryFired { slot: usize, weapon: &'static str },
     /// The room moved a client-owned hull itself - a refused pose, a
     /// portal, a gate - and the client snaps to it
     /// (docs/online-coop-prd.md §4.14).
@@ -506,8 +511,11 @@ pub enum Event {
     /// (`Tank::skid`, docs/sonic-hammer.md), 0 for every other shove.
     Shoved { seat: usize, vx: f32, vy: f32, skid: f32 },
     /// A projectile, beam or wave landed on `target` at (`x`, `y`);
-    /// `cause` says which kind of thing it was, for what draws it.
-    Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32, cause: HitCause },
+    /// `cause` says which kind of thing it was, for what draws it. `by` is
+    /// the owner slot of whoever landed it (`Owner::slot`, so a tower's is
+    /// `shell::TOWER_SLOT`), `None` for the world's own hurts: what the
+    /// shooter's hit marker is told by.
+    Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32, cause: HitCause, by: Option<usize> },
     /// A sonic hammer fired by `slot` from the pivot (`x`, `y`) along `dir`
     /// (`Dir::name`) (docs/sonic-hammer.md): the wave a replica draws.
     /// Logged right after its `Fired`, in the same tick.
@@ -565,6 +573,10 @@ pub enum Event {
     /// The drone `id` was struck in the air over (`x`, `y`), `height` px
     /// up, by `by` (`air::AirStrike::name`), and falls.
     DroneDowned { id: u32, x: f32, y: f32, height: f32, by: &'static str },
+    /// A round struck the drone `id` - or, `aircraft`, the helicopter of
+    /// call `id` - over (`x`, `y`) and it flies on: it takes
+    /// `fpv_drone_hits` (`air_heli_hits`) rounds to come down.
+    AirHit { id: u32, aircraft: bool, x: f32, y: f32 },
     /// A downed drone `id` reached the ground at (`x`, `y`): a dud.
     DroneCrashed { id: u32, x: f32, y: f32 },
     /// The drone `id` lost its lock (`why`: "wreck", "gone", "canopy",
@@ -655,8 +667,10 @@ pub enum Event {
     /// (`Projectile::try_ricochet`) or a shell or bullet off a barrel
     /// (`Material::deflect_chance`) - and flies on along `heading`
     /// (degrees, 0 = up). Recorded so a client that sees only positions
-    /// knows why the shot turned.
-    Ricochet { slot: usize, x: f32, y: f32, heading: f32 },
+    /// knows why the shot turned. `id` is the shot's (`Shell::id`), `shot`
+    /// what it is (the cause its hit would have had) and `off` what it came
+    /// off: a hull, a bong or a tile of its material.
+    Ricochet { slot: usize, id: u32, shot: HitCause, off: HitTarget, x: f32, y: f32, heading: f32 },
     /// `slot`'s rainbow shield ran out of charge and shattered at
     /// (`x`, `y`) - the frame it crossed zero, emitted once.
     ShieldBroken { slot: usize, x: f32, y: f32 },
@@ -871,6 +885,18 @@ impl HitCause {
     pub fn is_shot(self) -> bool {
         !matches!(self, HitCause::Blast | HitCause::Lava | HitCause::Fire | HitCause::Slime)
     }
+}
+
+/// What a hull is pressed against hardest (`Game::contacts_against`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Against {
+    /// Another tank's hull.
+    Hull,
+    /// Deep water's edge.
+    DeepWater,
+    /// A fixed face with this surface: a tile, the field's edge; `Plain`
+    /// is lava's edge or the bong.
+    Face(crate::obstacle::Surface),
 }
 
 /// What an `Event::Hit` landed on.
@@ -5389,10 +5415,11 @@ impl Game {
                     }),
                     _ => false,
                 };
-                bounced.then(|| p.heading())
+                bounced.then(|| (p.heading(), p.id()))
             };
-            if let Some(heading) = bounced {
-                f.events.push(Event::Ricochet { slot: owner.slot(), x: hit_pos.x, y: hit_pos.y, heading });
+            if let Some((heading, id)) = bounced {
+                let off = self.what_was_struck(f, target);
+                f.events.push(Event::Ricochet { slot: owner.slot(), id, shot: P::hit_cause(), off, x: hit_pos.x, y: hit_pos.y, heading });
                 continue;
             }
             {
@@ -5413,6 +5440,22 @@ impl Game {
                 cause: P::hit_cause(),
             };
             self.apply_hit(f, target, hit_pos, dmg, effects, owner);
+        }
+    }
+
+    /// What a sweep's `target` is, as an event names it: a hull by its
+    /// seat or slot, a bong by its side, a tile by its material, the
+    /// field's edge.
+    fn what_was_struck(&self, f: &Frame, target: ShellTarget) -> HitTarget {
+        match target {
+            ShellTarget::Tank(e) => match self.world.get::<&Tank>(e).map(|t| t.owner()) {
+                Ok(Owner::Player(player)) => HitTarget::Player { player },
+                Ok(owner) => HitTarget::Enemy { slot: owner.slot() },
+                Err(_) => HitTarget::Wall,
+            },
+            ShellTarget::Bong(e) => self.world.get::<&Bong>(e).map_or(HitTarget::Wall, |b| HitTarget::Bong { side: b.side }),
+            ShellTarget::Obstacle(e) => f.terrain.obstacle(e).map_or(HitTarget::Wall, |b| HitTarget::Obstacle { material: b.material }),
+            ShellTarget::Wall => HitTarget::Wall,
         }
     }
 
@@ -6049,6 +6092,14 @@ impl Game {
         out
     }
 
+    /// The ground's own drift at `pos` (px/s): a stream's current, a
+    /// sandstorm's gust - what carries a hull that stops there
+    /// (`Footing::flow`). The sound takes it off a hull's measured speed,
+    /// so one parked in a current runs no tracks.
+    pub fn drift_at(&self, pos: Position) -> Position {
+        Footing::at(&self.water, &self.lava, &self.craters, self.weather, pos, self.time).flow
+    }
+
     pub fn grass_disturbed(&self) -> Vec<Position> {
         let reach = OBSTACLE_GRID_SIZE * 0.5 + tuning().grass_crush_radius * 0.5;
         let movers: Vec<Position> = self
@@ -6112,6 +6163,29 @@ impl Game {
                 let stats = self.physics.contact_stats(t.body?);
                 let at = stats.contact?;
                 (stats.max_impulse > 0.0).then_some((t.owner_slot(), at, stats.max_impulse, stats.touching_tank))
+            })
+            .collect();
+        out.sort_by_key(|c| c.0);
+        out
+    }
+
+    /// `contacts`, each with what the hull is pressed against hardest: the
+    /// sound of a scrape is the face's. A replica has none.
+    pub fn contacts_against(&self) -> Vec<(usize, Position, f32, Against)> {
+        let mut out: Vec<(usize, Position, f32, Against)> = self
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| !t.is_dead())
+            .filter_map(|t| {
+                let stats = self.physics.contact_stats(t.body?);
+                let at = stats.contact?;
+                let against = match stats.hardest {
+                    Some((body, true)) if self.deep_water_bodies.contains(&body) => Against::DeepWater,
+                    Some((body, true)) => Against::Face(self.physics.surface_of(body)),
+                    _ => Against::Hull,
+                };
+                (stats.max_impulse > 0.0).then_some((t.owner_slot(), at, stats.max_impulse, against))
             })
             .collect();
         out.sort_by_key(|c| c.0);
@@ -8301,6 +8375,23 @@ mod mechanics_tests {
             }
         }
         panic!("the shell never reached the wall beyond the lake");
+    }
+
+    /// A hull pressed against deep water's edge is held against water, one
+    /// pressed against a wall against the wall's face, and one against a
+    /// lava lake's edge against a plain face (`Game::contacts_against`).
+    #[test]
+    fn a_hull_knows_what_it_is_pressed_against() {
+        let pressed = |map: &str, from: (i32, i32), dir: Dir| {
+            let mut game = sandbox(map);
+            with_tank_mut(&game.world, game.player().expect("player"), |t| t.heat_shield_timer = 100.0);
+            teleport_player(&mut game, map::cell_to_world(from.0, from.1));
+            drive(&mut game, Some(dir), 240);
+            game.contacts_against().into_iter().find(|c| c.0 == 0).map(|c| c.3)
+        };
+        assert_eq!(pressed(&water_map(""), (11, 11), Dir::Right), Some(Against::DeepWater));
+        assert_eq!(pressed(&lava_map(""), (11, 11), Dir::Right), Some(Against::Face(crate::obstacle::Surface::Plain)));
+        assert_eq!(pressed(&water_map(""), (29, 11), Dir::Right), Some(Against::Face(Material::Brick.surface())));
     }
 
     /// The water sandbox's shapes painted in lava instead: a 5 x 5 lake
@@ -11028,9 +11119,10 @@ cells."21,8" = { kind = "wall", material = "iron" }
             step(&mut game, Input::default());
             for e in game.events() {
                 match *e {
-                    Event::Ricochet { slot: 0, heading, .. } => {
+                    Event::Ricochet { slot: 0, id, shot: what, off, heading, .. } => {
                         shot.headings.push(heading);
-                        assert!(game.world.query::<&Shell>().iter().any(|s| s.state == ShellState::Flying), "still flying");
+                        assert!(game.world.query::<&Shell>().iter().any(|s| s.state == ShellState::Flying && s.id == id), "still flying, the shot it names");
+                        assert!(what == HitCause::Shell && matches!(off, HitTarget::Obstacle { material: Material::Iron }), "a shell off the iron: {off:?}");
                     }
                     Event::Hit { target: HitTarget::Obstacle { material: Material::Iron }, .. } => shot.burst_on_iron = true,
                     Event::Hit { .. } if !shot.headings.is_empty() => shot.landed_after = true,

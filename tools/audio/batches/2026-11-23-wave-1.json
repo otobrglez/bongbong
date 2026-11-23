@@ -1,0 +1,12 @@
+{
+  "flow": "v8Y3qwVgN7l4mpmeQk6s",
+  "name": "bongbong sfx 2026-11-23 wave-1",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 66,
+  "charged_credits": 20,
+  "note": "run in one call (1 node); all 4 takes started and completed, none hit the queue limit; replaces the rejected siren recipe, whose takes were moved to _takes/wave_start/_old/",
+  "nodes": {
+    "mSPevx6hGlA1oRSUCbye": "wave_start"
+  },
+  "sessions": ["KGrEoCrEgIoh8ptAzucP","jGW1GL4l1GOIx0dBni2U","ISwrQtW3toqZqRFY8tEP","PZs8yVnNMj9fW4Ors7j3"]
+}

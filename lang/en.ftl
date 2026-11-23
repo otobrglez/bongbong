@@ -78,6 +78,16 @@ round-lost = YOU LOSE
 round-restarting = Restarting in { $seconds }...
 round-back-to-lobby = Back to the lobby in { $seconds }...
 paused = PAUSED
+
+# The sound panel the HUD's speaker button opens (docs/sound-system-prd.md
+# 4.5): its title over an ON/OFF switch (64 px, 18 px text), then a
+# slider per level, each named in a 104 px column.
+sound-title = SOUND
+sound-on = ON
+sound-off = OFF
+sound-master = MASTER
+sound-effects = EFFECTS
+sound-music = MUSIC
 # A sheet that would not load or a picture the graphics card would not
 # make (src/render/target.rs): $name is the file's or the picture's name.
 render-trouble = Graphics trouble: { $name }

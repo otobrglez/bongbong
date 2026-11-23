@@ -1,0 +1,20 @@
+{
+  "flow": "TH7xVLSklAXTtmh38jU5",
+  "name": "bongbong sfx 2026-11-22 full-6",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 871,
+  "charged_credits": 264,
+  "note": "run in one call (9 nodes): all 36 takes started and completed, no take lost",
+  "nodes": {
+    "FoVgcCIPORY7iueNPchL": "hit_flame",
+    "4sPxi636jYfsImO89EEe": "hit_foliage",
+    "5B4uhG68AU4eJwQ6zAdX": "lantern",
+    "On3koe3Yr5XomUTxk2na": "missile_dud",
+    "FWdjKZQ9vki7XmnbUeiq": "night_loop",
+    "FpfYK3TElN4DnjEgAMKd": "portal_hum_loop",
+    "7QmIBzoa4bVjjvloSGzq": "rain_loop",
+    "uksljzq0a1uaKgTCS2rq": "scrape_loop",
+    "dIP21s7Km3MOioGYuklu": "wind_loop"
+  },
+  "sessions": ["kgFwH49EwoazCwnOTGGX","Ad5wjwtCm2aqtPBdpKpk","06jP2loBGGfKgEM2VoKp","cVJb8KxJQczDWvkOfX4c","dI5uJycpkSBrLbRouVWN","682xr7xd3ZtrXOFT68cn","6RDqrbyud5RWTkTG9gJS","yHEeZUanp6146AnsxCk9","HQHLUx5XuqFkRtsm0qCC","lrzZgWsCBLW8MUH7IjDB","id1z8ZG5qIKZNAIbciZQ","EWLwOlfzDjwcbElUwPxk","Nffgwnw3FGJ04rPVZ1aM","6Hw3LtG7FaUuocJLaeBP","OrPJRcSWTrdHzP0tRECA","xsFPnS5xxQbIJf15PzwF","PXl0syPFiXj0CRsAKmiF","7ba0lBuc1DANLr6mFJ3k","dvWIlEGHDI1QVNF2UOnO","0qSafwO10Eq6v9leJ5lj","gCSiQtKmL0TCC6t9MtvR","ZL7akhX8ebaEKZtmfsqc","zayK7tZ7jd2F9a95KXeE","CefuMGcUBp2OjV9aIwZt","fwO8SMX4ks9IqDqqPY6D","oSYxGAkR4MmknAQ0aOrL","Suk6t1LelRV9c2r1h7SJ","hlEsWA1AWKLdHsG5GIPv","fTs8NTTu4J28JyFV6cy0","hnLIuRRyru86UtK08QmH","A9cpWRmKfP4l6Jy8HgEG","cXPu0bbqNhJNsJesH8oB","A8s1X3W8yMSXln084Wwu","R84KJqleEb7W8KGFDRi6","w50e8b1IiHJUNearzH46","jVBR3eI4gxJ5RiWTvRXh"]
+}

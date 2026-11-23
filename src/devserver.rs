@@ -385,6 +385,13 @@ pub struct DevServer {
     hints: Option<crate::hud::Hints>,
     /// No window drives this server: `devserver::Headless` does.
     windowless: bool,
+    /// The sound panel as the window last laid it out (`hud::sound_panel_rects`),
+    /// `None` while it is shut: `status.ui.sound_panel` reports it.
+    sound_panel: Option<crate::hud::SoundPanelRects>,
+    /// A `click` on the sound button or the open panel, in UI points: the
+    /// panel's state is the window's (`app.rs`), so the window takes the
+    /// press at its next frame through its own hit tests (`take_sound_press`).
+    sound_press: Option<Vec2>,
 }
 
 /// A view the `camera` tool pinned: the world point at its centre and how
@@ -461,7 +468,21 @@ impl DevServer {
             held_touches: Vec::new(),
             hints: None,
             windowless: false,
+            sound_panel: None,
+            sound_press: None,
         }
+    }
+
+    /// The sound panel the window draws this frame, `None` while it is
+    /// shut, handed over once a frame like the UI frame.
+    pub fn publish_sound_panel(&mut self, panel: Option<crate::hud::SoundPanelRects>) {
+        self.sound_panel = panel;
+    }
+
+    /// A `click` on the sound button or the open panel since the window
+    /// last asked, in UI points.
+    pub fn take_sound_press(&mut self) -> Option<Vec2> {
+        self.sound_press.take()
     }
 
     /// The input a tool stood in for since the window last asked - the
@@ -633,7 +654,28 @@ impl DevServer {
     /// (`click_frame`).
     fn ui_json(&self, session: &Session, width: f32, height: f32) -> Value {
         let (_, _, ui) = self.click_frame(session, width, height);
-        crate::capi::ui_status(session, &ui)
+        let mut v = crate::capi::ui_status(session, &ui);
+        // The sound panel, while it is open: its switch and each level's
+        // track, in window coordinates, which is what `click` takes.
+        if let Some(object) = v.as_object_mut() {
+            let rect = |r: crate::math::Rectangle| {
+                let (a, b) = (ui.to_window(Vec2::new(r.x, r.y)), ui.to_window(Vec2::new(r.x + r.width, r.y + r.height)));
+                json!({ "x": a.x, "y": a.y, "w": b.x - a.x, "h": b.y - a.y })
+            };
+            object.insert(
+                "sound_panel".into(),
+                self.sound_panel.map_or(Value::Null, |p| {
+                    json!({
+                        "panel": rect(p.panel),
+                        "switch": rect(p.switch),
+                        "master": rect(p.tracks[0]),
+                        "effects": rect(p.tracks[1]),
+                        "music": rect(p.tracks[2]),
+                    })
+                }),
+            );
+        }
+        v
     }
 
     /// `status.camera` and the `camera` tool's reply: the view in force -
@@ -1702,7 +1744,16 @@ impl DevServer {
         let point = view.to_bitmap(window_point);
         let p = ui.to_ui(window_point);
         let corner = Self::corners(session, &ui).and_then(|corners| corners.hit(p));
+        // The sound button and the panel it opens are the window's: the
+        // press goes to it, in a round local or a room's.
+        let sound = !right
+            && matches!(session.mode(), Driver::Play | Driver::Online)
+            && (corner == Some(CornerButton::Sound) || self.sound_panel.is_some_and(|panel| panel.panel.contains(p)));
+        if sound {
+            self.sound_press = Some(p);
+        }
         match session.mode() {
+            _ if sound => {}
             Driver::Play => {
                 // The same order as `app.rs`: the level select or an
                 // open dialog eats every press while it is up, then the

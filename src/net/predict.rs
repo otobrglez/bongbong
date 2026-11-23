@@ -558,6 +558,9 @@ pub struct Predictor {
     /// first shot, the first barrel of a twin - and what it fired, for the
     /// round's muzzle ripple and the turret's kick.
     muzzles: Vec<(Position, ProvisionalKind)>,
+    /// Shell and plasma presses since the last frame that found too little
+    /// ammo for their shot - the room's `Event::DryFired` - for their click.
+    dry_presses: u32,
     /// The room's shots of this seat first seen unpaired, and when (local
     /// seconds of `clock`): held back from the picture for a moment in
     /// case their press is about to claim them, drawn if nothing does.
@@ -629,6 +632,7 @@ impl Predictor {
             reticle: None,
             impacts: Vec::new(),
             muzzles: Vec::new(),
+            dry_presses: 0,
             unpaired: std::collections::BTreeMap::new(),
             teleported: std::collections::BTreeSet::new(),
             next_shot: 0,
@@ -1037,6 +1041,9 @@ impl Predictor {
             _ => return,
         };
         if ammo - self.owed(kind) < cost {
+            if drawn && pressed && kind != ProvisionalKind::Bullet {
+                self.dry_presses += 1;
+            }
             return;
         }
         self.cooldown = cooldown;
@@ -1570,6 +1577,12 @@ impl Predictor {
     /// they fired, for the round's muzzle ripples and turret kicks.
     pub fn take_muzzles(&mut self) -> Vec<(Position, ProvisionalKind)> {
         std::mem::take(&mut self.muzzles)
+    }
+
+    /// How many shell and plasma presses since the last call found too
+    /// little ammo, for their dry click at the press.
+    pub fn take_dry_presses(&mut self) -> u32 {
+        std::mem::take(&mut self.dry_presses)
     }
 
     /// How many provisional shots are on the picture.

@@ -127,6 +127,24 @@ impl DevHooks {
         }
     }
 
+    /// The sound panel the window draws this frame (`None` while shut), for
+    /// `status.ui`.
+    pub fn publish_sound_panel(&mut self, panel: Option<crate::hud::SoundPanelRects>) {
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(server) = &mut self.server {
+            server.publish_sound_panel(panel);
+        }
+    }
+
+    /// A `click` the dev server took on the sound button or the open
+    /// panel, in UI points, for the window's own hit tests.
+    pub fn take_sound_press(&mut self) -> Option<Vec2> {
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        return self.server.as_mut().and_then(|server| server.take_sound_press());
+        #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+        None
+    }
+
     /// A press the window saw this frame, at `at` on the window, by a
     /// finger when `touch`.
     pub fn note_press(&mut self, at: Vec2, touch: bool) {

@@ -120,6 +120,29 @@ fn local_seats(session: &Session) -> Vec<u8> {
     }
 }
 
+/// What the sound hears from (`audio::space::View`): the camera's view, and
+/// a couch split's second; a followed view's ears lean toward its seat's
+/// tank, a whole field's sit at its middle.
+fn audio_views(game: &Game, camera: &Camera, second: Option<crate::math::Rectangle>, seats: &[u8]) -> Vec<crate::audio::space::View> {
+    let seat_at = |i: usize| {
+        seats
+            .get(i)
+            .and_then(|&s| crate::audio::bind::tank_in(game, s as usize))
+            .filter(|t| !t.is_wreck())
+            .map(|t| t.position)
+    };
+    let view = |r: crate::math::Rectangle, seat: Option<crate::math::Vec2>| crate::audio::space::View {
+        center: crate::math::Vec2::new(r.x + 0.5 * r.width, r.y + 0.5 * r.height),
+        half_width: 0.5 * r.width,
+        seat,
+    };
+    let mut views = vec![view(camera.rect(), if camera.shows_whole_field() { None } else { seat_at(0) })];
+    if let Some(r) = second {
+        views.push(view(r, seat_at(1)));
+    }
+    views
+}
+
 /// Whether the particle layer ages this frame: with the round on screen.
 /// A room's replica always runs; the local round does while it is played
 /// (`Session::playing`: no dialog, level select, lobby or builder over it)
@@ -715,6 +738,58 @@ fn load_progress() -> Option<crate::levels::Progress> {
     #[cfg(not(target_os = "emscripten"))]
     {
         progress_path().and_then(|path| crate::levels::read_progress(&path))
+    }
+}
+
+/// The sound settings (`audio::Settings`) the player chose in an earlier
+/// session: `bongbong.audio` in the page's `localStorage` on the web, a
+/// file beside the progress elsewhere. `None` the first time.
+fn load_audio_settings() -> Option<crate::audio::Settings> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let kept = page_string(PAGE_AUDIO);
+        serde_json::from_str(&kept).ok()
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let path = progress_path()?.with_file_name("audio.json");
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    }
+}
+
+/// The sound settings the page kept, as `load_audio_settings` reads them.
+#[cfg(target_os = "emscripten")]
+const PAGE_AUDIO: &std::ffi::CStr = c"(function(){try{return String(localStorage.getItem('bongbong.audio')||'')}catch(e){return ''}})()";
+
+/// Keep `settings` where `load_audio_settings` finds them; a store that
+/// cannot be written is logged and skipped.
+fn save_audio_settings(settings: &crate::audio::Settings) {
+    let Ok(json) = serde_json::to_string(settings) else {
+        return;
+    };
+    #[cfg(target_os = "emscripten")]
+    {
+        unsafe extern "C" {
+            fn emscripten_run_script(script: *const std::os::raw::c_char);
+        }
+        // The settings are numbers and booleans: nothing in the JSON
+        // needs quoting inside the script's single-quoted string.
+        let script = format!("(function(){{try{{localStorage.setItem('bongbong.audio','{json}')}}catch(e){{}}}})()");
+        if let Ok(script) = std::ffi::CString::new(script) {
+            unsafe { emscripten_run_script(script.as_ptr()) };
+        }
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let Some(path) = progress_path().map(|p| p.with_file_name("audio.json")) else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = std::fs::write(&path, json) {
+            eprintln!("bongbong: audio settings not saved to {}: {e}", path.display());
+        }
     }
 }
 
@@ -1790,6 +1865,18 @@ pub fn run(args: Args) {
         feedback,
         awareness,
         voice,
+        audio: {
+            let mut audio = crate::audio::Audio::shipped();
+            audio.warm();
+            if let Some(settings) = load_audio_settings() {
+                audio.set_settings(settings);
+            }
+            audio
+        },
+        audio_out: crate::render::audio::AudioOut::open(),
+        sound_panel: false,
+        sound_drag: None,
+        babbled: None,
         round_blocks,
         builder_blocks,
         round_minimap,
@@ -1917,6 +2004,18 @@ struct App {
     feedback: crate::feedback::Feedback,
     awareness: crate::indicators::ScreenAwareness,
     voice: crate::bubble::BongVoice,
+    /// Sound (docs/sound-system-prd.md): the director, which reads the
+    /// round as `fx` does, and the device its mix plays through - `None`
+    /// where the machine has none, and the game plays silent.
+    audio: crate::audio::Audio,
+    audio_out: Option<crate::render::audio::AudioOut>,
+    /// The sound panel is open under the right cluster
+    /// (`hud::sound_panel_rects`), and the slider a held press is setting.
+    sound_panel: bool,
+    sound_drag: Option<hud::SoundLevel>,
+    /// The bong's line last babbled and its age then: a line put up again
+    /// starts younger, so it babbles again.
+    babbled: Option<(String, f32)>,
     round_blocks: crate::render::canvas::BlockTextures,
     builder_blocks: crate::render::canvas::BlockTextures,
     round_minimap: crate::minimap::RoundMinimap,
@@ -2006,6 +2105,12 @@ impl App {
         let mut f = self.frame_input(rl, thread);
         if self.session.mode() == Driver::Build {
             self.frame_build(rl, thread, &f);
+            // The builder hears its own buttons; the round's sound holds.
+            self.audio.observe(&self.session.game, &[], &[], f.dt, false);
+            let commands = self.audio.take_commands();
+            if let Some(out) = &self.audio_out {
+                out.send(commands);
+            }
             return;
         }
         let stepped = self.frame_sim(&f);
@@ -2102,7 +2207,15 @@ impl App {
         let mut lamp_tap = false;
         // The pause button, pressed this frame (`CornerButton::Pause`).
         let mut pause_tap = false;
-        let keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
+        // The sound panel, where it is open: it closes with the corners,
+        // and while it is up a touch on it is the HUD's too.
+        if corners.is_none() {
+            self.sound_panel = false;
+            self.sound_drag = None;
+        }
+        let sound_panel = corners.as_ref().filter(|_| self.sound_panel).map(hud::sound_panel_rects);
+        let mut keep_out: Vec<crate::math::Rectangle> = corners.iter().flat_map(Corners::keep_out).collect();
+        keep_out.extend(sound_panel.map(|p| p.panel));
         self.touch.set_keep_out(&keep_out);
         // This frame's touch points, ids included so a stick follows its
         // own finger: on the window in UI points for the touch scheme,
@@ -2122,6 +2235,65 @@ impl App {
         if pressed {
             self.dev.note_press(window_pointer, touch_pressed);
         }
+        // Every corner button clicks. The sound button opens the sound
+        // panel or closes it, in any round, which runs on behind it: its
+        // switch mutes the game or brings its sound back, as the M key
+        // does, and its sliders set the levels, kept when a slider is let
+        // go (docs/sound-system-prd.md section 4.5).
+        if pressed && corner_hit.is_some() {
+            self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
+        }
+        let mut mute_toggle = crate::KEYBOARD_AVAILABLE && rl.is_key_pressed(KeyboardKey::KEY_M);
+        // The sound UI's press: the window's, or a dev server `click` on
+        // the button or the panel, which is a press held for this frame.
+        let dev_press = self.dev.take_sound_press();
+        let (sound_pressed, sound_held, sound_at) = match dev_press {
+            Some(at) => (true, true, at),
+            None => (pressed, held, ui_pointer),
+        };
+        let sound_corner = match dev_press {
+            Some(at) => corners.as_ref().and_then(|c| c.hit(at)),
+            None => corner_hit,
+        };
+        if sound_pressed && sound_corner == Some(CornerButton::Sound) {
+            self.touch.claim(&ui_touch_points);
+            self.sound_panel = !self.sound_panel;
+            self.sound_drag = None;
+        } else if let Some(panel) = sound_panel.filter(|_| sound_pressed) {
+            if panel.panel.contains(sound_at) {
+                self.touch.claim(&ui_touch_points);
+                if panel.switch.contains(sound_at) {
+                    mute_toggle = true;
+                    self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
+                } else if let Some(i) = panel.rows.iter().position(|row| row.contains(sound_at)) {
+                    self.sound_drag = Some(hud::SoundLevel::ALL[i]);
+                }
+            } else {
+                // A press anywhere else closes it and goes on to whatever
+                // it lands on.
+                self.sound_panel = false;
+            }
+        }
+        if let (Some(level), Some(panel)) = (self.sound_drag, sound_panel) {
+            let mut settings = self.audio.settings();
+            if sound_held {
+                let i = hud::SoundLevel::ALL.iter().position(|l| *l == level).unwrap_or(0);
+                level.set(&mut settings, hud::SoundPanelRects::value_at(panel.tracks[i], sound_at.x));
+                self.audio.set_settings(settings);
+            } else {
+                // Let go: kept, and a click at the new level.
+                self.sound_drag = None;
+                save_audio_settings(&settings);
+                self.audio.ui(crate::audio::cues::ids::UI_CLICK.0);
+            }
+        }
+        if mute_toggle {
+            let mut settings = self.audio.settings();
+            settings.muted = !settings.muted;
+            self.audio.set_settings(settings);
+            save_audio_settings(&settings);
+        }
+        self.dev.publish_sound_panel(corners.as_ref().filter(|_| self.sound_panel).map(hud::sound_panel_rects));
         let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);
         // A modified map whose original this build changed asks first.
         self.session.watch_originals();
@@ -2527,6 +2699,7 @@ impl App {
             // read each step's events before the next step clears them.
             let mut after_step = |game: &Game| {
                 self.fx.observe_events(game);
+                self.audio.observe_events(game);
                 self.follow.observe_events(game);
                 self.awareness.observe_events(game, &seats);
                 self.feedback.observe_events(game, &seats, &tuning(), hold);
@@ -2761,6 +2934,12 @@ impl App {
         let fx_dt = stepped.fx_dt;
         let Shot { camera, establishing, shown_rect, split_view, zoom_split, second_shown, overlay } = shot;
         let steer_right = crate::TOUCH_STEER_RIGHT;
+        // Online, the presses this client drew itself, for their sound to
+        // play at the press (docs/sound-system-prd.md section 4.10).
+        let (presses, predicted) = match (self.session.mode(), self.session.online.as_mut()) {
+            (Driver::Online, Some(round)) => (round.take_press_sounds(), round.draws_own_shots().then(|| round.seat()).flatten()),
+            _ => (Vec::new(), None),
+        };
         let game = self.session.shown();
         // Between the steps and the draw: the particle layer samples the
         // world the round is at (its events it read after each step),
@@ -2777,6 +2956,29 @@ impl App {
         self.fx.tick(fx_dt);
         self.feedback.tick(fx_dt, dt, &tuning());
         drop(fx_stage);
+        // Sound (docs/sound-system-prd.md): a replica's events read once a
+        // frame (a local round's were read after every step), then the
+        // frame's mix, heard from the views the window shows.
+        let audio_stage = crate::frame_stages::stage("audio");
+        self.audio.set_predicted_seat(predicted.map(usize::from));
+        if self.session.mode() == Driver::Online {
+            self.audio.observe_events(game);
+        }
+        if let Some(seat) = predicted {
+            for press in presses {
+                self.audio.own_press(game, seat as usize, press);
+            }
+        }
+        let seats = local_seats(&self.session);
+        let ears = audio_views(game, &camera, second_shown, &seats);
+        let own: Vec<usize> = seats.iter().map(|&s| s as usize).collect();
+        let running = fx_runs(self.session.mode(), self.session.playing(), game.paused);
+        self.audio.observe(game, &ears, &own, dt, running);
+        let commands = self.audio.take_commands();
+        if let Some(out) = &self.audio_out {
+            out.send(commands);
+        }
+        drop(audio_stage);
         // What the screen cannot see: a replica's events read once a frame
         // (a local round's were read after every step), and the arrows
         // drawn only while the camera shows less than the whole field, so
@@ -2790,7 +2992,9 @@ impl App {
         // The chrome the frame draws, and its corners laid out on the
         // window as this frame left it - a press may have opened a dialog
         // or started another round since the hit tests ran.
-        let chrome = self.session.play_chrome();
+        let mut chrome = self.session.play_chrome();
+        chrome.muted = self.audio.settings().muted;
+        chrome.sound_panel = self.sound_panel.then(|| self.audio.settings());
         let corners = CornerShape::of(&chrome, game.players.count()).map(|shape| hud::corners(&ui, &shape));
         // A cluster fades while a tank, a shot or a blast is under it, on
         // the frame's own time - a lockstep `step`'s, as the particles'.
@@ -2876,6 +3080,15 @@ impl App {
                 .unwrap_or_else(|| key.to_string())
         };
         self.voice.update(game, voice_dt, &tuning(), |key| words(key).chars().count());
+        // A new line up babbles once, where the bong stands.
+        let line = (self.session.mode() == Driver::Play).then(|| self.voice.showing()).flatten().map(|l| (l.key.clone(), l.age));
+        if let Some((key, age)) = &line
+            && self.babbled.as_ref().is_none_or(|(last, last_age)| last != key || age < last_age)
+            && let Some(at) = game.bong_position()
+        {
+            self.audio.babble(at, game.map.bong_kind(crate::bong::Side::Player));
+        }
+        self.babbled = line;
         let bubble = (self.session.mode() == Driver::Play)
             .then(|| self.voice.showing())
             .flatten()

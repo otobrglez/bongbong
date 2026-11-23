@@ -177,8 +177,9 @@ fn a_second_crate_queues_a_second_sortie() {
     assert!((left - tuning().air_support_delay_seconds).abs() < 0.05, "a full count from the first one leaving: {left}");
 }
 
-/// Bullets bring the heli down after `air_heli_hits`; anything else at
-/// once. Down, it is gone and the seat's next call starts its count.
+/// Bullets bring the heli down after `air_heli_hits`, each round before
+/// the last an `Event::AirHit`; anything else at once. Down, it is gone and
+/// the seat's next call starts its count.
 #[test]
 fn the_heli_comes_down_to_bullets_and_the_next_call_counts() {
     let mut game = round();
@@ -193,6 +194,8 @@ fn the_heli_comes_down_to_bullets_and_the_next_call_counts() {
     for _ in 1..tuning().air_heli_hits {
         assert!(!game.strike_air(&mut f, AirKey::Aircraft(heli.id), AirStrike::Bullet));
     }
+    let clipped = f.events.iter().filter(|e| matches!(e, Event::AirHit { aircraft: true, id, .. } if *id == heli.id)).count();
+    assert_eq!(clipped as u32, tuning().air_heli_hits.max(1) as u32 - 1, "each round it flies on through is an air hit");
     assert!(game.strike_air(&mut f, AirKey::Aircraft(heli.id), AirStrike::Bullet));
     assert!(f.events.iter().any(|e| matches!(e, Event::AircraftDowned { by: "bullet", .. })));
     assert!(game.aircraft().is_empty());

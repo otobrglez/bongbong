@@ -302,6 +302,30 @@ pub enum ActiveWeapon {
 }
 
 impl ActiveWeapon {
+    /// Every weapon, the shell included, in declaration order. The sound
+    /// maps walk it (`audio::source::weapon_sound`).
+    pub const ALL: [ActiveWeapon; 13] = [
+        ActiveWeapon::Laser,
+        ActiveWeapon::Plasma,
+        ActiveWeapon::Minigun,
+        ActiveWeapon::Missiles,
+        ActiveWeapon::Flamethrower,
+        ActiveWeapon::Grenades,
+        ActiveWeapon::SonicHammer,
+        ActiveWeapon::Emp,
+        ActiveWeapon::GaussRail,
+        ActiveWeapon::FpvSwarm,
+        ActiveWeapon::RodFromGod,
+        ActiveWeapon::GravityWell,
+        ActiveWeapon::Shell,
+    ];
+
+    /// The weapon `name` names (`ActiveWeapon::name`), as `Event::Fired`
+    /// carries it.
+    pub fn parse(name: &str) -> Option<ActiveWeapon> {
+        ActiveWeapon::ALL.into_iter().find(|w| w.name() == name)
+    }
+
     /// Lower-case name for tooling/JSON (`Event::Fired`, the dev server).
     pub fn name(self) -> &'static str {
         match self {

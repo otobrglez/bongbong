@@ -210,10 +210,10 @@ pub(super) fn hurt(tank: &mut Tank, hurt: &Hurt, events: &mut Vec<Event>, kills:
         Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
     };
     match hurt.report {
-        Report::Hit(cause) => events.push(Event::Hit { target, damage: landed, killed, x: hurt.at.x, y: hurt.at.y, cause }),
+        Report::Hit(cause) => events.push(Event::Hit { target, damage: landed, killed, x: hurt.at.x, y: hurt.at.y, cause, by: hurt.by.map(Owner::slot) }),
         Report::Contact(cause) => {
             if tank.touch(cause) || killed {
-                events.push(Event::Hit { target, damage: 0.0, killed, x: hurt.at.x, y: hurt.at.y, cause });
+                events.push(Event::Hit { target, damage: 0.0, killed, x: hurt.at.x, y: hurt.at.y, cause, by: hurt.by.map(Owner::slot) });
             }
         }
         Report::Own => {}
@@ -320,7 +320,7 @@ impl Game {
                         let d = roll_range(&mut f.rng, dmg.0, dmg.1);
                         bong.hurt_by(d, Some(shooter));
                         let target = HitTarget::Bong { side: bong.side };
-                        f.events.push(Event::Hit { target, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: effects.cause });
+                        f.events.push(Event::Hit { target, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: effects.cause, by: Some(shooter.slot()) });
                         (bong.is_dead(), bong.position, bong.can_hop(), bong.hop_distance())
                     }
                 };
@@ -345,10 +345,10 @@ impl Game {
                 // (a destroyed tile, a blast), since it happened first.
                 let mark = f.events.len();
                 let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot { dir: effects.travel, at: Some(at), by: Some(shooter) });
-                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y, cause: effects.cause });
+                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y, cause: effects.cause, by: Some(shooter.slot()) });
             }
             ShellTarget::Wall => {
-                f.events.push(Event::Hit { target: HitTarget::Wall, damage: 0.0, killed: false, x: at.x, y: at.y, cause: effects.cause });
+                f.events.push(Event::Hit { target: HitTarget::Wall, damage: 0.0, killed: false, x: at.x, y: at.y, cause: effects.cause, by: Some(shooter.slot()) });
             }
         }
     }
@@ -453,7 +453,7 @@ impl Game {
             }
             bong.hurt_by(dmg, params.by);
             let killed = bong.is_dead();
-            f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: dmg, killed, x: bong.position.x, y: bong.position.y, cause: HitCause::Blast });
+            f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: dmg, killed, x: bong.position.x, y: bong.position.y, cause: HitCause::Blast, by: params.by.map(Owner::slot) });
             if killed {
                 dead_bongs.push(bong.position);
             } else if bong.can_hop() {

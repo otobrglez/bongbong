@@ -357,7 +357,8 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
 /// plasma bolt / shell per barrel: a twin-barrel chassis (nonzero
 /// TANK_BARREL_LATERAL_OFFSET_BY_ROW) fires the left barrel now and queues
 /// the right one TANK_TWIN_SHOT_DELAY_SECONDS later, costing 2 ammo. A
-/// weapon short of the ammo it needs simply does nothing.
+/// weapon short of the ammo it needs fires nothing; a seat's shell or
+/// plasma press logs its dry click (`dry_fire`).
 pub(super) fn dispatch_fire(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner, aim_offset: f32) {
     dispatch_fire_from(physics, f, tank, owner, aim_offset, None);
 }
@@ -503,6 +504,8 @@ pub(super) fn dispatch_fire_from(
                         lateral_offset: lateral,
                     });
                 }
+            } else {
+                dry_fire(f, tank, ActiveWeapon::Plasma);
             }
         }
         ActiveWeapon::Shell => {
@@ -519,8 +522,19 @@ pub(super) fn dispatch_fire_from(
                         lateral_offset: lateral,
                     });
                 }
+            } else {
+                dry_fire(f, tank, ActiveWeapon::Shell);
             }
         }
+    }
+}
+
+/// A seat's press that found too little ammo for the shot: logged
+/// (`Event::DryFired`) for the click its player hears. An enemy holds its
+/// trigger rather than pressing it, so it logs none.
+fn dry_fire(f: &mut Frame, tank: &Tank, weapon: ActiveWeapon) {
+    if tank.is_player() {
+        f.events.push(Event::DryFired { slot: tank.owner_slot(), weapon: weapon.name() });
     }
 }
 

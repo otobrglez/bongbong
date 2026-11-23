@@ -163,6 +163,14 @@ pub const GUN_NAMES: [&str; 7] = ["shell", "laser", "plasma", "minigun", "missil
 /// `Tier::index`.
 pub const TIER_NAMES: [&str; 4] = ["light", "medium", "heavy", "super"];
 
+/// The sound buses in `audio::Bus` declaration order - index with
+/// `Bus::index`.
+pub const BUS_NAMES: [&str; 9] = ["music", "weapons", "impacts", "explosions", "vehicles", "world", "warnings", "voice", "ui"];
+
+/// The audibility classes in `audio::Class` declaration order - index with
+/// `Class::index`.
+pub const CLASS_NAMES: [&str; 5] = ["tiny", "small", "medium", "large", "huge"];
+
 /// The table macro. Grammar, one row per knob:
 ///
 /// ```text
@@ -5236,6 +5244,184 @@ tunables! {
         /// ground and the fog, sand, rain and snow in the air as plain
         /// blocks. For looking at that picture where the shaders work.
         weather_without_shaders: bool = false in 0 ..= 1;
+    }
+    group audio {
+        /// The whole mix, in dB, before the player's own volume setting
+        /// (docs/sound-system-prd.md section 4.5).
+        audio_master_db: f32 = (-3.0) in -60.0 ..= 12.0;
+        /// Each bus's level in dB, in `audio::Bus` order.
+        audio_bus_db: [f32; 9] = [-8.0, 0.0, -2.0, 0.0, -5.0, -9.0, 0.0, 0.0, -6.0] in -60.0 ..= 12.0 labels BUS_NAMES;
+        /// How many voices play at once; past it the quietest, lowest
+        /// priority one gives way (section 4.5).
+        audio_voices: usize = 48 in 4 ..= 128;
+        /// The HDR window (section 4.5): a voice more than this many dB under
+        /// the loudest sound playing is not started, and a loop under it is
+        /// let go.
+        audio_hdr_window_db: f32 = 45.0 in 6.0 ..= 96.0;
+        /// How fast the top of the HDR window falls back after a loud
+        /// sound, in dB a second.
+        audio_hdr_release_db_s: f32 = 20.0 in 1.0 ..= 200.0;
+        /// The listener floats above the field this share of half the
+        /// view's width (section 4.3): pan is `dx / sqrt(dx^2 + h^2)`.
+        audio_listener_height: f32 = 0.6 in 0.05 ..= 4.0;
+        /// Where a followed field puts the ears: 0 at the camera's centre,
+        /// 1 on the seat's own tank.
+        audio_ear_bias: f32 = 0.6 in 0.0 ..= 1.0;
+        /// How wide the stereo field is: 1 full, 0 mono.
+        audio_pan_width: f32 = 0.85 in 0.0 ..= 1.0;
+        /// The distance (px) inside which a sound plays at its full level.
+        audio_near_px: f32 = 96.0 in 1.0 ..= 2000.0;
+        /// How far each audibility class carries (px), in
+        /// `audio::Class` order; the huge class covers any map.
+        audio_class_far_px: [f32; 5] = [300.0, 600.0, 1200.0, 2500.0, 12000.0] in 50.0 ..= 20000.0 labels CLASS_NAMES;
+        /// How steeply a sound falls with distance past `audio_near_px`:
+        /// 1 is the inverse-distance law.
+        audio_rolloff: f32 = 1.0 in 0.1 ..= 4.0;
+        /// The high-cut a sound reaches at the end of its class's range
+        /// (Hz): the far end of a fight is its rumble.
+        audio_far_cutoff_hz: f32 = 1500.0 in 100.0 ..= 20000.0;
+        /// The most a wall line between listener and sound takes off, in dB.
+        audio_occlusion_max_db: f32 = (-24.0) in -80.0 ..= 0.0;
+        /// The high-cut a fully occluded sound falls to (Hz).
+        audio_occlusion_cutoff_hz: f32 = 800.0 in 100.0 ..= 20000.0;
+        /// How long a ricochet's whine follows the shot away (s), fading as
+        /// it goes.
+        audio_whine_seconds: f32 = 0.7 in 0.05 ..= 5.0;
+        /// How much a struck hull's mass lowers its ring: the pitch is
+        /// `1 / mass_factor` to this power (`source::hull_pitch`).
+        audio_hull_mass_pitch: f32 = 0.3 in 0.0 ..= 2.0;
+        /// The speed sound travels at (px a second) for the propagation
+        /// delay; about 1700 is the real one at the game's scale.
+        audio_sound_speed_px: f32 = 3000.0 in 300.0 ..= 50000.0;
+        /// The longest a far sound waits for its distance (s). 0 turns the
+        /// delay off.
+        audio_delay_max_s: f32 = 0.25 in 0.0 ..= 5.0;
+        /// The speed of sound doppler is figured against (px a second).
+        audio_doppler_c_px: f32 = 3000.0 in 300.0 ..= 50000.0;
+        /// The pitch range doppler may bend a sound across.
+        audio_doppler_min: f32 = 0.8 in 0.5 ..= 1.0;
+        audio_doppler_max: f32 = 1.25 in 1.0 ..= 2.0;
+        /// The room every placed sound sends into (section 4.3): the level
+        /// its tail returns at, in dB; how long it rings (to -60 dB) on an
+        /// arena and on a field, in seconds; and where its high-cut sits,
+        /// in Hz.
+        audio_reverb_db: f32 = 0.0 in -60.0 ..= 12.0;
+        audio_reverb_arena_s: f32 = 0.8 in 0.05 ..= 8.0;
+        audio_reverb_field_s: f32 = 1.6 in 0.05 ..= 8.0;
+        audio_reverb_damp_hz: f32 = 3500.0 in 100.0 ..= 20000.0;
+        /// The share of a sound sent to the room close up and at the end of
+        /// its class's range, linear; between them it follows the distance.
+        audio_reverb_send_near: f32 = 0.15 in 0.0 ..= 2.0;
+        audio_reverb_send_far: f32 = 1.2 in 0.0 ..= 2.0;
+        /// How close (px) a projectile must pass a seat's tank to whoosh by.
+        audio_flyby_px: f32 = 48.0 in 0.0 ..= 400.0;
+        /// The speed (px/s) into a face at which a hull's slam
+        /// (`Event::HullStruck`) sounds at its full strength; it starts at
+        /// a third at `hull_struck_min_speed`.
+        audio_slam_full_speed: f32 = 320.0 in 1.0 ..= 2000.0;
+        /// A twin gun's two shots (`bind::twin_shots`): how far apart they
+        /// pan when the barrels lie across the screen, and how much lower
+        /// the second sits, as a share of its pitch.
+        audio_twin_spread: f32 = 0.35 in 0.0 ..= 1.0;
+        audio_twin_detune: f32 = 0.05 in 0.0 ..= 0.5;
+        /// The lock beeps a seat hears while it stands in a charging rail's
+        /// lane (`warning.lock.rail`): seconds between two as the charge
+        /// starts and once it is full.
+        audio_lane_beep_slow_s: f32 = 0.45 in 0.05 ..= 2.0;
+        audio_lane_beep_fast_s: f32 = 0.1 in 0.02 ..= 1.0;
+        /// A seat's own rail beeps to be let go this many seconds before it
+        /// vents (`weapon.gauss_rail.vent.alarm`), a beep every
+        /// `audio_vent_beep_s`.
+        audio_vent_warn_s: f32 = 1.0 in 0.0 ..= 5.0;
+        audio_vent_beep_s: f32 = 0.12 in 0.02 ..= 1.0;
+        /// How far off (px) a drone locked on a seat holds its lock tone
+        /// (`warning.lock.drone`) at its lowest; it rises to its highest as
+        /// the drone closes in.
+        audio_drone_lock_far_px: f32 = 500.0 in 50.0 ..= 3000.0;
+        /// The seconds a diving drone's rotors take to rise to their scream
+        /// (`weapon.fpv_swarm.dive`).
+        audio_dive_rise_s: f32 = 0.6 in 0.05 ..= 5.0;
+        /// The ground speed (px/s) at which a missile's motor
+        /// (`weapon.missiles.motor`) reaches its top pitch.
+        audio_missile_motor_px_s: f32 = 345.0 in 10.0 ..= 3000.0;
+        /// A fly-by's strength at the edge of `audio_flyby_px`, as a share
+        /// of a pass straight over the seat's tank.
+        audio_flyby_edge_strength: f32 = 0.4 in 0.0 ..= 1.0;
+        /// The seconds between a spent special's empty clunk and the cannon
+        /// re-arming.
+        audio_rearm_s: f32 = 0.35 in 0.0 ..= 3.0;
+        /// An engine's pitch at idle and at top speed, before the chassis's
+        /// own offset (section 4.4).
+        audio_engine_idle_pitch: f32 = 0.8 in 0.25 ..= 2.0;
+        audio_engine_top_pitch: f32 = 1.3 in 0.25 ..= 3.0;
+        /// The seconds a standard chassis takes to rev to a new speed; a
+        /// heavier one takes longer by its mass factor.
+        audio_engine_spool_s: f32 = 0.35 in 0.01 ..= 5.0;
+        /// The engine's level at idle and at speed, linear.
+        audio_engine_idle_gain: f32 = 0.45 in 0.0 ..= 2.0;
+        audio_engine_drive_gain: f32 = 0.85 in 0.0 ..= 2.0;
+        /// How much quieter another tank's engine sits than a seat's own,
+        /// in dB: the field full of engines stays a bed.
+        audio_engine_others_db: f32 = (-6.0) in -40.0 ..= 0.0;
+        /// The speed (px a second) at which the tracks clank at full level.
+        audio_treads_full_px_s: f32 = 180.0 in 1.0 ..= 2000.0;
+        /// The speed (px a second) at which a hull wading into a ford
+        /// splashes at its full strength; a hull rolling in at walking pace
+        /// splashes at about a third.
+        audio_splash_full_px_s: f32 = 120.0 in 1.0 ..= 2000.0;
+        /// How long (s) the drips off a hull's runs fall after it climbs
+        /// out of a ford with its tracks full of water.
+        audio_drip_seconds: f32 = 6.0 in 0.1 ..= 60.0;
+        /// How long (s) a pivot's grind, a slip's screech or a coast's hiss
+        /// holds after the last frame the tracks did it, so a quick turn is
+        /// heard whole.
+        audio_turn_hold_s: f32 = 0.2 in 0.0 ..= 2.0;
+        /// How fast a hull on ice must be slowing (px a second, each second)
+        /// for its tracks to hiss as it coasts.
+        audio_coast_decel_px_s2: f32 = 20.0 in 0.0 ..= 2000.0;
+        /// The speed (px a second) at which a hull knocked off its tracks
+        /// skids at full level.
+        audio_skid_full_px_s: f32 = 200.0 in 1.0 ..= 2000.0;
+        /// How many placed water beds - a shore lapping, a stream, a frozen
+        /// shore - play at once: the nearest the ears.
+        audio_water_beds: usize = 6 in 0 ..= 32;
+        /// The level of every creature's sound on top of its cue's own, in
+        /// dB (docs/field-life.md, `audio::life`): the crows, the mallards
+        /// and the fireflies as one.
+        audio_critters_db: f32 = (-3.0) in -60.0 ..= 12.0;
+        /// The fewest seconds between two creatures' calls - a caw, a
+        /// quack, a dabble - anywhere in earshot, and after an alarm (a
+        /// flock flushed, a group put up) before the next.
+        audio_critter_gap_s: f32 = 4.0 in 0.0 ..= 60.0;
+        /// A creature calls only while the loudest recent sound (the HDR
+        /// window's top) is under this, in dB: a fight hushes the field.
+        audio_critter_calm_db: f32 = (-20.0) in -120.0 ..= 12.0;
+        /// The windows of the round's clock (s) a crow flock at rest and a
+        /// calm mallard group call in, and the share of the windows that
+        /// hold a call, at a hashed moment.
+        audio_crow_caw_s: f32 = 12.0 in 1.0 ..= 120.0;
+        audio_duck_quack_s: f32 = 10.0 in 1.0 ..= 120.0;
+        audio_critter_call_share: f32 = 0.6 in 0.0 ..= 1.0;
+        /// The seconds a flushed flock's first bird flies before the flock
+        /// caws once more as it wheels away.
+        audio_crow_wheel_s: f32 = 1.4 in 0.0 ..= 10.0;
+        /// The share of a duck's dips (`Duck::dabbling`) heard.
+        audio_duck_dabble_share: f32 = 0.1 in 0.0 ..= 1.0;
+        /// How many firefly swarms shimmer at once, the nearest the ears,
+        /// and how many fireflies make a swarm's shimmer full.
+        audio_firefly_beds: usize = 2 in 0 ..= 16;
+        audio_firefly_full: f32 = 10.0 in 1.0 ..= 200.0;
+        /// How much each link of a drum chain plays under the one before
+        /// it, in dB.
+        audio_chain_step_db: f32 = (-3.0) in -24.0 ..= 0.0;
+        /// How deep an explosion ducks the vehicles and the world, in dB,
+        /// and how fast they come back (s).
+        audio_explosion_duck_db: f32 = (-6.0) in -40.0 ..= 0.0;
+        audio_duck_release_s: f32 = 0.3 in 0.01 ..= 5.0;
+        /// The share of pitch and the dB of level a take may vary by, so a
+        /// sound heard often is never quite the same twice.
+        audio_pitch_jitter: f32 = 0.04 in 0.0 ..= 0.5;
+        audio_gain_jitter_db: f32 = 1.5 in 0.0 ..= 12.0;
     }
 }
 

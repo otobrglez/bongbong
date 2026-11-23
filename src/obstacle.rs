@@ -204,6 +204,41 @@ impl Sheet {
 }
 
 impl Material {
+    /// Every material, in declaration order. The sound maps walk it
+    /// (`audio::source::surface_family`); `audio_tests` holds it whole
+    /// against an exhaustive match.
+    pub const ALL: [Material; 29] = [
+        Material::Brick,
+        Material::Iron,
+        Material::Wood,
+        Material::Glass,
+        Material::Concrete,
+        Material::Sandbag,
+        Material::Barrel,
+        Material::Fence,
+        Material::Tree,
+        Material::Pine,
+        Material::Tesla,
+        Material::GunTower,
+        Material::BioSlush,
+        Material::Volcano,
+        Material::Lamp,
+        Material::Door,
+        Material::Target,
+        Material::Spruce,
+        Material::Scots,
+        Material::Fir,
+        Material::Birch,
+        Material::Willow,
+        Material::Palm,
+        Material::Snag,
+        Material::Tyres,
+        Material::Hay,
+        Material::WoodCrate,
+        Material::Barrier,
+        Material::TankTrap,
+    ];
+
     /// The atlas this material's tiles are drawn from. The drawn materials
     /// (`is_drawn`: the volcano's cone and the lamp post) have none and
     /// name the walls sheet only so the answer is total; nothing draws
@@ -577,6 +612,37 @@ impl Material {
     /// not the hammer's.
     pub fn breaks_by_sound(self) -> bool {
         self == Material::Glass
+    }
+
+    /// How many dB a sound loses crossing one cell of this tile on its way
+    /// to a listener (docs/sound-system-prd.md section 4.3): the masonry,
+    /// iron, towers, the volcano and doors take most of it, a wooden wall
+    /// less, glass half. A low concrete barrier, whose top a sound clears,
+    /// takes less than glass; the soft props a little; trees and boxes
+    /// barely; a lamp post, a range board or a tank trap's open beams not
+    /// at all. Everything `blocks_sound` stops loses at least 6 dB, and
+    /// nothing else does
+    /// (`audio_tests::sound_transmission_agrees_with_blocks_sound`).
+    pub fn sound_transmission(self) -> f32 {
+        match self {
+            Material::Brick | Material::Concrete | Material::Iron | Material::Door | Material::Volcano => -12.0,
+            Material::Tesla | Material::GunTower | Material::BioSlush => -12.0,
+            Material::Wood => -8.0,
+            Material::Glass => -6.0,
+            Material::Barrier => -4.5,
+            Material::Sandbag | Material::Tyres | Material::Hay => -3.0,
+            Material::Barrel | Material::Fence | Material::WoodCrate => -1.5,
+            Material::Tree
+            | Material::Pine
+            | Material::Spruce
+            | Material::Scots
+            | Material::Fir
+            | Material::Birch
+            | Material::Willow
+            | Material::Palm
+            | Material::Snag => -1.5,
+            Material::Lamp | Material::Target | Material::TankTrap => 0.0,
+        }
     }
 
     /// Odds a projectile sails over or through this tile instead of

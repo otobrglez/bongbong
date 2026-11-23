@@ -1044,6 +1044,7 @@ pub fn parse_seed(s: &str) -> Result<u64, String> {
 #[cfg(feature = "render")]
 pub mod app;
 pub mod ai;
+pub mod audio;
 pub mod battlefield;
 pub mod biome;
 pub mod blast;

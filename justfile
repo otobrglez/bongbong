@@ -424,6 +424,25 @@ mapshot-compare:
 check-sheets:
     nix-shell -p "python3.withPackages (ps: [ps.pillow])" --run "python3 tools/check_sheets.py"
 
+# The sound map (docs/sound-system-prd.md section 4.11): the code, the cue
+# manifest and the catalogue of interactions joined into one page at
+# target/soundmap/index.html - what needs sound, what plays, what is made.
+sound-map:
+    cargo run --bin soundmap --no-default-features -- --json target/soundmap/soundmap.json --html target/soundmap/index.html
+    @echo "open target/soundmap/index.html"
+
+# The sounds' guards: the manifest, the code's maps and the shipped files
+# agree (audio_tests decodes every approved take), and the catalogue resolves.
+check-sounds:
+    cargo test --lib --no-default-features --features dev-tools audio
+    cargo run --bin soundmap --no-default-features -- --check
+
+# A seeded round's sound rendered offline, heard from the first seat's tank:
+# `just audio-render 42 advance` writes target/audio/advance-42.wav.
+audio-render seed="42" scenario="advance":
+    mkdir -p target/audio
+    cargo run --release --bin probe --no-default-features -- --scenario {{scenario}} --seed {{seed}} --frames 1800 --audio-out target/audio/{{scenario}}-{{seed}}.wav
+
 # One-time: install the emsdk toolchain (pinned version, see
 # tools/setup_emscripten.sh) and the site/'s JS dependencies (Astro).
 # The wasm32-unknown-emscripten rustup target and node/yarn are already

@@ -1397,6 +1397,7 @@ impl Session {
                 lanterns: self.shown().lamps_in_play(),
                 heat_shield: crate::hud::heat_shield_up(self.shown(), self.online.as_ref().and_then(AnyRound::seat)),
                 air_support: crate::hud::air_support_up(self.shown(), self.online.as_ref().and_then(AnyRound::seat)),
+                sound_button: true,
                 ..PlayChrome::default()
             },
             Driver::Lobby => {
@@ -1418,6 +1419,9 @@ impl Session {
                 // The P key's stand-in, which a phone has no other way to.
                 pause_button: true,
                 paused: self.game.paused,
+                sound_button: true,
+                muted: false,
+                sound_panel: None,
                 seat: None,
                 players_dialog: self.players_dialog,
                 question: self.question.clone(),

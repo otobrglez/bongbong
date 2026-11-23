@@ -1,0 +1,31 @@
+{
+  "flow": "SVHiZqQIAUEaCvjOwPpO",
+  "name": "bongbong sfx 2026-11-23 gap-1",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 920,
+  "charged_credits": 288,
+  "note": "run in two calls (14 + 6 nodes); every one of the 80 takes started and completed, none hit the queue limit",
+  "nodes": {
+    "YU0VW65TTSGd1c0zkcxP": "drone_lock_loop",
+    "FCk7S9SgbZmh8SaSUWHP": "lock_beep",
+    "Yj7Cr74rULt5FpOqA9Oy": "bong_death",
+    "qpk0WqBqlpWOikVKc3oK": "water_geyser",
+    "BJIB1yHSL5uHICl5TiGb": "cannon_heavy_near",
+    "uziTWXCEJ855ZsoOjT2A": "cannon_light_near",
+    "6pYZrz5bRtxHAT7SIWWw": "cannon_super_near",
+    "0ZEFGEhRjhJWzMpwOgDe": "dry_fire",
+    "HaMKoYCOk42rwQP0GDyL": "flyby_rail",
+    "tXqjWx1FNUUJV0rQnSot": "fpv_dive_loop",
+    "jG6QSceUvrGPXHiZlrSk": "gauss_ready_ping",
+    "0xiLKPG3ZpFsTWTIJHYz": "hit_hull_inside",
+    "rmbzeSpTUGoZYHoYXZrk": "hit_sonic_hull",
+    "dL9ElF77Etszm8D3fEBR": "kill_confirm",
+    "4DHEX3Wcs5izNeodBdxv": "minigun_spin_up",
+    "g8KyrnDOPtaBGmCq6T4S": "offline_static_loop",
+    "g7wVdCEjTTUDbKGM2PLB": "pickup_energy",
+    "YI8p3hfXv4zzhgLf3sVu": "pickup_field",
+    "DYnmrRytQHLOlkYpD7ni": "pickup_fuel",
+    "ZN2JxgNsg8bW6AeXerjR": "special_empty"
+  },
+  "sessions": ["GM8fmB2SvgVd5cSF86bS","eTLoH12uNzgT5JMdCA41","GQPNPA71O2J4ev8enwnA","WvSuD4sO2S4Gsed6gWSS","7rg9eBeuGtG1qM8CMwLU","l9pOBEtKBjBNVohqrn6I","6QU3yRadVhxY5Zrjgg4G","GKSZfgUJXdL6FKS9dIzD","cg8WpeSEQZzfP70YlrKY","eKDEostihgYblNGpbix9","bxUcXuRyUA6rl4UhCRI4","o78vM86TizooBf9EAIvb","plRbWRtRyG8XqmKX9ZRr","nVVp2JSQ8kffq1AFNoQv","AiO7R3VDcuATqFcisSS5","c4k0UfWAUjmjVxVtmPaE","5S7COBjEKoaH4yGxbl2Z","NuKVJQLuCKwfEtNF1kfk","EUqmQO5HGklrE8YTQdUQ","AzGCUb4eZ7o7O0kLs1Ft","14evcVOmCDWrBVHIhSdi","dMBYR0o4sYiXDyIslF1L","neRDwdXtLDabiM45O2D0","SDpEIhptQOmTEfaV7r5t","0RM3HkHgKkpXmlgi19KQ","CzFbQr0WiIY3dlR6g6qr","KcCkobtUDIqcbVbQ2Ey3","ipbQ1iyB4qZZkWUnrjUg","FTxewxnLoTEmVfH1vB7Y","2mVIOu5nAtTIAT8nfmt8","XJyblsCWZwGJiA5dnZqI","JGJTGGrjODOO5tVU2vRC","xRaV4r8Y8u5jx6tE3Ptq","asvcUJRsVS59JbDzCTRm","8lyBjVjNetYDZAnRXi5k","NzhJIbHmrGzc83KgeUGP","mr29Ry6MlwNd0mAG3GPM","44YfORvwmHxDIvkeEKo2","cFefnrhWkGWctVmhavto","QZmtgFrpTAat3BYQefSg","DBkpDPp5TWxhrzaWTxZ5","PK4fKaOs7ds0bBlmx5RH","BBB33SGNHkghpxvRx4Qh","lj9967mFwTQZ9xVaya5l","Ucd1I2sFToGaVLpDpWlF","yfwCfYvl5u15FAzeOGUs","HDNMaAiGlKXspeVFfrkP","3lGmiZXS1YHS9TbCXrXw","niwKZF12juWbc1Jnjd95","ILqzs2LvYpXrYxP4MLU8","0LTEzvi02tH5bk2RVGNO","s1MTJkmzEzwNrvcBKkc3","oyQzhNvydSLkChbvlDZq","MzN9uuWCVJEg4CE0xVzh","cQoTlkZqm9qjIIqv2QfR","UNvzBidYUOg0C4k6duhu","gIaXokxImTXXGSJURthU","Z2b7EA3B28WStndG18Ht","iSkp6xC4dgaDucdMlW7e","LLxEj3NjMNpJaUkEnWhS","Q9jPMR4nKGskWUjjp06R","PnCRTJHc0wOAHGStXkC8","k9rMmKnD6HVDEpPV4Fkm","20YKz94g6DmSubhEtZjI","iWERW4id8PZOb0Uea0bE","Z4IR4hCVPXMI0gVRDDLQ","FPtBFqMnBbrrM2mzhIzQ","XEPGadZjY1xxZtbsd2zp","a68AXU8UYp9urRhg90ox","QFgfYshNe5BNO4UMKf7d","5EiOBVgy8RmZifanatMw","gBYpt7SNu5wGj8JtLXAy","QiDPzNrtedTTsLdqkbAZ","3ZKWibL5EF9kvy4aDAAc","MWqYk2LCRmkqmaQz3cee","H6TWrGpoT2V9tV53oGKk","UWXz9gVaiCa6UEIKHNqV","OdaE2LEBqtFDYRmkNYtL","53fO47NkgyaPcBqPBQ75","m9sUO3sHOpbfeOCc0fZm"]
+}

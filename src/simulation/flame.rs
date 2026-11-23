@@ -220,7 +220,7 @@ impl Game {
                     touched.push(entity);
                     if entered || bong.is_dead() {
                         let target = HitTarget::Bong { side: bong.side };
-                        f.events.push(Event::Hit { target, damage: 0.0, killed: bong.is_dead(), x: bong.position.x, y: bong.position.y, cause: super::HitCause::Flame });
+                        f.events.push(Event::Hit { target, damage: 0.0, killed: bong.is_dead(), x: bong.position.x, y: bong.position.y, cause: super::HitCause::Flame, by: Some(jet.owner.slot()) });
                     }
                     if bong.is_dead() {
                         dead_at.push(bong.position);

@@ -2149,6 +2149,84 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   sprite's samples then round onto other texels (measured: 1 to 20 pixels a frame on the default
   arena with only the tanks' sheet padded to 4096 px), so an atlas changes the picture.
 
+## Sound
+
+docs/sound-system-prd.md is the design; this is what each part owns.
+
+- `audio/mod.rs` — `Audio`, the director, owned by `app.rs` beside `Fx`. `observe_events` reads
+  each step's events (deduped on `Game::frame`, reset on a new seed or a rewind) and turns each
+  into the sounds `bind.rs` gives it; `observe` runs once a frame: the listeners
+  (`space::View` per view on the window), the watchers' loops, the one-shots asked for since,
+  the mix policy (each cue's polyphony, cooldown and steal; the HDR window; the voice budget;
+  ducking) and the bus and master levels, written as `dsp::Command`s. Variation (which take,
+  pitch and level jitter) is hashed from the cue, the frame and the source, never drawn. Online,
+  `set_predicted_seat` and `own_press` sound the own seat's presses at once and skip the room's
+  late copies (`room_copy_of_own_press`). `Settings` (volumes, mute, mono) are the player's,
+  kept by `app.rs` beside the progress (`audio.json`, `bongbong.audio` on the web), set on the
+  sound panel the HUD's sound button opens (`hud::sound_panel_rects`, `SoundLevel`; painted by
+  `render::hud::draw_sound_panel`) and muted by M. `room` picks the reverb by the map's class.
+  A `Play` may be for one seat (`Play::for_seat`): `start` drops it where the window does not play
+  that seat. `observe_events` hands each step's ricochets and beams to the watchers
+  (`Watchers::ricocheted`, `watch::Beam`), and `observe` gives them the listeners
+  (`Watchers::set_ears`).
+- `audio/bind.rs` — `bind(&Event, &Game) -> Binding`: an exhaustive match with no wildcard, each
+  arm a `Play` (cue, place, strength, pitch, delay, source, take, pan, the seat it is for),
+  `Watched(watcher)` or `Silent(reason)`. `twin_shots` splits a twin gun's shot in two; `hit` and
+  `impact` sound a `Hit` by cause, target and who hears it (hit marker, friendly fire, shield,
+  the inside of an own hull); `on_water` adds the water layer under a blast.
+- `audio/source.rs` — one exhaustive match per enumeration a sound depends on: chassis to engine
+  family and pitch, weapons, materials to surface families, pickups by weapon family, towers,
+  skies, themes and biomes, tread surfaces (`ground_layer` by sky and theme, `slip_cue`,
+  `skid_cue`), what a hull is pressed against (`scrape_cue`), hull mass (`hull_pitch`), laser and
+  plasma colours, bong kinds.
+- `audio/watch.rs` — the state watchers (`WATCHERS` lists them for the sound map): engines and
+  tracks (speed from position over sim time, so a replica revs too), the minigun (new bullet ids),
+  flames, charges, wind-up tells, fire clusters (4 x 4 cells a loop), sky and place beds,
+  scrapes, aircraft, fly-bys, thunder (the round clock's lightning), tesla towers, fuses,
+  portals, the volcano; the ground under each hull (surface, slips, skids, rubble, brush, ford
+  edges and drips, lava), the water beds, grenade and bong landings; a ricochet's whine; the
+  warnings for one seat (rail lane, drone lock, vent alarm), charge stages, missiles and their
+  motors, drone dives, grenade fuses, weapon states (spin-up, flame lit and shut, outage, spent,
+  reloads), beam near misses.
+- `audio/space.rs` — listeners at a height above the field, distance (audibility classes),
+  pan, air absorption, occlusion (`Occlusion`: one byte a cell from `Material::sound_transmission`,
+  rebuilt when a tile dies), propagation delay, doppler, and the room send that rises with
+  distance.
+- `audio/cues.rs` — the manifest (`audio/cues.toml`, embedded): samples and their takes, cues and
+  their layers by distance; `resolve` falls a dotted id back to its nearest ancestor; `ids` the
+  cue ids code names.
+- `audio/bank.rs` — samples decoded on first use (`lewton`), and a dev build's placeholder for a
+  sample with no file.
+- `audio/dsp/` — the engine: voices (linear resampler, SVF high-cut, gain and pan ramps, delayed
+  start, fades, a send to the room), nine buses with ducks and pauses, the room (`reverb.rs`, a
+  four-line FDN with a damped loop), master gain, mono, a watchdog that fades the mix when the
+  director stops beating, a lookahead limiter at -1 dBFS; `wav.rs` for offline renders. Pure
+  Rust, `Send`, `libm` for its transcendentals.
+- `audio/life.rs` — the field's creatures heard (docs/field-life.md). The director keeps its own
+  `fauna::Fauna`, stepped by `Fauna::observe` when `Fx` steps the window's (after each step, once a
+  frame), so it hears the field the window draws, a replica's and the offline render's alike.
+  `Critters` plays the edges - a flock lifting off and its far caw, a group running to take off, a
+  fright from a hull, a duck landing - and the calls at moments hashed on the round clock
+  (`life::calls`), in earshot, while the mix is calm (`audio_critter_calm_db`), one per
+  `audio_critter_gap_s` field-wide; at night the nearest swarms of fireflies shimmer. All on the world
+  bus at `audio_critters_db`.
+- `audio/offline.rs` — `Recorder`: the director and the engine stepped beside a headless round
+  (`probe --audio-out`).
+- `render/audio.rs` — `AudioOut`: the device and one 48 kHz float stereo `AudioStream` whose
+  raylib callback applies the queued commands and mixes, on the audio thread natively and from
+  miniaudio's ScriptProcessorNode on the web.
+- `bin/soundmap.rs` — the sound map: the code's maps and watchers, the manifest with its files,
+  and the catalogue (`audio/interactions.json`) joined into JSON and a viewer
+  (`tools/audio/soundmap/template.html`); `--check` is CI's guard.
+- Simulation side: a hull's slam is `Event::HullStruck` (`simulation/contact.rs`), sent, so a
+  client hears it with the face's `Surface` (`source::slam_cue`); `OnlineRound::take_press_sounds`
+  hands the window its own presses, a dry press too (`Predictor::take_dry_presses`). `Hit` names
+  its shooter (`by`); `Ricochet` its shot, what it came off (`Game::what_was_struck`) and the
+  shot's id; `DryFired` (a seat's empty press) and `AirHit` (a round a drone or the heli flies on
+  through) are events. `Game::contacts_against` says what a hull is pressed against
+  (`simulation::Against`, from `physics::ContactStats::hardest`); `Game::drift_at` is the current
+  and gust under a point; `wear::muddy` is the one mud rule.
+
 ## HUD and chrome
 
 - `hud.rs` (docs/hud-and-builder-layout-design.md, docs/large-maps-follow-camera.md §8) — the HUD,
@@ -2180,7 +2258,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   bong gauge under the bong pack's symbol, then the `CornerButton`s (`BUILD` or, online, `LEAVE` - `Session::leave_online`,
   the way out with no keyboard -, left of the mode button a local round's pause icon -
   `CornerButton::Pause`, the P key's `Input::pause_pressed`, two bars or a play triangle by
-  `PlayChrome::paused` -, players or `RESTART` on a keyboard-less build, `ONLINE` where
+  `PlayChrome::paused` -, left of it the sound button, which opens the sound panel under the right
+  cluster - `sound_panel_rects`, the one geometry of its switch and sliders, the round running on
+  behind it -, players or `RESTART` on a keyboard-less build, `ONLINE` where
   `ONLINE_AVAILABLE`) and a room's seat chips between the numbers and the buttons - all one row on
   every window. The minimap's slot (`Corners::minimap`, from `CornerShape::minimap` =
   `PlayChrome::minimap`, its size in points): its own plate under the right cluster, flush right,
@@ -2726,7 +2806,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `Ended { outcome }` is how a round's end reaches a client, since the snapshots stop with the tick.
   `codec.rs`: `encode`/`decode` of a `Msg`, one `kind` byte then `postcard` (lobby: JSON).
   `delta.rs`: `delta`/`apply_delta` - per family the changed entries in full, short moves as `Moved
-  {key, dx, dy}`, removals as keys; scalars as `Option`; events whole. `PROTOCOL_VERSION` (bump on
+  {key, dx, dy}`, removals as keys; scalars as `Option`; events whole - `Hit` with its shooter,
+  `Ricochet` with its shot, what it came off and its id, `MissileLocked`, `DryFired` and `AirHit`
+  among them (protocol 40). `PROTOCOL_VERSION` (bump on
   any postcard layout, enum order, kind tag or quantisation change), `MAX_SEATS`. Measured sizes in
   the module docs. The two files that do touch a `Game` (docs/online-coop-prd.md §4.2, §4.5):
   **`encode.rs`** — `snapshot(game, acked)` fills every family from the round through

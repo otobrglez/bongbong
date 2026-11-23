@@ -551,6 +551,13 @@ struct Args {
     #[arg(long = "json-out")]
     json_out: Option<PathBuf>,
 
+    /// Render each round's sound to this WAV (docs/sound-system-prd.md
+    /// section 4.14): the director and the engine beside the round, heard
+    /// from the first seat's tank. With `--rounds` above 1 each round
+    /// writes its own file, the round's index before the extension.
+    #[arg(long = "audio-out")]
+    audio_out: Option<PathBuf>,
+
     /// Fail the run (exit code 1, after a `BUDGET EXCEEDED` line per
     /// breach) if a kind's total exceeds its cap - repeatable, e.g.
     /// `--budget stall=0 --budget total=5`. Kinds are the ANOMALY-line
@@ -2325,11 +2332,18 @@ fn run_round(
     let mut rerolls = 0u32;
     let reach = if matches!(args.scenario, Scenario::Defend) { args.defend_reach } else { tuning().enemy_attack_range };
     let mut update_seconds = 0.0f64;
+    let mut recorder = args
+        .audio_out
+        .as_ref()
+        .map(|_| bongbong::audio::offline::Recorder::new(false, (0..args.players as usize).collect()));
     for frame in 1..=args.frames {
         let input = input_for_frame(args, frame);
         let started = std::time::Instant::now();
         game.update(input, DT, field_width(), field_height());
         update_seconds += started.elapsed().as_secs_f64();
+        if let Some(recorder) = recorder.as_mut() {
+            recorder.step(&game, DT);
+        }
         // Ram damage is invisible to `tank_snapshots`, which reports health
         // but never who took it off, so it is read off the event log.
         // Costs nothing - recording an event draws no RNG.
@@ -2401,6 +2415,13 @@ fn run_round(
                 );
             }
             break;
+        }
+    }
+    if let (Some(recorder), Some(path)) = (recorder.as_ref(), args.audio_out.as_ref()) {
+        let path = if args.rounds > 1 { path.with_extension(format!("{round}.wav")) } else { path.clone() };
+        match recorder.write(&path) {
+            Ok(()) => println!("probe: sound written to {} ({:.1} s)", path.display(), recorder.frames().len() as f32 / 2.0 / 48_000.0),
+            Err(e) => eprintln!("probe: sound not written to {}: {e}", path.display()),
         }
     }
 

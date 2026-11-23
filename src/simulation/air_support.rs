@@ -298,10 +298,10 @@ impl Game {
     }
 
     /// Strike the helicopter `id` with `by` (`Game::strike_air`): a bullet
-    /// counts a hit, `air_heli_hits` of them bring it down; anything else
-    /// downs it at once. Down, it is gone - a fireball where it falls,
-    /// `Event::AircraftDowned` - and the seat's next call starts its count.
-    /// True when it went down.
+    /// counts a hit (`Event::AirHit`), `air_heli_hits` of them bring it
+    /// down; anything else downs it at once. Down, it is gone - a fireball
+    /// where it falls, `Event::AircraftDowned` - and the seat's next call
+    /// starts its count. True when it went down.
     pub(super) fn strike_aircraft(&mut self, f: &mut Frame, id: u32, by: AirStrike) -> bool {
         let found = self.world.query::<(Entity, &Aircraft)>().iter().find(|(_, a)| a.id == id && a.sortie == Sortie::Heli).map(|(e, a)| (e, *a));
         let Some((entity, mut a)) = found else { return false };
@@ -311,6 +311,7 @@ impl Game {
                 if let Ok(mut slot) = self.world.get::<&mut Aircraft>(entity) {
                     slot.hits = a.hits;
                 }
+                f.events.push(Event::AirHit { id, aircraft: true, x: a.ground.x, y: a.ground.y });
                 return false;
             }
         }

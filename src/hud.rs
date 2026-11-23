@@ -860,6 +860,9 @@ pub const MODE_BUTTON_W: f32 = 72.0;
 /// on every local round so one press works the same everywhere. A
 /// finger's width, since it carries no label.
 pub const PAUSE_BUTTON_W: f32 = UI_TOUCH_PT;
+/// The sound button: a speaker that mutes the game and unmutes it, as
+/// the M key does (docs/sound-system-prd.md section 4.5).
+pub const SOUND_BUTTON_W: f32 = UI_TOUCH_PT;
 
 /// The `ONLINE` button: the way into the lobby (`lobby.rs`,
 /// docs/online-coop-prd.md §4.10). Wide enough for its six characters.
@@ -934,11 +937,13 @@ pub const INFO_TITLE_W: f32 = 160.0;
 pub const MISSION_BONG_SRC: Rectangle = Rectangle::new(11.0, 12.0, 26.0, 24.0);
 /// The gap either side of that bong.
 pub const MISSION_BONG_GAP: i32 = 4;
-/// The buttons' row: `ONLINE`, the players (or RESTART), the pause button
-/// and the mode button, right to left from its right end.
-pub const BUTTONS_W: f32 = ONLINE_BUTTON_W + PLAYERS_BUTTON_GAP + PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN;
+/// The buttons' row: `ONLINE`, the players (or RESTART), the sound button,
+/// the pause button and the mode button, right to left from its right end.
+pub const BUTTONS_W: f32 = ONLINE_BUTTON_W + PLAYERS_BUTTON_GAP + PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + SOUND_SPAN;
 /// The pause button and the mode button to its right.
 const PAUSE_SPAN: f32 = PAUSE_BUTTON_W + PLAYERS_BUTTON_GAP + MODE_BUTTON_W;
+/// The sound button and the pause and mode slots to its right.
+const SOUND_SPAN: f32 = SOUND_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN;
 /// One chip of the other seats' strip: its number over its health gauge.
 pub const CHIP_W: f32 = 20.0;
 pub const CHIP_H: f32 = 26.0;
@@ -969,6 +974,8 @@ pub struct CornerShape {
     pub leave: bool,
     /// The pause button, left of the mode button.
     pub pause: bool,
+    /// The sound button, left of the pause slot.
+    pub sound: bool,
     /// Lines of text under the left cluster.
     pub lines: usize,
     /// The minimap's size in points (`minimap::MinimapRules::size_pt`),
@@ -1010,6 +1017,7 @@ impl CornerShape {
                 build: chrome.build_button,
                 leave: chrome.leave_button,
                 pause: chrome.pause_button,
+                sound: chrome.sound_button,
                 // The build stamp always; an online round's status, a
                 // prompt and BACK's note over it.
                 lines: 1 + usize::from(chrome.status.is_some()) + usize::from(chrome.prompt.is_some()) + usize::from(chrome.note.is_some()),
@@ -1033,6 +1041,8 @@ pub enum CornerButton {
     Leave,
     /// Pauses the round or takes it on again, as the P key does.
     Pause,
+    /// Mutes the game's sound or brings it back, as the M key does.
+    Sound,
     /// The lamp row's lantern count: a press sets a lantern down, as the
     /// lamp key does (docs/volcano.md).
     Lamp,
@@ -1049,6 +1059,7 @@ impl CornerButton {
             CornerButton::Build => "build",
             CornerButton::Leave => "leave",
             CornerButton::Pause => "pause",
+            CornerButton::Sound => "sound",
             CornerButton::Lamp => "lamp",
         }
     }
@@ -1090,6 +1101,7 @@ pub struct Corners {
     pub build: Option<Rectangle>,
     pub leave: Option<Rectangle>,
     pub pause: Option<Rectangle>,
+    pub sound: Option<Rectangle>,
     /// The other seats' strip, in the right cluster's row between its
     /// numbers and its buttons.
     pub chips: Option<Rectangle>,
@@ -1159,6 +1171,7 @@ impl Corners {
             (CornerButton::Build, self.build),
             (CornerButton::Leave, self.leave),
             (CornerButton::Pause, self.pause),
+            (CornerButton::Sound, self.sound),
             (CornerButton::Lamp, self.lamp),
         ]
         .into_iter()
@@ -1196,6 +1209,7 @@ impl Corners {
             build: opt(self.build),
             leave: opt(self.leave),
             pause: opt(self.pause),
+            sound: opt(self.sound),
             chips: opt(self.chips),
             minimap: opt(self.minimap),
             lamp: opt(self.lamp),
@@ -1236,13 +1250,15 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let block_plate = VITALS_W + 2.0 * PLATE_PAD;
     let chips_w = if shape.chips > 0 { shape.chips as f32 * (CHIP_W + CHIP_GAP) - CHIP_GAP } else { 0.0 };
     // The buttons' row reaches from its right end to the leftmost slot the
-    // round draws a button in - the mode slot, the pause slot, the players
-    // slot, the online slot - so each keeps its own place whichever are
-    // drawn.
+    // round draws a button in - the mode slot, the pause slot, the sound
+    // slot, the players slot, the online slot - so each keeps its own
+    // place whichever are drawn.
     let buttons_w = if shape.online {
         BUTTONS_W
     } else if shape.players || shape.restart {
-        PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + PAUSE_SPAN
+        PLAYERS_BUTTON_W + PLAYERS_BUTTON_GAP + SOUND_SPAN
+    } else if shape.sound {
+        SOUND_SPAN
     } else if shape.pause {
         PAUSE_SPAN
     } else if shape.build || shape.leave {
@@ -1293,11 +1309,12 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
     let lines = Rectangle::new(area.x, bottom + ROW_GAP, block_plate, shape.lines as f32 * LINE_H);
 
     // The buttons from the row's right end - the mode slot, the pause slot,
-    // the players slot, the online slot - each always in its own place,
-    // whichever of them a round draws.
+    // the sound slot, the players slot, the online slot - each always in
+    // its own place, whichever of them a round draws.
     let mode = Rectangle::new(buttons_row.x + buttons_row.width - MODE_BUTTON_W, buttons_row.y, MODE_BUTTON_W, button_h);
     let pause = Rectangle::new(mode.x - PLAYERS_BUTTON_GAP - PAUSE_BUTTON_W, mode.y, PAUSE_BUTTON_W, button_h);
-    let players = Rectangle::new(pause.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, mode.y, PLAYERS_BUTTON_W, button_h);
+    let sound = Rectangle::new(pause.x - PLAYERS_BUTTON_GAP - SOUND_BUTTON_W, mode.y, SOUND_BUTTON_W, button_h);
+    let players = Rectangle::new(sound.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, mode.y, PLAYERS_BUTTON_W, button_h);
     let online = Rectangle::new(players.x - PLAYERS_BUTTON_GAP - ONLINE_BUTTON_W, mode.y, ONLINE_BUTTON_W, button_h);
 
     // The minimap: under the right cluster's plate, its own plate flush
@@ -1332,6 +1349,7 @@ pub fn corners(ui: &UiFrame, shape: &CornerShape) -> Corners {
         build: shape.build.then_some(mode),
         leave: shape.leave.then_some(mode),
         pause: shape.pause.then_some(pause),
+        sound: shape.sound.then_some(sound),
         chips,
         minimap,
         lamp: shape.lanterns.then(|| Rectangle::new(first.x, first.y + button_h + ROW_GAP, LAMP_BUTTON_W, button_h)),
@@ -1422,6 +1440,108 @@ pub struct PlayersDialogRects {
 pub fn players_dialog_rects(area: Rect) -> PlayersDialogRects {
     let (panel, one, two) = two_button_dialog(area);
     PlayersDialogRects { panel, one, two }
+}
+
+// ---- the sound panel --------------------------------------------------------
+//
+// The sound button opens it (docs/sound-system-prd.md section 4.5) under the
+// right cluster, flush with its right edge, over the minimap; the round runs
+// on behind it, a room's as a local one. Its first row is SOUND and an ON/OFF
+// switch that mutes as the M key does; under it a slider per level the player
+// sets. Every row is the corners' row height, a finger's on a touch screen,
+// and the panel is laid out at the corners' scale.
+
+/// The sound panel's width at full size.
+pub const SOUND_PANEL_W: f32 = 260.0;
+/// A row's label column, the slider's track to its right.
+pub const SOUND_LABEL_W: f32 = 104.0;
+/// The ON/OFF switch at the end of the first row.
+pub const SOUND_SWITCH_W: f32 = 64.0;
+
+/// A level the panel's sliders set, top to bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoundLevel {
+    Master,
+    Effects,
+    Music,
+}
+
+impl SoundLevel {
+    pub const ALL: [SoundLevel; 3] = [SoundLevel::Master, SoundLevel::Effects, SoundLevel::Music];
+
+    pub fn get(self, s: &crate::audio::Settings) -> f32 {
+        match self {
+            SoundLevel::Master => s.master,
+            SoundLevel::Effects => s.effects,
+            SoundLevel::Music => s.music,
+        }
+    }
+
+    pub fn set(self, s: &mut crate::audio::Settings, value: f32) {
+        let value = value.clamp(0.0, 1.0);
+        match self {
+            SoundLevel::Master => s.master = value,
+            SoundLevel::Effects => s.effects = value,
+            SoundLevel::Music => s.music = value,
+        }
+    }
+
+    pub fn label(self) -> crate::text::Key {
+        use crate::text::keys;
+        match self {
+            SoundLevel::Master => keys::SOUND_MASTER,
+            SoundLevel::Effects => keys::SOUND_EFFECTS,
+            SoundLevel::Music => keys::SOUND_MUSIC,
+        }
+    }
+}
+
+/// The sound panel's geometry (UI points, at the corners' scale).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SoundPanelRects {
+    pub panel: Rectangle,
+    /// The first row: SOUND and its switch.
+    pub title: Rectangle,
+    /// The ON/OFF switch: mutes the game and brings its sound back.
+    pub switch: Rectangle,
+    /// Each level's row, in `SoundLevel::ALL`'s order: a press anywhere
+    /// on it takes the slider.
+    pub rows: [Rectangle; 3],
+    /// Each row's track, the value read along it from 0 to 1.
+    pub tracks: [Rectangle; 3],
+}
+
+impl SoundPanelRects {
+    /// The value a pointer at `x` sets on `track`: its share of the way
+    /// along it, 0 left of it and 1 right of it.
+    pub fn value_at(track: Rectangle, x: f32) -> f32 {
+        if track.width <= 0.0 {
+            return 0.0;
+        }
+        ((x - track.x) / track.width).clamp(0.0, 1.0)
+    }
+}
+
+/// The sound panel under `corners`' right cluster: the one geometry its
+/// painter (`render::hud::draw_sound_panel`) and every hit test read.
+pub fn sound_panel_rects(corners: &Corners) -> SoundPanelRects {
+    let s = corners.scale;
+    let (pad, gap, row) = (PLATE_PAD * s, ROW_GAP * s, corners.row_h);
+    let w = SOUND_PANEL_W * s;
+    let right = corners.right.x + corners.right.width;
+    let top = corners.right.y + corners.right.height + CLUSTER_GAP * s;
+    let rows_h = 4.0 * row + 3.0 * gap;
+    let panel = Rectangle::new(right - w, top, w, rows_h + 2.0 * pad);
+    let (x, inner_w) = (panel.x + pad, w - 2.0 * pad);
+    let title = Rectangle::new(x, panel.y + pad, inner_w, row);
+    let switch = Rectangle::new(x + inner_w - SOUND_SWITCH_W * s, title.y, SOUND_SWITCH_W * s, row);
+    let row_at = |i: usize| Rectangle::new(x, title.y + (i as f32 + 1.0) * (row + gap), inner_w, row);
+    let rows = [row_at(0), row_at(1), row_at(2)];
+    // The track keeps half a knob clear at either end, so the knob at 0
+    // or 1 stays on the panel.
+    let knob = 8.0 * s;
+    let track = |r: Rectangle| Rectangle::new(r.x + SOUND_LABEL_W * s + knob, r.y, r.width - SOUND_LABEL_W * s - 2.0 * knob, r.height);
+    SoundPanelRects { panel, title, switch, rows, tracks: [track(rows[0]), track(rows[1]), track(rows[2])] }
 }
 
 /// A level's opening lines (docs/levels.md): its number over the mission
@@ -1665,6 +1785,15 @@ pub struct PlayChrome {
     /// The local round is paused: the pause button shows the play
     /// triangle that takes it on again.
     pub paused: bool,
+    /// The sound button left of the pause slot: every round's, local or
+    /// a room's.
+    pub sound_button: bool,
+    /// The game's sound is muted: the sound button shows the speaker
+    /// struck out. The app sets it from its audio settings.
+    pub muted: bool,
+    /// The sound panel is open under the right cluster
+    /// (`sound_panel_rects`), showing these settings. The app sets it.
+    pub sound_panel: Option<crate::audio::Settings>,
     /// The seat this window is playing in a room, whose block the left
     /// cluster shows. `None` in a couch round, where the first block is
     /// player 1's and the couch layouts apply.
@@ -2356,6 +2485,7 @@ mod hud_tests {
             build: true,
             leave: false,
             pause: true,
+            sound: true,
             lines: 1,
             minimap: None,
             lanterns: false,
@@ -2661,6 +2791,35 @@ mod hud_tests {
                 let unscaled = c.unscaled();
                 assert_eq!(unscaled.scale, 1.0);
                 assert!((unscaled.row_h - button_height(ui.touch)).abs() < 1e-3, "{what}");
+            }
+        }
+    }
+
+    /// The sound panel hangs under the right cluster, flush with its right
+    /// edge and inside the area, on every window: its switch on the title
+    /// row, a row per level under it, each a button's height at the
+    /// corners' scale, with its track right of the label column; a press
+    /// at either end of a track sets 0 or 1.
+    #[test]
+    fn the_sound_panel_hangs_under_the_right_cluster() {
+        for (screen, ui) in screens() {
+            for (shape_name, shape) in shapes() {
+                let what = format!("{shape_name} on {screen}");
+                let c = corners(&ui, &shape);
+                let p = sound_panel_rects(&c);
+                let right = c.right.x + c.right.width;
+                assert!((p.panel.x + p.panel.width - right).abs() < 1e-3, "{what}: flush right");
+                assert!(p.panel.y >= c.right.y + c.right.height, "{what}: under the cluster");
+                assert!(p.panel.x >= ui.area.x - 1e-3, "{what}: inside the area");
+                assert!(p.panel.y + p.panel.height <= ui.area.y + ui.area.h + 1e-3, "{what}: {:?} past the bottom", p.panel);
+                assert!(p.title.contains(Vec2::new(p.switch.x + 1.0, p.switch.y + 1.0)), "{what}: the switch on the title row");
+                for (row, track) in p.rows.iter().zip(p.tracks) {
+                    assert!((row.height - c.row_h).abs() < 1e-3, "{what}");
+                    assert!(row.y >= p.title.y + p.title.height && row.y + row.height <= p.panel.y + p.panel.height, "{what}");
+                    assert!(track.x > row.x + SOUND_LABEL_W * c.scale - 1e-3 && track.x + track.width < row.x + row.width, "{what}");
+                    assert_eq!(SoundPanelRects::value_at(track, track.x - 5.0), 0.0);
+                    assert_eq!(SoundPanelRects::value_at(track, track.x + track.width + 5.0), 1.0);
+                }
             }
         }
     }

@@ -1,0 +1,21 @@
+{
+  "flow": "WErd50iG3vc79J7GEq16",
+  "name": "bongbong sfx 2026-11-23 critters-1",
+  "model": "eleven_text_to_sound_v3",
+  "estimate_credits": 1012,
+  "charged_credits": 308,
+  "note": "run in one call (10 nodes); every one of the 40 takes started and completed, none hit the queue limit",
+  "nodes": {
+    "dup89WGIvuE9rLQDu6wN": "crow_alarm",
+    "zvhDofq5BVOXUVnljC6V": "crow_caw",
+    "gAu6WmSPvdow7eLmYubD": "crow_caw_far",
+    "AWOqqY6jrwPYpC8H0EZU": "crow_flush_wings",
+    "udsfZQgYq6ad8tJf9tus": "duck_alarm",
+    "J5FPnLwVr3nKBYWupKwW": "duck_dabble",
+    "zwXgGaixmivKEeB4tUpI": "duck_land",
+    "sYo8iGE5fyuXVOHndnBB": "duck_quack",
+    "6YDRG824IVLdLcqDYrdi": "duck_takeoff",
+    "mkNiYuWJtvq4S84K7NrA": "firefly_loop"
+  },
+  "sessions": ["rPQJgAuHUEHwqQPA5Vtm","AD2GXH2lsIZGHHjOpl4a","KWKfilfMJPOWitt2C2EE","vvj9GSaj4LwBwGpOdZBG","vWo9mnxNiiyWWAVYZ2In","93vzUck0aaKi6ODo8Uao","e0eZaxgt4jWSECdpC35l","KfZ6v9BLD10DvncRrWoe","93GDWEGRZtVacAkeXVd8","ia5BMHBX8bxvqUXvikiK","ihWPqUvBj86xlV12b9xi","YVSwTn69X3CPuvtEJF7c","6nZiZArldQ6fv6DI5K8E","lxQvsyW7L2OVkNYuBIjm","3KXCDE7o9ziq1MMCPIIV","GBiJQIRO4rCZQagUF874","cdrHIxvLilOUUxFG70Ol","VhDa0O49ewNGcUxx00YE","VKWjbZLjIqUaEscjRG2J","IGjAPOZ6SEdXFqcshpqq","Dw3DLfOzRiekjP02VVEp","KgpLFpcQ2Yd9uxEZ59nm","2fHsfpPhqNRlqpjUdAF1","hyWFyUonaY25TpV3dXuq","vP01mrfxmDEEDKbzL4j2","CIjLMWs6HfLtuE1nygzV","ihLA9RRymhMGcLMGgVNx","fCsMHYUvPCGJfRgK6raT","2MwEqquBYIMmyUKyO6kn","L5ydTBuzXkOcaONO4IA0","UvdqVFnvEGd4mI28X97i","qeTcC5wHEL2bJd6GMmHv","ldxHhaihHMQA4ZmHWmLw","0YN0C2GLWjvU2ctpST79","4fAY2Lh95i0Rz4DlHuO4","Lmx8vfKXXvYxItdaTPr3","7nL6ek5p2SnrNBLu5hek","PHFWPukWlYhBbG5YGLQY","rkbNMSveW1DY4Ef08EjQ","g3ATo9WrEtxoWNdKvTnb"]
+}
