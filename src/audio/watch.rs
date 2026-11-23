@@ -214,7 +214,7 @@ pub const WATCHERS: &[WatcherSpec] = &[
         online: "the same, from the sent Ricochet; a seat's own shot, which the replica does not hold, is flown on from where it turned",
     },
     WatcherSpec { id: "thunder", entity: "weather", reads: "weather::lightning on the round clock: a flash's rising edge", cues: &["world.thunder"], online: "the same: the clock is the round's" },
-    WatcherSpec { id: "tesla", entity: "tesla tower", reads: "Game::tower_views charge", cues: &["world.tesla.charge"], online: "silent: tower charge is not on the wire" },
+    WatcherSpec { id: "tesla", entity: "tesla tower", reads: "Game::tower_views charge", cues: &["world.tesla.charge"], online: "the same: the charge travels (`Snapshot::towers`)" },
     WatcherSpec { id: "fuse", entity: "barrel", reads: "Game::fused_barrels", cues: &["world.fuse"], online: "the same" },
     WatcherSpec { id: "portal", entity: "portal", reads: "Game::portals", cues: &["world.portal"], online: "the same" },
     WatcherSpec { id: "volcano", entity: "volcano", reads: "Volcano::phase on the round clock", cues: &["world.volcano"], online: "the same: the clock is the round's" },

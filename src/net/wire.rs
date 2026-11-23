@@ -5,9 +5,10 @@
 //! replica, and both sides only ever see the same bytes.
 //!
 //! Every family in a `Snapshot` is a vector sorted by its key (`tanks` by
-//! `id`, `shots` by `id`, `bongs` by side, `tiles`, `fires` and
-//! `grass_flat` by `cell`, `bonus_pickups` by cell then kind) with each
-//! key at most once;
+//! `id`, `shots` by `id`, `bongs` by side, `tiles`, `fires`,
+//! `grass_flat`, `towers` and `ooze` by `cell`, `globs` by `id`, `coats`
+//! by tank `id`, `bonus_pickups` by cell then kind) with each key at most
+//! once;
 //! `Snapshot::normalise` establishes that order and `delta` relies on it.
 
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,12 @@ pub const TIMER_STEPS_PER_SECOND: f32 = 10.0;
 
 /// The longest time a quantised timer can express (25.5 s).
 pub const TIMER_MAX_SECONDS: f32 = u8::MAX as f32 / TIMER_STEPS_PER_SECOND;
+
+/// A tower's charge (`tower::Tower::charge`, 0..=1) travels in this many
+/// steps: a tesla's lens and its hum, a mortar's loaded mouth. Coarse on
+/// purpose - a charging coil changes its entry every couple of ticks rather
+/// than every one, and a step is a 3 per cent change of a glow.
+pub const CHARGE_STEPS: f32 = 32.0;
 
 /// Pixels to quarter pixels, rounded to the nearest step and saturated at
 /// ±`POSITION_MAX_PX` (an infinity included). NaN becomes 0.
@@ -142,6 +149,18 @@ pub fn dequantise_fuse(q: u16) -> f32 {
 /// Tenths of a second back to seconds.
 pub fn dequantise_seconds(q: u8) -> f32 {
     q as f32 / TIMER_STEPS_PER_SECOND
+}
+
+/// A charge (0..=1, clamped) to the nearest of `CHARGE_STEPS` steps. NaN
+/// becomes 0.
+pub fn quantise_charge(charge: f32) -> u8 {
+    let v = (charge.clamp(0.0, 1.0) * CHARGE_STEPS).round();
+    if v.is_nan() { 0 } else { v as u8 }
+}
+
+/// Charge steps back to 0..=1.
+pub fn dequantise_charge(q: u8) -> f32 {
+    (q as f32 / CHARGE_STEPS).min(1.0)
 }
 
 fn saturate_i16(v: f32) -> i16 {
@@ -965,6 +984,79 @@ pub struct RubbleState {
     pub units: u8,
 }
 
+/// Bits of `TowerState::flags`.
+pub mod tower_flags {
+    /// The tower is on fire (`Tower::burning`): it burns down and fights
+    /// at `tower_burning_fire_factor` until it is repaired or dies. Not
+    /// `tile_flags::BURNING`, which on a tile means burning out at no
+    /// health.
+    pub const BURNING: u8 = 1 << 0;
+}
+
+/// A standing defence tower's weapon (`tower::Tower`,
+/// docs/defence-towers-prd.md §13), by its tile's cell: what its top layer,
+/// its glow and its hum are drawn from. Every standing tower is listed, so
+/// one missing is one whose tile is gone; a tower that does nothing costs
+/// a delta nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TowerState {
+    /// `encode::cell_index` of its tile.
+    pub cell: u16,
+    /// `quantise_heading` of `Tower::heading`: where the gun tower's
+    /// barrels and the mortar point. A tesla's never turns.
+    pub heading: u8,
+    /// `quantise_charge` of `Tower::charge`: the tesla's charge toward its
+    /// strike, the mortar's reload.
+    pub charge: u8,
+    /// `tower_flags` bits.
+    pub flags: u8,
+}
+
+/// A glob of ooze in the air (`tower::Glob`), by its id: where it left the
+/// mortar, where it lands and the tick it was lobbed. Its flight and apex
+/// are the knobs', and its age is the round clock's since `tick`, so an
+/// entry never changes: it comes, and goes when the glob lands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GlobState {
+    /// The low sixteen bits of its per-round projectile number.
+    pub id: u16,
+    /// Where it left the mortar's mouth, quarter pixels.
+    pub x: i16,
+    pub y: i16,
+    /// Where it lands, quarter pixels.
+    pub to_x: i16,
+    pub to_y: i16,
+    /// The round tick it was lobbed on.
+    pub tick: u32,
+}
+
+/// A cell of ooze on the ground (`tower::OozePuddle`), by its cell. The
+/// tick it dries on rather than its time left, so an entry changes only
+/// when the cell is splashed again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OozeState {
+    /// `encode::cell_index` of the cell.
+    pub cell: u16,
+    /// The round tick it dries on.
+    pub until: u32,
+    /// How long it lasts from being laid, in ticks: what its freshness is
+    /// over (a splash's `bio_puddle_seconds`, a burst vat's
+    /// `bio_spill_seconds`).
+    pub total: u16,
+}
+
+/// A coat of ooze on a live tank (`Tank::slime_timer`), by the tank's
+/// owner slot (`TankState::id`): what washes its hull lime, slows it -
+/// a seat's own hull in its client's sandbox too - and drips. Apart from
+/// `TankState` so a coat running down costs its two bytes, not the
+/// tank's whole entry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoatState {
+    pub id: u16,
+    /// Its time left, tenths of a second (`quantise_seconds`), at least 1.
+    pub left: u8,
+}
+
 /// The round's scalar state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoundState {
@@ -1049,6 +1141,14 @@ pub struct Snapshot {
     /// replica's cover - its arrows - leaves out until each stands back
     /// up, a joiner's included.
     pub grass_flat: Vec<GrassFlatState>,
+    /// Every standing tower's weapon (`TowerState`), by cell.
+    pub towers: Vec<TowerState>,
+    /// The globs of ooze in the air (`GlobState`), by id.
+    pub globs: Vec<GlobState>,
+    /// The ooze on the ground (`OozeState`), by cell.
+    pub ooze: Vec<OozeState>,
+    /// The tanks wearing ooze (`CoatState`), by owner slot.
+    pub coats: Vec<CoatState>,
     pub round: RoundState,
     /// What happened on the ticks since the previous snapshot, the AI's
     /// trace left out (`WireEvent::from_event`).
@@ -1093,6 +1193,14 @@ impl Snapshot {
         self.grass_flat.dedup_by_key(|g| g.cell);
         self.air.sort_by_key(|a| a.id);
         self.air.dedup_by_key(|a| a.id);
+        self.towers.sort_by_key(|t| t.cell);
+        self.towers.dedup_by_key(|t| t.cell);
+        self.globs.sort_by_key(|g| g.id);
+        self.globs.dedup_by_key(|g| g.id);
+        self.ooze.sort_by_key(|o| o.cell);
+        self.ooze.dedup_by_key(|o| o.cell);
+        self.coats.sort_by_key(|c| c.id);
+        self.coats.dedup_by_key(|c| c.id);
     }
 }
 
@@ -1558,6 +1666,22 @@ mod tests {
         assert_eq!(dequantise_seconds(13), 1.3);
     }
 
+    /// A tower's charge: clamped to 0..=1, the nearest of `CHARGE_STEPS`,
+    /// and a step read back is that step again.
+    #[test]
+    fn a_charge_rounds_to_its_step_and_a_step_is_itself() {
+        assert_eq!(quantise_charge(0.0), 0);
+        assert_eq!(quantise_charge(1.0), CHARGE_STEPS as u8);
+        assert_eq!(quantise_charge(1.7), CHARGE_STEPS as u8);
+        assert_eq!(quantise_charge(-0.2), 0);
+        assert_eq!(quantise_charge(f32::NAN), 0);
+        assert_eq!(quantise_charge(0.5 + 0.4 / CHARGE_STEPS), (CHARGE_STEPS / 2.0) as u8);
+        for q in 0..=CHARGE_STEPS as u8 {
+            assert_eq!(quantise_charge(dequantise_charge(q)), q);
+        }
+        assert_eq!(dequantise_charge(u8::MAX), 1.0);
+    }
+
     #[test]
     fn intent_round_trips_every_human_field() {
         let dirs = [None, Some(Dir::Up), Some(Dir::Down), Some(Dir::Left), Some(Dir::Right)];
@@ -1632,9 +1756,17 @@ mod tests {
             ],
             fires: vec![FireState { cell: 9, left: 1, lava: false }, FireState { cell: 2, left: 1, lava: true }],
             drones: vec![DroneState { id: 7, ..Default::default() }, DroneState { id: 2, ..Default::default() }, DroneState { id: 7, halo: 3, ..Default::default() }],
+            towers: vec![TowerState { cell: 40, ..Default::default() }, TowerState { cell: 12, heading: 9, ..Default::default() }, TowerState { cell: 12, heading: 1, ..Default::default() }],
+            globs: vec![GlobState { id: 5, ..Default::default() }, GlobState { id: 3, ..Default::default() }],
+            ooze: vec![OozeState { cell: 8, ..Default::default() }, OozeState { cell: 8, until: 4, ..Default::default() }, OozeState { cell: 1, ..Default::default() }],
+            coats: vec![CoatState { id: 4, left: 3 }, CoatState { id: 0, left: 40 }],
             ..Default::default()
         };
         s.normalise();
+        assert_eq!(s.towers.iter().map(|t| (t.cell, t.heading)).collect::<Vec<_>>(), vec![(12, 9), (40, 0)]);
+        assert_eq!(s.globs.iter().map(|g| g.id).collect::<Vec<_>>(), vec![3, 5]);
+        assert_eq!(s.ooze.iter().map(|o| (o.cell, o.until)).collect::<Vec<_>>(), vec![(1, 0), (8, 0)]);
+        assert_eq!(s.coats.iter().map(|c| c.id).collect::<Vec<_>>(), vec![0, 4]);
         assert_eq!(s.drones.iter().map(|d| (d.id, d.halo)).collect::<Vec<_>>(), vec![(2, 0), (7, 0)]);
         assert_eq!(s.tanks.iter().map(|t| t.id).collect::<Vec<_>>(), vec![1, 3]);
         assert_eq!(s.tanks[0].hp, 9, "the first entry wins");

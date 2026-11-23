@@ -151,6 +151,12 @@ pub const WELL_SIDE_REACH_SECONDS: f32 = 0.5;
 /// much later.
 pub const POSE_KNOCK_GRACE_TICKS: u64 = 60;
 
+/// Ticks after a coat of ooze goes on (`Event::Slimed`) that the pose
+/// validator still allows a client-owned hull its clean pace: a splash's
+/// coat reaches the client a link's delay after the room put it on, and
+/// its hull slows that much later (`net::predict`).
+pub const POSE_SLIME_GRACE_TICKS: u64 = 60;
+
 /// What the pose validator allows a client-owned seat past its chassis's
 /// reach for the knocks the room put on it (`sonic::knock`,
 /// `Game::accept_seat_pose`): each pose may go `speed` px/s further, and
@@ -1073,6 +1079,10 @@ pub struct Game {
     /// The knocks the room put on each client-owned seat (`sonic::knock`)
     /// that `accept_seat_pose` still allows for (`SeatKnock`).
     seat_knock: [SeatKnock; MAX_SEATS],
+    /// The frame each seat's coat of ooze went on (`Event::Slimed`), which
+    /// `accept_seat_pose` holds its slower pace to only
+    /// `POSE_SLIME_GRACE_TICKS` later.
+    seat_coated: [u64; MAX_SEATS],
     /// The sonic hammer's waves running out over the field
     /// (docs/sonic-hammer.md), in the order they were fired: struck by the
     /// rules on the round that simulates them (`tick_sonic_waves`), only
@@ -1872,6 +1882,7 @@ impl Game {
         // round would name one of this round's.
         self.seat_owned = [0; MAX_SEATS];
         self.seat_knock = [SeatKnock::default(); MAX_SEATS];
+        self.seat_coated = [0; MAX_SEATS];
         self.sonic_waves.clear();
         self.grass_flat.clear();
         self.grass_passes.clear();
@@ -2593,6 +2604,14 @@ impl Game {
                 self.seat_knock[seat] = self.seat_knock[seat].with(dv.length(), skid, self.frame);
             }
         }
+        let seats = self.players.count().min(MAX_SEATS);
+        for event in &events {
+            if let Event::Slimed { slot } = *event
+                && slot < seats
+            {
+                self.seat_coated[slot] = self.frame;
+            }
+        }
         self.show(Spectacle { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks });
         self.events.extend(events);
         self.events.extend(shoves.into_events());
@@ -2861,7 +2880,7 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, lava, craters, rubble, brush, weather, time, map, zones, zone_lead, .. } = self;
+        let Game { world, physics, water, lava, craters, rubble, brush, weather, time, map, zones, zone_lead, ooze, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return None };
         if tank.body.is_none() || tank.is_wreck() {
             return None;
@@ -2905,6 +2924,12 @@ impl Game {
         if let Some(handle) = tank.body {
             tank.position = physics.position(handle);
         }
+        // Ooze, as the room's `tick_ooze` runs it after the drive: a coat
+        // laid by a puddle the snapshots put down, washed off in water,
+        // running down - so the next tick's drive is slowed
+        // (`Tank::slime_pace`) as the room's is. A splash's coat is the
+        // room's word (`Snapshot::coats`).
+        towers::coat_tick(&mut tank, ooze, water, dt);
         charged
     }
 
@@ -3000,7 +3025,12 @@ impl Game {
             // the pose's facing swaps axis.
             let turned_axis = matches!(Dir::from_rotation(pose.rotation), Some(Dir::Left | Dir::Right)) != tank.facing_along_x();
             let fit = if turned_axis { tuning().tank_turn_fit_px * std::f32::consts::SQRT_2 } else { 0.0 };
-            let reach = (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX + well.length() + fit;
+            // A coat of ooze slows the hull (`Tank::slime_pace`) - from
+            // `POSE_SLIME_GRACE_TICKS` after it went on, once its client
+            // has heard of it.
+            let coated_for = self.frame.saturating_sub(self.seat_coated[seat]);
+            let pace = if coated_for >= POSE_SLIME_GRACE_TICKS { tank.slime_pace() } else { 1.0 };
+            let reach = (tank.effective_speed() * pace + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX + well.length() + fit;
             // A knock carries it past that too, by no more than the knock
             // could slide it in all (`SeatKnock`).
             (tank.position + well, reach, self.seat_knock[seat].extra(self.frame, ticks))
@@ -3380,6 +3410,10 @@ impl Game {
             if tank.special_offline > 0.0 {
                 tank.special_offline = (tank.special_offline - dt).max(f32::EPSILON);
             }
+            // A coat of ooze, likewise (`Snapshot::coats`).
+            if tank.slime_timer > 0.0 {
+                tank.slime_timer = (tank.slime_timer - dt).max(f32::EPSILON);
+            }
             // A charge counts up between snapshots, never past its vent:
             // the room's snapshot is what ends it (`TankState::charge`).
             if let Some(charge) = tank.charge.as_mut()
@@ -3398,6 +3432,15 @@ impl Game {
         }
         if self.lamps_out > 0.0 {
             self.lamps_out = (self.lamps_out - dt).max(f32::EPSILON);
+        }
+        // A glob flies on toward where it lands and the ooze dries, on the
+        // replica's own clock; the room's snapshot dropping one is what
+        // ends it (`Snapshot::{globs, ooze}`), its splash an event.
+        for glob in &mut self.globs {
+            glob.age = (glob.age + dt).min(glob.flight);
+        }
+        for puddle in self.ooze.values_mut() {
+            puddle.left = (puddle.left - dt).max(f32::EPSILON);
         }
         // A drone's rotors and lamp turn on the replica's own clock.
         for drone in self.world.query_mut::<&mut crate::fpv::Drone>() {

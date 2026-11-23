@@ -1631,11 +1631,19 @@ impl Predictor {
             let keep = self.sandbox.seat_motion(self.seat);
             let skid = self.sandbox.seat_skid(self.seat);
             let charge = self.sandbox.seat_charge(self.seat);
+            let slime = self.sandbox.seat_slime(self.seat);
             apply::snapshot_with(&mut self.sandbox, snapshot, apply::Show::Quiet);
             if let Some((position, rotation, velocity)) = keep {
                 self.sandbox.place_seat(self.seat, position, rotation, velocity);
                 self.sandbox.set_seat_skid(self.seat, skid);
                 self.sandbox.set_seat_charge(self.seat, charge);
+                // The coat: the hull's own, from a puddle it drove onto
+                // before the room's copy did, or the room's - a splash this
+                // client could not foresee - run down over the ticks the
+                // hull stands ahead of the acked one, whichever lasts longer.
+                let ahead = self.tick.wrapping_sub(acked).saturating_sub(1).min(HISTORY_TICKS as u32) as f32 * PHYSICS_FIXED_DT;
+                let room = self.sandbox.seat_slime(self.seat);
+                self.sandbox.set_seat_slime(self.seat, slime.max(room - ahead));
             }
             self.history.clear();
             self.report.in_flight = 0;
@@ -1961,6 +1969,100 @@ mod tests {
         let a = authority.seat_motion(0).expect("a hull").0;
         let p = predictor.motion().expect("a hull").0;
         assert_eq!((a.x, a.y), (p.x, p.y), "the boosted hull drifted away from its own prediction");
+    }
+
+    /// **A coated hull is a slower hull** (docs/defence-towers-prd.md §13).
+    /// A coat of ooze the room reports - a splash no client foresees -
+    /// slows the sandbox's hull to `bio_slime_speed_factor` of its pace
+    /// tick for tick as the room's hull is slowed, runs out on the same
+    /// tick, and the hull drives as far as a local round's slimed seat.
+    #[test]
+    fn a_coat_the_room_reports_slows_the_sandbox_as_a_local_hull_is_slowed() {
+        let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        let coat = 1.5;
+        let (mut authority, sandbox) = (round(), round());
+        let mut predictor = Predictor::new(sandbox, 0, 0);
+        authority.set_seat_slime(0, coat);
+        predictor.reconcile(&wire(&mut authority, 0), 0);
+        assert_eq!(predictor.sandbox.seat_slime(0), coat, "the coat rode in on the snapshot");
+        let mut clean = round();
+        let mut local = round();
+        local.set_seat_slime(0, coat);
+        let start = predictor.motion().expect("a hull").0;
+        let (w, h) = local.map.field_size();
+        for tick in 1..=60u32 {
+            authority.predict_seat(0, right, PHYSICS_FIXED_DT);
+            predictor.step(right);
+            clean.predict_seat(0, right, PHYSICS_FIXED_DT);
+            local.update(Input::single(right), PHYSICS_FIXED_DT, w, h);
+            let (a, p) = (authority.seat_motion(0).expect("a hull").0, predictor.motion().expect("a hull").0);
+            assert_eq!((a.x, a.y), (p.x, p.y), "tick {tick}: the slimed hull drifted from its prediction");
+            assert_eq!(authority.seat_slime(0), predictor.sandbox.seat_slime(0), "tick {tick}: the coats ran apart");
+        }
+        let slimed = predictor.motion().expect("a hull").0.x - start.x;
+        let free = clean.seat_motion(0).expect("a hull").0.x - start.x;
+        let local = local.seat_motion(0).expect("a hull").0.x - start.x;
+        let factor = tuning().bio_slime_speed_factor;
+        assert!(free > 100.0, "the clean hull should get going: {free}");
+        assert!(slimed < free * (factor + 0.1) && slimed > free * (factor - 0.1), "a slimed hull covers {slimed} px to a clean one's {free}");
+        assert!((slimed - local).abs() < 1.0, "the sandbox drove {slimed} px, a local round's slimed seat {local}");
+        // Past the coat's end both run free again, on the same tick.
+        for _ in 0..60 {
+            authority.predict_seat(0, right, PHYSICS_FIXED_DT);
+            predictor.step(right);
+        }
+        assert_eq!(predictor.sandbox.seat_slime(0), 0.0);
+        let (a, p) = (authority.seat_motion(0).expect("a hull").0, predictor.motion().expect("a hull").0);
+        assert_eq!((a.x, a.y), (p.x, p.y), "after the coat");
+    }
+
+    /// An owned hull (stage 3) is never replayed, so its coat is weighed
+    /// at each reconciliation: the room's, run down over the ticks the hull
+    /// stands ahead of the acked one, or its own from a puddle the
+    /// snapshots laid, put on the moment it drives onto it - before the
+    /// room's copy gets there - and kept through snapshots that have not
+    /// caught up.
+    #[test]
+    fn an_owned_hull_slows_on_the_rooms_coat_and_on_its_own_puddle() {
+        let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        let mut authority = round();
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.set_owned(true);
+        for _ in 0..10 {
+            predictor.step(Intent::default());
+        }
+        authority.set_seat_slime(0, 2.0);
+        predictor.reconcile(&wire(&mut authority, 4), 4);
+        let ahead = 5.0 * PHYSICS_FIXED_DT;
+        assert!((predictor.sandbox.seat_slime(0) - (2.0 - ahead)).abs() < 1e-4, "the room's coat, five ticks on: {}", predictor.sandbox.seat_slime(0));
+
+        // A puddle under the hull: the room's copy is still clean.
+        let mut authority = round();
+        let mut predictor = Predictor::new(round(), 0, 0);
+        let mut free = Predictor::new(round(), 0, 0);
+        predictor.set_owned(true);
+        free.set_owned(true);
+        let start = predictor.motion().expect("a hull").0;
+        let cell = crate::map::world_to_cell(start);
+        authority.ooze.insert(cell, crate::tower::OozePuddle { left: 6.0, total: 6.0 });
+        predictor.reconcile(&wire(&mut authority, 0), 0);
+        assert_eq!(predictor.sandbox.seat_slime(0), 0.0);
+        predictor.step(right);
+        free.step(right);
+        let coated = predictor.sandbox.seat_slime(0);
+        assert!(coated > 0.0, "driving on the puddle coats the owned hull at once");
+        // A snapshot from before the room's copy reached the puddle keeps
+        // the hull's own coat.
+        predictor.reconcile(&wire(&mut authority, 1), 1);
+        assert_eq!(predictor.sandbox.seat_slime(0), coated);
+        for _ in 0..40 {
+            predictor.step(right);
+            free.step(right);
+        }
+        let slimed = predictor.motion().expect("a hull").0.x - start.x;
+        let clean = free.motion().expect("a hull").0.x - start.x;
+        assert!(clean > 60.0, "the clean hull should get going: {clean}");
+        assert!(slimed < clean * (tuning().bio_slime_speed_factor + 0.1), "the coated hull covers {slimed} px to a clean one's {clean}");
     }
 
     /// No contact anywhere: a frame of flight in open air.

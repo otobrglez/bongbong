@@ -90,7 +90,8 @@
 //! - Positions - hulls, shots, missiles, grenades, bongs - move linearly
 //!   between the two ends of the bracket, on the wire's own quarter-pixel
 //!   grid; a missile's and a grenade's height too, and a missile's two
-//!   headings by the shortest arc.
+//!   headings by the shortest arc. A tower's heading turns the same way
+//!   and its charge rises with it (`TowerState`).
 //! - A hull's facing does not: movement is four-directional
 //!   (`Tank::control` snaps `rotation`), so a heading is a fact about a
 //!   tick, not a value to average. The bracket's near end owns it, and the
@@ -1540,6 +1541,15 @@ from: &Snapshot, to: &Snapshot, alpha: f32) -> Snapshot {
             c.dy = lerp(c.dy, to.crates[i].dy, alpha);
         }
     }
+    // A tower's top turns by the shortest arc and its charge rises or
+    // falls between the two ends, keyed by its cell; its fire is the near
+    // end's.
+    for tower in &mut out.towers {
+        if let Ok(i) = to.towers.binary_search_by_key(&tower.cell, |n| n.cell) {
+            tower.heading = lerp_heading(tower.heading, to.towers[i].heading, alpha);
+            tower.charge = lerp(tower.charge as i16, to.towers[i].charge as i16, alpha) as u8;
+        }
+    }
     out
 }
 
@@ -1883,6 +1893,25 @@ mod tests {
         interp.accept(b, exact(3));
         let frame = interp.sample(at(&interp, 25.0)).expect("a frame");
         assert_eq!(frame.snapshot.air, a.air, "a call holds until its aircraft's tick");
+    }
+
+    /// A tower's top turns the short way round and its charge rises
+    /// between two snapshots; its fire is the near end's.
+    #[test]
+    fn a_towers_top_turns_and_its_charge_rises_between_snapshots() {
+        use crate::net::wire::{TowerState, tower_flags};
+        let mut a = snapshot(0);
+        a.towers = vec![TowerState { cell: 70, heading: 250, charge: 4, flags: 0 }];
+        let mut b = snapshot(3);
+        b.towers = vec![TowerState { cell: 70, heading: 6, charge: 20, flags: tower_flags::BURNING }];
+        let mut interp = Interpolator::default();
+        interp.accept(a, exact(0));
+        interp.accept(b, exact(3));
+        let frame = interp.sample(at(&interp, 25.0)).expect("a frame");
+        let t = frame.snapshot.towers[0];
+        assert_eq!(t.heading, 0, "halfway round the short way: {t:?}");
+        assert_eq!(t.charge, 12, "halfway up: {t:?}");
+        assert_eq!(t.flags, 0, "the near end's fire: {t:?}");
     }
 
     /// A hull that moved further than it could have driven between two

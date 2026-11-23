@@ -907,7 +907,8 @@ Where the build departs from the text:
     rail and laser near misses.
   - **The wire** (protocol 40): `Hit` carries its shooter (`by`), `Ricochet` its shot, what it
     came off and the shot's id; `MissileLocked`, `DryFired` and `AirHit` are sent. A dry press
-    online clicks at the press (`PressSound::Dry`); the room's copy is skipped.
+    online clicks at the press (`PressSound::Dry`); the room's copy is skipped. A tower's charge
+    travels too (protocol 41, `Snapshot::towers`), so the tesla's hum plays on a replica.
 - **The field's creatures (BB-218):** crows, mallards and fireflies are presentation (`fauna.rs`), so
   the director steps its own copy by the same `Fauna::observe` at the moments `Fx` does
   (`audio/life.rs`) rather than taking the window's: the sound stays a function of the `Game` it

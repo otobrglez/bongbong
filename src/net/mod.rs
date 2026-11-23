@@ -123,7 +123,7 @@ pub mod wire;
 /// message (JSON, `serde(default)`) needs no bump. `Welcome::protocol`
 /// stays the welcome's first field, or a client on another number cannot
 /// read it.
-pub const PROTOCOL_VERSION: u16 = 40;
+pub const PROTOCOL_VERSION: u16 = 41;
 
 /// This build's version, the `bongbong` crate's: what a client reports
 /// about itself in `wire::ClientInfo` and the room server labels its

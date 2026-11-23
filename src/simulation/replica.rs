@@ -75,6 +75,31 @@ pub struct DrawableTank {
     pub charge: u32,
     /// The cell its rod's reticle stands on (`Tank::reticle`).
     pub reticle: Option<(i32, i32)>,
+    /// Its coat of ooze (`Tank::slime_timer`): the time left in tenths, at
+    /// least 1 while it wears one; 0 for none and on a wreck.
+    pub slime: u8,
+}
+
+/// One standing defence tower's weapon as it is drawn (`tower::TowerView`):
+/// its cell, its heading in 256 steps, its charge in the wire's steps
+/// (`net::wire::quantise_charge`) and whether it burns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawableTower {
+    pub cell: (i32, i32),
+    pub heading: u8,
+    pub charge: u8,
+    pub burning: bool,
+}
+
+/// One glob of ooze in the air: its id's low sixteen bits (the wire's
+/// key), where it left the mortar and where it lands in quarter pixels,
+/// and its age in whole ticks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawableGlob {
+    pub id: u16,
+    pub from: (i32, i32),
+    pub to: (i32, i32),
+    pub age: u32,
 }
 
 /// One FPV drone as the picture shows it (`fpv::Drone`): where it is, how
@@ -251,6 +276,13 @@ pub struct DrawableState {
     pub burnt_grass: Vec<(i32, i32)>,
     /// Each volcano's shift (`Volcano::shift`).
     pub volcano_shifts: Vec<i32>,
+    /// Every standing tower's weapon, by cell.
+    pub towers: Vec<DrawableTower>,
+    /// The globs of ooze in the air, by id.
+    pub globs: Vec<DrawableGlob>,
+    /// The ooze on the ground, by cell: the round tick each cell dries on
+    /// and the ticks it was laid for.
+    pub ooze: Vec<((i32, i32), u64, u32)>,
     /// The wave (0 under the band plan), live enemies, tanks still to
     /// roll in, the intro banner's and the end screen's time left in
     /// tenths, and the outcome.
@@ -435,6 +467,7 @@ impl Game {
                 offline: t.special_offline > 0.0,
                 charge: t.charge.map_or(0, |c| c.ticks()),
                 reticle: t.reticle.map(|r| r.cell),
+                slime: if t.is_slimed() && !t.is_wreck() { tenths(t.slime_timer).max(1) } else { 0 },
             })
             .collect();
         tanks.sort_by_key(|t| t.slot);
@@ -597,6 +630,30 @@ impl Game {
         let mut burnt_grass: Vec<(i32, i32)> = self.grass.iter().filter(|t| t.burnt).map(|t| crate::map::world_to_cell(t.base)).collect();
         burnt_grass.sort_unstable();
         burnt_grass.dedup();
+        let ticks = |seconds: f32| (seconds / crate::PHYSICS_FIXED_DT).round().max(0.0) as u32;
+        let towers: Vec<DrawableTower> = self
+            .towers
+            .iter()
+            .filter(|(_, tower)| self.world.get::<&Obstacle>(tower.entity).is_ok_and(|o| !o.destroyed))
+            .map(|(&cell, tower)| DrawableTower {
+                cell,
+                heading: heading_step(tower.heading),
+                charge: crate::net::wire::quantise_charge(tower.charge),
+                burning: tower.burning,
+            })
+            .collect();
+        let mut globs: Vec<DrawableGlob> = self
+            .globs
+            .iter()
+            .map(|g| DrawableGlob {
+                id: (g.id & 0xFFFF) as u16,
+                from: (quarter_px(g.from.x), quarter_px(g.from.y)),
+                to: (quarter_px(g.to.x), quarter_px(g.to.y)),
+                age: ticks(g.age),
+            })
+            .collect();
+        globs.sort_by_key(|g| g.id);
+        let ooze = self.ooze.iter().map(|(&cell, p)| (cell, self.frame + ticks(p.left) as u64, ticks(p.total))).collect();
 
         let wave = self.wave_status();
         DrawableState {
@@ -654,6 +711,9 @@ impl Game {
             trampled: self.grass_trampled.iter().copied().collect(),
             burnt_grass,
             volcano_shifts: self.volcanoes.iter().map(|v| v.shift).collect(),
+            towers,
+            globs,
+            ooze,
             wave: wave.map_or(0, |w| w.index),
             alive: wave.map_or(0, |w| w.alive),
             pending: wave.map_or(0, |w| w.pending),
