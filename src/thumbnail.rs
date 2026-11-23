@@ -239,7 +239,7 @@ mod tests {
         ("wildwood", 0xcc29_2d23_6145_b997),
         ("armory", 0xbbcd_7d06_53c7_cd1d),
         ("lotus-lagoon", 0x98a9_ea64_3091_f319),
-        ("vulkan", 0x1efa_29a4_9ec4_1f07),
+        ("vulkan", 0x395e_f95d_1bf2_027f),
         ("hedge-maze", 0xc954_49b8_7e29_a3c3),
         ("oasis-bazaar", 0x9fd4_404b_7d4e_5b61),
         ("castle-moat", 0x409a_b1b1_6c81_3664),

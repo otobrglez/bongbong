@@ -483,6 +483,14 @@ def ranger_station():
     pickup(68, 37, "sonic_hammer")
     for c, r in ((60, 46), (70, 46), (72, 45)):
         put(c, r, "wood_crate")
+    # the armoury: ammo round the walls and helicopter strikes in the
+    # corners, clear of the cross the gates' ways to the bong make (the
+    # north gate down column 65, the west and east gates along rows 40-42),
+    # the nearest strike 5 cells from the bong, past two of a rocket's blasts
+    for c, r in ((61, 37), (70, 38), (59, 44), (71, 43), (67, 46)):
+        pickup(c, r, "ammo")
+    for c, r in ((58, 36), (72, 36), (64, 46)):
+        pickup(c, r, "air_heli")
     # sandbag nests outside the north and west gates, a gap left for the
     # road (the east gate opens onto the bridge)
     for c, r in ((61, 33), (62, 33), (62, 32), (68, 33), (69, 33), (68, 32)):
@@ -1101,8 +1109,10 @@ HEADER = """\
 # The players start in the Ranger Station in the south-east: a limestone wall
 # round the bong's sandbag ring with gates north, west and east, two gun
 # towers on its north corners and a tesla by the bong, sandbag nests and
-# barriers outside the gates, the stores inside (ammo, health, shield, a bong
-# health pack and the sonic hammer - shove a tank into the lava). Its
+# barriers outside the gates, the stores inside (six ammo crates round the
+# walls, three helicopter strikes in its corners and by its south wall,
+# health, shield, a bong health pack and the sonic hammer - shove a tank
+# into the lava). Its
 # clearing runs from the southern lava to the east river, which passes the
 # east gate under a bridge. The road west crosses the southern lava to the
 # fishing village on the lagoon (minigun in the first hut), the road north
