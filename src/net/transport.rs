@@ -46,17 +46,48 @@ pub struct Closed {
     /// This end asked for it (`Transport::close`), rather than the room
     /// or the network.
     pub requested: bool,
+    /// Set when the client left because the room speaks another
+    /// `PROTOCOL_VERSION` (`RoomClient::poll`), saying which of the two is
+    /// behind: the window words it as "update the app", "reload the page"
+    /// or "try again later" (`text::closed`), never as `reason`, which is
+    /// the developer's reading.
+    pub mismatch: Option<Mismatch>,
+}
+
+/// How a room on another `PROTOCOL_VERSION` stands to this build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mismatch {
+    /// The room is ahead of this build, or never said a number this build
+    /// could read: this build is the one to update.
+    RoomNewer,
+    /// The room is behind this build: a server not yet rolled out to the
+    /// version this build was released with.
+    RoomOlder,
 }
 
 impl Closed {
     /// The connection failed or the far end hung up.
     pub fn fault(reason: impl Into<String>) -> Closed {
-        Closed { reason: reason.into(), requested: false }
+        Closed { reason: reason.into(), requested: false, mismatch: None }
     }
 
     /// This end closed the socket.
     pub fn by_us() -> Closed {
-        Closed { reason: "closed by this end".into(), requested: true }
+        Closed { reason: "closed by this end".into(), requested: true, mismatch: None }
+    }
+
+    /// The client left a room on another protocol: `room` is the room's
+    /// number where it said one (a `Welcome`'s leading field, a refusal's
+    /// `protocol`), `None` where its welcome never came in a shape this
+    /// build could read at all.
+    pub fn other_protocol(room: Option<u16>) -> Closed {
+        let ours = crate::net::PROTOCOL_VERSION;
+        let (reason, mismatch) = match room {
+            Some(room) if room < ours => (format!("the room speaks protocol {room}, older than this build's {ours}"), Mismatch::RoomOlder),
+            Some(room) => (format!("the room speaks protocol {room}, newer than this build's {ours}"), Mismatch::RoomNewer),
+            None => (format!("the room sent no welcome this build could read (protocol {ours})"), Mismatch::RoomNewer),
+        };
+        Closed { reason, requested: false, mismatch: Some(mismatch) }
     }
 }
 
@@ -109,11 +140,13 @@ impl Transport for Failed {
 /// A client's socket to a room.
 ///
 /// Implementations deliver whole messages in the order they were sent
-/// (every one is a WebSocket frame) and never block the caller. A
-/// message that does not decode is dropped rather than fatal: §4.3's
-/// rule is that a new `Lobby` variant needs no `PROTOCOL_VERSION` bump,
-/// so a room one build ahead may say something this build has no name
-/// for, and the round must not end over it.
+/// (every one is a WebSocket frame), decoded by `codec::decode`, and never
+/// block the caller. A message that does not decode is dropped rather
+/// than fatal: §4.3's rule is that a new `Lobby` variant needs no
+/// `PROTOCOL_VERSION` bump, so a room one build ahead may say something
+/// this build has no name for, and the round must not end over it. A
+/// `Welcome` from another protocol is not dropped: `decode` reads it as
+/// `Msg::ForeignWelcome`, which is how a client learns to leave.
 pub trait Transport {
     /// Where the connection stands, as of the last `drain`.
     fn state(&self) -> ConnState;

@@ -559,7 +559,7 @@
       "id": 5,
       "type": "stat",
       "title": "Build",
-      "description": "The image tag the pod runs and its net::PROTOCOL_VERSION. A client refuses a server on another protocol by name.",
+      "description": "The image tag the pod runs and its net::PROTOCOL_VERSION. A client on another protocol is refused before it is seated, and a client that finds a server on another protocol leaves it.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2119,7 +2119,7 @@
       "id": 24,
       "type": "stat",
       "title": "On another protocol",
-      "description": "Connected clients that speak a protocol other than this server's (bongbong_info). Such a client is welcomed and then leaves, so any here are players who cannot play until they update.",
+      "description": "Connected clients that speak a protocol other than this server's (bongbong_info). Such a client is refused before it is seated and told to reload the page or update the app, so any here are players who cannot play until they do.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

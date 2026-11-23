@@ -79,13 +79,21 @@ is never paid back as a burst, and the tick arm is polled before commands - with
 between back-to-back late ticks, so a flood of lobby or dev traffic can neither delay a tick nor be
 starved by an overloaded room. `/metrics` adds tick lateness (p50/p99), late, dropped and overrun
 ticks and intent starvations. `conn.rs` is one task per socket with a bounded `Outbox`: a slow
-client skips snapshots, never queues them. **Its keep-alive** (`hub::KeepAlive`, set before serving
+client skips snapshots, never queues them. **A greeting on another protocol goes no further**: a
+`Create` or `Join` whose `ClientInfo::protocol` is not the server's is refused before a room is
+made or a seat given (`protocol_refusal`, logged and counted under the client's build in
+`bongbong_clients`), with the socket left open so the line stays on the player's screen; one with
+no `ClientInfo` (a hand-driven socket) is seated. `hub::find` still reaches a draining server's
+rooms, which are rounds in play or just ended and take no new seat, so a join there is a seat
+coming back. **Its keep-alive** (`hub::KeepAlive`, set before serving
 through `Server::keep_alive`): the writer sends a WebSocket ping every `ping_every` (2 s), which a
 browser answers at the protocol level even in a hidden tab, and a connection that sends nothing at
 all - not even that pong - for `silent_after` (10 s) is closed, so a seat on a dead path starts its
 grace and an empty round pauses instead of holding the seat forever. `cargo test -p bongbong-server`
 runs the unit tests and `tests/round.rs`, which binds an ephemeral port, plays a round through two
-headless `tokio-tungstenite` clients and measures the cadence, fills a room to its cap, plays a
+headless `tokio-tungstenite` clients and measures the cadence, fills a room to its cap, refuses an
+old page, an old app and a newer build before seating any of them
+(`a_client_on_another_protocol_is_refused_before_it_is_seated`), plays a
 four-seat round with a replica per client held to the wire, and - through whole
 `net::round::OnlineRound`s rather than a bare `RoomClient` - taps the trigger on one seat and on
 both seats of a co-op room and counts the shells back (the intersection of `OnlineRound`'s real-time
@@ -128,8 +136,14 @@ connects with a `tag:ci` Tailscale OAuth client first, then `docker buildx build
 linux/amd64 --push` (tags `latest` and `git describe`; the cleanup after it keeps the newest three
 release tags and never touches `latest` or a PR's images), then `kustomize edit set image` +
 `kubectl apply -k k8s/base/`. **The trigger is the version tag `cloudflare-deploy.yml` uses**, so
-the wasm client and the image ship together - a client and server that disagree about
-`net::PROTOCOL_VERSION` refuse each other by name. The image is built on `rust:1.99.0-bookworm` in
+the wasm client and the image ship together, and the page goes out second: `cloudflare-deploy.yml`
+builds while the server rolls out and its deploy step waits for this run of the same commit to
+succeed (`gh run watch`), so a new page never greets the old server and a failed rollout leaves the
+old page up. What still meets across `net::PROTOCOL_VERSION` - a page left open, an app not yet
+updated - is refused by the room before it is seated (`conn::protocol_refusal`: a
+`Refusal::BadMessage` every build since `ClientInfo` shows, "reload it" for the web, "update the
+app" for the rest, with the server's number for a build that reads it), and a client that finds a
+room on another protocol leaves it, giving the seat back, and says so in its own language. The image is built on `rust:1.99.0-bookworm` in
 cargo-chef stages - the dependencies a layer of their own, rebuilt only when a manifest or the
 lockfile changes - then copied onto `gcr.io/distroless/cc-debian12`, ~53 MB. In CI the layers are
 kept in GitHub's Actions cache (scope `rooms-server`): ci.yml's `rooms-cache` job writes it on every
@@ -332,7 +346,9 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   and ci.yml's `web-cache` job builds it on every push to master, because a run reads only caches
   saved on its own ref or on master - without it a PR's first preview and a release tag compile
   everything. `cloudflare-deploy.yml` deploys production on version tags (the `bongbong` Worker,
-  bongbong.io). `pr-preview.yml` deploys every same-repo PR with `--features dev-tools` to an
+  bongbong.io), after the room server: it builds while `deploy-rooms.yml` rolls the server out and
+  deploys once that run of the same commit has succeeded (a manual run with no server run of its
+  commit deploys at once). `pr-preview.yml` deploys every same-repo PR with `--features dev-tools` to an
   ephemeral Worker `bongbong-pr-<N>` on its workers.dev subdomain (`wrangler deploy --name`, no
   custom domain), posts a sticky comment, and deletes the worker on close. **PR previews are the QA
   surface with the tuning panel; production never gets it.** Fork PRs get no secrets by design -

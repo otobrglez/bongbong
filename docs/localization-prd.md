@@ -557,7 +557,10 @@ does that the text above does not say, or says differently:
   in `Lobby::Error { refusal }`; `text::refusal` is the client's words.
   The client's own close reasons (`Closed::reason`) stay strings: they
   name addresses and socket errors and are shown as the detail they are,
-  under the localized `OFFLINE` label. `PROTOCOL_VERSION` is 7.
+  under the localized `OFFLINE` label. `PROTOCOL_VERSION` is 7. The one
+  close a player is told what to do about - a room on another protocol,
+  `Closed::mismatch` - is a message (`note-update-app`,
+  `note-reload-page`, `note-room-older`, through `text::closed`).
 - **The status line's label** is `OnlineRound::new`'s `label` looked up
   as `status-label-<label>`: the game's `ROOM` is a word, the rig's `RIG`
   falls back to itself.

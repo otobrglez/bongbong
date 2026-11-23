@@ -166,6 +166,14 @@ impl Hub {
     }
 
     /// The room `code` names, once the code is a code at all.
+    ///
+    /// A draining server still finds its rooms, unlike `create_room`: what
+    /// it holds then is rounds being played or just ended (a waiting or
+    /// paused room closes when the drain starts), neither of which takes a
+    /// new seat (`Refusal::AlreadyStarted`), so a join that finds one is a
+    /// seat coming back to the round the drain exists to let finish. A
+    /// client on another protocol never gets this far: `conn::protocol_refusal`
+    /// turns it away first.
     pub fn find(&self, code: &str) -> Result<RoomHandle, Refusal> {
         let code = code::check(code).map_err(|e| Refusal::BadCode { detail: e.to_string() })?;
         self.rooms

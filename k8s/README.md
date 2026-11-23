@@ -56,9 +56,13 @@ server are both on the tailnet, so `tailscale status` has to be up first.
 
 Deploys happen from CI: tagging `vX.Y.Z` runs
 `.github/workflows/deploy-rooms.yml`, which builds and pushes the image
-and rolls it out. That is the same tag `cloudflare-deploy.yml` uses, so
-the web client and the server ship together - they refuse each other by
-name if `net::PROTOCOL_VERSION` disagrees.
+and rolls it out. That is the same tag `cloudflare-deploy.yml` uses, and
+the web deploy waits for this rollout to succeed before it ships the page,
+so a new page never meets the old server. A client on another
+`net::PROTOCOL_VERSION` than the server's - a page left open from before,
+an app not yet updated - is refused before it is seated and told to reload
+the page or update the app; a client ahead of the server leaves it and
+says to try again later.
 
 By hand, for a one-off:
 

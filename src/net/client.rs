@@ -15,9 +15,21 @@
 //! The socket is the only thing a room is reached through, so creating a
 //! room is a message on it like any other and there is no HTTP client
 //! anywhere in the game.
+//!
+//! A room on another `PROTOCOL_VERSION` is left, never waited on: its
+//! `Welcome` arrives as `Msg::ForeignWelcome` (`codec::decode` reads the
+//! leading number alone), a room that checks the greeting refuses it with
+//! its own number (`Refusal::BadMessage::protocol`), and a room that
+//! answered the greeting but sent no welcome this build could read within
+//! `WELCOME_WITHIN` is taken as one too. Each says `Leave` where the room
+//! may have seated it, so no seat is held for a client that cannot play,
+//! closes the socket, and ends on a `Closed` whose `mismatch` the window
+//! words as "update the app" or "reload the page" when the room is ahead
+//! and "try again in a while" when it is behind (`text::closed`).
 
 use crate::ai::Intent;
 use crate::level::Mission;
+use crate::net::PROTOCOL_VERSION;
 use crate::net::codec::Msg;
 use crate::net::delta::apply_delta;
 use crate::net::rooms::RoomCode;
@@ -57,6 +69,15 @@ pub const CLIENT_AWAY_AFTER: std::time::Duration = std::time::Duration::from_sec
 /// socket is open, and a dial whose path dies mid-handshake would
 /// otherwise leave the lobby reaching for the room forever.
 pub const ROOM_REACH_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// How long a room that has answered the greeting - the code of a room
+/// made, a roster - may go without a `Welcome` this build can read before
+/// the client takes it as a room on another protocol and leaves
+/// (`RoomClient::poll`). The room sends the welcome in the same breath as
+/// those, so a wait this long is a welcome that arrived and could not be
+/// read at all, not one still on its way; a link too slow to carry one in
+/// this time could not carry the round's snapshots either.
+pub const WELCOME_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Who this client is to a room.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -252,9 +273,12 @@ pub enum ClientEvent {
     Said { seat: u8, text: String },
     /// The room refused what was asked (a code that names no room, a
     /// full room, a kick of oneself), as a code the caller puts into
-    /// words. The socket stays open unless a `Closed` follows.
+    /// words. The socket stays open unless a `Closed` follows. A refusal
+    /// naming another protocol is not one of these: it ends the client
+    /// with a `Closed` whose `mismatch` is set.
     Refused(Refusal),
-    /// The connection ended.
+    /// The connection ended. `mismatch` is set when the client left a
+    /// room on another protocol.
     Closed(Closed),
     /// The answer to a clock probe (`RoomClient::ping`), and the instant
     /// it came off the socket.
@@ -292,6 +316,11 @@ pub struct RoomClient<T: Transport> {
     /// to open (`ROOM_REACH_WITHIN`).
     dialled_at: std::time::Instant,
     reach_within: std::time::Duration,
+    /// When the room first answered the greeting with something other
+    /// than a welcome or a refusal, and how long the welcome may take
+    /// after it (`WELCOME_WITHIN`).
+    answered_at: Option<std::time::Instant>,
+    welcome_within: std::time::Duration,
     /// What every one of those instants is read on: the wall unless a
     /// test winds it (`set_clock`).
     clock: crate::net::now::Now,
@@ -332,6 +361,8 @@ impl<T: Transport> RoomClient<T> {
             last_poll: None,
             dialled_at: std::time::Instant::now(),
             reach_within: ROOM_REACH_WITHIN,
+            answered_at: None,
+            welcome_within: WELCOME_WITHIN,
             clock: crate::net::now::Now::wall(),
         }
     }
@@ -362,9 +393,15 @@ impl<T: Transport> RoomClient<T> {
             self.unanswered_since = None;
         }
         for (msg, arrived) in scratch.drain(..) {
-            self.take(msg, arrived, out);
+            // A room this client has left says nothing more to it.
+            if !matches!(self.phase, Phase::Closed(_)) {
+                self.take(msg, arrived, out);
+            }
         }
         self.scratch = scratch;
+        if matches!(self.phase, Phase::Closed(_)) {
+            return;
+        }
         if let ConnState::Closed(closed) = self.transport.state() {
             self.phase = Phase::Closed(closed.clone());
             out.push(ClientEvent::Closed(closed));
@@ -375,7 +412,26 @@ impl<T: Transport> RoomClient<T> {
             self.give_up("the room stopped answering", out);
         } else if self.phase == Phase::Connecting && self.clock.since(self.dialled_at) >= self.reach_within {
             self.give_up("the room could not be reached", out);
+        } else if self.phase == Phase::Greeting && self.answered_at.is_some_and(|at| self.clock.since(at) >= self.welcome_within) {
+            // Answered, and no welcome: one came in a shape this build
+            // could not even read a protocol from.
+            self.leave_other_protocol(None, true, out);
         }
+    }
+
+    /// Leave a room on another protocol - `room`'s number where it said
+    /// one - and end with a `Closed` that says so: `Leave` first where the
+    /// room may have seated this client (it welcomed it, or answered the
+    /// greeting), so the seat is freed rather than held for a client that
+    /// cannot play, then the socket.
+    fn leave_other_protocol(&mut self, room: Option<u16>, seated: bool, out: &mut Vec<ClientEvent>) {
+        if seated {
+            self.say(Lobby::Leave);
+        }
+        self.transport.close();
+        let closed = Closed::other_protocol(room);
+        self.phase = Phase::Closed(closed.clone());
+        out.push(ClientEvent::Closed(closed));
     }
 
     /// Close the connection from this end for `reason`, which the lobby
@@ -394,6 +450,7 @@ impl<T: Transport> RoomClient<T> {
         self.dialled_at = clock.now();
         self.last_poll = None;
         self.unanswered_since = None;
+        self.answered_at = None;
         self.clock = clock;
     }
 
@@ -401,6 +458,12 @@ impl<T: Transport> RoomClient<T> {
     /// set), for a test that cannot wait it out.
     pub fn set_reach_within(&mut self, reach_within: std::time::Duration) {
         self.reach_within = reach_within;
+    }
+
+    /// How long a room that answered the greeting may take to welcome
+    /// (`WELCOME_WITHIN` unless set), for a test that cannot wait it out.
+    pub fn set_welcome_within(&mut self, welcome_within: std::time::Duration) {
+        self.welcome_within = welcome_within;
     }
 
     /// How long a ping may go unanswered before the room is taken as gone
@@ -585,18 +648,36 @@ impl<T: Transport> RoomClient<T> {
         }
     }
 
+    /// The room has answered the greeting with something that is neither
+    /// its welcome nor a refusal: the welcome is due (`WELCOME_WITHIN`).
+    fn welcome_due(&mut self) {
+        if self.phase == Phase::Greeting && self.answered_at.is_none() {
+            self.answered_at = Some(self.clock.now());
+        }
+    }
+
     /// One message from the room.
     fn take(&mut self, msg: Msg, arrived: std::time::Instant, out: &mut Vec<ClientEvent>) {
         match msg {
             Msg::Lobby(Lobby::RoomCreated { code }) => {
                 self.code = Some(code.clone());
+                self.welcome_due();
                 out.push(ClientEvent::Created { code });
             }
             Msg::Lobby(Lobby::Roster { host, seats }) => {
                 self.host_seat = host;
                 self.seats = seats.clone();
+                self.welcome_due();
                 out.push(ClientEvent::Roster { host, seats });
             }
+            // The room checked the greeting and speaks another protocol:
+            // nothing was seated.
+            Msg::Lobby(Lobby::Error { refusal: Refusal::BadMessage { protocol: Some(room), .. } }) if room != PROTOCOL_VERSION => {
+                self.leave_other_protocol(Some(room), false, out);
+            }
+            // The room seated this client and welcomed it in a layout that
+            // is not this build's.
+            Msg::ForeignWelcome { protocol } => self.leave_other_protocol(Some(protocol), true, out),
             Msg::Lobby(Lobby::Started) => {
                 self.started = true;
                 out.push(ClientEvent::Started);
@@ -611,8 +692,13 @@ impl<T: Transport> RoomClient<T> {
                 out.push(ClientEvent::Ended { outcome });
             }
             Msg::Lobby(Lobby::Said { seat, text }) => out.push(ClientEvent::Said { seat, text }),
-            Msg::Lobby(Lobby::Error { refusal }) => out.push(ClientEvent::Refused(refusal)),
+            Msg::Lobby(Lobby::Error { refusal }) => {
+                // The room said why there is no welcome; nothing is due.
+                self.answered_at = None;
+                out.push(ClientEvent::Refused(refusal));
+            }
             Msg::Welcome(welcome) => {
+                self.answered_at = None;
                 self.seat = Some(welcome.seat);
                 self.merge_roster(&welcome);
                 // A round that is already running welcomes a joiner at
@@ -924,6 +1010,116 @@ mod tests {
         assert_eq!(events, [ClientEvent::Refused(Refusal::NoSuchRoom { code: "AKKKK".into() })]);
         assert_eq!(client.phase(), &Phase::Greeting, "still connected, still nobody's seat");
         assert_eq!(client.seat(), None);
+    }
+
+    /// A host and its room on one manual clock, the client still greeting.
+    fn greeting_on_a_manual_clock() -> (Room, RoomClient<loopback::Loopback>, crate::net::now::Now) {
+        let clock = crate::net::now::Now::manual();
+        let (mut client_end, mut room_end) = loopback::pair(LinkQuality::PERFECT, 4);
+        client_end.set_clock(clock.clone());
+        room_end.set_clock(clock.clone());
+        let mut room = Room { link: room_end, heard: Vec::new() };
+        let mut client = RoomClient::host(client_end, Identity::new("host", "tok-host"), RoomSetup::default());
+        client.set_clock(clock.clone());
+        frame(&mut room, &mut client);
+        assert_eq!(client.phase(), &Phase::Greeting);
+        (room, client, clock)
+    }
+
+    /// **A room on another protocol is left, not waited on.** Its welcome
+    /// is read for the number alone; the client says `Leave`, since the
+    /// room seated it, closes the socket and ends on a `Closed` naming the
+    /// mismatch - which side is behind - once, ignoring the rest of what
+    /// the room says.
+    #[test]
+    fn a_welcome_from_another_protocol_leaves_the_room_and_says_why() {
+        use crate::net::transport::Mismatch;
+        for (theirs, behind) in [(33, Mismatch::RoomOlder), (PROTOCOL_VERSION + 1, Mismatch::RoomNewer)] {
+            let (mut room, mut client, _) = greeting_on_a_manual_clock();
+            room.lobby(Lobby::RoomCreated { code: "AK7QX".into() });
+            room.say(Msg::ForeignWelcome { protocol: theirs });
+            room.lobby(Lobby::Roster { host: 0, seats: Vec::new() });
+            let events = frame(&mut room, &mut client);
+            let closed = Closed::other_protocol(Some(theirs));
+            assert_eq!(closed.mismatch, Some(behind));
+            assert_eq!(events, [ClientEvent::Created { code: "AK7QX".into() }, ClientEvent::Closed(closed.clone())]);
+            assert_eq!(client.phase(), &Phase::Closed(closed));
+            assert_eq!(client.seat(), None, "never seated on a welcome it could not read");
+            assert_eq!(room.heard.last(), Some(&Msg::Lobby(Lobby::Leave)), "the room's seat is given back: {:?}", room.heard);
+            assert!(frame(&mut room, &mut client).is_empty(), "reported once");
+            client.ready();
+            client.send_intent(&Intent::default());
+            assert!(room.listen().is_empty(), "the socket is closed: nothing more goes out");
+        }
+    }
+
+    /// **A room that checks the greeting refuses it with its number**, and
+    /// the client ends the same way, without a `Leave` - nothing was
+    /// seated. A `BadMessage` that names no protocol, or this build's, is
+    /// an ordinary refusal that leaves the socket open.
+    #[test]
+    fn a_refusal_naming_another_protocol_ends_the_client_without_a_seat_to_give_back() {
+        let (mut room, mut client, _) = greeting_on_a_manual_clock();
+        for protocol in [None, Some(PROTOCOL_VERSION)] {
+            let refusal = Refusal::BadMessage { detail: "?".into(), protocol };
+            room.lobby(Lobby::Error { refusal: refusal.clone() });
+            assert_eq!(frame(&mut room, &mut client), [ClientEvent::Refused(refusal)]);
+            assert_eq!(client.phase(), &Phase::Greeting);
+        }
+        room.lobby(Lobby::Error {
+            refusal: Refusal::BadMessage { detail: "this game is out of date".into(), protocol: Some(PROTOCOL_VERSION + 1) },
+        });
+        let events = frame(&mut room, &mut client);
+        assert_eq!(events, [ClientEvent::Closed(Closed::other_protocol(Some(PROTOCOL_VERSION + 1)))]);
+        assert!(!room.heard.contains(&Msg::Lobby(Lobby::Leave)), "nothing seated, nothing to leave");
+        assert!(frame(&mut room, &mut client).is_empty(), "reported once");
+    }
+
+    /// **A room that answers but never welcomes is left.** The code and a
+    /// roster came, the welcome did not - it arrived in a shape this build
+    /// could not read even a number from, and the transport dropped it -
+    /// so once `WELCOME_WITHIN` has passed the client leaves the seat the
+    /// room gave it and ends as on any other mismatch. A refusal is the
+    /// room saying why there is no welcome, and stops the wait.
+    #[test]
+    fn a_room_that_answers_the_greeting_and_never_welcomes_is_left() {
+        use std::time::Duration;
+        let (mut room, mut client, clock) = greeting_on_a_manual_clock();
+        client.set_welcome_within(Duration::from_secs(2));
+        clock.advance(Duration::from_secs(60));
+        assert!(frame(&mut room, &mut client).is_empty(), "nothing answered yet: the dial's and the ping's limits, not this one");
+        room.lobby(Lobby::RoomCreated { code: "AK7QX".into() });
+        room.link.send(&[codec::kind::WELCOME, 0xff, 0xff, 0xff, 0xff]);
+        room.lobby(Lobby::Roster { host: 0, seats: Vec::new() });
+        let events = frame(&mut room, &mut client);
+        assert_eq!(events.len(), 2, "the code and the roster, the unreadable welcome dropped: {events:?}");
+        clock.advance(Duration::from_millis(1_900));
+        assert!(frame(&mut room, &mut client).is_empty(), "not yet");
+        clock.advance(Duration::from_millis(200));
+        assert_eq!(frame(&mut room, &mut client), [ClientEvent::Closed(Closed::other_protocol(None))]);
+        assert_eq!(room.heard.last(), Some(&Msg::Lobby(Lobby::Leave)));
+
+        // The room said why: nothing is due, however long it takes.
+        let (mut room, mut client, clock) = greeting_on_a_manual_clock();
+        client.set_welcome_within(Duration::from_secs(2));
+        room.lobby(Lobby::RoomCreated { code: "AK7QX".into() });
+        room.lobby(Lobby::Error { refusal: Refusal::ServerFull { rooms: 8 } });
+        frame(&mut room, &mut client);
+        clock.advance(Duration::from_secs(10));
+        assert!(frame(&mut room, &mut client).is_empty());
+        assert_eq!(client.phase(), &Phase::Greeting);
+
+        // And a welcome in time is a room joined.
+        let (mut room, mut client, clock) = greeting_on_a_manual_clock();
+        client.set_welcome_within(Duration::from_secs(2));
+        room.lobby(Lobby::RoomCreated { code: "AK7QX".into() });
+        frame(&mut room, &mut client);
+        clock.advance(Duration::from_millis(1_500));
+        room.say(Msg::Welcome(welcome(0, 0)));
+        frame(&mut room, &mut client);
+        clock.advance(Duration::from_secs(10));
+        assert!(frame(&mut room, &mut client).is_empty());
+        assert_eq!(client.phase(), &Phase::Lobby);
     }
 
     /// **A connection that dies without closing is noticed.** Silence the

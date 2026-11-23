@@ -12,6 +12,20 @@ name: Cloudflare Deploy
 # whose tag cannot be pushed from where you are. Per-PR preview deploys
 # live in pr-preview.yml, built from the same composite action.
 #
+# **On a version tag the page goes out after the room server.** The same
+# tag starts deploy-rooms.yml, and a page that reached players first
+# would greet the old server in a protocol it does not speak. So the build
+# runs while the server rolls out, and the deploy waits for that rollout
+# (deploy-rooms.yml's run for this commit) to succeed: until then the old
+# page and the old server play on together, and the moment the new server
+# takes rooms the new page follows. A page still open from before is
+# refused by the new server before it is seated and told to reload
+# (docs/online-coop-prd.md section 4.9). A failed rollout fails this too,
+# leaving the page that matches the server still running. A manual run
+# waits the same way for a server run of its commit when there is one, and
+# deploys at once when there is none (a page-only redeploy); pr-preview.yml
+# is untouched by any of it.
+#
 # Toolchain pins (Rust, emsdk) live in .github/actions/build-web/action.yml.
 #
 # Requires repo secrets:
@@ -29,11 +43,49 @@ jobs:
     permissions:
       contents: read
       deployments: write
+      # `gh run list/watch` on deploy-rooms.yml's run.
+      actions: read
     steps:
       - uses: actions/checkout@v7
 
       - name: Build web (wasm + Astro site)
         uses: ./.github/actions/build-web
+
+      # The room server's rollout for this commit, which the same tag
+      # started: its build, then `kubectl rollout status`, which waits out
+      # the old pod's drain (up to 35 minutes, deploy-rooms.yml). A tag's
+      # run is looked for until it shows up - it starts with this one, so
+      # it is there long before the web build is done - and a manual run's
+      # only once.
+      - name: Wait for the room server's rollout
+        timeout-minutes: 90
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          run=""
+          for attempt in $(seq 1 30); do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy-rooms.yml \
+              --commit "$GITHUB_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)
+            [ -n "$run" ] || [ "$EVENT" != push ] && break
+            sleep 20
+          done
+          if [ -z "$run" ]; then
+            if [ "$EVENT" = push ]; then
+              echo "::error::no Deploy Room Server run for $GITHUB_SHA: the page waits for the server it talks to"
+              exit 1
+            fi
+            echo "No Deploy Room Server run for $GITHUB_SHA; a manual page-only deploy goes ahead."
+            exit 0
+          fi
+          echo "Waiting for Deploy Room Server run $run"
+          gh run watch "$run" --repo "$GITHUB_REPOSITORY" --interval 30 > /dev/null || true
+          conclusion=$(gh run view "$run" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)
+          if [ "$conclusion" != success ]; then
+            echo "::error::Deploy Room Server run $run ended $conclusion; the page stays on the build the running server speaks"
+            exit 1
+          fi
+          echo "The room server is rolled out; deploying the page."
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4

@@ -1155,7 +1155,10 @@ impl From<WireOverrides> for LevelOverrides {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Welcome {
     /// `net::PROTOCOL_VERSION` of the server; a client on another version
-    /// leaves rather than misread the stream.
+    /// leaves rather than misread the stream. **The first field, in every
+    /// version**: a client reads it alone from a welcome whose layout is
+    /// not its own (`codec::decode`'s `Msg::ForeignWelcome`), so it can
+    /// say why it is leaving instead of waiting on a message it dropped.
     pub protocol: u16,
     /// The server's simulation build, stamped for the logs.
     pub sim_version: String,
@@ -1216,9 +1219,15 @@ pub struct RosterSeat {
 }
 
 /// What a client says about its own build when it asks for a seat
-/// (`Lobby::Create`/`Join`), for the room server's metrics and logs. It
-/// changes nothing a room does: a client on another protocol still learns
-/// it from the `Welcome` and leaves.
+/// (`Lobby::Create`/`Join`), for the room server's metrics and logs, and
+/// the one thing a room checks before it seats anyone: a `protocol` other
+/// than the server's is refused there and then, with a
+/// `Refusal::BadMessage` that names the server's protocol and says in
+/// plain words to update the app or reload the page - the one refusal
+/// every build since this struct was added can read and show
+/// (`server/src/conn.rs`). A greeting without it (a hand-driven socket)
+/// is seated, and a client on another protocol still learns it from the
+/// `Welcome` and leaves.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientInfo {
     /// `net::BUILD_VERSION` of the client.
@@ -1335,8 +1344,16 @@ pub enum Refusal {
     NotInRoom,
     /// A message only the server sends.
     NotYours,
-    /// Bytes that did not decode as a message.
-    BadMessage { detail: String },
+    /// Bytes that did not decode as a message, or a greeting from a build
+    /// on another protocol: then `protocol` is the server's
+    /// `PROTOCOL_VERSION`, which a client of this build or later reads to
+    /// leave and say so in its own words, and `detail` says it in English
+    /// for a build older than the field, which shows `detail` alone.
+    BadMessage {
+        detail: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protocol: Option<u16>,
+    },
     /// A `Create` whose map did not parse or is unknown.
     BadMap { detail: String },
     /// A `Join` whose code is not the shape of a room code.
@@ -1382,7 +1399,7 @@ impl std::fmt::Display for Refusal {
             Refusal::AlreadyInRoom => f.write_str("already in a room"),
             Refusal::NotInRoom => f.write_str("not in a room"),
             Refusal::NotYours => f.write_str("that message is the server's to send"),
-            Refusal::BadMessage { detail } => f.write_str(detail),
+            Refusal::BadMessage { detail, .. } => f.write_str(detail),
             Refusal::BadMap { detail } => write!(f, "bad map: {detail}"),
             Refusal::BadCode { detail } => f.write_str(detail),
             Refusal::NoSuchRoom { code } => write!(f, "no room {code} here"),
@@ -1420,6 +1437,34 @@ mod tests {
             assert_eq!(back, Lobby::Error { refusal });
         }
         assert_eq!(Refusal::RoomFull { seats: 8 }.to_string(), "the room is full: 8 seats");
+    }
+
+    /// **The protocol refusal is one an older build reads.** Builds before
+    /// `BadMessage::protocol` know the variant as `{kind, detail}` alone;
+    /// the new field is skipped when absent and ignored by them when
+    /// present, so they show the detail, and this build reads the number.
+    #[test]
+    fn the_protocol_refusal_reads_in_a_build_older_than_its_field() {
+        /// `Refusal` as builds up to protocol 40 spell the variant.
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum Before {
+            BadMessage { detail: String },
+        }
+        /// `Lobby::Error` as they spell it.
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum BeforeLobby {
+            Error { refusal: Before },
+        }
+        let refusal = Refusal::BadMessage { detail: "update the app".into(), protocol: Some(41) };
+        let json = serde_json::to_string(&Lobby::Error { refusal: refusal.clone() }).expect("encodes");
+        assert_eq!(json, r#"{"type":"error","refusal":{"kind":"bad_message","detail":"update the app","protocol":41}}"#);
+        let old: BeforeLobby = serde_json::from_str(&json).expect("an older build reads it");
+        assert_eq!(old, BeforeLobby::Error { refusal: Before::BadMessage { detail: "update the app".into() } });
+        assert_eq!(serde_json::from_str::<Lobby>(&json).expect("this build reads it"), Lobby::Error { refusal });
+        let plain = serde_json::to_string(&Refusal::BadMessage { detail: "x".into(), protocol: None }).unwrap();
+        assert_eq!(plain, r#"{"kind":"bad_message","detail":"x"}"#, "no protocol, no field: the bytes every build sends");
     }
 
     #[test]

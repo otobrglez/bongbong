@@ -102,6 +102,7 @@ fn describe(msg: &Msg) -> String {
     match msg {
         Msg::Lobby(l) => format!("lobby {}", serde_json_type(l)),
         Msg::Welcome(w) => format!("welcome seat {}", w.seat),
+        Msg::ForeignWelcome { protocol } => format!("welcome on protocol {protocol}"),
         Msg::Snapshot(s) => format!("snapshot tick {}", s.tick),
         Msg::Delta(d) => format!("delta tick {}", d.tick),
         Msg::Intent(_) => "intent".into(),
@@ -483,6 +484,82 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     let (status, metrics) = http_get(admin_addr, "/metrics").await;
     assert_eq!(status, 200, "the metrics listener answers through the drain");
     assert!(metrics.contains("bongbong_draining 1"), "{metrics}");
+}
+
+/// **A client on another protocol is refused before it is seated**
+/// (docs/online-coop-prd.md §4.9). An old page asking for a room, an old
+/// app joining one by its code, a build ahead of the server: each is told
+/// what to do in the one refusal every build that sends a `ClientInfo`
+/// shows, naming the server's protocol for a build that reads it, and the
+/// server makes no room and gives no seat - the room plays on with the
+/// seats it had, sized for them. The socket stays open, so the reason
+/// stays on the player's screen, and the same socket from this build's
+/// protocol is seated as ever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_on_another_protocol_is_refused_before_it_is_seated() {
+    use bongbong::net::wire::Refusal;
+    let (addr, admin_addr, hub) = start_server_with_admin().await;
+    let mut host = connect(addr).await;
+    send(&mut host, &create(5)).await;
+    let code = expect(&mut host, "the code", |m| match m {
+        Msg::Lobby(Lobby::RoomCreated { code }) => Ok(code),
+        other => Err(other),
+    })
+    .await;
+    let _ = expect_welcome(&mut host).await;
+
+    let build = |protocol: u16, platform: &str| Some(ClientInfo { version: "0.2.10".into(), protocol, platform: platform.into() });
+    async fn refused(ws: &mut Client) -> (String, Option<u16>) {
+        expect(ws, "the refusal", |m| match m {
+            Msg::Lobby(Lobby::Error { refusal: Refusal::BadMessage { detail, protocol } }) => Ok((detail, protocol)),
+            other => Err(other),
+        })
+        .await
+    }
+    let mut stale = connect(addr).await;
+    send(
+        &mut stale,
+        &Msg::Lobby(Lobby::Create {
+            nick: "old".into(),
+            device_token: "tok-old".into(),
+            map: "default".into(),
+            map_toml: None,
+            mission: Mission::Protect,
+            seed: None,
+            client: build(33, "web"),
+        }),
+    )
+    .await;
+    let (detail, protocol) = refused(&mut stale).await;
+    assert_eq!(protocol, Some(PROTOCOL_VERSION), "the refusal names the server's protocol");
+    assert!(detail.contains("reload"), "an old page is told to reload: {detail}");
+    assert_eq!(hub.room_count(), 1, "no room was made for it");
+
+    for (client, says) in [(build(33, "ios"), "update the app"), (build(PROTOCOL_VERSION + 1, "android"), "try again")] {
+        send(&mut stale, &Msg::Lobby(Lobby::Join { nick: "old".into(), device_token: "tok-old".into(), code: code.clone(), client })).await;
+        let (detail, protocol) = refused(&mut stale).await;
+        assert_eq!(protocol, Some(PROTOCOL_VERSION));
+        assert!(detail.contains(says), "{detail}");
+    }
+
+    // Nothing was seated: the room holds the host alone, and every roster
+    // the host was sent - its own seat's - says so.
+    let (_, metrics) = http_get(admin_addr, "/metrics").await;
+    assert!(metrics.contains("bongbong_seats{state=\"connected\"} 1"), "{metrics}");
+    assert!(metrics.contains("bongbong_clients{version=\"0.2.10\",protocol=\"33\",platform=\"web\"} 1"), "the refused build is counted: {metrics}");
+    send(&mut host, &Msg::Lobby(Lobby::Chat { text: "anyone?".into() })).await;
+    let heard = expect(&mut host, "the chat", |m| match m {
+        Msg::Lobby(Lobby::Said { seat, .. }) => Ok(seat),
+        Msg::Lobby(Lobby::Roster { seats, .. }) if seats.len() != 1 => panic!("a seat came: {seats:?}"),
+        other => Err(other),
+    })
+    .await;
+    assert_eq!(heard, 0);
+
+    // The refused socket is still open, and on this build's protocol it
+    // is seated like any other.
+    send(&mut stale, &Msg::Lobby(Lobby::Join { nick: "old".into(), device_token: "tok-old".into(), code, client: build(PROTOCOL_VERSION, "web") })).await;
+    assert_eq!(expect_welcome(&mut stale).await.seat, 1);
 }
 
 /// A room seats a whole team: every seat up to `SEATS_PLAYABLE` is

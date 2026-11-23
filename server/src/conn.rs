@@ -4,6 +4,11 @@
 //! a bounded `Outbox`. The room never awaits a client: it offers a
 //! snapshot to the outbox and moves on, so a slow client skips snapshots
 //! and never queues them.
+//!
+//! A `Create` or `Join` from a build on another protocol is refused here,
+//! before a room is made or a seat given (`protocol_refusal`), so a player
+//! on an old page or app is told what to do and no room plays on with a
+//! seat that cannot see the round.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -11,6 +16,7 @@ use std::sync::atomic::Ordering;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
 use bongbong::map::{MapFile, open_map};
+use bongbong::net::PROTOCOL_VERSION;
 use bongbong::net::codec::{self, Msg};
 use bongbong::net::wire::{ClientInfo, Lobby, Refusal};
 use futures_util::{SinkExt, StreamExt};
@@ -98,6 +104,34 @@ impl Outbox {
     pub fn is_open(&self) -> bool {
         !self.tx.is_closed()
     }
+}
+
+/// The refusal for a greeting from a build on another protocol, or `None`
+/// for one this server can seat - its own protocol, or a greeting that
+/// does not say (a hand-driven socket; a client that old learns it from
+/// the `Welcome`).
+///
+/// `Refusal::BadMessage` because it is the one refusal every build that
+/// sends a `ClientInfo` can read and show: its `detail` is the whole
+/// message for those, set after their own "the room could not read that:"
+/// and so in plain words, and kept short enough to fit the lobby's line.
+/// `protocol` is for builds that know the field, which leave and say it in
+/// their own language. The advice follows the two numbers: a build behind
+/// the server updates (a web page reloads, which is its update), a build
+/// ahead of it waits for the server's rollout.
+pub fn protocol_refusal(client: Option<&ClientInfo>) -> Option<Refusal> {
+    let client = client?;
+    if client.protocol == PROTOCOL_VERSION {
+        return None;
+    }
+    let detail = if client.protocol > PROTOCOL_VERSION {
+        "this game is newer than the room server - try again in a while"
+    } else if client.platform == "web" {
+        "this page is out of date - reload it to play online"
+    } else {
+        "this game is out of date - update the app to play online"
+    };
+    Some(Refusal::BadMessage { detail: detail.into(), protocol: Some(PROTOCOL_VERSION) })
 }
 
 /// The connection's place in a room once it has joined one.
@@ -217,10 +251,22 @@ async fn handle(
     let msg = match codec::decode(bytes) {
         Ok(msg) => msg,
         Err(e) => {
-            outbox.lobby(Lobby::Error { refusal: Refusal::BadMessage { detail: e.to_string() } });
+            outbox.lobby(Lobby::Error { refusal: Refusal::BadMessage { detail: e.to_string(), protocol: None } });
             return;
         }
     };
+    // A greeting from another protocol goes no further than its build's
+    // count in the metrics: no room is made and no seat given. The socket
+    // stays open, as after any refusal, so the reason stays on the
+    // player's screen until they leave it.
+    if let Msg::Lobby(Lobby::Create { client, .. } | Lobby::Join { client, .. }) = &msg
+        && let Some(refusal) = protocol_refusal(client.as_ref())
+    {
+        let label = seen.greet(hub, client.as_ref());
+        info!(conn = conn_id, version = %label.version, protocol = %label.protocol, platform = %label.platform, "refused a client on another protocol");
+        outbox.lobby(Lobby::Error { refusal });
+        return;
+    }
     match msg {
         Msg::Intent(intent) => {
             if let Some(a) = attached {
@@ -290,7 +336,7 @@ async fn handle(
             let pong = Msg::Pong(bongbong::net::wire::Pong { client_ms: ping.client_ms, server_ms: hub.now_ms() });
             outbox.offer(Bytes::from(codec::encode(&pong)));
         }
-        Msg::Lobby(_) | Msg::Snapshot(_) | Msg::Delta(_) | Msg::Welcome(_) | Msg::Pong(_) => {
+        Msg::Lobby(_) | Msg::Snapshot(_) | Msg::Delta(_) | Msg::Welcome(_) | Msg::ForeignWelcome { .. } | Msg::Pong(_) => {
             outbox.lobby(Lobby::Error { refusal: Refusal::NotYours });
         }
     }
@@ -333,6 +379,32 @@ async fn join(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn client(protocol: u16, platform: &str) -> ClientInfo {
+        ClientInfo { version: "0.2.10".into(), protocol, platform: platform.into() }
+    }
+
+    /// **A build on another protocol is told what to do, by which side is
+    /// behind**: an old page to reload, an old app to update, a build
+    /// ahead of the server to wait. This server's own protocol, and a
+    /// greeting that does not say, are seated.
+    #[test]
+    fn a_greeting_on_another_protocol_is_refused_with_what_to_do() {
+        let refused = |protocol, platform| match protocol_refusal(Some(&client(protocol, platform))) {
+            Some(Refusal::BadMessage { detail, protocol: Some(p) }) => {
+                assert_eq!(p, PROTOCOL_VERSION, "the refusal names the server's protocol");
+                detail
+            }
+            other => panic!("protocol {protocol} on {platform}: {other:?}"),
+        };
+        assert!(refused(33, "web").contains("reload"), "{}", refused(33, "web"));
+        for platform in ["ios", "android", "macos", "windows", "linux", "other"] {
+            assert!(refused(33, platform).contains("update the app"), "{platform}: {}", refused(33, platform));
+        }
+        assert!(refused(PROTOCOL_VERSION + 1, "web").contains("try again"));
+        assert_eq!(protocol_refusal(Some(&client(PROTOCOL_VERSION, "web"))), None);
+        assert_eq!(protocol_refusal(None), None, "a greeting that does not say is seated");
+    }
 
     #[tokio::test]
     async fn a_full_outbox_skips_snapshots_and_closes_on_a_reliable_send() {
