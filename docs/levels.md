@@ -207,7 +207,7 @@ enemy there carries one of the six BB-36 weapons.
 | 12 Scrapyard | flamethrower, missiles, minigun | |
 | 13 Vulkan | sonic hammer (68,37), helicopter strikes (three in the station), missiles, plasma, minigun, sonic hammer (48,21) | the hammer again - shove a tank into the lava |
 | 14 Black Gold | gravity well (5,5) and (40,16), jet (16,17) and helicopter (16,30) strikes, missiles (18,21), grenades (18,26), minigun (12,23), plasma (12,24), flamethrower, laser, sonic hammer, FPV swarm, EMP burst, gauss rail | the well again - by the depot's fuel dump, a second among the pump jacks, drums pulled together on the fuse lines; the air strikes, rockets and grenades in the Wildcat Depot's stores by the start; the gauss rail and the EMP in the enemy's control room under four towers |
-| 15 Castle Moat | laser, minigun, missiles | |
+| 15 Castle Moat | grenades (40,20), missiles (56,33), jet (56,20) and helicopter (40,33) strikes, gravity well (41,21), plasma, minigun and a tower pack in the keep; laser, plasma and minigun in the armoury; gauss rail and grenades at the forge; EMP, sonic hammer, plasma and missiles at the north battery; laser, FPV swarm and minigun in the tiltyard; flamethrowers, grenades and air strikes out in the village and the camps | the gravity well again - by the start, to pull a pack together on a drawbridge; the blast weapons and the air strikes in the keep's corners, 10 cells from the bong |
 | 16 Grand Campaign | plasma, laser, flamethrower, missiles, minigun, rod from god (31,17) | rod from god - against the super-heavies |
 | 17 Longwater | plasma, missiles, minigun, laser, flamethrower | |
 
