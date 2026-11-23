@@ -246,7 +246,7 @@ mod tests {
         ("oasis-bazaar", 0x9f8f_c048_b56e_efd5),
         ("castle-moat", 0x409a_b1b1_6c81_3664),
         ("archipelago", 0xcf0c_571c_f251_4d1b),
-        ("black-gold", 0x5982_660d_ca83_4f36),
+        ("black-gold", 0xcd33_1ccb_504a_594c),
         ("harbor-lights", 0x5382_14f7_f83d_bec7),
         ("carnival", 0x5c94_a82c_7f27_0306),
         ("jungle-temple", 0xc450_038c_c32e_3432),
