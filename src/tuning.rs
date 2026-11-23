@@ -4574,6 +4574,11 @@ tunables! {
         /// left fading into the one it opens on where the field stands
         /// (`mode::Swap`). 0 cuts, as reduced motion does.
         ui_swap_seconds: f32 = 0.18 in 0.0 ..= 1.0;
+        /// While a round is being played, the mouse cursor hides once the
+        /// mouse has been still this many seconds, and comes back the
+        /// moment it moves or a button is pressed (`hud::CursorIdle`).
+        /// 0 never hides it.
+        ui_cursor_hide_seconds: f32 = 1.5 in 0.0 ..= 10.0;
         /// In a build with the dev tools, where each frame's time goes -
         /// the frame, the steps, the pictures kept, the lights, the world,
         /// the chrome, the swap (`frame_stages.rs`) - on a line under the

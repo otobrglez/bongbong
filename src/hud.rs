@@ -714,6 +714,30 @@ impl Hints {
     }
 }
 
+/// Whether the mouse cursor is drawn over the window: hidden while a round
+/// is being played and the mouse has been still `ui_cursor_hide_seconds`,
+/// back the moment it moves or a button is pressed, and always shown where
+/// the pointer is the way to play - the builder, the lobby, the level
+/// select, a dialog, a pause, the banners and the end screen
+/// (`Session::round_covered`), and a window where the mouse stands in for a
+/// finger. The tank is driven from the keys; the cursor only ever reaches
+/// for the corner buttons, so out of the way is where it belongs until then.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CursorIdle {
+    /// Seconds since the mouse last moved or pressed.
+    still: f32,
+}
+
+impl CursorIdle {
+    /// One frame on: `used` the mouse moved, pressed or scrolled this
+    /// frame, `may_hide` the window is on a round being played. Returns
+    /// whether the cursor is hidden now.
+    pub fn step(&mut self, used: bool, may_hide: bool, dt: f32, hide_after: f32) -> bool {
+        self.still = if used { 0.0 } else { self.still + dt.max(0.0) };
+        may_hide && hide_after > 0.0 && self.still >= hide_after
+    }
+}
+
 /// A window's safe area as its insets from each edge, in the window's own
 /// units: the strips a notch, a Dynamic Island, rounded corners and a home
 /// indicator take, which no chrome may sit under. Zero where the platform
@@ -2028,6 +2052,35 @@ mod hud_tests {
 
     const W: f32 = crate::DEFAULT_SCREEN_WIDTH as f32;
     const H: f32 = crate::DEFAULT_SCREEN_HEIGHT as f32;
+
+    /// The cursor hides only on a round being played, only once the mouse
+    /// has been still long enough, and is back the frame the mouse is used.
+    #[test]
+    fn the_cursor_hides_on_a_still_mouse_in_play_and_comes_back_when_used() {
+        let mut idle = CursorIdle::default();
+        let (dt, after) = (0.25, 1.0);
+        for _ in 0..3 {
+            assert!(!idle.step(false, true, dt, after), "still under the wait");
+        }
+        assert!(idle.step(false, true, dt, after), "hidden once still for the wait");
+        assert!(!idle.step(true, true, dt, after), "a move brings it back at once");
+        assert!(!idle.step(false, true, dt, after), "and the wait starts again");
+
+        // Off a round being played - the builder, a dialog, the end screen -
+        // it never hides, however long the mouse rests, and it hides at
+        // once on coming back to a round if the mouse rested all along.
+        let mut idle = CursorIdle::default();
+        for _ in 0..20 {
+            assert!(!idle.step(false, false, dt, after));
+        }
+        assert!(idle.step(false, true, dt, after));
+
+        // A wait of 0 never hides it.
+        let mut idle = CursorIdle::default();
+        for _ in 0..20 {
+            assert!(!idle.step(false, true, dt, 0.0));
+        }
+    }
 
     /// A round of `seats` seats on the shipped map, seeded so the tanks
     /// land in the same places every run.
