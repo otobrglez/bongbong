@@ -67,7 +67,8 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
     # Apple Silicon; the Intel half is cross-compiled, as dist built it.
-    runs-on: macos-14
+    # The image testflight.yml builds and signs on.
+    runs-on: macos-26
     timeout-minutes: 60
     permissions:
       contents: write
