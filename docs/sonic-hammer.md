@@ -549,7 +549,8 @@ the general case:
   plasma, minigun and flamethrower stand beside that column (11,6 to 11,12),
   so free play has every weapon. The plan below is the first, 36 x 18 cut.
 - **In the campaign** (BB-46, docs/levels.md, "The weapons along the way"): the hammer's first crate is
-  Glasshouses' (level 3, 8,7), in the west glass house it breaks open.
+  Lotus Lagoon's (level 1, 41,23), by the start, to shove a tank off a bridge or into the drums;
+  Glasshouses (level 3) has one at (8,7), in the west glass house it breaks open.
   Wildwood (level 7) has one in the iron bunker behind the Old Line
   (158,76). Vulkan (level 13) has two: one in the Ranger Station's stores by the
   start (68,37), one at the volcano's foot (48,21) beside the north-east
