@@ -157,7 +157,7 @@ fn create(seed: u64) -> Msg {
         map_toml: None,
         mission: Mission::Protect,
         seed: Some(seed),
-        client: Some(ClientInfo { version: "9.9.9".into(), protocol: PROTOCOL_VERSION, platform: "web".into() }),
+        client: Some(ClientInfo { version: "9.9.9".into(), protocol: PROTOCOL_VERSION, platform: "web".into(), maps: None }),
     })
 }
 
@@ -269,7 +269,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert_eq!(welcome.protocol, PROTOCOL_VERSION);
     assert_eq!(welcome.seat, 0);
     assert_eq!(welcome.roster.len(), 1);
-    assert!(welcome.map_toml.contains("cells"), "the map travels in the welcome");
+    assert!(!welcome.map.open().expect("the map opens").cells.is_empty(), "the map travels in the welcome");
     assert_eq!(welcome.snapshot.tick, 0, "a waiting room has no round yet");
 
     // A second player joins by code; a code that is not one, and a
@@ -508,7 +508,7 @@ async fn a_client_on_another_protocol_is_refused_before_it_is_seated() {
     .await;
     let _ = expect_welcome(&mut host).await;
 
-    let build = |protocol: u16, platform: &str| Some(ClientInfo { version: "0.2.10".into(), protocol, platform: platform.into() });
+    let build = |protocol: u16, platform: &str| Some(ClientInfo { version: "0.2.10".into(), protocol, platform: platform.into(), maps: None });
     async fn refused(ws: &mut Client) -> (String, Option<u16>) {
         expect(ws, "the refusal", |m| match m {
             Msg::Lobby(Lobby::Error { refusal: Refusal::BadMessage { detail, protocol } }) => Ok((detail, protocol)),

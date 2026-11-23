@@ -1275,6 +1275,31 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("boot-camp", include_str!("../maps/boot-camp.toml")),
 ];
 
+/// The text of the shipped map called `name`, as this build embeds it;
+/// `None` for a name `SHIPPED_MAPS` does not have.
+pub fn shipped_text(name: &str) -> Option<&'static str> {
+    SHIPPED_MAPS.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)
+}
+
+/// One hash over every one of `SHIPPED_MAPS`, names and texts in their
+/// order (`fnv1a`), worked out once: two builds with the same digest ship
+/// the same maps byte for byte. What a client reports to a room
+/// (`net::wire::ClientInfo::maps`), so the room may send it a shipped map
+/// by name.
+pub fn shipped_digest() -> u64 {
+    static DIGEST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *DIGEST.get_or_init(|| {
+        let mut bytes = Vec::new();
+        for (name, text) in SHIPPED_MAPS {
+            for part in [name.as_bytes(), text.as_bytes()] {
+                bytes.extend_from_slice(&(part.len() as u64).to_le_bytes());
+                bytes.extend_from_slice(part);
+            }
+        }
+        fnv1a(&bytes)
+    })
+}
+
 /// The names of the `SHIPPED_MAPS` a room may play, in their order: every
 /// one but a training map (`MapFile::hostable`), which plays one seat.
 /// What the lobby's map stepper walks.

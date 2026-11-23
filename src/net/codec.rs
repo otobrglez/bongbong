@@ -173,7 +173,7 @@ mod tests {
             sim_version: "0.1.0".into(),
             seat: 1,
             roster: vec![Seat { seat: 0, nick: "host".into(), chassis: 4 }],
-            map_toml: "size = [34, 17]\n".into(),
+            map: crate::net::wire::WireMap::Shipped { name: "default".into(), hash: 7 },
             seed: 0xB0B5,
             tuning_json: "{}".into(),
             overrides: WireOverrides { mission: Some(Mission::Hunt), ..Default::default() },

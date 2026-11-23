@@ -15,6 +15,10 @@
 //! gate - answers with `Placed` too), and `stamp_presses` on the events
 //! it sends, so a seat's `Fired` names the intent its press came on.
 //!
+//! What a seat whose outbox skipped snapshots missed is banked here too
+//! (`Banked`): the events its replica needs as state, delivered ahead of
+//! its next full snapshot.
+//!
 //! **One `Placed` answers a run of refusals.** The client snaps to it on
 //! arrival and drives on from there, and the poses it sent before it
 //! heard are refused on the way: the room holds to the `Placed` it sent
@@ -38,7 +42,7 @@ use std::time::{Duration, Instant};
 use crate::math::Vec2 as Position;
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
-use crate::net::wire::{dir_index, quantise_pos};
+use crate::net::wire::{Snapshot, dir_index, quantise_pos};
 use crate::simulation::{Game, SeatPose};
 use crate::tank::Dir;
 
@@ -196,6 +200,76 @@ pub fn stamp_presses(events: &mut [WireEvent], presses: &[u32; MAX_SEATS]) {
         {
             *input_tick = tick;
         }
+    }
+}
+
+/// The most events a seat's `Banked` holds. A seat that skips snapshots
+/// long enough to bank more than this - minutes of tile deaths, oil prints
+/// and its own shots - has a socket that is not draining, and is let go to
+/// come back with a `Welcome` rather than banked for further.
+pub const BANK_MAX: usize = 4096;
+
+/// What one seat missed while its outbox skipped snapshots
+/// (docs/online-coop-prd.md §4.7): the events of every skipped snapshot
+/// the replica needs as state however late (`interp::carries_state` for
+/// that seat - a tile's death, a loose drum gone, an oil print, a trampled
+/// cell, a lantern set, a round starting or ending, a hull placed or
+/// shoved, its own `Fired`), delivered ahead of the next full snapshot's
+/// own. A full snapshot puts every hull and shot where it is, but a dead
+/// tile is no entry at all in it - the tile family lists only what differs
+/// from fresh - so without these a tile that died in a skipped snapshot
+/// stands on the replica for the rest of the round.
+///
+/// A seat's `Placed` is banked like the rest: the room answers a run of
+/// refused poses with one and holds to it (`PLACED_HOLD_TICKS`), so one
+/// lost would leave the hull refused with nothing to come back to. A
+/// `RoundStarted` drops what was banked before it, which belonged to the
+/// round it replaced, and a seat's `Placed` the earlier one of its own,
+/// since a client snaps to each in turn and the last has the last word.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Banked {
+    events: Vec<WireEvent>,
+}
+
+impl Banked {
+    /// Bank what the snapshot `events` came in that `seat` was not sent.
+    /// `false` once the bank would pass `BANK_MAX`: it is emptied, and the
+    /// seat cannot be made whole by a snapshot any more.
+    pub fn skip(&mut self, events: &[WireEvent], seat: u8) -> bool {
+        for event in events.iter().filter(|e| crate::net::interp::carries_state(e, Some(seat))) {
+            match *event {
+                WireEvent::RoundStarted { .. } => self.events.clear(),
+                WireEvent::Placed { seat: s, .. } => self.events.retain(|e| !matches!(*e, WireEvent::Placed { seat: t, .. } if t == s)),
+                _ => {}
+            }
+            self.events.push(event.clone());
+        }
+        if self.events.len() > BANK_MAX {
+            self.events.clear();
+            return false;
+        }
+        true
+    }
+
+    /// `snapshot` with the banked events ahead of its own: the full
+    /// snapshot a seat that skipped is sent next.
+    pub fn ahead_of(&self, snapshot: &Snapshot) -> Snapshot {
+        let mut out = snapshot.clone();
+        out.events = self.events.iter().chain(snapshot.events.iter()).cloned().collect();
+        out
+    }
+
+    /// The bank was delivered, or a `Welcome` made it moot.
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
     }
 }
 
@@ -466,5 +540,37 @@ cells."8,8" = { kind = "start" }
             })
             .collect();
         assert_eq!(ticks, [37, 17, 0]);
+    }
+
+    /// **A seat's bank keeps what its replica needs and no more**: of a
+    /// skipped snapshot, the events `interp::carries_state` keeps for that
+    /// seat, in order, ahead of the next full snapshot's own; a round that
+    /// started over drops what was banked before it, the seat's latest
+    /// `Placed` stands for every earlier one, and past `BANK_MAX` the bank
+    /// gives up.
+    #[test]
+    fn a_seats_bank_keeps_the_state_it_skipped() {
+        use crate::net::wire::WeaponKind;
+        let blast = WireEvent::Blast { x: 0, y: 0, chained: false, drum: crate::obstacle::Drum::Fuel };
+        let gone = WireEvent::LooseGone { col: 4, row: 5 };
+        let wall = WireEvent::ObstacleDestroyed { material: crate::obstacle::Material::Brick, x: 80, y: 80 };
+        let own = WireEvent::Fired { slot: 1, weapon: WeaponKind::Shell, input_tick: 9 };
+        let theirs = WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: 9 };
+        let placed = |x: i16| WireEvent::Placed { seat: 1, x, y: 0, dir: 0 };
+        let mut bank = Banked::default();
+        assert!(bank.skip(&[blast.clone(), gone.clone(), theirs.clone(), placed(1)], 1));
+        assert!(bank.skip(&[wall.clone(), own.clone(), placed(2)], 1));
+        let next = Snapshot { tick: 30, events: vec![blast.clone()], ..Snapshot::default() };
+        assert_eq!(bank.ahead_of(&next).events, vec![gone.clone(), wall.clone(), own.clone(), placed(2), blast.clone()]);
+        assert_eq!(bank.ahead_of(&next).tick, 30);
+        let restart = WireEvent::RoundStarted { seed: 3, enemies: 0, mission: Default::default(), spawn: Default::default() };
+        assert!(bank.skip(&[restart.clone(), gone.clone()], 1));
+        assert_eq!(bank.ahead_of(&Snapshot::default()).events, vec![restart, gone.clone()], "the old round's state is moot");
+        bank.clear();
+        assert!(bank.is_empty());
+        let flood = vec![gone; BANK_MAX];
+        assert!(bank.skip(&flood, 1), "a bank holds BANK_MAX events");
+        assert!(!bank.skip(&[wall], 1), "and gives up past it");
+        assert!(bank.is_empty());
     }
 }

@@ -1190,3 +1190,107 @@ fn an_online_press_sounds_once_at_the_press_and_never_again_from_the_room() {
     let again = started(&later).into_iter().filter(|&(_, bus, looped)| bus == Bus::Weapons.index() && !looped).count();
     assert_eq!(again, 0, "the room's copy of the shot is skipped: {later:?}");
 }
+
+/// `OPEN` with a tesla coil beside the seat's start.
+const COIL: &str = r#"
+version = 1
+tanks = 0
+size = [24, 14]
+cells."2,2" = { kind = "bong" }
+cells."6,6" = { kind = "start" }
+cells."9,6" = { kind = "tesla", side = "enemy" }
+"#;
+
+/// The coil's tower in `COIL`.
+const COIL_CELL: (i32, i32) = (9, 6);
+
+/// The room's round as a client's replica of it: welcomed, then each
+/// snapshot written in, both through the codec.
+fn replica_of(room: &Game) -> Game {
+    use crate::net::codec::{Msg, decode, encode};
+    let chassis = room.player_chassis().expect("the seat's tank").row() as u8;
+    let roster = vec![crate::net::wire::Seat { seat: 0, nick: "a".into(), chassis }];
+    let w = crate::net::encode::welcome(room, 0, roster, "{}".into(), [0; crate::MAX_SEATS]).expect("a welcome");
+    let Ok(Msg::Welcome(w)) = decode(&encode(&Msg::Welcome(w))) else { panic!("a welcome decodes") };
+    crate::net::apply::welcome(&w).expect("a replica")
+}
+
+fn cut_onto(room: &Game, replica: &mut Game) {
+    use crate::net::codec::{Msg, decode, encode};
+    let snap = crate::net::encode::snapshot(room, [0; crate::MAX_SEATS]);
+    let Ok(Msg::Snapshot(snap)) = decode(&encode(&Msg::Snapshot(snap))) else { panic!("a snapshot decodes") };
+    crate::net::apply::snapshot(replica, &snap);
+}
+
+/// The cues one frame of `game` started voices for, off the director's
+/// list of recent cues - which holds the last 32, so a test reading it
+/// stays short of that.
+fn frame_cues(game: &Game, a: &mut Audio) -> Vec<String> {
+    let before = a.status().recent.len();
+    a.observe_events(game);
+    a.observe(game, &view_on(game), &[0], crate::PHYSICS_FIXED_DT, true);
+    a.take_commands();
+    let recent = a.status().recent;
+    assert!(recent.len() < 32, "the recent list filled, so what the frame started cannot be told: {recent:?}");
+    recent[before..].to_vec()
+}
+
+/// **An EMP's outages and a helicopter's salvo sound on a replica**
+/// (BB-250). The outages are the `disabled` watcher's - a tank's
+/// `Tank::disabled` and a tower's `Tower::disabled` going out, which the
+/// snapshot carries - and the salvo is sent, its point with it; before,
+/// all three were on `NOT_SENT` with nothing hearing them online.
+#[test]
+fn an_emps_outages_and_a_helis_salvo_sound_on_a_replica() {
+    let mut room = game_on(COIL);
+    let mut replica = replica_of(&room);
+    let mut a = primed(&replica);
+    for _ in 0..3 {
+        room.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        cut_onto(&room, &mut replica);
+        assert!(frame_cues(&replica, &mut a).iter().all(|c| !c.contains("disabled") && c != "air.salvo"));
+    }
+    // The room's ring puts the seat's electrics and the coil out, and a
+    // helicopter fires a salvo, all on one tick.
+    room.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+    room.debug_set_tank(0, &crate::simulation::debug::TankPatch { disabled: Some(3.0), ..Default::default() }).expect("the seat");
+    room.towers.get_mut(&COIL_CELL).expect("the coil").disable(4.0);
+    let seat = bind::tank_in(&room, 0).expect("the seat").position;
+    room.events.push(Event::AirSalvo { id: 3, x: seat.x + 64.0, y: seat.y });
+    cut_onto(&room, &mut replica);
+    assert!(replica.events().iter().any(|e| matches!(e, Event::AirSalvo { id: 3, .. })), "the salvo reaches the replica: {:?}", replica.events());
+    let heard = frame_cues(&replica, &mut a);
+    for cue in ["weapon.emp_burst.disabled", "tower.disabled", "air.salvo"] {
+        assert_eq!(heard.iter().filter(|c| *c == cue).count(), 1, "{cue} on the replica: {heard:?}");
+    }
+    // The outages run on; nothing goes out again.
+    for _ in 0..10 {
+        room.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        cut_onto(&room, &mut replica);
+        replica.tick_presentation(crate::PHYSICS_FIXED_DT);
+        let heard = frame_cues(&replica, &mut a);
+        assert!(heard.iter().all(|c| !c.contains("disabled")), "{heard:?}");
+    }
+}
+
+/// A local round hears the same outages from the same watcher, once each,
+/// and the `Disabled` and `TowerDisabled` events add nothing to it.
+#[test]
+fn an_emps_outages_sound_once_in_a_local_round() {
+    let mut game = game_on(COIL);
+    let mut a = primed(&game);
+    game.debug_set_tank(0, &crate::simulation::debug::TankPatch { disabled: Some(3.0), ..Default::default() }).expect("the seat");
+    game.towers.get_mut(&COIL_CELL).expect("the coil").disable(4.0);
+    let seat = bind::tank_in(&game, 0).expect("the seat").position;
+    let mut heard = Vec::new();
+    for i in 0..6 {
+        game.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        if i == 0 {
+            game.events.push(Event::Disabled { slot: 0, x: seat.x, y: seat.y });
+            game.events.push(Event::TowerDisabled { x: 9.0 * 32.0 + 16.0, y: 6.0 * 32.0 + 16.0 });
+        }
+        heard.extend(frame_cues(&game, &mut a));
+    }
+    assert_eq!(heard.iter().filter(|c| *c == "weapon.emp_burst.disabled").count(), 1, "{heard:?}");
+    assert_eq!(heard.iter().filter(|c| *c == "tower.disabled").count(), 1, "{heard:?}");
+}

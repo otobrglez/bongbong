@@ -29,10 +29,16 @@
 //! that skipped one, or just arrived, gets the next in full. The bytes
 //! come from `net::encode` (`snapshot`, `welcome`); the room only adds
 //! its clock, the events of any ticks between snapshots, and each seat's
-//! press on its `Fired` (`authority::stamp_presses`). Seats outlive
+//! press on its `Fired` (`authority::stamp_presses`). A seat's skipped
+//! snapshots bank the events its replica needs as state
+//! (`authority::Banked`) - a tile's death above all, which no full
+//! snapshot can say - and its next full snapshot carries them ahead of its
+//! own. Seats outlive
 //! connections: a disconnect keeps the seat for its device token, and a
 //! reconnect reclaims it with a fresh `Welcome` cut from the live world,
-//! holes in the map included.
+//! holes in the map included. The `Welcome` names a shipped map to a
+//! client that ships the same maps and carries any other deflated
+//! (`WireMap`).
 //!
 //! The durations below are server policy, not gameplay tuning. The one
 //! thing here that does touch the tuning table is `tuning_patch`: the
@@ -49,13 +55,13 @@ use std::time::Duration;
 use axum::body::Bytes;
 use bongbong::PHYSICS_FIXED_DT;
 use bongbong::level::{LevelOverrides, Mission};
-use bongbong::map::MapFile;
+use bongbong::map::{self, MapFile};
 use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::delta;
 use bongbong::net::encode;
 use bongbong::net::events::WireEvent;
 use bongbong::net::authority::{self, PoseOutcome, TickClock};
-use bongbong::net::wire::{Lobby, Refusal, RosterSeat, Seat as WireSeat, Snapshot, Welcome};
+use bongbong::net::wire::{Lobby, Refusal, RosterSeat, Seat as WireSeat, Snapshot, Welcome, WireMap};
 use bongbong::simulation::SeatPose;
 use bongbong::Position;
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
@@ -373,6 +379,9 @@ impl Lifecycle {
 pub struct ConnLink {
     pub id: u64,
     pub outbox: Outbox,
+    /// The shipped maps the client said it has (`ClientInfo::maps`): the
+    /// same digest as this server's and it is sent a shipped map by name.
+    pub maps: Option<u64>,
 }
 
 /// What a room is created with.
@@ -497,6 +506,9 @@ struct Seat {
     /// The next snapshot goes in full: the seat just (re)joined or
     /// skipped a delta, so its baseline is not the room's.
     needs_full: bool,
+    /// What the snapshots this seat skipped carried that its replica needs
+    /// as state, for its next full one (`authority::Banked`).
+    banked: authority::Banked,
 }
 
 impl Seat {
@@ -519,6 +531,13 @@ struct Room {
     code: String,
     stats: Arc<RoomStats>,
     map: MapFile,
+    /// `map` by name, when it is a shipped map as this build ships it
+    /// (`WireMap::shipped`): what a client shipping the same maps is
+    /// welcomed with.
+    map_by_name: Option<WireMap>,
+    /// `map` deflated, made the first time a client needs it: a builder's
+    /// map, or a client whose shipped maps are not this build's.
+    map_deflated: std::cell::OnceCell<WireMap>,
     overrides: LevelOverrides,
     pinned_seed: Option<u64>,
     /// The seed the current round runs on (0 before the first start).
@@ -642,6 +661,8 @@ impl Room {
             hub,
             code,
             stats,
+            map_by_name: WireMap::shipped(&params.map),
+            map_deflated: std::cell::OnceCell::new(),
             map: params.map,
             overrides: LevelOverrides { mission: Some(params.mission), ..LevelOverrides::default() },
             pinned_seed: params.seed,
@@ -770,6 +791,7 @@ impl Room {
                     away_since: None,
                     mailbox: Arc::new(Mailbox::new()),
                     needs_full: true,
+                    banked: authority::Banked::default(),
                 }));
                 self.life.connect(now);
                 info!(code = self.code, seat = i, nick, "seat joined");
@@ -781,6 +803,9 @@ impl Room {
         // (`schedule`).
         let mailbox = self.seat(seat).expect("just seated").mailbox.clone();
         let welcome = self.welcome(seat);
+        if let Some(Some(s)) = self.seats.get_mut(seat as usize) {
+            s.banked.clear();
+        }
         self.send_to(seat, Msg::Welcome(welcome));
         if self.life.phase() == Phase::Ended {
             // A seat reclaimed after the round finished is welcomed into
@@ -946,6 +971,7 @@ impl Room {
         for i in 0..self.seats.len() {
             let Some(seat) = self.seats[i].as_mut() else { continue };
             seat.needs_full = false;
+            seat.banked.clear();
             let welcome = self.welcome(i as u8);
             self.prev = welcome.snapshot.clone();
             self.send_to(i as u8, Msg::Welcome(welcome));
@@ -1082,11 +1108,31 @@ impl Room {
         kind.map_or(0, |k| k.row() as u8)
     }
 
-    /// The welcome for `seat`: in a round, `encode::welcome` on the live
-    /// world (its current snapshot, the holes shot in the map, the pins
-    /// the replica's `init` needs), so a joiner or a rejoiner builds the
-    /// round as it stands now; in a waiting room, the map and the roster
-    /// with an empty snapshot.
+    /// The map as `seat`'s client is sent it: by name when the room's map
+    /// is a shipped one and the client ships the same maps
+    /// (`ClientInfo::maps`, `map::shipped_digest`), deflated otherwise - a
+    /// builder's map, or a client a release apart whose copy of the map
+    /// may not be the room's.
+    fn wire_map(&self, seat: u8) -> WireMap {
+        let same_maps = self.seat(seat).and_then(|s| s.conn.as_ref()).is_some_and(|c| c.maps == Some(map::shipped_digest()));
+        if let Some(by_name) = self.map_by_name.as_ref().filter(|_| same_maps) {
+            return by_name.clone();
+        }
+        self.map_deflated
+            .get_or_init(|| {
+                WireMap::deflated(&self.map).unwrap_or_else(|e| {
+                    warn!(code = self.code, error = e, "the room's map does not serialise");
+                    WireMap::Deflated(Vec::new())
+                })
+            })
+            .clone()
+    }
+
+    /// The welcome for `seat`: in a round, `encode::welcome_with_map` on
+    /// the live world (its current snapshot, the holes shot in the map, the
+    /// pins the replica's `init` needs), so a joiner or a rejoiner builds
+    /// the round as it stands now; in a waiting room, the map and the
+    /// roster with an empty snapshot. The map goes as `wire_map` puts it.
     fn welcome(&self, seat: u8) -> Welcome {
         let roster: Vec<WireSeat> = self
             .seats
@@ -1095,21 +1141,18 @@ impl Room {
             .filter_map(|(i, s)| s.as_ref().map(|s| WireSeat { seat: i as u8, nick: s.nick.clone(), chassis: self.chassis(i as u8) }))
             .collect();
         let acked = self.acked();
+        let map = self.wire_map(seat);
         if let Some(game) = &self.game {
-            match encode::welcome(game, seat, roster.clone(), self.tuning_json.clone(), acked) {
-                Ok(mut welcome) => {
-                    welcome.snapshot.server_ms = self.server_ms();
-                    return welcome;
-                }
-                Err(e) => warn!(code = self.code, error = e, "welcome could not be encoded; sending the map alone"),
-            }
+            let mut welcome = encode::welcome_with_map(game, map, seat, roster, self.tuning_json.clone(), acked);
+            welcome.snapshot.server_ms = self.server_ms();
+            return welcome;
         }
         Welcome {
             protocol: PROTOCOL_VERSION,
             sim_version: SIM_VERSION.into(),
             seat,
             roster,
-            map_toml: self.map.to_toml_string().unwrap_or_default(),
+            map,
             seed: self.round_seed,
             tuning_json: ROOM_TUNING_JSON.into(),
             overrides: self.overrides.into(),
@@ -1365,29 +1408,41 @@ impl Room {
 
     /// Encode this tick's snapshot once - the delta for every seat in
     /// step, the full one for those that need it - and offer it to every
-    /// connected seat's outbox.
+    /// connected seat's outbox. A seat whose outbox skips it banks the
+    /// events its replica needs as state (`authority::Banked`), and its
+    /// next full snapshot carries them ahead of its own, encoded for it
+    /// alone; a seat that has banked more than `authority::BANK_MAX` is
+    /// let go, to come back with a `Welcome`.
     fn broadcast_snapshot(&mut self, acked: [u32; MAX_SEATS]) {
         let snap = self.fresh_snapshot(acked);
         self.pending_events.clear();
         let delta_bytes = Bytes::from(codec::encode(&Msg::Delta(delta(&self.prev, &snap))));
         let mut full_bytes: Option<Bytes> = None;
         let metrics = self.hub.metrics.clone();
-        for seat in self.seats.iter_mut().flatten() {
+        for (i, seat) in self.seats.iter_mut().enumerate() {
+            let Some(seat) = seat else { continue };
             let Some(conn) = &seat.conn else { continue };
-            let bytes = if seat.needs_full {
+            let bytes = if !seat.needs_full {
+                delta_bytes.clone()
+            } else if seat.banked.is_empty() {
                 full_bytes.get_or_insert_with(|| Bytes::from(codec::encode(&Msg::Snapshot(snap.clone())))).clone()
             } else {
-                delta_bytes.clone()
+                Bytes::from(codec::encode(&Msg::Snapshot(seat.banked.ahead_of(&snap))))
             };
             let len = bytes.len();
             match conn.outbox.offer(bytes) {
                 Delivery::Sent => {
                     seat.needs_full = false;
+                    seat.banked.clear();
                     metrics.record_snapshot_bytes(len);
                 }
                 Delivery::Skipped => {
                     seat.needs_full = true;
                     metrics.snapshots_skipped_total.fetch_add(1, Ordering::Relaxed);
+                    if !seat.banked.skip(&snap.events, i.min(u8::MAX as usize) as u8) {
+                        warn!(code = self.code, seat = i, "a seat skipped snapshots past what its bank holds; let go to come back with a welcome");
+                        conn.outbox.close();
+                    }
                 }
                 Delivery::Gone => {}
             }
@@ -1613,6 +1668,7 @@ mod dev {
                     away_since: None,
                     mailbox: Arc::new(Mailbox::new()),
                     needs_full: true,
+                    banked: authority::Banked::default(),
                 }));
                 self.life.connect(now);
             }
@@ -1795,6 +1851,7 @@ mod dev {
                 // The welcome is the seat's baseline now, not the last
                 // snapshot every other seat has: the next goes in full.
                 seat.needs_full = true;
+                seat.banked.clear();
                 let welcome = self.welcome(i as u8);
                 self.send_to(i as u8, Msg::Welcome(welcome));
                 sent += 1;
@@ -2153,7 +2210,7 @@ cells."11,4" = { kind = "start2" }
         let stats = Arc::new(RoomStats::new(params.map_label.clone(), params.mission));
         let mut room = Room::new(hub, "TESTS".into(), params, rx, stats);
         let (outbox, mut out, _close) = Outbox::pair();
-        room.join("oto".into(), "tok-oto".into(), ConnLink { id: 1, outbox }).expect("seated");
+        room.join("oto".into(), "tok-oto".into(), ConnLink { id: 1, outbox, maps: None }).expect("seated");
         let mut welcomes = move || {
             let mut patches = Vec::new();
             while let Ok(bytes) = out.try_recv() {
@@ -2188,6 +2245,165 @@ cells."11,4" = { kind = "start2" }
         let refused = room.dev("room_tuning", &json!({ "patch": { "tank_speed": 350, "no_such_row": 1 } }));
         assert!(refused.unwrap_err().contains("no_such_row"));
         assert_eq!(room.dev("room_tuning", &json!({})).expect("a report")["rows"], json!({ "tank_speed": 300 }));
+    }
+
+    /// One client of a room, as `RoomClient` and `OnlineRound` are: a
+    /// replica off its welcome, every snapshot or delta onto its baseline
+    /// and into the replica.
+    #[derive(Default)]
+    struct Window {
+        replica: Option<Game>,
+        baseline: Snapshot,
+        /// The full snapshots it was sent, as they came.
+        fulls: Vec<Snapshot>,
+    }
+
+    impl Window {
+        fn read(&mut self, out: &mut mpsc::Receiver<Bytes>) {
+            use bongbong::net::{apply, delta::apply_delta};
+            while let Ok(bytes) = out.try_recv() {
+                match codec::decode(&bytes).expect("a message") {
+                    Msg::Welcome(w) => {
+                        self.replica = Some(apply::welcome(&w).expect("a replica"));
+                        self.baseline = w.snapshot;
+                    }
+                    Msg::Snapshot(snap) => {
+                        self.fulls.push(snap.clone());
+                        self.baseline = snap;
+                        apply::snapshot(self.replica.as_mut().expect("welcomed"), &self.baseline);
+                    }
+                    Msg::Delta(d) => {
+                        self.baseline = apply_delta(&self.baseline, &d);
+                        apply::snapshot(self.replica.as_mut().expect("welcomed"), &self.baseline);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// The tiles a round stands, by material and cell, sorted.
+    fn standing(game: &Game) -> Vec<(bongbong::obstacle::Material, (i32, i32))> {
+        let mut tiles: Vec<_> = game.drawable_state().tiles.iter().map(|t| (t.material, t.cell)).collect();
+        tiles.sort_by_key(|&(_, cell)| cell);
+        tiles
+    }
+
+    /// **A seat whose outbox skipped snapshots is left no ghost** (BB-250).
+    /// A fuel drum and the brick wall beside it die on a tick the seat's
+    /// full outbox skips. Its next full snapshot puts every hull where it
+    /// is, but a dead tile is no entry at all in one; what the skipped
+    /// snapshots carried that the replica needs as state - the drum's
+    /// `LooseGone`, the wall's `ObstacleDestroyed` - goes ahead of it, and
+    /// the replica stands what the room stands.
+    #[tokio::test]
+    async fn a_seat_that_skipped_the_snapshots_its_tiles_died_in_is_left_no_ghost() {
+        use crate::conn::{OUTBOX_DEPTH, Outbox};
+        use crate::metrics::Metrics;
+
+        let map = "version = 1\ntanks = 0\ncells.\"2,2\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"barrel\", drum = \"fuel\" }\ncells.\"11,10\" = { kind = \"wall\", material = \"brick\" }\n";
+        let params = RoomParams { map: MapFile::from_toml_str(map).expect("the map"), map_label: "custom".into(), mission: Mission::Destroy, seed: Some(7) };
+        let (_commands, rx) = mpsc::channel(1);
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let stats = Arc::new(RoomStats::new(params.map_label.clone(), params.mission));
+        let mut room = Room::new(hub, "TESTS".into(), params, rx, stats);
+        let (outbox, mut out, _close) = Outbox::pair();
+        room.join("oto".into(), "tok-oto".into(), ConnLink { id: 1, outbox, maps: None }).expect("seated");
+        room.start(0).expect("the host starts");
+        let mut window = Window::default();
+        for _ in 0..3 {
+            room.tick();
+            window.read(&mut out);
+        }
+        let replica = |w: &Window| standing(w.replica.as_ref().expect("welcomed"));
+        assert_eq!(replica(&window).len(), 2, "the drum and the wall stand: {:?}", replica(&window));
+        // The window stops reading; its outbox fills, and the room skips.
+        let seat = |room: &Room| room.seats[0].as_ref().expect("the seat").needs_full;
+        let mut ticks = 0;
+        while !seat(&room) {
+            room.tick();
+            ticks += 1;
+            assert!(ticks <= OUTBOX_DEPTH + 1, "the outbox never filled");
+        }
+        room.game.as_mut().expect("a round").debug_detonate(bongbong::map::cell_to_world(10, 10)).expect("the drum");
+        for _ in 0..3 {
+            room.tick();
+        }
+        let room_stands = standing(room.game.as_ref().expect("a round"));
+        assert!(room_stands.is_empty(), "the room lost both: {room_stands:?}");
+        assert!(room.seats[0].as_ref().is_some_and(|s| s.needs_full && !s.banked.is_empty()), "the seat banked what it skipped");
+        // The window reads what was queued, then the room's next tick.
+        window.read(&mut out);
+        assert_eq!(replica(&window).len(), 2, "nothing queued said the tiles died");
+        room.tick();
+        window.read(&mut out);
+        let full = window.fulls.last().expect("a full snapshot after the skips");
+        assert!(full.events.iter().any(|e| matches!(e, WireEvent::LooseGone { col: 10, row: 10 })), "{:?}", full.events);
+        assert!(full.events.iter().any(|e| matches!(e, WireEvent::ObstacleDestroyed { material: bongbong::obstacle::Material::Brick, .. })), "{:?}", full.events);
+        assert_eq!(replica(&window), room_stands, "a ghost stands on the replica");
+        assert!(room.seats[0].as_ref().is_some_and(|s| !s.needs_full && s.banked.is_empty()), "delivered, the bank is empty");
+        // In step again: deltas.
+        room.tick();
+        window.read(&mut out);
+        assert_eq!(replica(&window), room_stands);
+    }
+
+    /// **A shipped map goes by name to a client that ships the same maps**
+    /// (BB-250): a few dozen bytes where its TOML is kilobytes, and
+    /// deflated to a client that said nothing of its maps or ships others,
+    /// so a client a release apart still plays the room's map. Every
+    /// welcome builds the same replica.
+    #[tokio::test]
+    async fn a_shipped_map_goes_by_name_only_to_a_client_that_ships_the_same_maps() {
+        use bongbong::net::wire::WireMap;
+        use crate::conn::Outbox;
+        use crate::metrics::Metrics;
+
+        let map = MapFile::from_toml_str(bongbong::map::shipped_text("default").expect("shipped")).map(|mut m| {
+            m.name = Some("default".into());
+            m
+        });
+        let params = RoomParams { map: map.expect("the map"), map_label: "default".into(), mission: Mission::Protect, seed: Some(7) };
+        let (_commands, rx) = mpsc::channel(1);
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let stats = Arc::new(RoomStats::new(params.map_label.clone(), params.mission));
+        let mut room = Room::new(hub, "TESTS".into(), params, rx, stats);
+        let digest = bongbong::map::shipped_digest();
+        let mut outs = Vec::new();
+        for (i, maps) in [Some(digest), None, Some(digest ^ 1)].into_iter().enumerate() {
+            let (outbox, out, _close) = Outbox::pair();
+            room.join(format!("p{i}"), format!("tok-{i}"), ConnLink { id: i as u64, outbox, maps }).expect("seated");
+            room.seats[i].as_mut().expect("the seat").ready = true;
+            outs.push(out);
+        }
+        room.start(0).expect("the host starts");
+        let mut replicas = Vec::new();
+        for (i, out) in outs.iter_mut().enumerate() {
+            let mut last = None;
+            while let Ok(bytes) = out.try_recv() {
+                if let Ok(Msg::Welcome(w)) = codec::decode(&bytes) {
+                    last = Some((bytes.len(), w));
+                }
+            }
+            let (len, w) = last.expect("the round's welcome");
+            match (i, &w.map) {
+                (0, WireMap::Shipped { name, .. }) => assert_eq!(name, "default"),
+                (1 | 2, WireMap::Deflated(_)) => {}
+                (_, other) => panic!("seat {i} was sent {other:?}"),
+            }
+            println!("seat {i}: welcome {len} B");
+            replicas.push(bongbong::net::apply::welcome(&w).expect("a replica"));
+        }
+        // The same map and the same round on every client (the tanks' rolls
+        // are the room's once a client has staged its tuning patch, which
+        // a test leaves alone: the table is global).
+        let mut map = room.map.clone();
+        map.name = None;
+        for replica in &replicas {
+            assert_eq!(replica.map, map);
+            assert_eq!(replica.drawable_state(), replicas[0].drawable_state(), "every client builds the same round");
+            assert_eq!(standing(replica), standing(room.game.as_ref().expect("a round")));
+        }
     }
 
     /// Every shipped map - what the lobby's stepper offers - is a room's

@@ -12,6 +12,11 @@ hecs = "0.11"
 # compact serde binary for every message but the lobby's JSON. `use-std`
 # for the `Vec` encoders and `std::error::Error` on its error type.
 postcard = { version = "1", features = ["use-std"] }
+# A builder's map travels in a `Welcome` deflated (src/net/wire.rs,
+# `WireMap`): raw DEFLATE in pure Rust, so the room server, the wasm page
+# and every native client carry the same codec with no C. The version the
+# `png` crate already pins in Cargo.lock.
+miniz_oxide = "0.8"
 rand = "0.10.3"
 # A seed replays bit for bit on every platform (docs/gameplay-verification-
 # design.md): `enhanced-determinism` puts rapier's and parry's own math on

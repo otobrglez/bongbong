@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    AirState, BonusPickup, CoatState, CraterState, GlobState, GrassFlatState, OozeState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, TowerState, Welcome, WellDrumState, ZoneState, dir_index, bong_flags, quantise_bank, quantise_charge, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags, tower_flags,
+    AirState, BonusPickup, CoatState, CraterState, GlobState, GrassFlatState, OozeState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, TowerState, Welcome, WellDrumState, WireMap, ZoneState, dir_index, bong_flags, quantise_bank, quantise_charge, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags, tower_flags,
 };
 use crate::bullet::Bullet;
 use crate::bong::Bong;
@@ -151,8 +151,9 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
 /// and a full `snapshot`. The roster's first two chassis are what the
 /// server pinned `player_row_override`/`player2_row_override` to, so the
 /// replica's `init` draws the same rolls; a seat past those two rolls its
-/// chassis on both sides off the shared seed. Fails only if the map does
-/// not serialise.
+/// chassis on both sides off the shared seed. The map goes as a client of
+/// this build is sent it (`WireMap::of`: a shipped one by name, any other
+/// deflated). Fails only if the map does not serialise.
 pub fn welcome(
     game: &Game,
     seat: u8,
@@ -160,6 +161,20 @@ pub fn welcome(
     tuning_json: String,
     acked: [u32; MAX_SEATS],
 ) -> Result<Welcome, String> {
+    Ok(welcome_with_map(game, WireMap::of(&game.map)?, seat, roster, tuning_json, acked))
+}
+
+/// `welcome` with the map already put the way this client is to be sent
+/// it: a room works that out once for its map and per seat picks the
+/// shipped name or the deflated text (`WireMap`, `ClientInfo::maps`).
+pub fn welcome_with_map(
+    game: &Game,
+    map: WireMap,
+    seat: u8,
+    roster: Vec<Seat>,
+    tuning_json: String,
+    acked: [u32; MAX_SEATS],
+) -> Welcome {
     let cols = field_cols(game);
     let mut oil_cells: Vec<u16> = game.oil_cells.iter().map(|&c| cell_index(cols, c)).collect();
     oil_cells.sort_unstable();
@@ -201,12 +216,12 @@ pub fn welcome(
         .collect();
     burnt_grass.sort_unstable();
     burnt_grass.dedup();
-    Ok(Welcome {
+    Welcome {
         protocol: PROTOCOL_VERSION,
         sim_version: env!("CARGO_PKG_VERSION").to_string(),
         seat,
         roster,
-        map_toml: game.map.to_toml_string()?,
+        map,
         seed: game.round_seed(),
         tuning_json,
         overrides: game.level_overrides.into(),
@@ -217,7 +232,7 @@ pub fn welcome(
         trampled_cells,
         burnt_grass,
         snapshot: snapshot(game, acked),
-    })
+    }
 }
 
 fn tanks(game: &Game) -> Vec<TankState> {

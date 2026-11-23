@@ -67,8 +67,11 @@
 //! four shells landed and four were fired is 259 B, and an idle interval
 //! costs the 52 B header. On the default map 240 frames into a seven-tank
 //! band round (`apply::tests::encoding_the_same_round_twice_gives_identical_bytes`)
-//! a full snapshot is 262 B and the welcome 23.2 KB, nearly all of it the
-//! map's TOML. The PRD's estimates were 300 B and 80 to 120 B; the
+//! a full snapshot is 448 B and the welcome 2.9 KB, most of it the map's
+//! 23 KB of TOML deflated (`wire::WireMap`); a shipped map goes by name
+//! instead, and the biggest, Wildwood's 442 KB, welcomes in 286 B at its
+//! first tick (`apply::tests::the_biggest_shipped_maps_welcome_in_a_few_kilobytes`).
+//! The PRD's estimates were 300 B and 80 to 120 B; the
 //! projectiles are the gap, and the PRD's next step - shots as events,
 //! which `Ricochet` makes possible - is what closes it.
 
@@ -126,7 +129,7 @@ pub mod wire;
 /// message (JSON, `serde(default)`) needs no bump. `Welcome::protocol`
 /// stays the welcome's first field, or a client on another number cannot
 /// read it.
-pub const PROTOCOL_VERSION: u16 = 42;
+pub const PROTOCOL_VERSION: u16 = 43;
 
 /// This build's version, the `bongbong` crate's: what a client reports
 /// about itself in `wire::ClientInfo` and the room server labels its

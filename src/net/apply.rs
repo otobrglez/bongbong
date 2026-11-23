@@ -49,7 +49,7 @@ use hecs::Entity;
 
 use crate::bullet::{Bullet, BulletState};
 use crate::bong::{Facing, Bong, Side};
-use crate::map::{self, MapFile};
+use crate::map;
 use crate::math::Vec2;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::encode::{cell_from_index, cell_index, field_cols};
@@ -171,14 +171,15 @@ impl Show {
 }
 
 /// A replica of the round `w` describes, at the tick its snapshot was
-/// cut. Refuses a welcome from another protocol version or with a map
-/// that does not parse.
+/// cut. Refuses a welcome from another protocol version, one naming a
+/// shipped map this build does not ship as the room's does, and one whose
+/// map does not inflate or parse (`WireMap::open`).
 pub fn welcome(w: &Welcome) -> Result<Game, String> {
     if w.protocol != PROTOCOL_VERSION {
         return Err(format!("server speaks protocol {} but this build speaks {PROTOCOL_VERSION}", w.protocol));
     }
     let mut game = Game::default();
-    game.map = MapFile::from_toml_str(&w.map_toml)?;
+    game.map = w.map.open()?;
     game.seed_override = Some(w.seed);
     game.level_overrides = w.overrides.into();
     game.enemy_count_override = w.enemy_count.map(|n| n as usize);
@@ -798,6 +799,12 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
 /// welcome's frame-0 snapshot carries the same event for the round
 /// `welcome` has just built, so a replica already standing at frame 0 on
 /// that seed keeps the world it has instead of building an identical one.
+/// What the events before the last `RoundStarted` say of the world - a
+/// tile's death, a print, a trampled cell - was the old round's, which the
+/// new one replaced, so only the events from it on are applied as state:
+/// a frame that hands over several snapshots at once, or a full snapshot
+/// carrying what a seat's skipped ones banked (`authority::Banked`), may
+/// span the restart.
 ///
 /// A `DrumLaunched` puts the drum in the air here, since a snapshot has
 /// no family for something that is neither a tile nor a shot; its arc is
@@ -812,11 +819,11 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
 /// `GrassTrampled` takes its cell out of the replica's cover, quiet or
 /// drawn, as a `LanternSet` spends a lantern.
 fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presses: &BTreeSet<usize>) -> BTreeSet<u16> {
-    let restarted = s.events.iter().rev().find_map(|e| match *e {
-        WireEvent::RoundStarted { seed, .. } => Some(seed),
+    let restarted = s.events.iter().enumerate().rev().find_map(|(i, e)| match *e {
+        WireEvent::RoundStarted { seed, .. } => Some((i, seed)),
         _ => None,
     });
-    if let Some(seed) = restarted {
+    if let Some((_, seed)) = restarted {
         if game.frame() != 0 || game.round_seed() != seed {
             game.seed_override = Some(seed);
             let (width, height) = game.map.field_size();
@@ -825,10 +832,14 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_presse
         }
     }
     let mut dead = BTreeSet::new();
-    for (i, event) in s.events.iter().enumerate() {
+    let this_round = restarted.map_or(0, |(i, _)| i);
+    for (i, event) in s.events.iter().enumerate().skip(this_round) {
         match *event {
             // A loose drum may have gone off anywhere: it is known by the
-            // cell it was placed in (`Event::LooseGone`).
+            // cell it was placed in (`Event::LooseGone`), and its
+            // `ObstacleDestroyed`, which the same tick logs, names where it
+            // went off - not its key - so that one is passed over. Both are
+            // state however late (`interp::carries_state`).
             WireEvent::LooseGone { col, row } => {
                 dead.insert(cell_index(cols, (col as i32, row as i32)));
             }
@@ -1755,6 +1766,7 @@ mod tests {
     use crate::net::encode as enc;
     use crate::net::wire::Seat;
     use crate::simulation::Input;
+    use crate::map::MapFile;
     use crate::simulation::replica::DrawableState;
 
     const DEFAULT_MAP: &str = include_str!("../../maps/default.toml");
@@ -2551,8 +2563,40 @@ mod tests {
         w.protocol += 1;
         assert!(welcome(&w).is_err());
         w.protocol -= 1;
-        w.map_toml = "not a map".into();
+        w.map = crate::net::wire::WireMap::Deflated(b"not a map".to_vec());
         assert!(welcome(&w).is_err());
+        w.map = crate::net::wire::WireMap::Deflated(miniz_oxide::deflate::compress_to_vec(b"version = \"x\"", 6));
+        assert!(welcome(&w).is_err());
+    }
+
+    /// **A shipped map goes by name, and only as this build ships it.**
+    /// A welcome naming a shipped map builds the replica from the build's
+    /// own text; one whose hash is another build's text, or that names a
+    /// map this build does not ship, is refused with the reason in words -
+    /// never played on a map that is not the room's.
+    #[test]
+    fn a_shipped_map_is_opened_by_name_and_refused_when_this_build_ships_another() {
+        use crate::net::wire::WireMap;
+        let mut game = authoritative(DEFAULT_MAP, 1, 2);
+        game.map.name = Some("default".into());
+        let map = WireMap::shipped(&game.map).expect("the default map as it ships");
+        let WireMap::Shipped { ref name, hash } = map else { panic!("{map:?}") };
+        assert_eq!((name.as_str(), hash), ("default", map::fnv1a(DEFAULT_MAP.as_bytes())));
+        let w = enc::welcome_with_map(&game, map.clone(), 0, roster(&game), "{}".into(), [0; MAX_SEATS]);
+        let replica = welcome(&w).expect("a replica on the build's own copy");
+        assert_eq!(replica.drawable_state(), game.drawable_state());
+        let mut other = w.clone();
+        other.map = WireMap::Shipped { name: "default".into(), hash: hash ^ 1 };
+        let refused = welcome(&other).err().expect("another build's text of the map");
+        assert!(refused.contains("another version"), "{refused}");
+        other.map = WireMap::Shipped { name: "no-such-map".into(), hash };
+        assert!(welcome(&other).err().expect("a map this build has not got").contains("does not ship"));
+        // A map edited from a shipped one is that map no longer: it goes
+        // deflated, and so does one that has no name at all.
+        game.map.tanks = Some(9);
+        assert_eq!(WireMap::shipped(&game.map), None);
+        game.map.name = None;
+        assert!(matches!(WireMap::of(&game.map), Ok(WireMap::Deflated(_))));
     }
 
     /// An open waves round, the shape a room server runs when the map
@@ -4120,5 +4164,171 @@ cells."16,10" = { kind = "tall_grass" }
         snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
         let (tanks, towers, _, lamps) = flags(&replica.drawable_state());
         assert!(tanks.iter().all(|&(_, d, o)| !d && !o) && towers.is_empty() && !lamps, "{tanks:?} {towers:?} {lamps}");
+    }
+
+    /// A fuel drum beside a brick wall: setting the drum off kills both on
+    /// the same tick - the drum by its `LooseGone`, the wall by its
+    /// `ObstacleDestroyed`.
+    const DRUM_AND_WALL: &str = "version = 1\ntanks = 0\ncells.\"2,2\" = { kind = \"start\" }\ncells.\"10,10\" = { kind = \"barrel\", drum = \"fuel\" }\ncells.\"11,10\" = { kind = \"wall\", material = \"brick\" }\n";
+
+    /// The tiles a game stands, by material and cell, sorted.
+    fn standing(game: &Game) -> Vec<(crate::obstacle::Material, (i32, i32))> {
+        let mut tiles: Vec<_> = game.drawable_state().tiles.iter().map(|t| (t.material, t.cell)).collect();
+        tiles.sort_by_key(|&(_, cell)| cell);
+        tiles
+    }
+
+    /// One idle tick of the authority and its snapshot, stamped on the
+    /// room's clock and through the codec.
+    fn tick_and_cut(game: &mut Game) -> Snapshot {
+        let (width, height) = game.map.field_size();
+        game.update(Input::default(), PHYSICS_FIXED_DT, width, height);
+        let mut snap = enc::snapshot(game, [0; MAX_SEATS]);
+        snap.server_ms = crate::net::interp::tick_ms(snap.tick).round() as u32;
+        let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap))).expect("decodes") else { panic!("kind") };
+        snap
+    }
+
+    /// **A drum's and a wall's deaths survive a stale hand-over** (BB-250).
+    /// A hidden tab takes its backlog in one frame, which keeps of the
+    /// snapshots long past only the events the replica needs as state
+    /// (`interp::carries_state`). A pushed drum's death is known by the
+    /// cell it was placed in (`LooseGone`), not its `ObstacleDestroyed`,
+    /// so dropping that one stood the drum on the replica for the rest of
+    /// the round.
+    #[test]
+    fn a_drum_and_a_wall_that_died_in_a_stale_backlog_are_gone_on_the_replica() {
+        use crate::net::interp::{Interpolator, tick_ms};
+        let mut game = quiet_round(DRUM_AND_WALL, 7, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        let mut interp = Interpolator::default();
+        interp.set_seat(Some(0));
+        let at = |tick: u32| tick_ms(tick).round() as i64;
+        for _ in 0..10 {
+            let snap = tick_and_cut(&mut game);
+            let tick = snap.tick;
+            interp.accept(snap, at(tick));
+            if let Some(frame) = interp.sample(at(tick)) {
+                snapshot(&mut replica, &frame.snapshot);
+            }
+        }
+        assert_eq!(standing(&replica).len(), 2, "the drum and the wall stand: {:?}", standing(&replica));
+        // The tab hides; the drum goes off in the first tick it misses.
+        game.debug_detonate(map::cell_to_world(10, 10)).expect("the drum");
+        let mut last = 0;
+        for _ in 0..300 {
+            let snap = tick_and_cut(&mut game);
+            last = snap.tick;
+            interp.accept(snap, at(last));
+        }
+        assert!(standing(&game).is_empty(), "the room lost both: {:?}", standing(&game));
+        let frame = interp.sample(at(last)).expect("a frame");
+        assert!(interp.report().stale_events > 0, "the deaths were long past when the frame reached them");
+        snapshot(&mut replica, &frame.snapshot);
+        assert_eq!(standing(&replica), standing(&game), "a ghost stands on the replica");
+    }
+
+    /// **What a seat's skipped snapshots carried reaches it with its next
+    /// full one** (BB-250, `authority::Banked`). A full snapshot puts every
+    /// hull where it is, but a tile that died is no entry at all in it, so
+    /// the drum and the wall that died in the skipped ticks would stand on
+    /// the replica for good; banked, they go. A round that started over in
+    /// a skipped tick still re-inits the replica, and the deaths banked
+    /// before it - the old round's - leave the new round's drum and wall
+    /// standing.
+    #[test]
+    fn what_a_seat_skipped_reaches_its_replica_with_its_next_full_snapshot() {
+        use crate::net::authority::Banked;
+        let mut game = quiet_round(DRUM_AND_WALL, 7, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        for _ in 0..3 {
+            let snap = tick_and_cut(&mut game);
+            snapshot(&mut replica, &snap);
+        }
+        game.debug_detonate(map::cell_to_world(10, 10)).expect("the drum");
+        let mut banked = Banked::default();
+        for _ in 0..4 {
+            let skipped = tick_and_cut(&mut game);
+            assert!(banked.skip(&skipped.events, 0));
+        }
+        assert!(standing(&game).is_empty(), "the room lost both: {:?}", standing(&game));
+        let full = tick_and_cut(&mut game);
+        let mut without = welcome_through_the_codec(&quiet_round(DRUM_AND_WALL, 7, 0));
+        snapshot(&mut without, &full);
+        assert_eq!(standing(&without).len(), 2, "a full snapshot alone cannot say a tile died");
+        snapshot(&mut replica, &banked.ahead_of(&full));
+        assert_eq!(standing(&replica), standing(&game), "a ghost stands on the replica");
+        assert_eq!(replica.drawable_state(), game.drawable_state());
+
+        // The round starts over on a skipped tick: its `RoundStarted` is
+        // banked behind the old round's deaths, which it makes moot.
+        game.seed_override = Some(0xFEED);
+        let (width, height) = game.map.field_size();
+        game.init(width, height);
+        let restarted = enc::snapshot(&game, [0; MAX_SEATS]);
+        assert!(restarted.events.iter().any(|e| matches!(e, WireEvent::RoundStarted { seed: 0xFEED, .. })));
+        let mut banked = Banked::default();
+        let old_round = vec![WireEvent::LooseGone { col: 10, row: 10 }, WireEvent::ObstacleDestroyed { material: crate::obstacle::Material::Brick, x: 11 * 128 + 64, y: 10 * 128 + 64 }];
+        assert!(banked.skip(&old_round, 0));
+        assert!(banked.skip(&restarted.events, 0));
+        let full = tick_and_cut(&mut game);
+        snapshot(&mut replica, &banked.ahead_of(&full));
+        assert_eq!(replica.round_seed(), 0xFEED, "the replica started over");
+        assert_eq!(standing(&replica).len(), 2, "the new round's drum and wall stand: {:?}", standing(&replica));
+        assert_eq!(replica.drawable_state(), game.drawable_state());
+        // A frame that hands the old round's deaths over together with the
+        // restart applies only what follows the restart.
+        let mut spanning = tick_and_cut(&mut game);
+        spanning.events = old_round;
+        spanning.events.push(WireEvent::RoundStarted { seed: 0xFEED, enemies: 0, mission: Default::default(), spawn: Default::default() });
+        let mut fresh = welcome_through_the_codec(&game);
+        snapshot(&mut fresh, &spanning);
+        assert_eq!(standing(&fresh).len(), 2, "deaths before the restart are the old round's: {:?}", standing(&fresh));
+    }
+
+    /// **A shipped map's welcome is a few kilobytes** (BB-250): the
+    /// biggest shipped maps go by name and hash, so a slow link lands the
+    /// welcome inside the client's five seconds; deflated - what a client
+    /// shipping other maps is sent - they are a tenth of their TOML.
+    #[test]
+    fn the_biggest_shipped_maps_welcome_in_a_few_kilobytes() {
+        for name in ["wildwood", "grand-campaign"] {
+            let mut game = Game::default();
+            game.seed_override = Some(7);
+            game.map = MapFile::from_toml_str(map::shipped_text(name).expect("a shipped map")).expect("it parses");
+            game.map.name = Some(name.to_string());
+            let (width, height) = game.map.field_size();
+            game.init(width, height);
+            let w = enc::welcome(&game, 0, roster(&game), "{}".into(), [0; MAX_SEATS]).expect("a welcome");
+            assert!(matches!(w.map, crate::net::wire::WireMap::Shipped { .. }), "{name} goes by name");
+            let bytes = encode(&Msg::Welcome(w.clone())).len();
+            let text = game.map.to_toml_string().expect("the map serialises").len();
+            let deflated = encode(&Msg::Welcome(enc::welcome_with_map(&game, crate::net::wire::WireMap::deflated(&game.map).unwrap(), 0, roster(&game), "{}".into(), [0; MAX_SEATS]))).len();
+            println!("{name}: welcome {bytes} B by name, {deflated} B deflated, its TOML {text} B");
+            assert!(bytes < 8 * 1024, "{name}'s welcome is {bytes} B");
+            assert!(deflated < text / 5, "{name} deflated to {deflated} B of {text}");
+            let Msg::Welcome(w) = decode(&encode(&Msg::Welcome(w))).expect("decodes") else { panic!("kind") };
+            let replica = welcome(&w).expect("a replica on the build's own copy");
+            assert_eq!(replica.drawable_state(), game.drawable_state(), "{name}");
+        }
+    }
+
+    /// **A builder's map round-trips deflated**: a map no client ships
+    /// goes as its TOML deflated and comes out the same map, the replica
+    /// the room's picture.
+    #[test]
+    fn a_builders_map_round_trips_deflated() {
+        let mut game = quiet_round(DRUM_AND_WALL, 7, 0);
+        for _ in 0..3 {
+            tick_and_cut(&mut game);
+        }
+        let w = enc::welcome(&game, 0, roster(&game), "{}".into(), [0; MAX_SEATS]).expect("a welcome");
+        let crate::net::wire::WireMap::Deflated(ref bytes) = w.map else { panic!("a builder's map goes deflated: {:?}", w.map) };
+        assert!(bytes.len() < game.map.to_toml_string().unwrap().len(), "deflated: {} B", bytes.len());
+        let Msg::Welcome(w) = decode(&encode(&Msg::Welcome(w))).expect("decodes") else { panic!("kind") };
+        assert_eq!(w.map.open().expect("it inflates"), game.map);
+        let replica = welcome(&w).expect("a replica");
+        assert_eq!(replica.map, game.map);
+        assert_eq!(replica.drawable_state(), game.drawable_state());
     }
 }

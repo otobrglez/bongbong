@@ -2208,7 +2208,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   plasma colours, bong kinds.
 - `audio/watch.rs` — the state watchers (`WATCHERS` lists them for the sound map): engines and
   tracks (speed from position over sim time, so a replica revs too), the minigun (new bullet ids),
-  flames, charges, wind-up tells, fire clusters (4 x 4 cells a loop), sky and place beds,
+  flames, charges, wind-up tells, an EMP's outages (`outages`: a tank's or a tower's `disabled`
+  going from nothing to running, which a replica's snapshots carry, so `Event::Disabled` and
+  `TowerDisabled` bind to it and stay unsent), fire clusters (4 x 4 cells a loop), sky and place beds,
   scrapes, aircraft, fly-bys, thunder (the round clock's lightning), tesla towers, fuses,
   portals, the volcano; the ground under each hull (surface, slips, skids, rubble, brush, ford
   edges and drips, lava), the water beds, grenade and bong landings; a ricochet's whine; the
@@ -2833,15 +2835,22 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   lobbed, `OozeState` with the tick it dries, `CoatState` - a tank's coat, apart from `TankState`
   so a coat running down costs two bytes) -, `RoundState` (the wave, the live and pending
   counts, the mission banner's, the `WAVE N` breather's and the end screen's restart countdown's
-  time left, the outcome), `events`), `Welcome` (`WireOverrides` mirrors `LevelOverrides`), the JSON
-  `Lobby` enum, and the quantisation helpers (positions quarter pixels as `i16`, velocities `i8` at
+  time left, the outcome), `events`), `Welcome` (`WireOverrides` mirrors `LevelOverrides`; the map
+  as a `WireMap` - one of `map::SHIPPED_MAPS` by name and the FNV-1a of its text, or any other map's
+  TOML raw-deflated through `miniz_oxide`, `WireMap::open` refusing a shipped map this build ships
+  another text of and inflating to at most `MAP_TEXT_MAX`; protocol 43), the JSON
+  `Lobby` enum (`ClientInfo::maps`, the client's `map::shipped_digest`, is what lets a room name a
+  shipped map to it), and the quantisation helpers (positions quarter pixels as `i16`, velocities `i8` at
   4 px/s, headings `u8` of a turn, health whole points, timers tenths; only NaN collapses to 0).
   `events.rs`: `WireEvent`, the owned mirror of `simulation::Event` - `from_event` is an exhaustive
   match, so a new `Event` variant fails to compile until mirrored or put on `NOT_SENT` (the AI
   trace, `PhysicsQuarantine` and `Rerolled`); `LaserBeam` is how a laser reaches a replica at all,
   `net::apply` pushing the beam the event carries (one a leg, the lens flashing on leg 0 alone);
   `ShotTeleported` carries a shot's `ShotState` key so the interpolator draws its jump;
-  `GrassTrampled {col, row}` is state, applied quiet or drawn. The lobby's
+  `GrassTrampled {col, row}` is state, applied quiet or drawn; `AirSalvo` is sent for its launch's
+  sound (its point is the salvo's mark, which no family carries), while `Disabled` and
+  `TowerDisabled` stay on `NOT_SENT` - the sound's `disabled` watcher hears the replicated outage
+  instead. The lobby's
   `Ended { outcome }` is how a round's end reaches a client, since the snapshots stop with the tick.
   `codec.rs`: `encode`/`decode` of a `Msg`, one `kind` byte then `postcard` (lobby: JSON); a
   `Welcome` is read from its leading `protocol` first, and one from another protocol is
@@ -2860,18 +2869,24 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   bitmask over `pickup_slots` plus bonus cells, only the tiles that differ from fresh in whole
   points, fires, `RoundState`, the frame's events; a tile death is an `ObstacleDestroyed` event and
   a `DESTROYED` entry cut from it, since the world drops a dead tile the same frame), `welcome(game,
-  seat, roster, tuning_json, acked)` adds the map TOML, seed, `WireOverrides`, `enemy_count`, the
+  seat, roster, tuning_json, acked)` adds the map (`WireMap::of`: by name when it is a shipped map as
+  this build ships it, else deflated; a room picks per seat with `welcome_with_map`), seed,
+  `WireOverrides`, `enemy_count`, the
   unburnt `oil_cells`, the `oil_prints` among them, the `dead_cells` a state snapshot cannot
   express, the `trampled_cells` (`Game::grass_trampled`) and the `burnt_grass` (the map's cover
   cells gone from `grass_cells` and every burnt tuft's cell, undergrowth included); `wire_events` for a
   server accumulating the ticks between snapshots; `server_ms` is the caller's. **`apply.rs`** —
-  `welcome(&Welcome) -> Result<Game>` builds the replica by `Game::init` on the same map, seed,
+  `welcome(&Welcome) -> Result<Game>` builds the replica by `Game::init` on the same map
+  (`WireMap::open`: the build's own text of a shipped one, refused when its hash is not the room's), seed,
   overrides and roster-pinned chassis (so `init`'s rolls match), `strip_ai`, removes `dead_cells`,
   takes `trampled_cells`, chars `burnt_grass` (`Game::char_grass`, the one routine a lit cell,
   `tick_fires` and a listed fire char through, so a cell still burning is charred twice to no
   effect), then
   `snapshot(&mut Game, &Snapshot)`: events first (`RoundStarted` re-inits on its seed unless
-  the replica already stands in that round at frame 0, which is every welcome; `ObstacleDestroyed`
+  the replica already stands in that round at frame 0, which is every welcome, and only the events
+  from the last one on are applied as state, the ones before it being the replaced round's;
+  `LooseGone` removes a loose drum by the cell it was placed in, its `ObstacleDestroyed` passed over;
+  `ObstacleDestroyed`
   removes the tile - a tower's with its weapon, leaving its ruin, cold for a joiner's
   `dead_cells` -; `DrumLaunched` puts the drum in the air; `OilPrinted` lays the room's print,
   drawn or not; `GrassTrampled`, quiet or drawn, takes the cell out of the cover; `TeslaStrike`
@@ -3006,7 +3021,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
     end's, whose events are handed over exactly once, on the frame render time reaches it
     (`Game::frame` is that tick, which is what makes `Fx::observe` fire once per snapshot); a
     snapshot handed over past `EVENT_STALE_MS` late (a hidden tab's backlog, a full buffer) keeps
-    only the events `carries_state`. A hull that jumped (`Teleported`, `Placed`, or further than it
+    only the events `carries_state` - a round starting or ending, every tile death and a loose
+    drum's `LooseGone`, an oil print, a trampled cell, a lantern set down, a drum or bomb launched, a
+    hull placed, moved, entered or shoved, and this seat's `Fired` and `WellAnchored`. A hull that jumped (`Teleported`, `Placed`, or further than it
     could drive) is drawn whole at its tick and named in `Frame::snapped`, which `draw` lifts the
     tread-mark trail of before `tick_presentation`; a shot whose far end carries its
     `ShotTeleported` holds and is drawn at the exit the same way, its correction offset dropped.

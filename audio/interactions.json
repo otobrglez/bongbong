@@ -6186,7 +6186,7 @@
     "name": "Event::Disabled { slot, x, y }; replica: TankState::disabled rising from 0",
     "where": "src/simulation/emp.rs:214"
    },
-   "online": "not_sent",
+   "online": "state_on_wire",
    "visual": "render/game.rs:1755 emp::sparks, lights out (draw_tank_dark), turret droop (tank.rs:1771), HUD WPN OFFLINE for a seat",
    "frequency": "rare",
    "sound": {
@@ -6343,7 +6343,7 @@
     "name": "Event::TowerDisabled { x, y }; replica: tile_flags::DISABLED set",
     "where": "src/simulation/emp.rs:230"
    },
-   "online": "not_sent",
+   "online": "state_on_wire",
    "visual": "render/game.rs:1765 emp::sparks on the tower, glow off, Tower::droop",
    "frequency": "rare",
    "sound": {
@@ -8257,7 +8257,7 @@
     "name": "Event::AirSalvo { id, x, y } (no Fired for the missiles); replica: new MissileState ids near the heli",
     "where": "src/simulation/air_support.rs:248, src/air_support/heli.rs:80"
    },
-   "online": "not_sent",
+   "online": "sent",
    "visual": "muzzle flash at the pods (simulation/air_support.rs:247), the missiles' climb and smoke trails",
    "frequency": "frequent",
    "sound": {
@@ -8270,9 +8270,7 @@
     ],
     "notes": "The missiles domain's launch sound, keyed off Fired, never plays for these."
    },
-   "gaps": [
-    "specials.G6"
-   ],
+   "gaps": [],
    "domain": "specials",
    "base": "event",
    "online_work": true,
@@ -13249,7 +13247,7 @@
     "name": "Event::Disabled { slot, x, y } then Tank::disabled > 0; reboot when it reaches 0",
     "where": "src/simulation/mod.rs:524"
    },
-   "online": "not_sent",
+   "online": "state_on_wire",
    "visual": "dead lights, sparks, sagging turret (wire.rs:543-546)",
    "frequency": "occasional",
    "sound": {
@@ -20080,7 +20078,7 @@
     "count"
    ],
    "status": "event",
-   "online_work": true,
+   "online_work": false,
    "needs_data": false,
    "manifest": {
     "cue": "air.salvo",
@@ -20349,8 +20347,8 @@
    "variants_by": [
     "seat vs enemy"
    ],
-   "status": "event",
-   "online_work": true,
+   "status": "state",
+   "online_work": false,
    "needs_data": false,
    "manifest": {
     "cue": "weapon.emp_burst.disabled",
@@ -23649,8 +23647,8 @@
    "variants_by": [
     "TowerKind"
    ],
-   "status": "event",
-   "online_work": true,
+   "status": "state",
+   "online_work": false,
    "needs_data": true,
    "manifest": {
     "cue": "tower.disabled",
@@ -27103,11 +27101,11 @@
   },
   {
    "id": "specials.G3",
-   "type": "not_sent",
-   "title": "Disabled is not sent",
-   "detail": "The EMP knocking a hull's electrics out is NOT_SENT; a replica sees only TankState::disabled.",
-   "where": "src/simulation/emp.rs:214, src/net/events.rs:53",
-   "suggested_fix": "Detect Tank::disabled rising from 0 in sample_world (and falling to 0 for the reboot).",
+   "type": "no_event",
+   "title": "An EMP's reboot has no sound",
+   "detail": "The power-down is the disabled watcher's (Tank::disabled rising from nothing, a replica's too, since TankState::disabled carries it); nothing hears the electrics come back.",
+   "where": "src/audio/watch.rs (Watchers::outages)",
+   "suggested_fix": "Play the reboot on Tank::disabled falling to nothing in the disabled watcher.",
    "domain": "specials",
    "interactions": [
     "specials.emp_disables_tank"
@@ -27115,11 +27113,11 @@
   },
   {
    "id": "specials.G4",
-   "type": "not_sent",
-   "title": "TowerDisabled is not sent",
-   "detail": "A tower going offline is NOT_SENT. A replica must diff tile_flags::DISABLED per tower cell, and nothing at all marks one coming back.",
-   "where": "src/simulation/emp.rs:230, src/net/wire.rs:758",
-   "suggested_fix": "Edge-detect Tower::disabled > 0 per tower in sample_world (both edges).",
+   "type": "no_event",
+   "title": "A tower's reboot has no sound",
+   "detail": "A tower going offline is the disabled watcher's (Tower::disabled rising from nothing; a replica's from the tile's DISABLED flag); nothing marks one coming back.",
+   "where": "src/audio/watch.rs (Watchers::outages)",
+   "suggested_fix": "Play the reboot on Tower::disabled falling to nothing in the disabled watcher.",
    "domain": "specials",
    "interactions": [
     "specials.emp_disables_tower"
@@ -27135,18 +27133,6 @@
    "domain": "specials",
    "interactions": [
     "specials.fpv_lock"
-   ]
-  },
-  {
-   "id": "specials.G6",
-   "type": "not_sent",
-   "title": "AirSalvo is not sent, and the heli's rockets log no Fired",
-   "detail": "The heli's salvo is NOT_SENT, and Missile::spawn from air_salvo emits no Event::Fired, so a launch cue keyed on Fired { missiles } never plays for them, offline or online. A replica only sees new MissileState ids appear near the aircraft.",
-   "where": "src/simulation/air_support.rs:242, src/net/events.rs:57",
-   "suggested_fix": "Send AirSalvo (it is rare and small), or detect new missile ids within the heli's reach in sample_world. Offline, key the salvo cue on AirSalvo.",
-   "domain": "specials",
-   "interactions": [
-    "specials.heli_salvo"
    ]
   },
   {
@@ -28093,11 +28079,11 @@
   },
   {
    "id": "actors.G13",
-   "type": "not_sent",
-   "title": "Disabled is not sent and the reboot has no event",
-   "detail": "Event::Disabled is on NOT_SENT (net/events.rs:53); TankState::disabled (wire.rs:543-546) carries the outage, so a replica must edge-detect both the power-down and the reboot.",
-   "where": "src/net/events.rs:53",
-   "suggested_fix": "Edge-detect TankState::disabled rising and reaching 0 in sample_world; the local round can do the same.",
+   "type": "no_event",
+   "title": "The reboot after an EMP has no event",
+   "detail": "The power-down is heard from Tank::disabled rising (the disabled watcher, on a replica too); the reboot, Tank::disabled reaching nothing, is heard by nothing.",
+   "where": "src/audio/watch.rs (Watchers::outages)",
+   "suggested_fix": "Edge-detect Tank::disabled reaching nothing in the disabled watcher.",
    "domain": "actors",
    "interactions": [
     "actors.disabled_by_emp"
@@ -29027,7 +29013,7 @@
   {
    "name": "Disabled",
    "line": 524,
-   "doc": "The tank in owner slot `slot`, at (`x`, `y`), was disabled by an EMP's ring (`Tank::disable`). Not sent: `TankState::disabled` is what draws.",
+   "doc": "The tank in owner slot `slot`, at (`x`, `y`), was disabled by an EMP's ring (`Tank::disable`). Not sent: `TankState::disabled` is what draws, and what the sound's `disabled` watcher hears go out (`audio::watch`), on a replica as in a local round.",
    "not_sent": true,
    "ai_trace": false,
    "interactions": [
@@ -29040,7 +29026,7 @@
   {
    "name": "TowerDisabled",
    "line": 528,
-   "doc": "The tower at (`x`, `y`) went offline under an EMP's ring (`Tower::disable`). Not sent: the tile's `DISABLED` flag is what draws.",
+   "doc": "The tower at (`x`, `y`) went offline under an EMP's ring (`Tower::disable`). Not sent: the tile's `DISABLED` flag is what draws, and what the `disabled` watcher hears go out.",
    "not_sent": true,
    "ai_trace": false,
    "interactions": [
@@ -29185,14 +29171,14 @@
   {
    "name": "AirSalvo",
    "line": 581,
-   "doc": "The helicopter `id` fired a salvo at (`x`, `y`). Not sent: the missiles are the state.",
-   "not_sent": true,
+   "doc": "The helicopter `id` fired a salvo at (`x`, `y`): its rockets are the missiles, and this is the launch a client hears.",
+   "not_sent": false,
    "ai_trace": false,
    "interactions": [
     "specials.heli_salvo",
     "presentation.air_support_ammo_spent"
    ],
-   "fx_elsewhere": "the heli's missiles (not sent)"
+   "fx_elsewhere": "the heli's missiles"
   },
   {
    "name": "AirStrike",

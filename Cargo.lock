@@ -229,6 +229,7 @@ dependencies = [
  "hecs",
  "lewton",
  "libm",
+ "miniz_oxide 0.8.9",
  "png",
  "postcard",
  "rand 0.10.4",

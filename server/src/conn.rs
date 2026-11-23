@@ -30,7 +30,8 @@ use crate::metrics::{ClientLabel, Metrics};
 use crate::room::{self, Command, ConnLink, RoomParams};
 
 /// Messages the writer holds for a client before the room starts
-/// skipping its snapshots: at 20 Hz, under a second of lag.
+/// skipping its snapshots: at 60 Hz, a snapshot a tick, about 267 ms of
+/// lag.
 pub const OUTBOX_DEPTH: usize = 16;
 
 /// How long the writer gets to flush what is queued and send the
@@ -301,7 +302,8 @@ async fn handle(
                 }
             };
             outbox.lobby(Lobby::RoomCreated { code: room.code.clone() });
-            join(room, nick, device_token, conn_id, outbox, attached, hub, &label).await;
+            let maps = client.as_ref().and_then(|c| c.maps);
+            join(room, nick, device_token, conn_id, outbox, attached, hub, &label, maps).await;
         }
         Msg::Lobby(Lobby::Join { nick, device_token, code, client }) => {
             if attached.is_some() {
@@ -310,7 +312,7 @@ async fn handle(
             }
             let label = seen.greet(hub, client.as_ref());
             match hub.find(&code) {
-                Ok(room) => join(room, nick, device_token, conn_id, outbox, attached, hub, &label).await,
+                Ok(room) => join(room, nick, device_token, conn_id, outbox, attached, hub, &label, client.as_ref().and_then(|c| c.maps)).await,
                 Err(refusal) => {
                     info!(conn = conn_id, code, %refusal, "join refused");
                     outbox.lobby(Lobby::Error { refusal });
@@ -343,7 +345,9 @@ async fn handle(
 }
 
 /// Ask `room` for a seat and, given one, attach the connection to it and
-/// count the seat under the client's build.
+/// count the seat under the client's build. `maps` is the shipped maps the
+/// client said it has (`ClientInfo::maps`), which decides how its
+/// `Welcome` carries the room's map.
 #[allow(clippy::too_many_arguments)]
 async fn join(
     room: RoomHandle,
@@ -354,9 +358,10 @@ async fn join(
     attached: &mut Option<Attached>,
     hub: &Hub,
     client: &ClientLabel,
+    maps: Option<u64>,
 ) {
     let (reply, answer) = oneshot::channel();
-    let link = ConnLink { id: conn_id, outbox: outbox.clone() };
+    let link = ConnLink { id: conn_id, outbox: outbox.clone(), maps };
     if room.commands.send(Command::Join { nick, device_token, conn: link, reply }).await.is_err() {
         outbox.lobby(Lobby::Error { refusal: Refusal::RoomGone { code: room.code.clone() } });
         return;
@@ -381,7 +386,7 @@ mod tests {
     use super::*;
 
     fn client(protocol: u16, platform: &str) -> ClientInfo {
-        ClientInfo { version: "0.2.10".into(), protocol, platform: platform.into() }
+        ClientInfo { version: "0.2.10".into(), protocol, platform: platform.into(), maps: None }
     }
 
     /// **A build on another protocol is told what to do, by which side is
