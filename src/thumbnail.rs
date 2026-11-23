@@ -223,7 +223,10 @@ mod tests {
     /// (BB-206), and the one step a thumbnail is staged on moves a drum
     /// there that stands against a body. Serpent River, No Man's Land and
     /// the Scrapyard carry the BB-209 props (docs/sandbags-barrels-fences.md
-    /// "New props").
+    /// "New props"). Vulkan is `tools/gen_vulkan.py`'s output (BB-220): a
+    /// change to the generator is a change to this row; Serpent River's
+    /// moved with the laser crate by its start, and Wildwood's with its
+    /// campaign crates by the start and no rod or rail (BB-220).
     #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 25] = [
         ("default", 0xc35e_5595_2de6_4cd3),
@@ -233,10 +236,10 @@ mod tests {
         ("portals", 0x4339_ad71_265d_1078),
         ("towers", 0x5be8_d484_6f04_af4a),
         ("longwater", 0x81c7_dd5f_ddce_9c7e),
-        ("wildwood", 0x3de6_5932_792a_3e47),
+        ("wildwood", 0xcc29_2d23_6145_b997),
         ("armory", 0xbbcd_7d06_53c7_cd1d),
         ("lotus-lagoon", 0x98a9_ea64_3091_f319),
-        ("vulkan", 0x187d_1427_5c66_27b8),
+        ("vulkan", 0x1efa_29a4_9ec4_1f07),
         ("hedge-maze", 0xc954_49b8_7e29_a3c3),
         ("oasis-bazaar", 0x9fd4_404b_7d4e_5b61),
         ("castle-moat", 0x409a_b1b1_6c81_3664),
@@ -245,7 +248,7 @@ mod tests {
         ("harbor-lights", 0x7851_0905_9e3f_ccd2),
         ("carnival", 0x7ef7_f14f_1d30_7eb2),
         ("jungle-temple", 0xb446_4b07_ae74_0292),
-        ("serpent-river", 0x434b_20b0_1c51_34da),
+        ("serpent-river", 0x48b0_ee5d_6673_1186),
         ("no-mans-land", 0x5523_d1fb_fd4e_1951),
         ("glasshouses", 0x2fda_8bc0_d144_e270),
         ("scrapyard", 0xd37f_d36a_0ed7_6dd4),

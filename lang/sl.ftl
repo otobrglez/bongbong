@@ -100,6 +100,8 @@ level-scrapyard = Odpad
 level-black-gold = Črno zlato
 level-castle-moat = Grajski jarek
 level-grand-campaign = Veliki pohod
+level-wildwood = Divji gozd
+level-longwater = Dolga voda
 
 seat-label = P{ $n }
 

@@ -548,11 +548,13 @@ the general case:
   to the reserved column and whatever its interactions need; the laser,
   plasma, minigun and flamethrower stand beside that column (11,6 to 11,12),
   so free play has every weapon. The plan below is the first, 36 x 18 cut.
-- **In the campaign** (BB-46, docs/levels.md, "The weapons along the way"): the hammer's first crate is Vulkan's
-  (level 2, 35,27), west of the start towards the southern river's stone
-  crossing - a shove into the lava is the hammer's "trouble", and the heat
-  shields are the answer to an enemy's; Glasshouses (level 3) has a second
-  at 8,7, in the west glass house it breaks open.
+- **In the campaign** (BB-46, docs/levels.md, "The weapons along the way"): the hammer's first crate is
+  Glasshouses' (level 3, 8,7), in the west glass house it breaks open.
+  Wildwood (level 7) has one in the iron bunker behind the Old Line
+  (158,76). Vulkan (level 13) has two: one in the Ranger Station's stores by the
+  start (68,37), one at the volcano's foot (48,21) beside the north-east
+  river of lava - a shove into the lava is the hammer's "trouble", and the
+  heat shields are the answer to an enemy's.
 
   ```
        0         1         2         3
