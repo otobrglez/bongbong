@@ -658,12 +658,13 @@ for the crates and the walls.
 ### 3.5 In the campaign
 
 BB-46 (docs/levels.md, "The weapons along the way"): Harbor Lights (level 10)
-has the rail's first crate at 4,20 in the warehouse yard, inside the start's
-sight box (its laser moved up to the town at 6,7): brick and glass warehouses
-and iron only at the lighthouse, so a slug crosses the town. Row 20 also runs
-through the players' own bong on the beach (34,20), and a slug hurts either
-side's bong. No Man's Land (level 11) has two more at 15,17 and 16,17, by its
-start. It is never on a Hunt map, where two slugs kill the hunted bong.
+has the rail's first crate at 42,35 in the harbourmaster's yard, inside the
+start's sight box, and a second in the town hall at 40,13 (BB-230,
+`tools/gen_harbor_lights.py`): brick, glass and timber everywhere and iron
+only in the moored tanker's hull and the boatyard crane's foot, so a slug
+crosses the town. The players' own bong (48,32) stands off the start's row
+and column, and a slug hurts either side's bong. No Man's Land (level 11)
+has two more at 15,17 and 16,17, by its start. It is never on a Hunt map, where two slugs kill the hunted bong.
 
 ## 4. AI
 
