@@ -263,8 +263,9 @@ Longwater 49.9 to 57.0 ms); the window draws it as one texture.
 - **The floodwork apron** (`Places::aprons`, `Apron`): round every tower
   that stands within two cells of water, two cells each way, and joined
   across the way in between where two such towers stand within eight
-  cells on one row or column - on Lotus Lagoon the two tesla towers at
-  (21, 13) and (27, 13) flanking the peninsula's mouth. Slabs 16 x 12 px in
+  cells on one row or column - on Lotus Lagoon round the pavilion island's
+  four towers, and across the way between the two teslas at (31, 19) and
+  (37, 19) flanking the south bridge. Slabs 16 x 12 px in
   a running bond on the field's grid, a few lifted in the middle and most
   at the rim so it frays into the meadow, stained by the water within
   12 px of it and in damp patches. Only open ground is paved: water, bank

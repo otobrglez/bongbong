@@ -2781,7 +2781,8 @@ mod session_tests {
         let view = s.play_chrome().result.expect("the end screen");
         let seconds = crate::tuning::tuning().restart_delay.ceil() as u32;
         assert_eq!(view.buttons, Some(ResultButtons { next: Some(NextLevel::Next), countdown: Some(seconds), uncounted: false }));
-        assert_eq!((view.stats.destroyed, view.stats.enemies), (5, 5), "Lotus Lagoon's band, every one");
+        let band = s.game.map.tanks.expect("Lotus Lagoon names its band");
+        assert_eq!((view.stats.destroyed, view.stats.enemies), (band, band), "Lotus Lagoon's band, every one");
         assert!(s.play_chrome().result.is_some() && s.game.in_finale(), "the finale plays before the end screen");
         for _ in 0..end_frames(&s) - 30 {
             step(&mut s);

@@ -193,9 +193,9 @@ enemy there carries one of the six BB-36 weapons.
 | Level | Weapon crates | Met first here |
 |---|---|---|
 | 0 Boot Camp | minigun | minigun |
-| 1 Lotus Lagoon | missiles, minigun, plasma | missiles, plasma |
+| 1 Lotus Lagoon | missiles (26,23), plasma (39,23), minigun, sonic hammer (41,23) | missiles, plasma; the sonic hammer - shove a tank off a bridge or into the drums |
 | 2 Serpent River | laser (18,13), plasma, missiles, laser (56,18) | laser - in the meadow by the start; the second on the far bank, for crossing |
-| 3 Glasshouses | plasma, laser, minigun, missiles, flamethrower, sonic hammer (8,7) | flamethrower; sonic hammer - to break the glass |
+| 3 Glasshouses | plasma, laser, minigun, missiles, flamethrower, sonic hammer (8,7) | flamethrower; the sonic hammer again - to break the glass |
 | 4 Oasis Bazaar | flamethrower, plasma, missiles, grenades (24,23) | grenades - lobbed over the compound's towered gate |
 | 5 Carnival | EMP burst (13,21), laser, missiles, plasma, flamethrower, minigun, grenades, sonic hammer | EMP - six waves of light tanks among a hundred drums, enemies arming from the crates |
 | 6 Jungle Temple | plasma, laser, minigun, flamethrower, missiles, FPV swarm (13,23) | FPV swarm - over the temple walls; the miniguns beside it are the counter |
