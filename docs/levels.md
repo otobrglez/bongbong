@@ -192,7 +192,7 @@ enemy there carries one of the six BB-36 weapons.
 | 1 Lotus Lagoon | missiles, minigun, plasma | missiles, plasma |
 | 2 Vulkan | sonic hammer (35,27) | sonic hammer - shove a tank into the lava |
 | 3 Glasshouses | plasma, laser, minigun, missiles, flamethrower, sonic hammer (8,7) | laser, flamethrower; the hammer again, to break the glass |
-| 4 Oasis Bazaar | flamethrower, plasma, missiles, grenades (24,23) | grenades - lobbed over the compound's towered gate |
+| 4 Oasis Bazaar | flamethrower, plasma, minigun, missiles, laser, sonic hammer, grenades (17,18) and (47,30) | grenades - the first crate by the yard's east gate, the second by the khan's south postern, to lob over its walls |
 | 5 Carnival | laser, missiles, flamethrower, plasma, EMP burst (19,11) | EMP - eight tanks and a field of missile crates |
 | 6 Jungle Temple | plasma, laser, minigun, flamethrower, missiles, FPV swarm (13,23) | FPV swarm - over the temple walls; the miniguns beside it are the counter |
 | 7 Hedge Maze | laser, plasma, missiles | |
@@ -221,7 +221,8 @@ The placements follow these rules:
   grenades, FPV swarm, air support, the gravity well - lies at least two of
   its blast's radii from that bong (256 px for the grenade), so the first
   fight it is used in is not at the bong. The campaign keeps it: Jungle
-  Temple's swarm lies 716 px from its bong, Oasis Bazaar's grenades 559 px.
+  Temple's swarm lies 716 px from its bong, Oasis Bazaar's nearer grenades
+  345 px.
   `armory`, free play, does not: its grenades lie 233 px from the bong and
   its swarm and well 172 px (BB-188 left the map as it was).
 - **Kept setup draws.** A crate takes over a spare ammo or speed-up cell, or
