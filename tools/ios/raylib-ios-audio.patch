@@ -1,0 +1,57 @@
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -39,6 +39,11 @@
+ # Only build raudio if it's enabled
+ if (NOT DEFINED SUPPORT_MODULE_RAUDIO OR SUPPORT_MODULE_RAUDIO)
+     list(APPEND raylib_sources raudio.c)
++    # bongbong: miniaudio's Core Audio backend includes AVFoundation on iOS,
++    # an Objective-C header, so raudio.c builds as Objective-C there.
++    if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
++        set_source_files_properties(raudio.c PROPERTIES COMPILE_OPTIONS "-xobjective-c")
++    endif()
+ endif()
+ 
+ # Only build rmodels if it's enabled
+--- a/src/raudio.c
++++ b/src/raudio.c
+@@ -461,11 +461,30 @@
+ // Module Functions Definition - Audio Device initialization and Closing
+ //----------------------------------------------------------------------------------
+ 
++#if defined(__APPLE__) && defined(__OBJC__)
++// bongbong: iOS stops the device for a call or Siri and only reports the end
++// of the interruption; take the session back and start the device again, or
++// the game stays silent for the rest of the run.
++static void OnDeviceNotification(const ma_device_notification *pNotification)
++{
++    if (pNotification->type != ma_device_notification_type_interruption_ended) return;
++    @autoreleasepool { [[AVAudioSession sharedInstance] setActive:YES error:nil]; }
++    ma_device_start(pNotification->pDevice);
++}
++#endif
++
+ // Initialize audio device
+ void InitAudioDevice(void)
+ {
+     // Init audio context
+     ma_context_config ctxConfig = ma_context_config_init();
++#if defined(__APPLE__)
++    // bongbong: a game's sound mixes with the player's music and follows the
++    // ring/silent switch (Ambient), rather than miniaudio's default
++    // PlayAndRecord, which stops other audio.
++    ctxConfig.coreaudio.sessionCategory = ma_ios_session_category_ambient;
++    ctxConfig.coreaudio.sessionCategoryOptions = ma_ios_session_category_option_mix_with_others;
++#endif
+     ma_log_callback_init(OnLog, NULL);
+ 
+     ma_result result = ma_context_init(NULL, 0, &ctxConfig, &AUDIO.System.context);
+@@ -484,6 +503,9 @@
+     config.sampleRate = AUDIO_DEVICE_SAMPLE_RATE;
+     config.periodSizeInFrames = AUDIO_DEVICE_PERIOD_SIZE_IN_FRAMES;
+     config.dataCallback = OnSendAudioDataToDevice;
++#if defined(__APPLE__) && defined(__OBJC__)
++    config.notificationCallback = OnDeviceNotification;
++#endif
+     config.pUserData = NULL;
+     config.noPreSilencedOutputBuffer = true;    // raylib pre-silences the output buffer manually
+     config.noFixedSizedCallback = true;         // raylib does not require fixed sized callback guarantees. This bypasses an internal intermediary buffer

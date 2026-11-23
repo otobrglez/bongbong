@@ -79,6 +79,17 @@ round-restarting = Restarting in { $seconds }...
 round-back-to-lobby = Back to the lobby in { $seconds }...
 paused = PAUSED
 
+# The goodbye a desktop window shows when it is closed (hud::Goodbye).
+# Say only what is true: the campaign is saved the moment a level is won.
+goodbye-title = THANKS FOR PLAYING!
+goodbye-saved = Your campaign progress is saved.
+goodbye-see-you = See you on the battlefield.
+# The game's author signs the thanks; a name, the same in every language.
+goodbye-signature = - @otobrglez
+# The builder's map has changes not yet saved: the goodbye asks first.
+goodbye-unsaved-title = UNSAVED MAP CHANGES
+goodbye-unsaved-keys = Esc: back to the game   Enter: quit anyway
+
 # The sound panel the HUD's speaker button opens (docs/sound-system-prd.md
 # 4.5): its title over an ON/OFF switch (64 px, 18 px text), then a
 # slider per level, each named in a 104 px column.
