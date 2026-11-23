@@ -2202,6 +2202,14 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   four-line FDN with a damped loop), master gain, mono, a watchdog that fades the mix when the
   director stops beating, a lookahead limiter at -1 dBFS; `wav.rs` for offline renders. Pure
   Rust, `Send`, `libm` for its transcendentals.
+- `audio/life.rs` — the field's creatures heard (docs/field-life.md). The director keeps its own
+  `fauna::Fauna`, stepped by `Fauna::observe` when `Fx` steps the window's (after each step, once a
+  frame), so it hears the field the window draws, a replica's and the offline render's alike.
+  `Critters` plays the edges - a flock lifting off and its far caw, a group running to take off, a
+  fright from a hull, a duck landing - and the calls at moments hashed on the round clock
+  (`life::calls`), in earshot, while the mix is calm (`audio_critter_calm_db`), one per
+  `audio_critter_gap_s` field-wide; at night the nearest swarms of fireflies shimmer. All on the world
+  bus at `audio_critters_db`.
 - `audio/offline.rs` — `Recorder`: the director and the engine stepped beside a headless round
   (`probe --audio-out`).
 - `render/audio.rs` — `AudioOut`: the device and one 48 kHz float stereo `AudioStream` whose

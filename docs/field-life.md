@@ -141,6 +141,16 @@ weather's light map: the light map's pool would light the grass round it
 as well, and the look chosen (BB-218's preview) is the dithered glow
 alone.
 
+## Sound
+
+`audio/life.rs` steps its own `Fauna` as `Fx` does and hears the field the window draws
+(docs/sound-system-prd.md). A flock at rest caws now and then; lifting off it bursts into wings
+and alarm and caws once more as it wheels away. A calm mallard group quacks and dabbles
+(`Duck::dabbling`, the dip drawn); a hull on the bank sets it quacking, a shot or a blast splashes
+it up, and each duck splashes down where it lands; none on ice. At night the fireflies' swarms
+shimmer faintly, dimming as a blast puts them out. Calls are hashed on the round clock, one in
+earshot per `audio_critter_gap_s`, none while a fight is loud.
+
 ## Knobs
 
 The `fauna` tuning group: `crow_*`, `duck_*` and `firefly_*`, each creature

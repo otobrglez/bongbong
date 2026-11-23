@@ -908,6 +908,12 @@ Where the build departs from the text:
   - **The wire** (protocol 40): `Hit` carries its shooter (`by`), `Ricochet` its shot, what it
     came off and the shot's id; `MissileLocked`, `DryFired` and `AirHit` are sent. A dry press
     online clicks at the press (`PressSound::Dry`); the room's copy is skipped.
+- **The field's creatures (BB-218):** crows, mallards and fireflies are presentation (`fauna.rs`), so
+  the director steps its own copy by the same `Fauna::observe` at the moments `Fx` does
+  (`audio/life.rs`) rather than taking the window's: the sound stays a function of the `Game` it
+  reads, and the probe's render and a replica hear the same creatures. Alarms and landings play on
+  their edges; calls are hashed on the round clock and kept sparse; the fireflies shimmer as a bed
+  per swarm. Nothing goes on the wire.
 - **Still to make:** the 156 needs not yet in the manifest, the announcer, and music. Online, the
   kill sting and the missile pod's reload are silent (neither replicates); `Wreck`'s cause, `Ram`'s
   speed, `BongBite`'s position, `RoundEnded`'s reason and `ObstacleDestroyed`'s cause are still

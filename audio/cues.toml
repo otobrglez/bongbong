@@ -3408,7 +3408,10 @@ duration_seconds = 1.0
 status = "planned"
 bus = "world"
 prompt = "a warm summer night, a very faint delicate shimmer of tiny soft twinkles over a high airy hum, sparse and even, no melody, no music"
+# Generated without the style prefix: "close-mic, dry, punchy" fights a faint
+# night shimmer.
 duration_seconds = 8.0
+prompt_influence = 0.35
 loop = true
 
 [sample.thunder]
