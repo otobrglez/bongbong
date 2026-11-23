@@ -92,26 +92,29 @@ RL_VENDORED="$(ls -d "$HOME"/.cargo/registry/src/*/sola-raylib-sys-"$RL_SYS_VERS
 [[ -d "$RL_VENDORED" ]] || { echo "[setup-ios] sola-raylib-sys-$RL_SYS_VERSION is not in the cargo registry; run 'cargo fetch' first" >&2; exit 1; }
 
 # A fresh copy of the vendored tree (the registry is never edited) with the
-# one patch iOS needs on top: tools/ios/raylib-sdl-highdpi.patch teaches the
-# SDL backend to render into the whole high-pixel-density drawable (3x on a
-# phone) instead of a 1x corner of it - the GLFW backend already does this
-# on high-DPI displays through raylib's screenScale, the SDL one never did.
+# two patches iOS needs on top:
+# - tools/ios/raylib-sdl-highdpi.patch teaches the SDL backend to render into
+#   the whole high-pixel-density drawable (3x on a phone) instead of a 1x
+#   corner of it - the GLFW backend already does this on high-DPI displays
+#   through raylib's screenScale, the SDL one never did;
+# - tools/ios/raylib-ios-audio.patch gives the phone sound: raudio.c builds
+#   as Objective-C (miniaudio's Core Audio backend includes AVFoundation),
+#   the audio session is Ambient with mix-with-others (the player's music
+#   keeps playing, the ring/silent switch silences the game), and the device
+#   starts again when a call or Siri ends the interruption.
 RL="$SRC/raylib"
 rm -rf "$RL"
 cp -R "$RL_VENDORED" "$RL"
 patch -p1 -d "$RL" --silent < tools/ios/raylib-sdl-highdpi.patch
+patch -p1 -d "$RL" --silent < tools/ios/raylib-ios-audio.patch
 
-# -DMA_NO_COREAUDIO: raudio.c compiles miniaudio as plain C, and on iOS
-# miniaudio's CoreAudio backend #includes the Objective-C AVFoundation
-# umbrella header, which does not compile as C. Without CoreAudio miniaudio
-# keeps its null backend; the game plays no audio. When audio arrives,
-# raudio.c has to be compiled as Objective-C instead. RAYLIB_EXTRA_CMAKE is
-# the escape hatch (e.g. "-DCUSTOMIZE_BUILD=ON -DSUPPORT_MODULE_RAUDIO=OFF").
+# RAYLIB_EXTRA_CMAKE is the escape hatch (e.g. "-DCUSTOMIZE_BUILD=ON
+# -DSUPPORT_MODULE_RAUDIO=OFF").
 rm -rf "$BUILD/raylib-$SLICE"
 cmake -S "$RL" -B "$BUILD/raylib-$SLICE" "${IOS_CMAKE[@]}" \
     -DPLATFORM=SDL -DOPENGL_VERSION="ES 2.0" -DBUILD_EXAMPLES=OFF \
     -DSDL3_DIR="$IOS_PREFIX/lib/cmake/SDL3" -DCMAKE_FIND_ROOT_PATH="$IOS_PREFIX" \
-    -DCMAKE_C_FLAGS="-DMA_NO_COREAUDIO" ${RAYLIB_EXTRA_CMAKE:-}
+    ${RAYLIB_EXTRA_CMAKE:-}
 cmake --build "$BUILD/raylib-$SLICE" -j"$JOBS"
 cmake --install "$BUILD/raylib-$SLICE"
 

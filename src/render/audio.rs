@@ -27,6 +27,27 @@ use crate::audio::dsp::{Command, Engine, RATE};
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 static QUEUE: Mutex<Vec<Command>> = Mutex::new(Vec::new());
 
+/// A sample file read through raylib's `LoadFileData`, for the bank
+/// (`audio::Audio::shipped_reading`). On Android the game's files live in
+/// the APK, which `std::fs` cannot see; raylib's `fopen` is wrapped to read
+/// the APK's assets (android/build.rs), so this is the reader there.
+pub fn read_raylib(path: &str) -> Option<Vec<u8>> {
+    let name = std::ffi::CString::new(path).ok()?;
+    let mut size: std::os::raw::c_int = 0;
+    // SAFETY: `name` is a valid C string for the call; raylib returns either
+    // null or a buffer of `size` bytes it allocated, copied out here before
+    // it is handed back to `UnloadFileData`.
+    unsafe {
+        let data = ffi::LoadFileData(name.as_ptr(), &mut size);
+        if data.is_null() {
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(data, size.max(0) as usize).to_vec();
+        ffi::UnloadFileData(data);
+        Some(bytes)
+    }
+}
+
 /// raylib's stream callback: `frames` stereo `f32` frames to fill.
 unsafe extern "C" fn fill(buffer: *mut c_void, frames: c_uint) {
     // SAFETY: raylib hands the stream's own buffer, `frames` frames in its

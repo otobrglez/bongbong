@@ -134,7 +134,7 @@ Non-goals
   - `AudioStream::update` with `is_processed()` is safe and usable.
   - raylib's decoders are WAV, OGG, MP3 and QOA; FLAC is off.
 - **Web.** No ASYNCIFY, and none should be needed: see D4. The page's audio-unlock hook resumes a `Module.audioContext` that nothing sets (`site/src/scripts/runtime.ts:27, 58-69`).
-- **iOS.** raylib is built with `-DMA_NO_COREAUDIO` (`tools/setup_ios.sh:104-114`), so it has no audio backend.
+- **iOS.** `tools/ios/raylib-ios-audio.patch` (BB-216) builds `raudio.c` as Objective-C for miniaudio's Core Audio backend, with an Ambient, mix-with-others session started again after an interruption.
 - **Android.** AAudio and OpenSL ES are available. raylib leaves audio playing when the app loses focus (`rcore_android.c:1137-1142`).
 - **ElevenLabs connector.** It is read in this session; no credits were spent.
   - **Sound Effects:** the `sfx` node type. The default model is `eleven_text_to_sound_v3`; `eleven_text_to_sound_v2` remains. Its parameters are `duration_seconds` 0.5–30, `prompt_influence` 0–1 (default 0.3) and `loop`.
@@ -719,8 +719,8 @@ The sound map is where you see what needs sound, what is hooked, and what has be
 |---|---|---|
 | Linux, Windows, macOS | ready | raylib `AudioStream`. `libasound2-dev` is already in `dist-workspace.toml`. A lost device (headphones unplugged) re-inits on the next frame. |
 | Web | spike | D4: no ASYNCIFY (verify), the unlock fix in `runtime.ts`, `bbHidden`, the lazy fetch, buffer size against latency. |
-| Android | follow-up | AAudio through miniaudio (OpenSL ES is linked, `android/build.rs:39`). The watchdog (D5) silences focus loss. Not in the first PR: the build stays silent until its follow-up issue. |
-| iOS | follow-up | Drop `-DMA_NO_COREAUDIO` and compile `raudio.c` as Objective-C (`tools/setup_ios.sh:104-114`). A raylib patch beside `tools/ios/raylib-sdl-highdpi.patch` sets the session category to Ambient with mix-with-others; miniaudio's default is PlayAndRecord. Handle interruptions (calls, Siri) by pausing and resuming the stream. Not in the first PR. |
+| Android | done (BB-216) | AAudio through miniaudio (OpenSL ES is linked, `android/build.rs:39`). The samples live in the APK, which `std::fs` cannot read, so the window reads them through raylib's `LoadFileData` (`render::audio::read_raylib`; raylib's `fopen` is wrapped to the APK's assets). The watchdog (D5) fades the mix when the app loses focus. |
+| iOS | done (BB-216) | `tools/ios/raylib-ios-audio.patch`, applied by `tools/setup_ios.sh` beside the high-DPI patch: `raudio.c` builds as Objective-C for miniaudio's Core Audio backend; the session is Ambient with mix-with-others (miniaudio's default is PlayAndRecord, which stops the player's music); when a call or Siri ends an interruption the session is taken back and the device started again. The ring/silent switch mutes the game. |
 | Room server, probe | none | The null driver. The director still runs in the probe for tests and offline renders. |
 
 ### 4.14 Dev tooling and tests
@@ -833,7 +833,7 @@ Settled with the owner, 2026-11-22:
 5. **Budget order.** Effects and voice are generated first. Music waits until the owner has heard the effects.
 6. **Picking takes.** The session cannot listen. It pre-picks each take by measurement (length, loudness, clipping, a clean start and end, the loop seam) and ships it. The owner reviews on the audition page and swaps or rejects; rejected takes are regenerated.
 7. **The bong's voice** is language-free babble timed to its bubbles: per-kind pitch, nothing to translate. The announcer speaks localised lines.
-8. **Platforms.** Desktop and the web first. iOS and Android audio are a follow-up issue, and those builds stay silent until it lands.
+8. **Platforms.** Desktop, the web, iOS and Android all play sound; the phones came with BB-216.
 9. **Online:** the event and wire changes of §4.10 are in, with a `PROTOCOL_VERSION` bump.
 10. **Delivery.** Everything is built in one PR with this document, tracked as one issue (BB-102) with sub-issues per phase. It is pushed at phase ends only, to spare CI.
 

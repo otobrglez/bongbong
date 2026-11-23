@@ -353,8 +353,10 @@ build, so every switch would recompile them and their dependents). `.cargo/confi
   App Store Connect refuses a binary that references `AVCaptureDevice` or CoreBluetooth without a
   usage string, and the options are part of its install marker so a change rebuilds (the script
   hands cmake Xcode's clang: nix's wrapper, first on the devenv PATH, adds `-mmacos-version-min` and
-  fails the iOS compiler check); raylib gets `-DMA_NO_COREAUDIO` because miniaudio's CoreAudio
-  backend needs Objective-C - when audio arrives, compile `raudio.c` as ObjC). `just ios-smoke`
+  fails the iOS compiler check); raylib gets `tools/ios/raylib-ios-audio.patch` beside the high-DPI
+  one: `raudio.c` builds as Objective-C for miniaudio's Core Audio backend, the session is Ambient
+  with mix-with-others (the player's music plays on, the ring/silent switch mutes the game), and the
+  device starts again when a call or Siri ends an interruption). `just ios-smoke`
   (`tools/ios/smoke.c`, SDL3 + GL ES 2 `glDrawElements`) is the standing check after any
   Xcode/runtime update. Device slice: `just ios-setup-device`.
 - **Run**: `just run-ios-sim` (`build-ios-sim` + `tools/ios/bundle.sh` →
@@ -464,7 +466,9 @@ not build on the nix toolchain).
 - **Why `nobuild` again**: `sola-raylib-sys`'s Android cmake branch mis-parses the API level and
   emits no link args. `android/build.rs` emits the prebuilt `libraylib.a`, `log android EGL GLESv2
   OpenSLES c m`, and as `rustc-cdylib-link-arg` **`-Wl,--wrap=fopen`** (raylib routes asset reads
-  into the APK through `__wrap_fopen`; without it every `LoadTexture` fails silently),
+  into the APK through `__wrap_fopen`; without it every `LoadTexture` fails silently - and the
+  sound bank reads its samples through raylib's `LoadFileData` on Android for the same reason,
+  `render::audio::read_raylib`, since `std::fs` cannot see into the APK),
   **`-Wl,-u,ANativeActivity_onCreate`** (keeps the activity entry from the static archive) and
   `-Wl,-z,max-page-size=16384`.
 - **Shipping it** (`.github/workflows/android-release.yml`): runs when the Release workflow finishes
