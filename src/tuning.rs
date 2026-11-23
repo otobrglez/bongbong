@@ -5385,6 +5385,32 @@ tunables! {
         /// How many placed water beds - a shore lapping, a stream, a frozen
         /// shore - play at once: the nearest the ears.
         audio_water_beds: usize = 6 in 0 ..= 32;
+        /// The level of every creature's sound on top of its cue's own, in
+        /// dB (docs/field-life.md, `audio::life`): the crows, the mallards
+        /// and the fireflies as one.
+        audio_critters_db: f32 = (-3.0) in -60.0 ..= 12.0;
+        /// The fewest seconds between two creatures' calls - a caw, a
+        /// quack, a dabble - anywhere in earshot, and after an alarm (a
+        /// flock flushed, a group put up) before the next.
+        audio_critter_gap_s: f32 = 4.0 in 0.0 ..= 60.0;
+        /// A creature calls only while the loudest recent sound (the HDR
+        /// window's top) is under this, in dB: a fight hushes the field.
+        audio_critter_calm_db: f32 = (-20.0) in -120.0 ..= 12.0;
+        /// The windows of the round's clock (s) a crow flock at rest and a
+        /// calm mallard group call in, and the share of the windows that
+        /// hold a call, at a hashed moment.
+        audio_crow_caw_s: f32 = 12.0 in 1.0 ..= 120.0;
+        audio_duck_quack_s: f32 = 10.0 in 1.0 ..= 120.0;
+        audio_critter_call_share: f32 = 0.6 in 0.0 ..= 1.0;
+        /// The seconds a flushed flock's first bird flies before the flock
+        /// caws once more as it wheels away.
+        audio_crow_wheel_s: f32 = 1.4 in 0.0 ..= 10.0;
+        /// The share of a duck's dips (`Duck::dabbling`) heard.
+        audio_duck_dabble_share: f32 = 0.1 in 0.0 ..= 1.0;
+        /// How many firefly swarms shimmer at once, the nearest the ears,
+        /// and how many fireflies make a swarm's shimmer full.
+        audio_firefly_beds: usize = 2 in 0 ..= 16;
+        audio_firefly_full: f32 = 10.0 in 1.0 ..= 200.0;
         /// How much each link of a drum chain plays under the one before
         /// it, in dB.
         audio_chain_step_db: f32 = (-3.0) in -24.0 ..= 0.0;

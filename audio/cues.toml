@@ -2465,6 +2465,70 @@ loop = true
   peak_dbtp = -9.13
   seconds = 4.00
 
+# The field's creatures (docs/field-life.md; the crows, ducks and
+# fireflies watchers, audio::life).
+
+[sample.crow_caw]
+status = "planned"
+bus = "world"
+prompt = "a single crow on open farmland cawing two or three times, hoarse natural caws with short pauses, outdoors, no music"
+duration_seconds = 2.0
+
+[sample.crow_flush_wings]
+status = "planned"
+bus = "world"
+prompt = "a small flock of crows bursting up off a field, a sudden flurry of heavy wing flaps rushing away, no music"
+duration_seconds = 1.5
+
+[sample.crow_alarm]
+status = "planned"
+bus = "world"
+prompt = "several startled crows taking flight, harsh overlapping alarm caws, agitated, no music"
+duration_seconds = 1.5
+
+[sample.crow_caw_far]
+status = "planned"
+bus = "world"
+prompt = "a crow cawing as it flies away overhead, two caws fading into the distance, outdoors, no music"
+duration_seconds = 2.5
+
+[sample.duck_quack]
+status = "planned"
+bus = "world"
+prompt = "a mallard duck on a calm pond, a few soft contented quacks and low chuckles, no music"
+duration_seconds = 2.0
+
+[sample.duck_dabble]
+status = "planned"
+bus = "world"
+prompt = "a duck dipping its head into still pond water, a small soft splash and gentle paddling ripples, no music"
+duration_seconds = 1.0
+
+[sample.duck_takeoff]
+status = "planned"
+bus = "world"
+prompt = "mallard ducks taking off from a pond, a splashing run across the water and loud whistling wing beats, no music"
+duration_seconds = 2.0
+
+[sample.duck_alarm]
+status = "planned"
+bus = "world"
+prompt = "startled mallard ducks quacking loudly in alarm as they flee, no music"
+duration_seconds = 1.5
+
+[sample.duck_land]
+status = "planned"
+bus = "world"
+prompt = "a duck landing on a pond, a short skidding splash-down and a settling ripple, no music"
+duration_seconds = 1.0
+
+[sample.firefly_loop]
+status = "planned"
+bus = "world"
+prompt = "a warm summer night, a very faint delicate shimmer of tiny soft twinkles over a high airy hum, sparse and even, no melody, no music"
+duration_seconds = 8.0
+loop = true
+
 [sample.thunder]
 status = "approved"
 bus = "world"
@@ -5657,6 +5721,108 @@ jitter = false
 gain_db = -8.0
 layers = [{ sample = "bed_karst_loop" }]
 note = "The karst biome's air."
+
+# The field's creatures (the crows, ducks and fireflies watchers,
+# audio::life): quiet, sparse, every one `audio_critters_db` under its cue.
+
+[cue."world.crow.caw"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+steal = "none"
+gain_db = -10.0
+layers = [{ sample = "crow_caw" }]
+note = "A crow flock at rest - on the grass or in a crown - cawing now and then, hashed on the round clock: one creature's call in earshot every audio_critter_gap_s at most, while the mix is calm."
+
+[cue."world.crow.flush"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+cooldown_ms = 1500
+gain_db = -6.0
+layers = [{ sample = "crow_flush_wings" }, { sample = "crow_alarm", gain_db = -3.0 }]
+note = "A crow flock lifting off from a hull, a shot, a blast or a struck tree: a burst of wings and alarmed caws, fuller the more birds."
+
+[cue."world.crow.caw.far"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 1
+steal = "none"
+gain_db = -9.0
+layers = [{ sample = "crow_caw_far" }]
+note = "A flushed flock cawing once more as it wheels away, audio_crow_wheel_s into its flight, where its first bird flies."
+
+[cue."world.duck.quack"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+steal = "none"
+gain_db = -11.0
+layers = [{ sample = "duck_quack" }]
+note = "A calm mallard group quacking now and then, hashed on the round clock, under the creatures' gap and calm."
+
+[cue."world.duck.quack.wary"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+cooldown_ms = 6000
+gain_db = -12.0
+layers = [{ sample = "duck_alarm" }]
+note = "A hull on the bank frightening a mallard group: a few agitated quacks as it paddles off."
+
+[cue."world.duck.dabble"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 1
+steal = "none"
+gain_db = -14.0
+layers = [{ sample = "duck_dabble" }]
+note = "A duck tipping its head under (Duck::dabbling, the dip the window draws), audio_duck_dabble_share of its dips, under the creatures' gap and calm."
+
+[cue."world.duck.takeoff"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+cooldown_ms = 1500
+gain_db = -6.0
+layers = [{ sample = "duck_takeoff" }, { sample = "duck_alarm", gain_db = -3.0 }]
+note = "A mallard group put up by a shot or a blast: the splashing run, loud wing beats and alarmed quacks, fuller the more ducks."
+
+[cue."world.duck.land"]
+kind = "one_shot"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 3
+cooldown_ms = 120
+gain_db = -10.0
+layers = [{ sample = "duck_land" }]
+note = "A duck splashing down on open water; a group's landings patter at least 120 ms apart."
+
+[cue."world.firefly"]
+kind = "loop"
+bus = "world"
+priority = "low"
+class = "small"
+polyphony = 2
+jitter = false
+gain_db = -18.0
+layers = [{ sample = "firefly_loop" }]
+note = "Fireflies at night: a faint shimmer over the nearest swarms, as strong as the sky shows them and as lit as they glow."
 
 # Fly-bys (the flyby watcher).
 

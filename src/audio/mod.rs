@@ -6,8 +6,9 @@
 //! [`Audio`] is the director. After every simulation step it reads the
 //! step's events (`observe_events`, deduped on `Game::frame` the way `Fx`
 //! is) and turns each into the sounds `bind.rs` gives it; once a frame
-//! (`observe`) it lets the state watchers (`watch.rs`) ask for the loops no
-//! event reports - engines, tracks, the minigun, fires, the weather - places
+//! (`observe`) it lets the state watchers (`watch.rs`, and `life.rs` for
+//! the field's creatures) ask for the sounds no event reports - engines,
+//! tracks, the minigun, fires, the weather, the crows and ducks - places
 //! every sound for the listeners (`space.rs`), decides what may play (each
 //! cue's polyphony and cooldown, the HDR window, the voice budget), and
 //! writes [`dsp::Command`]s for the engine. The engine (`dsp/`) mixes them;
@@ -22,6 +23,7 @@ pub mod bank;
 pub mod bind;
 pub mod cues;
 pub mod dsp;
+pub mod life;
 pub mod offline;
 pub mod source;
 pub mod space;
@@ -218,6 +220,12 @@ pub struct Audio {
     /// (`OnlineRound::draws_own_shots`): its own presses play at once
     /// (`own_press`) and the room's late copies of them are skipped.
     predicted: Option<usize>,
+    /// The field's creatures (`fauna.rs`), stepped by `Fauna::observe` at
+    /// the moments `Fx` steps the window's copy - after every step and once
+    /// a frame - so they are the field the window draws (`life.rs`).
+    life: crate::fauna::Fauna,
+    /// What the creatures' watcher keeps between frames.
+    critters: life::Critters,
 }
 
 /// How many recent cues the dev tools see.
@@ -246,6 +254,8 @@ impl Audio {
             variation: 0,
             recent: VecDeque::new(),
             predicted: None,
+            life: crate::fauna::Fauna::default(),
+            critters: life::Critters::default(),
         }
     }
 
@@ -297,6 +307,7 @@ impl Audio {
     /// Reads one simulation step's events. Call after every `update`, as
     /// the app does `Fx::observe_events`; a step already read is skipped.
     pub fn observe_events(&mut self, game: &Game) {
+        self.life.observe(game);
         let (frame, seed) = (game.frame(), game.round_seed());
         if self.seed == Some(seed) && frame == self.last_frame {
             return;
@@ -397,6 +408,7 @@ impl Audio {
             }
         }
         self.watch.reset();
+        self.critters.reset();
         self.cooldown.clear();
         self.space.walls_changed();
         self.hdr_top = -120.0;
@@ -407,6 +419,7 @@ impl Audio {
     /// owner slots this window plays; `dt` the frame's real time; `running`
     /// whether the round moves (not under a dialog, a pause or the builder).
     pub fn observe(&mut self, game: &Game, views: &[View], own: &[usize], dt: f32, running: bool) {
+        self.life.observe(game);
         let t = tuning();
         let dt = dt.max(0.0);
         self.time += dt as f64;
@@ -424,8 +437,11 @@ impl Audio {
         if running {
             let mut wishes = Vec::new();
             let mut plays = Vec::new();
-            self.watch.set_ears(self.space.ears().iter().map(|e| e.at));
+            let ears: Vec<Vec2> = self.space.ears().iter().map(|e| e.at).collect();
+            self.watch.set_ears(ears.iter().copied());
             self.watch.sample(game, own, self.time, &t, &mut wishes, &mut plays);
+            let calm = self.hdr_top < t.audio_critter_calm_db;
+            self.critters.sample(&self.life, game, &ears, self.time, calm, &t, &mut wishes, &mut plays);
             self.pending.extend(plays);
             self.loops(&wishes, &t);
         }

@@ -134,6 +134,12 @@ impl Crow {
     fn roll(&self, k: u32) -> f32 {
         pyro::unit(self.seed ^ self.leg.wrapping_mul(0x9E37_79B9), k)
     }
+
+    /// The flock it belongs to, for the round: what flushes with it, and
+    /// what the sound calls and alarms by (`audio::life`).
+    pub fn flock(&self) -> usize {
+        self.flock
+    }
 }
 
 /// The place of bird `i` (of a flock) about its flock's spot, jittered by
