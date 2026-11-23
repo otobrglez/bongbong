@@ -39,6 +39,13 @@ round-restarting = Nova igra čez { $seconds }...
 round-back-to-lobby = Nazaj v sobo čez { $seconds }...
 paused = PAVZA
 
+goodbye-title = HVALA ZA IGRO!
+goodbye-saved = Napredek v kampanji je shranjen.
+goodbye-see-you = Se vidimo na bojišču.
+goodbye-signature = - @otobrglez
+goodbye-unsaved-title = NI SHRANJENO
+goodbye-unsaved-keys = Esc: nazaj v igro   Enter: vseeno končaj
+
 sound-title = ZVOK
 sound-on = VKL
 sound-off = IZKL

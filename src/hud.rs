@@ -714,6 +714,95 @@ impl Hints {
     }
 }
 
+/// The goodbye a desktop window shows when it is closed: thanks, signed by
+/// the game's author, and what the game keeps - only what is true. The campaign is saved the frame a
+/// level is won, so a player with a level won hears it is saved; one with
+/// none is just thanked. A map in the builder with changes not yet saved
+/// would be lost, so there the goodbye asks instead: Esc goes back to the
+/// game, Enter or closing again quits. Otherwise it never holds a quit up:
+/// it closes by itself after `GOODBYE_SECONDS`, and any key, any click or
+/// closing again closes it at once. The web and the phones have no quit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Goodbye {
+    pub kind: GoodbyeKind,
+    /// Seconds left before it closes by itself; unsaved changes wait.
+    left: f32,
+}
+
+/// What the goodbye says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoodbyeKind {
+    /// Thanks, and the campaign's progress is saved.
+    Saved,
+    /// Thanks, with nothing won yet to keep.
+    Thanks,
+    /// The builder's map has changes not saved: quit anyway?
+    Unsaved,
+}
+
+/// What a frame of the goodbye decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GoodbyeStep {
+    /// Still showing.
+    Stay,
+    /// Close the window.
+    Quit,
+    /// Back to the game: the quit is called off.
+    Back,
+}
+
+/// How long the goodbye stays when nothing ends it sooner, in seconds.
+pub const GOODBYE_SECONDS: f32 = 1.5;
+/// The goodbye's title and its line under it, in points.
+pub const GOODBYE_TITLE_SIZE: i32 = 48;
+pub const GOODBYE_LINE_SIZE: i32 = RESULT_SEATS_SIZE;
+
+impl Goodbye {
+    /// The goodbye for a window closing with `campaign_saved` (a level of
+    /// the campaign won, which the store holds) and `unsaved_map` (the
+    /// builder's map changed since it was last saved).
+    pub fn new(campaign_saved: bool, unsaved_map: bool) -> Goodbye {
+        let kind = if unsaved_map {
+            GoodbyeKind::Unsaved
+        } else if campaign_saved {
+            GoodbyeKind::Saved
+        } else {
+            GoodbyeKind::Thanks
+        };
+        Goodbye { kind, left: GOODBYE_SECONDS }
+    }
+
+    /// A frame on: `close` the window was asked to close again, `escape`
+    /// and `enter` those keys pressed, `other` any other key or a click.
+    pub fn step(&mut self, dt: f32, close: bool, escape: bool, enter: bool, other: bool) -> GoodbyeStep {
+        match self.kind {
+            GoodbyeKind::Unsaved if escape => GoodbyeStep::Back,
+            GoodbyeKind::Unsaved if close || enter => GoodbyeStep::Quit,
+            GoodbyeKind::Unsaved => GoodbyeStep::Stay,
+            _ if close || escape || enter || other => GoodbyeStep::Quit,
+            _ => {
+                self.left -= dt.max(0.0);
+                if self.left <= 0.0 { GoodbyeStep::Quit } else { GoodbyeStep::Stay }
+            }
+        }
+    }
+
+    /// The author's signature under the thanks; none under the question.
+    pub fn signature(&self) -> Option<crate::text::Key> {
+        (self.kind != GoodbyeKind::Unsaved).then_some(crate::text::keys::GOODBYE_SIGNATURE)
+    }
+
+    /// The title and the line under it.
+    pub fn lines(&self) -> (crate::text::Key, crate::text::Key) {
+        use crate::text::keys;
+        match self.kind {
+            GoodbyeKind::Saved => (keys::GOODBYE_TITLE, keys::GOODBYE_SAVED),
+            GoodbyeKind::Thanks => (keys::GOODBYE_TITLE, keys::GOODBYE_SEE_YOU),
+            GoodbyeKind::Unsaved => (keys::GOODBYE_UNSAVED_TITLE, keys::GOODBYE_UNSAVED_KEYS),
+        }
+    }
+}
+
 /// A window's safe area as its insets from each edge, in the window's own
 /// units: the strips a notch, a Dynamic Island, rounded corners and a home
 /// indicator take, which no chrome may sit under. Zero where the platform
@@ -2028,6 +2117,42 @@ mod hud_tests {
 
     const W: f32 = crate::DEFAULT_SCREEN_WIDTH as f32;
     const H: f32 = crate::DEFAULT_SCREEN_HEIGHT as f32;
+
+    /// The goodbye says only what is kept, never holds a quit up, and
+    /// asks first where a map's changes would be lost.
+    #[test]
+    fn the_goodbye_thanks_closes_by_itself_and_asks_before_losing_a_map() {
+        use crate::text::keys;
+        assert_eq!(Goodbye::new(true, false).lines(), (keys::GOODBYE_TITLE, keys::GOODBYE_SAVED));
+        assert_eq!(Goodbye::new(false, false).lines(), (keys::GOODBYE_TITLE, keys::GOODBYE_SEE_YOU));
+        assert_eq!(Goodbye::new(true, true).kind, GoodbyeKind::Unsaved, "losing a map outranks the thanks");
+        assert_eq!(Goodbye::new(false, false).signature(), Some(keys::GOODBYE_SIGNATURE), "the thanks is signed");
+        assert_eq!(Goodbye::new(false, true).signature(), None, "the question is not");
+
+        // It closes by itself once its time is up ...
+        let mut g = Goodbye::new(true, false);
+        let mut frames = 0;
+        while g.step(0.1, false, false, false, false) == GoodbyeStep::Stay {
+            frames += 1;
+            assert!(frames < 100);
+        }
+        let expected = (GOODBYE_SECONDS / 0.1).round() as i32;
+        assert!((expected - 2..=expected).contains(&frames), "{frames} frames of {expected}");
+        // ... and at once on any key, a click or closing again.
+        for (close, escape, enter, other) in [(true, false, false, false), (false, true, false, false), (false, false, true, false), (false, false, false, true)] {
+            assert_eq!(Goodbye::new(false, false).step(0.0, close, escape, enter, other), GoodbyeStep::Quit);
+        }
+
+        // Unsaved changes wait for an answer: Esc goes back, Enter or
+        // closing again quits, anything else leaves the question up.
+        let mut g = Goodbye::new(false, true);
+        for _ in 0..100 {
+            assert_eq!(g.step(0.1, false, false, false, true), GoodbyeStep::Stay);
+        }
+        assert_eq!(g.step(0.0, false, true, false, false), GoodbyeStep::Back);
+        assert_eq!(g.step(0.0, false, false, true, false), GoodbyeStep::Quit);
+        assert_eq!(g.step(0.0, true, false, false, false), GoodbyeStep::Quit);
+    }
 
     /// A round of `seats` seats on the shipped map, seeded so the tanks
     /// land in the same places every run.
