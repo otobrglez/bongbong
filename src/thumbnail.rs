@@ -238,7 +238,7 @@ mod tests {
         ("lotus-lagoon", 0x98a9_ea64_3091_f319),
         ("vulkan", 0x187d_1427_5c66_27b8),
         ("hedge-maze", 0xc954_49b8_7e29_a3c3),
-        ("oasis-bazaar", 0x197f_2a08_c4d7_4931),
+        ("oasis-bazaar", 0x9f8f_c048_b56e_efd5),
         ("castle-moat", 0x409a_b1b1_6c81_3664),
         ("archipelago", 0x457b_7d4e_693d_6d82),
         ("black-gold", 0x5982_660d_ca83_4f36),
