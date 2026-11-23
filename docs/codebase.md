@@ -410,7 +410,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   language's message against the points its box has (the corners' slots, the banners through
   `fit_size`, the dialogs, the lobby's buttons and seat columns, the builder), so a translation
   that does not fit does not merge. The room server's refusals are `net::wire::Refusal` codes the
-  client puts into words (`text::refusal`); `net/round.rs` is the one `net/` file that reads the
+  client puts into words (`text::refusal`), and a room the client left for speaking another
+  protocol is `text::closed`'s line (`Closed::mismatch`: update the app, reload the page on the web,
+  or try again in a while); `net/round.rs` is the one `net/` file that reads the
   catalogue, and nothing under `simulation/` does (a test greps). The wave banner (`WaveBanner`) and
   the mission banner are data the renderer words. Tests build local `Catalogue`s; never call
   `set_language` in a test.
@@ -2821,7 +2823,10 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   `ShotTeleported` carries a shot's `ShotState` key so the interpolator draws its jump;
   `GrassTrampled {col, row}` is state, applied quiet or drawn. The lobby's
   `Ended { outcome }` is how a round's end reaches a client, since the snapshots stop with the tick.
-  `codec.rs`: `encode`/`decode` of a `Msg`, one `kind` byte then `postcard` (lobby: JSON).
+  `codec.rs`: `encode`/`decode` of a `Msg`, one `kind` byte then `postcard` (lobby: JSON); a
+  `Welcome` is read from its leading `protocol` first, and one from another protocol is
+  `Msg::ForeignWelcome { protocol }` with the rest unread - `Welcome::protocol` stays the first
+  field in every version so a client can always read it.
   `delta.rs`: `delta`/`apply_delta` - per family the changed entries in full, short moves as `Moved
   {key, dx, dy}`, removals as keys; scalars as `Option`; events whole - `Hit` with its shooter,
   `Ricochet` with its shot, what it came off and its id, `MissileLocked`, `DryFired` and `AirHit`
@@ -2869,8 +2874,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   - **The client's socket** (feature `online`, on by default and off under `--no-default-features`,
     so the server and the probe carry no second WebSocket stack): `transport.rs` is the whole
     contract - `send(&[u8])`, `drain(&mut Vec<Msg>)` (decoding through `codec`, appending, never
-    blocking) and a `ConnState` of connecting/open/`Closed{reason, requested}`; a message that does
-    not decode is skipped, since a new `Lobby` variant needs no protocol bump. `Failed` is the one a
+    blocking) and a `ConnState` of connecting/open/`Closed{reason, requested, mismatch}`; a message
+    that does not decode is skipped, since a new `Lobby` variant needs no protocol bump, but a
+    welcome from another protocol decodes as `Msg::ForeignWelcome` and is never lost. `Failed` is the one a
     browser hands back when it will not dial the URL at all - closed from the first frame, so the
     refusal reaches the lobby along the path a hang-up takes. Three implementations: `native.rs`,
     blocking `tungstenite` + rustls/webpki-roots on one std thread that flushes the outgoing queue
@@ -2915,7 +2921,15 @@ docs/sound-system-prd.md is the design; this is what each part owns.
     on the first frame back; a socket still unopened after `ROOM_REACH_WITHIN` (15 s) closes as "the
     room could not be reached", and the native dial times its connect and both handshakes
     (`DIAL_TIMEOUT`, 10 s) so a path that dies mid-handshake ends the socket thread instead of
-    blocking it (a `Game` is none of its business - that is `apply.rs` and the caller's).
+    blocking it (a `Game` is none of its business - that is `apply.rs` and the caller's). **A room
+    on another protocol is left, never waited on**: a `ForeignWelcome`, a `Refusal::BadMessage`
+    naming another `protocol` (a room that checks the greeting, `server/src/conn.rs`), or a room
+    that answered the greeting (`RoomCreated`, `Roster`) and sent no readable welcome within
+    `WELCOME_WITHIN` (15 s; a refusal stops the wait) each say `Leave` where the room may have
+    seated the client, close the socket and end on one `Closed` whose `mismatch`
+    (`transport::Mismatch::RoomNewer`/`RoomOlder`) `text::closed` words as "update the app" -
+    "reload the page" on the web - or "try again in a while"; `round.rs` shows that line, never
+    the developer's reason, on the lobby and the status line.
     `connect(host, identity, Target)` is **the one place a client socket is opened** -
     `--host`/`--join`, the lobby's `HOST`/`JOIN`, a page's own invite link and the dev server's
     `click` all come through it, so a button, a flag and a link reach a room the same way; it is two

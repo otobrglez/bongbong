@@ -3,9 +3,16 @@
 //! (`Intent`, `Snapshot`, `Delta`, `Welcome`) are `postcard`; the lobby's
 //! body is JSON (docs/online-coop-prd.md §4.3). The transport delivers
 //! whole messages (a WebSocket frame each), so no length prefix is needed.
+//!
+//! A `Welcome` is read from its leading `protocol` first: one from a room
+//! on another `PROTOCOL_VERSION` is `Msg::ForeignWelcome` and the rest of
+//! it is never parsed, since its layout is not this build's to read - so a
+//! client learns why it cannot join instead of dropping a message it has no
+//! words for (`net::client`).
 
 use std::fmt;
 
+use crate::net::PROTOCOL_VERSION;
 use crate::net::delta::SnapshotDelta;
 use crate::net::wire::{IntentMsg, Lobby, Ping, Pong, Snapshot, Welcome};
 
@@ -34,6 +41,12 @@ pub enum Msg {
     Snapshot(Snapshot),
     Delta(SnapshotDelta),
     Welcome(Welcome),
+    /// A `Welcome` from a room on another protocol, read as far as this
+    /// build can: its leading `protocol`, the one field every version's
+    /// `Welcome` starts with. `decode` makes it; a room never means to
+    /// send one, and encoded it is that leading field alone, which reads
+    /// back as itself.
+    ForeignWelcome { protocol: u16 },
     Lobby(Lobby),
     Ping(Ping),
     Pong(Pong),
@@ -46,7 +59,7 @@ impl Msg {
             Msg::Intent(_) => kind::INTENT,
             Msg::Snapshot(_) => kind::SNAPSHOT,
             Msg::Delta(_) => kind::DELTA,
-            Msg::Welcome(_) => kind::WELCOME,
+            Msg::Welcome(_) | Msg::ForeignWelcome { .. } => kind::WELCOME,
             Msg::Lobby(_) => kind::LOBBY,
             Msg::Ping(_) => kind::PING,
             Msg::Pong(_) => kind::PONG,
@@ -100,6 +113,7 @@ pub fn encode(msg: &Msg) -> Vec<u8> {
         Msg::Snapshot(m) => postcard::to_stdvec(m),
         Msg::Delta(m) => postcard::to_stdvec(m),
         Msg::Welcome(m) => postcard::to_stdvec(m),
+        Msg::ForeignWelcome { protocol } => postcard::to_stdvec(protocol),
         Msg::Ping(m) => postcard::to_stdvec(m),
         Msg::Pong(m) => postcard::to_stdvec(m),
         Msg::Lobby(m) => {
@@ -111,14 +125,19 @@ pub fn encode(msg: &Msg) -> Vec<u8> {
     out
 }
 
-/// The message in `bytes`, or why it is not one.
+/// The message in `bytes`, or why it is not one. A `Welcome` whose leading
+/// `protocol` is not this build's is `Msg::ForeignWelcome`, the rest of it
+/// unread.
 pub fn decode(bytes: &[u8]) -> Result<Msg, DecodeError> {
     let (&tag, body) = bytes.split_first().ok_or(DecodeError::Empty)?;
     Ok(match tag {
         kind::INTENT => Msg::Intent(postcard::from_bytes(body)?),
         kind::SNAPSHOT => Msg::Snapshot(postcard::from_bytes(body)?),
         kind::DELTA => Msg::Delta(postcard::from_bytes(body)?),
-        kind::WELCOME => Msg::Welcome(postcard::from_bytes(body)?),
+        kind::WELCOME => match postcard::take_from_bytes::<u16>(body)? {
+            (protocol, _) if protocol != PROTOCOL_VERSION => Msg::ForeignWelcome { protocol },
+            _ => Msg::Welcome(postcard::from_bytes(body)?),
+        },
         kind::LOBBY => Msg::Lobby(serde_json::from_slice(body)?),
         kind::PING => Msg::Ping(postcard::from_bytes(body)?),
         kind::PONG => Msg::Pong(postcard::from_bytes(body)?),
@@ -130,7 +149,6 @@ pub fn decode(bytes: &[u8]) -> Result<Msg, DecodeError> {
 mod tests {
     use super::*;
     use crate::level::Mission;
-    use crate::net::PROTOCOL_VERSION;
     use crate::net::delta::delta;
     use crate::net::events::WireEvent;
     use crate::net::wire::{RoundState, Seat, TankState, WeaponKind, WireOverrides};
@@ -149,6 +167,26 @@ mod tests {
         }
     }
 
+    fn welcome() -> Welcome {
+        Welcome {
+            protocol: PROTOCOL_VERSION,
+            sim_version: "0.1.0".into(),
+            seat: 1,
+            roster: vec![Seat { seat: 0, nick: "host".into(), chassis: 4 }],
+            map_toml: "size = [34, 17]\n".into(),
+            seed: 0xB0B5,
+            tuning_json: "{}".into(),
+            overrides: WireOverrides { mission: Some(Mission::Hunt), ..Default::default() },
+            enemy_count: Some(6),
+            oil_cells: vec![40, 41],
+            oil_prints: vec![crate::net::wire::OilPrintState { cell: 41, dir: 3, fade: 8 }],
+            dead_cells: vec![77],
+            trampled_cells: vec![300],
+            burnt_grass: vec![299, 301],
+            snapshot: snapshot(),
+        }
+    }
+
     #[test]
     fn every_kind_round_trips() {
         let mut next = snapshot();
@@ -158,23 +196,7 @@ mod tests {
             Msg::Intent(IntentMsg { tick: 12, move_dir: 1, face: 0, fire: true, ..IntentMsg::default() }),
             Msg::Snapshot(snapshot()),
             Msg::Delta(delta(&snapshot(), &next)),
-            Msg::Welcome(Welcome {
-                protocol: PROTOCOL_VERSION,
-                sim_version: "0.1.0".into(),
-                seat: 1,
-                roster: vec![Seat { seat: 0, nick: "host".into(), chassis: 4 }],
-                map_toml: "size = [34, 17]\n".into(),
-                seed: 0xB0B5,
-                tuning_json: "{}".into(),
-                overrides: WireOverrides { mission: Some(Mission::Hunt), ..Default::default() },
-                enemy_count: Some(6),
-                oil_cells: vec![40, 41],
-                oil_prints: vec![crate::net::wire::OilPrintState { cell: 41, dir: 3, fade: 8 }],
-                dead_cells: vec![77],
-                trampled_cells: vec![300],
-                burnt_grass: vec![299, 301],
-                snapshot: snapshot(),
-            }),
+            Msg::Welcome(welcome()),
             Msg::Lobby(Lobby::Chat { text: "gg".into() }),
         ];
         for msg in msgs {
@@ -182,6 +204,32 @@ mod tests {
             assert_eq!(bytes[0], msg.kind());
             assert_eq!(decode(&bytes).unwrap(), msg);
         }
+    }
+
+    /// **A welcome from another protocol is read for its number alone.**
+    /// Its body is another build's layout - here a field this build does
+    /// not have, after the number - so nothing past the number is parsed,
+    /// whether or not the rest would happen to decode; this build's own
+    /// number with a body that does not parse is malformed, as before.
+    #[test]
+    fn a_welcome_from_another_protocol_is_read_for_its_number_alone() {
+        for other in [33u16, PROTOCOL_VERSION + 1, 300] {
+            let mut bytes = vec![kind::WELCOME];
+            bytes.extend(postcard::to_stdvec(&other).unwrap());
+            bytes.extend([0xff, 0x07, 0x42]);
+            assert_eq!(decode(&bytes).unwrap(), Msg::ForeignWelcome { protocol: other });
+            let alone = encode(&Msg::ForeignWelcome { protocol: other });
+            assert_eq!(decode(&alone).unwrap(), Msg::ForeignWelcome { protocol: other }, "encoded, it reads back as itself");
+        }
+        // This build's welcome with another protocol's number in front: still foreign.
+        let Msg::Welcome(_) = decode(&encode(&Msg::Welcome(welcome()))).unwrap() else { panic!("this build's welcome") };
+        let mut theirs = welcome();
+        theirs.protocol = 33;
+        assert_eq!(decode(&encode(&Msg::Welcome(theirs))).unwrap(), Msg::ForeignWelcome { protocol: 33 });
+        let mut cut = vec![kind::WELCOME];
+        cut.extend(postcard::to_stdvec(&PROTOCOL_VERSION).unwrap());
+        assert!(matches!(decode(&cut), Err(DecodeError::Postcard(_))), "this build's number and no body is malformed");
+        assert!(matches!(decode(&[kind::WELCOME]), Err(DecodeError::Postcard(_))), "no number at all is malformed");
     }
 
     #[test]

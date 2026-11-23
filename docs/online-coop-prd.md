@@ -612,8 +612,10 @@ Tailscale, `docker buildx` for the image, and `kustomize edit set image` plus
   timeout is the drain, not a guess. A third job prunes the registry to the
   newest three tags. **The trigger is the version tag
   `cloudflare-deploy.yml` already uses**, so the wasm client and the image
-  ship together: a client and a server that disagree about
-  `net::PROTOCOL_VERSION` refuse each other by name.
+  ship together, and the page waits for this rollout before it deploys (its
+  `Wait for the room server's rollout` step); a client and a server that
+  still disagree about `net::PROTOCOL_VERSION` refuse each other before a
+  seat is held (4.9, Versions).
 - TLS and DNS: `rooms.bongbong.io` **proxied through Cloudflare**, the way
   `boo.run` is - it resolves to Cloudflare addresses, and that is why its
   Ingress carries no `tls` block: the edge terminates TLS and the origin
@@ -675,10 +677,27 @@ dropped).
   every live round. Clients see the socket close and land on the end screen
   with "the room is gone"; the host makes a new room in one tap. Accepted for
   v1.
-- Versions: a **protocol** number gates joining (web: "reload the page"; app:
-  "update, or play this round in the browser", which the invite page already
-  offers); a **sim** version is stamped in `Welcome` and in the logs. Ship the
-  web build and the image from the same tag in the existing release workflow.
+- Versions: a **protocol** number gates joining, at both ends and before a
+  seat is held. The room refuses a `Create` or `Join` whose `ClientInfo`
+  names another protocol before it makes a room or gives a seat, with the one
+  refusal every build since `ClientInfo` reads and shows -
+  `Refusal::BadMessage`, its `detail` in plain words ("this page is out of
+  date - reload it to play online"; an app is told to update; a build ahead
+  of the server to try again in a while) and its `protocol` the server's, for
+  a build that knows the field. A client that meets a room on another
+  protocol leaves it: a `Welcome` it cannot read is read for its leading
+  number alone (`Msg::ForeignWelcome`), a refusal naming the server's number
+  is taken as one, and a room that answered the greeting but sent no
+  readable welcome within `WELCOME_WITHIN` (15 s) as one too; it says `Leave`
+  where it may have been seated, so no room plays on with a seat that cannot
+  see the round, closes the socket, and shows, in the language on screen,
+  "update the app" (web: "reload the page") when the room is ahead and "try
+  again in a while" when it is behind. A **sim** version is stamped in
+  `Welcome` and in the logs. The web build and the image ship from the same
+  tag, **the image first**: the web deploy builds while the server rolls out
+  and deploys once that rollout has succeeded, so a new page never meets the
+  old server; what still meets across versions is an open page or an app not
+  yet updated, which the refusal above covers.
 - Tuning is a build, not a hot reload: the native `--tuning` file re-read
   would alter every live round on a global table. Captured per room at
   creation, sent in `Welcome`, changed by deploying.

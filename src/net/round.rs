@@ -691,7 +691,7 @@ impl<T: Transport> OnlineRound<T> {
                     _ => t.fmt(keys::STATUS_WAITING, &args(0)),
                 }
             }
-            Phase::Closed(closed) => t.fmt(keys::STATUS_OFFLINE, &[("room", room.as_str().into()), ("reason", closed.reason.as_str().into())]),
+            Phase::Closed(closed) => t.fmt(keys::STATUS_OFFLINE, &[("room", room.as_str().into()), ("reason", crate::text::closed(closed).into())]),
         };
         if let Some(note) = &self.note {
             line.push_str(" - ");
@@ -745,7 +745,7 @@ impl<T: Transport> OnlineRound<T> {
                     self.start_sent = false;
                     self.note = Some(crate::text::refusal(&refusal));
                 }
-                ClientEvent::Closed(closed) => self.note = Some(closed.reason),
+                ClientEvent::Closed(closed) => self.note = Some(crate::text::closed(&closed)),
                 ClientEvent::Ended { outcome } => {
                     self.ended = Some(outcome);
                     // The room is back in its lobby, so the rematch is
@@ -3095,6 +3095,29 @@ mod tests {
         }
         assert!(matches!(round.phase(), Phase::Closed(_)), "{:?}", round.phase());
         assert!(round.status().contains("OFFLINE"), "{}", round.status());
+    }
+
+    /// **A room on another protocol is said as what to do**, in the
+    /// language on screen, never as the developer's reading: a room ahead
+    /// of this build asks for the update (the page's reload on the web), a
+    /// room behind it asks for patience. The round builds no replica of a
+    /// welcome it cannot read, and gives the seat back.
+    #[test]
+    fn a_room_on_another_protocol_is_said_as_what_to_do() {
+        use crate::text::{keys, text, update_key};
+        for (theirs, key) in [(PROTOCOL_VERSION + 1, update_key()), (PROTOCOL_VERSION - 1, keys::NOTE_ROOM_OLDER)] {
+            let (mut room, mut round) = room_and_round();
+            round.frame(&Intent::default(), 1.0 / 60.0);
+            room.say(Msg::Lobby(Lobby::RoomCreated { code: "AK7QX".into() }));
+            room.say(Msg::ForeignWelcome { protocol: theirs });
+            round.frame(&Intent::default(), 1.0 / 60.0);
+            assert!(matches!(round.phase(), Phase::Closed(c) if c.mismatch.is_some()), "{:?}", round.phase());
+            let line = text().get(key);
+            assert_eq!(round.note(), Some(line.as_str()), "protocol {theirs}");
+            assert!(round.status().contains(&line), "{}", round.status());
+            assert!(round.game().is_none(), "no replica of a round it cannot read");
+            assert!(room.heard().contains(&Msg::Lobby(Lobby::Leave)), "the seat is given back");
+        }
     }
 
     /// The clock reads a welcome at the instant it came off the socket, as

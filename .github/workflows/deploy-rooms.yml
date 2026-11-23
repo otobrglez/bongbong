@@ -6,12 +6,17 @@ name: Deploy Room Server
 # the private registry and the API server over Tailscale, push with
 # buildx, then `kustomize edit set image` + `kubectl apply -k`.
 #
-# **Same trigger as cloudflare-deploy.yml, on purpose.** A client and a
-# server that disagree about `net::PROTOCOL_VERSION` refuse each other by
-# name, so the wasm build and the image have to ship from one tag
-# (§4.9: "ship the web build and the image from the same tag"). Tagging
-# `vX.Y.Z` therefore ships three things together - the native archives
-# (release.yml), the web build (cloudflare-deploy.yml) and this.
+# **Same trigger as cloudflare-deploy.yml, on purpose, and first.** The
+# wasm build and the image ship from one tag (§4.9), and the page goes out
+# only once this workflow's rollout has succeeded: cloudflare-deploy.yml
+# builds while this runs and its deploy waits for this run, so a new page
+# never greets the old server. What does meet across versions - a page
+# left open from before, an app not yet updated - is refused by this
+# server before it is seated, with a line to reload the page or update the
+# app (server/src/conn.rs), and a client of a newer protocol that finds an
+# older server leaves it and says so. Tagging `vX.Y.Z` therefore ships
+# three things together - the native archives (release.yml), this, and
+# then the web build (cloudflare-deploy.yml).
 #
 # A deploy with rounds in progress is slow by design: `Recreate` waits for
 # the old pod, and the old pod drains for as long as its longest round,

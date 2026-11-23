@@ -275,6 +275,12 @@ note-tuning-refused = the room's tuning was refused: { $detail }
 note-welcome-refused = the room's round could not be built: { $detail }
 # `--host -m` on a map nobody has won as it stands.
 note-not-cleared = this map is not cleared: win it from PLAY in the builder, then save it
+# The room speaks another protocol and this build left it. Ahead of this
+# build: update the app (the web build says reload the page, which is its
+# update); behind it: the room server has not caught up yet.
+note-update-app = this game is older than the room server: update the app to play online
+note-reload-page = this page is older than the room server: reload the page to play online
+note-room-older = the room server is older than this game: try again in a while
 
 ## What the room server refused, and why (net::wire::Refusal). Shown
 ## under the lobby's title or on the status line. `{ $detail }` is the

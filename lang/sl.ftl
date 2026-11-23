@@ -188,6 +188,9 @@ status-offline = { $room } - BREZ POVEZAVE: { $reason }
 note-tuning-refused = nastavitve sobe niso bile sprejete: { $detail }
 note-welcome-refused = igre v sobi ni bilo mogoče zgraditi: { $detail }
 note-not-cleared = ta zemljevid še ni preigran: zmagaj ga z IGRAJ v graditelju, nato ga shrani
+note-update-app = ta igra je starejša od strežnika sob: za spletno igro posodobi aplikacijo
+note-reload-page = ta stran je starejša od strežnika sob: za spletno igro osveži stran
+note-room-older = strežnik sob je starejši od te igre: poskusi znova čez nekaj časa
 
 ## Zavrnitve strežnika
 

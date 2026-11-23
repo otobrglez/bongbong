@@ -106,14 +106,23 @@ pub mod transport;
 pub mod web;
 pub mod wire;
 
-/// The protocol's version, compared in `Welcome`: a client on another
-/// number leaves instead of misreading the stream. Bump it whenever bytes
-/// from the previous version would decode wrongly or not at all: a field
-/// added, removed, reordered or retyped in any postcard message, a variant
-/// added to or reordered in an enum on the wire (postcard encodes the
-/// variant index), a change to a `codec::kind` tag or to a quantisation
-/// scale. A new optional field in a `Lobby` message (JSON, `serde(default)`)
-/// needs no bump.
+/// The protocol's version, compared at both ends before a round is read.
+/// A room refuses a `Create` or `Join` whose `wire::ClientInfo` names
+/// another, before it makes a room or gives a seat, telling the player to
+/// update the app or reload the page (`server/src/conn.rs`); a client
+/// leaves a room whose `Welcome` names another - read from the welcome's
+/// leading field alone when the rest is not its layout
+/// (`codec::Msg::ForeignWelcome`) - giving back the seat and saying the
+/// same in its own words (`client::RoomClient`, `text::closed`).
+///
+/// Bump it whenever bytes from the previous version would decode wrongly
+/// or not at all: a field added, removed, reordered or retyped in any
+/// postcard message, a variant added to or reordered in an enum on the
+/// wire (postcard encodes the variant index), a change to a `codec::kind`
+/// tag or to a quantisation scale. A new optional field in a `Lobby`
+/// message (JSON, `serde(default)`) needs no bump. `Welcome::protocol`
+/// stays the welcome's first field, or a client on another number cannot
+/// read it.
 pub const PROTOCOL_VERSION: u16 = 40;
 
 /// This build's version, the `bongbong` crate's: what a client reports

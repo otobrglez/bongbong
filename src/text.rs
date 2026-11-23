@@ -186,6 +186,9 @@ keys! {
     NOTE_TUNING_REFUSED = "note-tuning-refused";
     NOTE_WELCOME_REFUSED = "note-welcome-refused";
     NOTE_NOT_CLEARED = "note-not-cleared";
+    NOTE_UPDATE_APP = "note-update-app";
+    NOTE_RELOAD_PAGE = "note-reload-page";
+    NOTE_ROOM_OLDER = "note-room-older";
     REFUSAL_ALREADY_IN_ROOM = "refusal-already-in-room";
     REFUSAL_NOT_IN_ROOM = "refusal-not-in-room";
     REFUSAL_NOT_YOURS = "refusal-not-yours";
@@ -392,7 +395,7 @@ pub fn refusal(refusal: &crate::net::wire::Refusal) -> String {
         R::AlreadyInRoom => t.get(keys::REFUSAL_ALREADY_IN_ROOM),
         R::NotInRoom => t.get(keys::REFUSAL_NOT_IN_ROOM),
         R::NotYours => t.get(keys::REFUSAL_NOT_YOURS),
-        R::BadMessage { detail } => t.fmt(keys::REFUSAL_BAD_MESSAGE, &[("detail", detail.as_str().into())]),
+        R::BadMessage { detail, .. } => t.fmt(keys::REFUSAL_BAD_MESSAGE, &[("detail", detail.as_str().into())]),
         R::BadMap { detail } => t.fmt(keys::REFUSAL_BAD_MAP, &[("detail", detail.as_str().into())]),
         R::BadCode { detail } => t.fmt(keys::REFUSAL_BAD_CODE, &[("detail", detail.as_str().into())]),
         R::NoSuchRoom { code } => t.fmt(keys::REFUSAL_NO_SUCH_ROOM, &[("code", code.as_str().into())]),
@@ -414,6 +417,25 @@ pub fn refusal(refusal: &crate::net::wire::Refusal) -> String {
         R::ServerRestarting => t.get(keys::REFUSAL_SERVER_RESTARTING),
         R::RoomClosed => t.get(keys::REFUSAL_ROOM_CLOSED),
     }
+}
+
+/// Why the connection to a room ended, in the language on screen: a room
+/// on another protocol as what to do about it - update the app, or reload
+/// the page on the web, when the room is ahead of this build; try again
+/// later when it is behind -, anything else as the socket's own reason.
+pub fn closed(closed: &crate::net::transport::Closed) -> String {
+    use crate::net::transport::Mismatch;
+    match closed.mismatch {
+        Some(Mismatch::RoomNewer) => text().get(update_key()),
+        Some(Mismatch::RoomOlder) => text().get(keys::NOTE_ROOM_OLDER),
+        None => closed.reason.clone(),
+    }
+}
+
+/// What a build behind its room is told to do: reload the page on the
+/// web, where the page is the build, and update the app everywhere else.
+pub fn update_key() -> Key {
+    if cfg!(target_os = "emscripten") { keys::NOTE_RELOAD_PAGE } else { keys::NOTE_UPDATE_APP }
 }
 
 /// One argument to a message with a placeholder: `("n", 3.into())`.
@@ -985,6 +1007,10 @@ mod text_tests {
             (keys::LOBBY_SUB_GUEST, UI_SMALL_TEXT, content, vec![]),
             // A room refused before it was dialled: the closed face's line.
             (keys::NOTE_NOT_CLEARED, UI_SMALL_TEXT, content, vec![]),
+            // A room on another protocol: the closed face's line.
+            (keys::NOTE_UPDATE_APP, UI_SMALL_TEXT, content, vec![]),
+            (keys::NOTE_RELOAD_PAGE, UI_SMALL_TEXT, content, vec![]),
+            (keys::NOTE_ROOM_OLDER, UI_SMALL_TEXT, content, vec![]),
             (keys::LOBBY_MAP, HUD_TEXT_SIZE, 152, vec![]),
             (keys::LOBBY_MISSION, HUD_TEXT_SIZE, 152, vec![]),
             // The touch hint, centred on each half of the smallest window
