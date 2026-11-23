@@ -2146,17 +2146,29 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   kept by `app.rs` beside the progress (`audio.json`, `bongbong.audio` on the web), set on the
   sound panel the HUD's sound button opens (`hud::sound_panel_rects`, `SoundLevel`; painted by
   `render::hud::draw_sound_panel`) and muted by M. `room` picks the reverb by the map's class.
+  A `Play` may be for one seat (`Play::for_seat`): `start` drops it where the window does not play
+  that seat. `observe_events` hands each step's ricochets and beams to the watchers
+  (`Watchers::ricocheted`, `watch::Beam`), and `observe` gives them the listeners
+  (`Watchers::set_ears`).
 - `audio/bind.rs` — `bind(&Event, &Game) -> Binding`: an exhaustive match with no wildcard, each
-  arm a `Play` (cue, place, strength, pitch, delay, source), `Watched(watcher)` or
-  `Silent(reason)`.
+  arm a `Play` (cue, place, strength, pitch, delay, source, take, pan, the seat it is for),
+  `Watched(watcher)` or `Silent(reason)`. `twin_shots` splits a twin gun's shot in two; `hit` and
+  `impact` sound a `Hit` by cause, target and who hears it (hit marker, friendly fire, shield,
+  the inside of an own hull); `on_water` adds the water layer under a blast.
 - `audio/source.rs` — one exhaustive match per enumeration a sound depends on: chassis to engine
-  family and pitch, weapons, materials to surface families, pickups, towers, skies, themes and
-  biomes, tread surfaces, bong kinds.
+  family and pitch, weapons, materials to surface families, pickups by weapon family, towers,
+  skies, themes and biomes, tread surfaces (`ground_layer` by sky and theme, `slip_cue`,
+  `skid_cue`), what a hull is pressed against (`scrape_cue`), hull mass (`hull_pitch`), laser and
+  plasma colours, bong kinds.
 - `audio/watch.rs` — the state watchers (`WATCHERS` lists them for the sound map): engines and
   tracks (speed from position over sim time, so a replica revs too), the minigun (new bullet ids),
   flames, charges, wind-up tells, fire clusters (4 x 4 cells a loop), sky and place beds,
   scrapes, aircraft, fly-bys, thunder (the round clock's lightning), tesla towers, fuses,
-  portals, the volcano.
+  portals, the volcano; the ground under each hull (surface, slips, skids, rubble, brush, ford
+  edges and drips, lava), the water beds, grenade and bong landings; a ricochet's whine; the
+  warnings for one seat (rail lane, drone lock, vent alarm), charge stages, missiles and their
+  motors, drone dives, grenade fuses, weapon states (spin-up, flame lit and shut, outage, spent,
+  reloads), beam near misses.
 - `audio/space.rs` — listeners at a height above the field, distance (audibility classes),
   pan, air absorption, occlusion (`Occlusion`: one byte a cell from `Material::sound_transmission`,
   rebuilt when a tile dies), propagation delay, doppler, and the room send that rises with
@@ -2181,7 +2193,12 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   (`tools/audio/soundmap/template.html`); `--check` is CI's guard.
 - Simulation side: a hull's slam is `Event::HullStruck` (`simulation/contact.rs`), sent, so a
   client hears it with the face's `Surface` (`source::slam_cue`); `OnlineRound::take_press_sounds`
-  hands the window its own presses.
+  hands the window its own presses, a dry press too (`Predictor::take_dry_presses`). `Hit` names
+  its shooter (`by`); `Ricochet` its shot, what it came off (`Game::what_was_struck`) and the
+  shot's id; `DryFired` (a seat's empty press) and `AirHit` (a round a drone or the heli flies on
+  through) are events. `Game::contacts_against` says what a hull is pressed against
+  (`simulation::Against`, from `physics::ContactStats::hardest`); `Game::drift_at` is the current
+  and gust under a point; `wear::muddy` is the one mud rule.
 
 ## HUD and chrome
 
@@ -2762,7 +2779,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   `Ended { outcome }` is how a round's end reaches a client, since the snapshots stop with the tick.
   `codec.rs`: `encode`/`decode` of a `Msg`, one `kind` byte then `postcard` (lobby: JSON).
   `delta.rs`: `delta`/`apply_delta` - per family the changed entries in full, short moves as `Moved
-  {key, dx, dy}`, removals as keys; scalars as `Option`; events whole. `PROTOCOL_VERSION` (bump on
+  {key, dx, dy}`, removals as keys; scalars as `Option`; events whole - `Hit` with its shooter,
+  `Ricochet` with its shot, what it came off and its id, `MissileLocked`, `DryFired` and `AirHit`
+  among them (protocol 40). `PROTOCOL_VERSION` (bump on
   any postcard layout, enum order, kind tag or quantisation change), `MAX_SEATS`. Measured sizes in
   the module docs. The two files that do touch a `Game` (docs/online-coop-prd.md §4.2, §4.5):
   **`encode.rs`** — `snapshot(game, acked)` fills every family from the round through

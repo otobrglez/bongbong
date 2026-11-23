@@ -149,7 +149,8 @@ meadow lies lighter and deepens into the biome's earth rather than the
 grass ramp's olive; on a gravel shelf the stones crush into dark tracks
 with pale stones pushed up beside them; on a bank's silt it is dark wet
 mud; on packed earth - a road's shoulder, a furrow, the road's own dirt -
-dry dust. Wet tracks out of a ford print the silt's mud on any of them, so
+dry dust (`wear::muddy` is the one rule for mud, which the tread sounds read
+too). Wet tracks out of a ford print the silt's mud on any of them, so
 a hull's carry off the bank shows as a brown trail into the meadow. It is
 the bake's choice alone: what is pressed, and every rule above, is the
 same with or without a biome. Burnt-in marks take

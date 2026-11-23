@@ -877,8 +877,41 @@ Where the build departs from the text:
 - **Made:** all 123 planned samples (150 cues), 2,076 credits for the 109 after the first 14.
   `static/audio` is 3.9 MB, all of it preloaded on the web; the core-preload and lazy-fetch split
   of section 4.8 is not built.
-- **Still to make:** the 156 needs not yet in the manifest, the bong's babble wired to its bubbles
-  (the sample exists), the announcer, and music.
+- **The gap pass (2026-11-23)** filled what a research pass over weapons, water and impacts found:
+  - **Twin guns:** each shell and plasma bolt of a twin gun is its own sound
+    (`bind::twin_shots`): neighbouring takes, panned to its own barrel by the hull's heading
+    (`audio_twin_spread`), the second a shade lower (`audio_twin_detune`).
+  - **Shots and hits:** a sound can be for one seat (`Play::for_seat`, `bind::Hears`), which the
+    director drops where the window does not play that seat: the missile lock warns only its
+    target, the shooter hears a lock chirp, a hit marker or a friendly-fire buzz. Ricochets sound
+    by shot and by what they came off (`hit.ricochet.<shot>.<what>`), with a whine that follows the
+    shot by its id (the `ricochet` watcher). Bullets have a sound per material, a shield thrums
+    when a hit lands on it, an own hull rings inside (`hit.hull_inside`), a bong dies, a hull
+    pressed against deep water slaps rather than scrapes (`Game::contacts_against`). A manifest
+    layer may carry a `pitch`, so one sample serves several cues.
+  - **Water and ground:** a hull's ground sound follows the sky and theme (mud through
+    `wear::muddy`, snow, desert dust) and the lava under it (a gloop and a sizzle, not water);
+    fords splash in and out and drip after; pivots, slips, coasts on ice and skids sound by surface;
+    rubble crunches and brush rustles; blasts on water add a geyser (`bind::on_water`), duds and
+    downed drones plop, the rod throws a column; grenades and the bong land in water; lakes lap and
+    streams babble from placed beds clustered 4 x 4 (`audio_water_beds` nearest the listeners);
+    a doused hull and a wreck in a ford or rain hiss; a hull drifting on a current is not driving
+    (`Game::drift_at`).
+  - **Weapon feedback:** the rail's line-of-fire alarm and a drone's lock tone for the targeted
+    seat, a kill sting (offline: a replica keeps no wreck tally), grenade fuse beeps, the rail's
+    ready, overcharge and vent alarm, the FPV dive, the rod's own uplink, reticle and abort, the
+    cannon by calibre tier, a missile volley tube by tube (`Fired` for missiles is the `missile`
+    watcher's, with a motor loop per missile), the minigun's spin-up, the flamethrower lit, shut
+    and run dry, an outage's static and the special back, a spent special and the cannon
+    re-armed, reloads, weapon pickups by family, plasma and missile fly-bys scaled by closeness,
+    rail and laser near misses.
+  - **The wire** (protocol 40): `Hit` carries its shooter (`by`), `Ricochet` its shot, what it
+    came off and the shot's id; `MissileLocked`, `DryFired` and `AirHit` are sent. A dry press
+    online clicks at the press (`PressSound::Dry`); the room's copy is skipped.
+- **Still to make:** the 156 needs not yet in the manifest, the announcer, and music. Online, the
+  kill sting and the missile pod's reload are silent (neither replicates); `Wreck`'s cause, `Ram`'s
+  speed, `BongBite`'s position, `RoundEnded`'s reason and `ObstacleDestroyed`'s cause are still
+  to send.
 
 ## 9. References
 
