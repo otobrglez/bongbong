@@ -795,7 +795,14 @@ pub fn draw_goodbye(d: &mut impl RaylibDraw, area: Rect, goodbye: &crate::hud::G
     let line_size = crate::hud::GOODBYE_LINE_SIZE;
     let w = width(&line, line_size);
     let tint = if goodbye.kind == crate::hud::GoodbyeKind::Unsaved { BUILD_COLOR } else { TEXT };
-    d.draw_text(&line, (area.x + area.w / 2.0).round() as i32 - w / 2, cy - crate::hud::GOODBYE_TITLE_SIZE + size + 20, line_size, tint);
+    let line_y = cy - crate::hud::GOODBYE_TITLE_SIZE + size + 20;
+    d.draw_text(&line, (area.x + area.w / 2.0).round() as i32 - w / 2, line_y, line_size, tint);
+    if let Some(signature) = goodbye.signature() {
+        let signature = t.get(signature);
+        let w = width(&signature, line_size);
+        let quiet = Color::new(TEXT.r, TEXT.g, TEXT.b, 150);
+        d.draw_text(&signature, (area.x + area.w / 2.0).round() as i32 - w / 2, line_y + line_size + 28, line_size, quiet);
+    }
 }
 
 /// The friendly-fire line's red: the palette's, the grenade band's.

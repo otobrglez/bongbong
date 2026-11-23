@@ -714,8 +714,8 @@ impl Hints {
     }
 }
 
-/// The goodbye a desktop window shows when it is closed: thanks, and what
-/// the game keeps - only what is true. The campaign is saved the frame a
+/// The goodbye a desktop window shows when it is closed: thanks, signed by
+/// the game's author, and what the game keeps - only what is true. The campaign is saved the frame a
 /// level is won, so a player with a level won hears it is saved; one with
 /// none is just thanked. A map in the builder with changes not yet saved
 /// would be lost, so there the goodbye asks instead: Esc goes back to the
@@ -785,6 +785,11 @@ impl Goodbye {
                 if self.left <= 0.0 { GoodbyeStep::Quit } else { GoodbyeStep::Stay }
             }
         }
+    }
+
+    /// The author's signature under the thanks; none under the question.
+    pub fn signature(&self) -> Option<crate::text::Key> {
+        (self.kind != GoodbyeKind::Unsaved).then_some(crate::text::keys::GOODBYE_SIGNATURE)
     }
 
     /// The title and the line under it.
@@ -2121,6 +2126,8 @@ mod hud_tests {
         assert_eq!(Goodbye::new(true, false).lines(), (keys::GOODBYE_TITLE, keys::GOODBYE_SAVED));
         assert_eq!(Goodbye::new(false, false).lines(), (keys::GOODBYE_TITLE, keys::GOODBYE_SEE_YOU));
         assert_eq!(Goodbye::new(true, true).kind, GoodbyeKind::Unsaved, "losing a map outranks the thanks");
+        assert_eq!(Goodbye::new(false, false).signature(), Some(keys::GOODBYE_SIGNATURE), "the thanks is signed");
+        assert_eq!(Goodbye::new(false, true).signature(), None, "the question is not");
 
         // It closes by itself once its time is up ...
         let mut g = Goodbye::new(true, false);

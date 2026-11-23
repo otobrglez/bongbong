@@ -96,6 +96,7 @@ keys! {
     GOODBYE_SEE_YOU = "goodbye-see-you";
     GOODBYE_UNSAVED_TITLE = "goodbye-unsaved-title";
     GOODBYE_UNSAVED_KEYS = "goodbye-unsaved-keys";
+    GOODBYE_SIGNATURE = "goodbye-signature";
     SOUND_TITLE = "sound-title";
     SOUND_ON = "sound-on";
     SOUND_OFF = "sound-off";
@@ -1074,6 +1075,7 @@ mod text_tests {
             (keys::GOODBYE_SAVED, GOODBYE_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::GOODBYE_SEE_YOU, GOODBYE_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::GOODBYE_UNSAVED_KEYS, GOODBYE_LINE_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::GOODBYE_SIGNATURE, GOODBYE_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_ALL_CLEAR, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("count", 14.into())]),
             (keys::RESULT_UNCOUNTED, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),

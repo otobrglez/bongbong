@@ -42,6 +42,7 @@ paused = PAVZA
 goodbye-title = HVALA ZA IGRO!
 goodbye-saved = Napredek v kampanji je shranjen.
 goodbye-see-you = Se vidimo na bojišču.
+goodbye-signature = - @otobrglez
 goodbye-unsaved-title = NI SHRANJENO
 goodbye-unsaved-keys = Esc: nazaj v igro   Enter: vseeno končaj
 

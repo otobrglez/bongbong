@@ -84,6 +84,8 @@ paused = PAUSED
 goodbye-title = THANKS FOR PLAYING!
 goodbye-saved = Your campaign progress is saved.
 goodbye-see-you = See you on the battlefield.
+# The game's author signs the thanks; a name, the same in every language.
+goodbye-signature = - @otobrglez
 # The builder's map has changes not yet saved: the goodbye asks first.
 goodbye-unsaved-title = UNSAVED MAP CHANGES
 goodbye-unsaved-keys = Esc: back to the game   Enter: quit anyway
