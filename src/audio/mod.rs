@@ -262,7 +262,13 @@ impl Audio {
     /// The shipped manifest, its files read from disk; a dev-tools build
     /// plays placeholders for the sounds not made yet.
     pub fn shipped() -> Audio {
-        Audio::new(Arc::new(Manifest::shipped()), cfg!(feature = "dev-tools"), bank::read_disk)
+        Audio::shipped_reading(bank::read_disk)
+    }
+
+    /// The shipped manifest, its files read by `read`: the window on Android
+    /// hands in raylib's file loader, the one that sees the APK's assets.
+    pub fn shipped_reading(read: bank::Reader) -> Audio {
+        Audio::new(Arc::new(Manifest::shipped()), cfg!(feature = "dev-tools"), read)
     }
 
     pub fn manifest(&self) -> &Manifest {

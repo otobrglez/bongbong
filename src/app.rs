@@ -1867,6 +1867,11 @@ pub fn run(args: Args) {
         awareness,
         voice,
         audio: {
+            // Android keeps the sound files in the APK, which only raylib's
+            // file loader reads; everywhere else they are on disk.
+            #[cfg(target_os = "android")]
+            let mut audio = crate::audio::Audio::shipped_reading(crate::render::audio::read_raylib);
+            #[cfg(not(target_os = "android"))]
             let mut audio = crate::audio::Audio::shipped();
             audio.warm();
             if let Some(settings) = load_audio_settings() {
