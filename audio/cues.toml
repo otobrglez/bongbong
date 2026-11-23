@@ -580,6 +580,152 @@ duration_seconds = 1.2
   peak_dbtp = -1.00
   seconds = 1.00
 
+# Weapon feedback and warnings: each calibre's cannon, what a weapon does
+# between its shots, reloads, near misses, and the warnings a seat hears.
+
+[sample.cannon_light_near]
+status = "planned"
+bus = "weapons"
+prompt = "light tank cannon firing, sharp snappy crack with a short tight body and a light breech clack, no music, no reverb"
+duration_seconds = 1.0
+
+[sample.cannon_heavy_near]
+status = "planned"
+bus = "weapons"
+prompt = "heavy tank cannon firing, deep concussive boom with a hard crack and a heavy breech clank, no music, no reverb"
+duration_seconds = 1.4
+
+[sample.cannon_super_near]
+status = "planned"
+bus = "weapons"
+prompt = "super heavy tank main gun firing, enormous thunderous blast with a chest-deep low boom and a massive breech slam, no music, no reverb"
+duration_seconds = 1.8
+
+[sample.shell_rack]
+status = "planned"
+bus = "weapons"
+prompt = "tank cannon breech racking a fresh shell, crisp mechanical clack and slide, no music"
+duration_seconds = 0.5
+
+[sample.special_empty]
+status = "planned"
+bus = "weapons"
+prompt = "weapon feed running empty, hollow metallic clunk of an empty mechanism, no music"
+duration_seconds = 0.5
+
+[sample.minigun_spin_up]
+status = "planned"
+bus = "weapons"
+prompt = "rotary minigun barrels spinning up from rest, quick rising electric motor whine and mechanical whir, no music"
+duration_seconds = 0.5
+
+[sample.missile_motor_loop]
+status = "planned"
+bus = "weapons"
+prompt = "small rocket motor burning in flight, roaring exhaust hiss with a rough rumble, steady, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.flame_valve]
+status = "planned"
+bus = "weapons"
+prompt = "flamethrower trigger released, sharp metallic valve snap and a short dying gasp of gas, no music"
+duration_seconds = 0.5
+
+[sample.flame_sputter]
+status = "planned"
+bus = "weapons"
+prompt = "flamethrower running out of fuel, sputtering coughs of flame and a fading gas hiss, no music"
+duration_seconds = 1.0
+
+[sample.offline_static_loop]
+status = "planned"
+bus = "weapons"
+prompt = "shorted electronics crackling, electrical static with sputtering snaps and a low buzz, steady, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.gauss_ready_ping]
+status = "planned"
+bus = "weapons"
+prompt = "railgun fully charged, crisp high electronic lock-on ping with a short ring, no music"
+duration_seconds = 0.5
+
+[sample.rod_uplink_loop]
+status = "planned"
+bus = "weapons"
+prompt = "satellite uplink carrier tone, soft electronic hum with faint digital chirps, steady, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.rod_cancel]
+status = "planned"
+bus = "weapons"
+prompt = "targeting uplink aborted, short descending two-note electronic blip, no music"
+duration_seconds = 0.5
+
+[sample.fpv_dive_loop]
+status = "planned"
+bus = "weapons"
+prompt = "small racing drone diving at full throttle, screaming high-pitched rotor whine, steady, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.lock_beep]
+status = "planned"
+bus = "warnings"
+prompt = "single urgent electronic target-lock beep, short high square-wave tone, no music"
+duration_seconds = 0.5
+
+[sample.drone_lock_loop]
+status = "planned"
+bus = "warnings"
+prompt = "thin high electronic warning tone, pure whine with a faint pulse, steady, no music"
+duration_seconds = 2.0
+loop = true
+
+[sample.kill_confirm]
+status = "planned"
+bus = "ui"
+prompt = "short rewarding confirmation sting for a destroyed enemy, bright metallic double chime over a soft low thump, no music"
+duration_seconds = 0.6
+
+[sample.pickup_energy]
+status = "planned"
+bus = "ui"
+prompt = "energy weapon armed, capacitor charging with a quick rising electric whine and a lock click, no music"
+duration_seconds = 0.7
+
+[sample.pickup_fuel]
+status = "planned"
+bus = "ui"
+prompt = "flamethrower fuel tank fitted, heavy liquid slosh and a valve clunk, no music"
+duration_seconds = 0.6
+
+[sample.pickup_field]
+status = "planned"
+bus = "ui"
+prompt = "exotic field weapon armed, deep resonant hum swelling with a heavy latch, no music"
+duration_seconds = 0.7
+
+[sample.flyby_plasma]
+status = "planned"
+bus = "impacts"
+prompt = "plasma bolt flying past close by, crackling electric whoosh with a buzzing hum, no music"
+duration_seconds = 0.6
+
+[sample.flyby_rail]
+status = "planned"
+bus = "impacts"
+prompt = "railgun slug tearing past close by, violent supersonic crack and electric sizzle, no music"
+duration_seconds = 0.6
+
+[sample.flyby_laser]
+status = "planned"
+bus = "impacts"
+prompt = "laser beam searing past close by, sharp electric zap and crackling hiss, no music"
+duration_seconds = 0.5
+
 [sample.gauss_charge_loop]
 status = "approved"
 bus = "weapons"
@@ -3001,9 +3147,10 @@ kind = "one_shot"
 bus = "weapons"
 priority = "high"
 class = "medium"
-polyphony = 4
+polyphony = 8
+steal = "oldest"
 layers = [{ sample = "missiles_fire" }]
-note = "Seeker missiles launched."
+note = "A seeker missile leaving its tube: a volley is heard tube by tube (the missile watcher)."
 
 [cue."weapon.missiles.dud"]
 kind = "one_shot"
@@ -3077,6 +3224,327 @@ class = "large"
 polyphony = 2
 layers = [{ sample = "gauss_fire" }]
 note = "A rail slug fired; overcharged is its own child cue."
+
+# Weapon feedback and warnings: each calibre's cannon, what a weapon does
+# between its shots, reloads, near misses, and the warnings a seat hears.
+
+[cue."weapon.shell.fire.light"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "cannon_light_near", until_px = 700 }, { sample = "cannon_far", from_px = 450 }]
+note = "A light chassis's main gun (scout, wraith), pitched by mass."
+
+[cue."weapon.shell.fire.heavy"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "cannon_heavy_near", until_px = 700 }, { sample = "cannon_far", from_px = 450 }]
+note = "A heavy chassis's main gun (breaker, longbow, ravager, obelisk), pitched by mass."
+
+[cue."weapon.shell.fire.super"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "large"
+polyphony = 6
+layers = [{ sample = "cannon_super_near", until_px = 800 }, { sample = "cannon_far", from_px = 550 }]
+note = "A super-heavy chassis's main gun (titan, leviathan), pitched by mass."
+
+[cue."weapon.shell.reload"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "shell_rack" }]
+note = "A seat's magazine back to a shot's cost, or its cannon re-arming after a special is spent: a shell racked."
+
+[cue."weapon.shell.reload.full"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "shell_rack", gain_db = 2.0 }]
+note = "A seat's magazine full again: the rack, lower and firmer."
+
+[cue."weapon.spent"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "special_empty" }]
+note = "A seat's special spent - its last charge, the minigun dry, the fuel out - before the cannon re-arms."
+
+[cue."weapon.offline"]
+kind = "loop"
+bus = "weapons"
+priority = "high"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "offline_static_loop" }]
+note = "A seat's special offline - its electrics out under an EMP, or its own EMP's cost - as static."
+
+[cue."weapon.online"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+layers = [{ sample = "pickup_boost", gain_db = -4.0 }]
+note = "A seat's special back online."
+
+[cue."weapon.minigun.spin_up"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "minigun_spin_up" }]
+note = "A minigun's barrels spinning up from rest, before the first round."
+
+[cue."weapon.missiles.motor"]
+kind = "modulated_loop"
+bus = "weapons"
+priority = "medium"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "missile_motor_loop" }]
+note = "A missile's rocket in flight, pitched by its speed: the loudest four roar."
+
+[cue."weapon.missiles.reload"]
+kind = "one_shot"
+bus = "weapons"
+priority = "low"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "shell_rack", gain_db = -8.0 }]
+note = "A seat's missile pod refilling a tube: a soft clunk each."
+
+[cue."weapon.missiles.reload.ready"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "tiny"
+polyphony = 1
+jitter = false
+layers = [{ sample = "ui_click", gain_db = -4.0 }]
+note = "A seat's missile pod full again: a ready tick."
+
+[cue."weapon.flamethrower.start"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "fire_ignite", gain_db = -2.0 }]
+note = "A flamethrower lighting as a hold starts: the whoomp of its fuel catching."
+
+[cue."weapon.flamethrower.stop"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "flame_valve" }]
+note = "A flamethrower let go: its valve snapping shut."
+
+[cue."weapon.flamethrower.stop.dry"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "flame_sputter" }]
+note = "A flamethrower run dry: it sputters out."
+
+[cue."weapon.grenades.beep"]
+kind = "one_shot"
+bus = "warnings"
+priority = "medium"
+class = "small"
+polyphony = 4
+layers = [{ sample = "lock_beep", gain_db = -10.0 }]
+note = "A grenade's fuse lamp flashing, a beep a flash, quicker as it nears going off."
+
+[cue."weapon.gauss_rail.ready"]
+kind = "one_shot"
+bus = "weapons"
+priority = "high"
+class = "small"
+polyphony = 2
+layers = [{ sample = "gauss_ready_ping" }]
+note = "A rail's charge reaching full."
+
+[cue."weapon.gauss_rail.charge.overcharged"]
+kind = "loop"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "tesla_charge_loop", gain_db = -2.0 }]
+note = "An overcharged rail crackling, unstable, over its charge's whine."
+
+[cue."weapon.gauss_rail.vent.alarm"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "lock_beep", gain_db = -4.0 }]
+note = "A seat's rail in its last second before it vents: fast beeps to let go."
+
+[cue."weapon.rod_from_god.uplink"]
+kind = "loop"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "rod_uplink_loop" }]
+note = "A rod's uplink open while its reticle is up."
+
+[cue."weapon.rod_from_god.reticle"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+jitter = false
+layers = [{ sample = "ui_click", gain_db = -8.0 }]
+note = "A seat's rod reticle stepping a cell."
+
+[cue."weapon.rod_from_god.cancel"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "rod_cancel" }]
+note = "A rod's reticle put down without a call: let go early or on its own cell, or lost to another weapon."
+
+[cue."weapon.rod_from_god.cancel.timeout"]
+kind = "one_shot"
+bus = "weapons"
+priority = "medium"
+class = "small"
+polyphony = 2
+layers = [{ sample = "rod_cancel" }, { sample = "emp_disabled", gain_db = -8.0 }]
+note = "A rod's reticle held past its time: the abort, with static."
+
+[cue."weapon.fpv_swarm.dive"]
+kind = "modulated_loop"
+bus = "weapons"
+priority = "high"
+class = "medium"
+polyphony = 4
+layers = [{ sample = "fpv_dive_loop" }]
+note = "A drone committed to its dive, its rotors rising to a scream."
+
+[cue."warning.lock.rail"]
+kind = "one_shot"
+bus = "warnings"
+priority = "warning"
+class = "small"
+polyphony = 2
+layers = [{ sample = "lock_beep" }]
+note = "A seat standing in a charging rail's lane: lock beeps, quicker as the charge fills."
+
+[cue."warning.lock.drone"]
+kind = "modulated_loop"
+bus = "warnings"
+priority = "warning"
+class = "small"
+polyphony = 2
+layers = [{ sample = "drone_lock_loop" }]
+note = "A drone's lock on a seat: a thin tone rising as it nears, cut when the lock breaks."
+
+[cue."ui.kill"]
+kind = "ui"
+bus = "ui"
+priority = "high"
+class = "huge"
+polyphony = 2
+jitter = false
+layers = [{ sample = "kill_confirm" }]
+note = "A seat wrecked an enemy."
+
+[cue."pickup.weapon.energy"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_energy" }]
+note = "An energy weapon picked up: the laser, plasma, the rail or the EMP."
+
+[cue."pickup.weapon.fuel"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_fuel" }]
+note = "The flamethrower picked up."
+
+[cue."pickup.weapon.field"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "pickup_field" }]
+note = "A field weapon picked up: the sonic hammer or the gravity well."
+
+[cue."pickup.weapon.drones"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "drone_launch", gain_db = -4.0 }]
+note = "The FPV swarm picked up: its rotors spinning up."
+
+[cue."pickup.weapon.uplink"]
+kind = "one_shot"
+bus = "ui"
+priority = "high"
+class = "medium"
+polyphony = 2
+layers = [{ sample = "air_radio" }]
+note = "The rod from god picked up: its uplink acknowledged."
+
+[cue."flyby.plasma"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "tiny"
+polyphony = 3
+layers = [{ sample = "flyby_plasma" }]
+note = "A plasma bolt passing close by a seat."
+
+[cue."flyby.rail"]
+kind = "one_shot"
+bus = "impacts"
+priority = "high"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "flyby_rail" }]
+note = "A rail slug passing close by a seat without going through it."
+
+[cue."flyby.laser"]
+kind = "one_shot"
+bus = "impacts"
+priority = "medium"
+class = "tiny"
+polyphony = 2
+layers = [{ sample = "flyby_laser" }]
+note = "A laser beam passing close by a seat without striking it."
 
 [cue."weapon.gauss_rail.charge"]
 kind = "modulated_loop"

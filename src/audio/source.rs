@@ -7,9 +7,11 @@
 
 use crate::biome::Biome;
 use crate::bong::BongKind;
+use crate::laser::LaserVariant;
 use crate::map::{Theme, Weather};
 use crate::obstacle::{Material, Surface as Face};
 use crate::pickup::PickupKind;
+use crate::plasma::PlasmaVariant;
 use crate::simulation::HitCause;
 use crate::tank::{ActiveWeapon, TankKind};
 use crate::tower::TowerKind;
@@ -84,7 +86,7 @@ pub fn weapon_sound(weapon: ActiveWeapon) -> FireSound {
         ActiveWeapon::Laser => FireSound::Elsewhere("LaserBeam"),
         ActiveWeapon::Plasma => FireSound::Cue("weapon.plasma.fire"),
         ActiveWeapon::Minigun => FireSound::Watched("minigun"),
-        ActiveWeapon::Missiles => FireSound::Cue("weapon.missiles.fire"),
+        ActiveWeapon::Missiles => FireSound::Watched("missile"),
         ActiveWeapon::Flamethrower => FireSound::Watched("flame"),
         ActiveWeapon::Grenades => FireSound::Cue("weapon.grenades.fire"),
         ActiveWeapon::SonicHammer => FireSound::Elsewhere("SonicBlast"),
@@ -190,7 +192,11 @@ pub fn hit_shot(cause: HitCause) -> &'static str {
     }
 }
 
-/// What picking up a crate sounds like.
+/// What picking up a crate sounds like. A weapon arms with its family's
+/// sound (`pickup.weapon.<family>.<weapon>`): the guns' load and lock
+/// (ballistic, which is the parent's), a capacitor's whine (energy), a
+/// fuel tank's slosh, a field weapon's hum, the swarm's rotors, the rod's
+/// uplink.
 pub fn pickup_cue(kind: PickupKind) -> &'static str {
     match kind {
         PickupKind::Health | PickupKind::BongHealth => "pickup.health",
@@ -198,18 +204,36 @@ pub fn pickup_cue(kind: PickupKind) -> &'static str {
         PickupKind::SpeedUp | PickupKind::Shield | PickupKind::HeatShield => "pickup.boost",
         PickupKind::TowerPack => "pickup.tower",
         PickupKind::AirHeli | PickupKind::AirJet => "pickup.air",
-        PickupKind::Laser
-        | PickupKind::Minigun
-        | PickupKind::Plasma
-        | PickupKind::Missiles
-        | PickupKind::Flamethrower
-        | PickupKind::Grenades
-        | PickupKind::SonicHammer
-        | PickupKind::Emp
-        | PickupKind::GaussRail
-        | PickupKind::FpvSwarm
-        | PickupKind::RodFromGod
-        | PickupKind::GravityWell => "pickup.weapon",
+        PickupKind::Minigun => "pickup.weapon.ballistic.minigun",
+        PickupKind::Missiles => "pickup.weapon.ballistic.missiles",
+        PickupKind::Grenades => "pickup.weapon.ballistic.grenades",
+        PickupKind::Laser => "pickup.weapon.energy.laser",
+        PickupKind::Plasma => "pickup.weapon.energy.plasma",
+        PickupKind::GaussRail => "pickup.weapon.energy.gauss_rail",
+        PickupKind::Emp => "pickup.weapon.energy.emp",
+        PickupKind::Flamethrower => "pickup.weapon.fuel.flamethrower",
+        PickupKind::SonicHammer => "pickup.weapon.field.sonic_hammer",
+        PickupKind::GravityWell => "pickup.weapon.field.gravity_well",
+        PickupKind::FpvSwarm => "pickup.weapon.drones.fpv_swarm",
+        PickupKind::RodFromGod => "pickup.weapon.uplink.rod_from_god",
+    }
+}
+
+/// A laser's shot by its beam's colour: the rarer, stronger blue a little
+/// hotter, higher.
+pub fn laser_pitch(variant: LaserVariant) -> f32 {
+    match variant {
+        LaserVariant::Red => 1.0,
+        LaserVariant::Blue => 1.08,
+    }
+}
+
+/// A plasma bolt's shot by its colour: the rarer, stronger purple a little
+/// heavier, lower.
+pub fn plasma_pitch(variant: PlasmaVariant) -> f32 {
+    match variant {
+        PlasmaVariant::Teal => 1.0,
+        PlasmaVariant::Purple => 0.9,
     }
 }
 

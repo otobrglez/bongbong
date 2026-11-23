@@ -310,6 +310,9 @@ impl Audio {
             if matches!(event, Event::RoundStarted { .. } | Event::ObstacleDestroyed { .. } | Event::ChunksBroken { collapsed: true, .. }) {
                 self.space.walls_changed();
             }
+            if let Some(beam) = watch::Beam::of(event, game.events()) {
+                self.watch.beam(beam);
+            }
             if self.room_copy_of_own_press(event) {
                 continue;
             }
@@ -327,15 +330,18 @@ impl Audio {
 
     /// Whether `event` is the room's late copy of a press this window
     /// already sounded (docs/sound-system-prd.md section 4.10): the own
-    /// seat's cannon, plasma, well anchor or charge end. The shows of the
-    /// weapons drawn on the press never reach the replica (`apply.rs`).
+    /// seat's cannon, plasma, well anchor or rail's charge end. The shows
+    /// of the weapons drawn on the press never reach the replica
+    /// (`apply.rs`). A rod's reticle going down has no press show, so the
+    /// room's `ChargeEnded` for it is the one that sounds.
     fn room_copy_of_own_press(&self, event: &Event) -> bool {
         let Some(own) = self.predicted else {
             return false;
         };
         match *event {
             Event::Fired { slot, weapon } => slot == own && matches!(weapon, "shell" | "plasma" | "minigun"),
-            Event::WellAnchored { slot, .. } | Event::ChargeEnded { slot, .. } => slot == own,
+            Event::WellAnchored { slot, .. } => slot == own,
+            Event::ChargeEnded { slot, weapon, .. } => slot == own && weapon != crate::tank::ActiveWeapon::RodFromGod.name(),
             _ => false,
         }
     }
