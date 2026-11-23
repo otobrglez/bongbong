@@ -47,6 +47,13 @@ const GRID_BOTTOM_GAP: f32 = 12.0;
 pub const SELECT_BACK_W: f32 = 140.0;
 pub const SELECT_BACK_H: f32 = 48.0;
 
+/// Whether the screen has an `EXIT` button beside `BACK`: where the game
+/// can quit - a desktop window, which says goodbye first (`hud::Goodbye`).
+/// The web and the phones have no quit, and keep `BACK` alone.
+pub const HAS_EXIT: bool = !crate::EMBEDDED;
+/// The gap between `BACK` and `EXIT`.
+const BUTTON_GAP: f32 = 12.0;
+
 /// A tile's number, and its title under it on at most two lines
 /// (`wrap`).
 pub const TILE_NUMBER_SIZE: i32 = 20;
@@ -80,10 +87,20 @@ pub fn content_rect(area: Rect) -> Rectangle {
     Rectangle::new(p.x + SELECT_MARGIN, p.y + SELECT_MARGIN, SELECT_W - 2.0 * SELECT_MARGIN, SELECT_H - 2.0 * SELECT_MARGIN)
 }
 
-/// The `BACK` button, centred along the content's bottom edge.
+/// The `BACK` button along the content's bottom edge: centred alone, or
+/// the left of the pair the two buttons make, centred, where there is an
+/// `EXIT` (`HAS_EXIT`).
 pub fn back_rect(area: Rect) -> Rectangle {
     let c = content_rect(area);
-    Rectangle::new((c.x + (c.width - SELECT_BACK_W) / 2.0).round(), c.y + c.height - SELECT_BACK_H, SELECT_BACK_W, SELECT_BACK_H)
+    let row = if HAS_EXIT { 2.0 * SELECT_BACK_W + BUTTON_GAP } else { SELECT_BACK_W };
+    Rectangle::new((c.x + (c.width - row) / 2.0).round(), c.y + c.height - SELECT_BACK_H, SELECT_BACK_W, SELECT_BACK_H)
+}
+
+/// The `EXIT` button, right of `BACK` and its size, where the game can
+/// quit (`HAS_EXIT`).
+pub fn exit_rect(area: Rect) -> Option<Rectangle> {
+    let back = back_rect(area);
+    HAS_EXIT.then(|| Rectangle::new(back.x + SELECT_BACK_W + BUTTON_GAP, back.y, SELECT_BACK_W, SELECT_BACK_H))
 }
 
 /// Level `i`'s tile (0-based): row-major, `SELECT_COLUMNS` to a row,
@@ -163,6 +180,8 @@ pub struct SelectInput {
 pub enum SelectAction {
     Stay,
     Close,
+    /// Quit the game: `EXIT`, through the goodbye.
+    Exit,
     /// Start level `i` (0-based) - one that is open, never a locked one.
     Start(usize),
 }
@@ -199,6 +218,8 @@ pub struct LevelSelectView {
     pub title: String,
     pub sub: String,
     pub back: String,
+    /// `EXIT`'s word, where there is the button (`HAS_EXIT`).
+    pub exit: Option<String>,
     pub tiles: Vec<TileView>,
 }
 
@@ -224,8 +245,9 @@ impl LevelSelect {
         self.focus
     }
 
-    /// One frame: a press on an open tile starts it, one on `BACK` or
-    /// outside the panel closes the screen, and one anywhere else in the
+    /// One frame: a press on an open tile starts it, one on `EXIT` quits,
+    /// one on `BACK` or outside the panel closes the screen, and one
+    /// anywhere else in the
     /// panel - a locked tile included - does nothing. The panel is
     /// centred in `area` (UI points); `count` levels, `reached` the
     /// furthest open (`Campaign::open_to`).
@@ -244,6 +266,9 @@ impl LevelSelect {
             if let Some(i) = under {
                 self.focus = i;
                 return SelectAction::Start(i);
+            }
+            if exit_rect(area).is_some_and(|r| r.contains(p)) {
+                return SelectAction::Exit;
             }
             if back_rect(area).contains(p) || !panel_rect(area).contains(p) {
                 return SelectAction::Close;
@@ -298,7 +323,13 @@ impl LevelSelect {
                 focus: i == self.focus,
             })
             .collect();
-        LevelSelectView { title: t.get(keys::LEVELS_TITLE), sub: t.get(keys::LEVELS_SUB), back: t.get(keys::LEVELS_BACK), tiles }
+        LevelSelectView {
+            title: t.get(keys::LEVELS_TITLE),
+            sub: t.get(keys::LEVELS_SUB),
+            back: t.get(keys::LEVELS_BACK),
+            exit: HAS_EXIT.then(|| t.get(keys::LEVELS_EXIT)),
+            tiles,
+        }
     }
 }
 
@@ -356,6 +387,14 @@ mod level_select_tests {
             let back = back_rect(area);
             assert!(inside(back), "{area:?}");
             assert!(back.width >= LOBBY_TOUCH_MIN && back.height >= LOBBY_TOUCH_MIN);
+            if let Some(exit) = exit_rect(area) {
+                assert!(inside(exit), "EXIT leaves the panel on {area:?}");
+                assert!(exit.x >= back.x + back.width, "EXIT overlaps BACK");
+                assert_eq!((exit.y, exit.width, exit.height), (back.y, back.width, back.height), "EXIT is BACK's twin");
+                // The pair stands centred under the grid.
+                let (left, right) = (back.x - content.x, content.x + content.width - (exit.x + exit.width));
+                assert!((left - right).abs() <= 1.0, "the pair is off centre: {left} against {right}");
+            }
             for i in 0..SELECT_TILES {
                 let r = tile_rect(area, i);
                 assert!(inside(r), "tile {i} leaves the panel on {area:?}");
@@ -393,6 +432,10 @@ mod level_select_tests {
         assert_eq!(s.update(&press(centre(tile_rect(area, 13))), area, 14, 3), SelectAction::Stay);
         assert_eq!(s.update(&press(centre(tile_rect(area, 0))), area, 14, 3), SelectAction::Start(0));
         assert_eq!(s.update(&press(centre(tile_rect(area, 3))), area, 14, 3), SelectAction::Start(3));
+        // EXIT quits, where there is one.
+        if let Some(exit) = exit_rect(area) {
+            assert_eq!(s.update(&press(centre(exit)), area, 14, 3), SelectAction::Exit);
+        }
         // The panel's own face is not a button either.
         let title = Vec2::new(content_rect(area).x + 4.0, content_rect(area).y + 4.0);
         assert_eq!(s.update(&press(title), area, 14, 3), SelectAction::Stay);

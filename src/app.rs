@@ -1923,7 +1923,9 @@ pub fn run(args: Args) {
         }
         let mut goodbye: Option<crate::hud::Goodbye> = None;
         loop {
-            let close = rl.window_should_close();
+            // The window's close button or Cmd+Q, or the level select's
+            // `EXIT` (`Session::take_quit`).
+            let close = rl.window_should_close() || app.session.take_quit();
             let Some(mut shown) = goodbye else {
                 if close {
                     let first = app.goodbye();

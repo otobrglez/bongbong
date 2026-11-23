@@ -156,6 +156,9 @@ pub struct Session {
     /// `set_campaign`. `None` - a test's session, a tool's - makes every
     /// map free play.
     pub campaign: Option<Campaign>,
+    /// The player asked to quit from inside the game - the level select's
+    /// `EXIT` - and the window has not heard yet (`take_quit`).
+    quit: bool,
     /// The level select (`level_select.rs`), from `press_levels` until a
     /// level starts or it is closed: play mode only, never together with
     /// a dialog, and the round behind it frozen the dialogs' way.
@@ -305,6 +308,7 @@ impl Session {
             nick: anonymous.nick,
             token: anonymous.device_token,
             campaign: None,
+            quit: false,
             level_select: None,
             question: None,
             originals_checked: std::collections::BTreeSet::new(),
@@ -571,12 +575,24 @@ impl Session {
     /// centred in the chrome's `area`): its hit tests and keys, and
     /// whatever they ask. Answers whether a level started - a new round,
     /// with its banner.
+    /// Whether the player asked to quit since the last call: the desktop
+    /// window's loop reads it beside the window's own close, and says
+    /// goodbye (`hud::Goodbye`).
+    pub fn take_quit(&mut self) -> bool {
+        std::mem::take(&mut self.quit)
+    }
+
     pub fn update_level_select(&mut self, input: &SelectInput, area: Rect) -> bool {
         let (Some(select), Some(campaign)) = (&mut self.level_select, &self.campaign) else { return false };
         match select.update(input, area, campaign.levels.len(), campaign.open_to()) {
             SelectAction::Stay => false,
             SelectAction::Close => {
                 self.level_select = None;
+                false
+            }
+            SelectAction::Exit => {
+                self.level_select = None;
+                self.quit = true;
                 false
             }
             SelectAction::Start(i) => match self.start_level(i) {
@@ -1473,6 +1489,9 @@ impl Session {
                 out.push((format!("level_{}", tile.number), tile_rect(ui.area, i)));
             }
             out.push(("back".to_string(), back_rect(ui.area)));
+            if let Some(exit) = crate::level_select::exit_rect(ui.area) {
+                out.push(("exit".to_string(), exit));
+            }
         } else if chrome.players_dialog {
             let r = players_dialog_rects(ui.area);
             out.extend([("one".to_string(), r.one), ("two".to_string(), r.two)]);
@@ -2980,7 +2999,17 @@ mod session_tests {
         assert!(s.level_select.is_some(), "a locked level is no button");
         assert!(!s.update_level_select(&press(centre(back_rect(field))), field));
         assert!(s.level_select.is_none() && s.playing());
+        assert!(!s.take_quit(), "BACK is no quit");
         assert_eq!((s.game.frame(), s.level()), (frame, Some(0)), "the same round, where it stood");
+
+        // EXIT, where the game can quit, closes the screen and asks the
+        // window to say goodbye - once.
+        if let Some(exit) = crate::level_select::exit_rect(field) {
+            assert!(s.press_levels());
+            assert!(!s.update_level_select(&press(centre(exit)), field));
+            assert!(s.level_select.is_none());
+            assert!(s.take_quit() && !s.take_quit());
+        }
 
         // Won: level 2 is reached, and the end screen opens the screen.
         finish(&mut s, true);
