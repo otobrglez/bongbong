@@ -26,8 +26,8 @@ map = "lotus-lagoon"
 title = "Lotus Lagoon"
 
 [[level]]
-map = "vulkan"
-title = "Vulkan"
+map = "serpent-river"
+title = "Serpent River"
 
 [[level]]
 map = "glasshouses"
@@ -46,6 +46,10 @@ map = "jungle-temple"
 title = "Jungle Temple"
 
 [[level]]
+map = "wildwood"
+title = "Wildwood"
+
+[[level]]
 map = "hedge-maze"
 title = "Hedge Maze"
 
@@ -58,16 +62,16 @@ map = "harbor-lights"
 title = "Harbor Lights"
 
 [[level]]
-map = "serpent-river"
-title = "Serpent River"
-
-[[level]]
 map = "no-mans-land"
 title = "No Man's Land"
 
 [[level]]
 map = "scrapyard"
 title = "Scrapyard"
+
+[[level]]
+map = "vulkan"
+title = "Vulkan"
 
 [[level]]
 map = "black-gold"
@@ -80,3 +84,7 @@ title = "Castle Moat"
 [[level]]
 map = "grand-campaign"
 title = "Grand Campaign"
+
+[[level]]
+map = "longwater"
+title = "Longwater"

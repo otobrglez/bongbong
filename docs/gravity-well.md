@@ -735,10 +735,13 @@ distance).
 
 ### 3.5 In the campaign
 
-BB-46 (docs/levels.md, "The weapons along the way"): Black Gold (level 13)
-has the well's crate at 1,13, out by the west edge north of the start: the
-well gathers the refinery's drums on their fuse lines and they go up
-together.
+BB-46 (docs/levels.md, "The weapons along the way"): the well's first crate
+is Wildwood's (level 7), at 31,57 by the start, inside its sight box and
+12.5 cells from the players' bong - past two of the well's reaches - with a
+second sealed in the ruined chapel's brick crypt (99,23): shoot your way
+in. Black Gold (level 14) has one at 1,13, out by the west edge north of
+the start: the well gathers the refinery's drums on their fuse lines and
+they go up together.
 
 ## 4. AI
 

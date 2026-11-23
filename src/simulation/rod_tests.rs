@@ -340,7 +340,8 @@ fn a_rod_on_vulkans_crater_sets_it_off() {
     game.init(w, h);
     let t = tuning();
     assert_eq!(game.volcanoes.len(), 1);
-    let crater = crate::map::cell_to_world(26, 15);
+    let cell = game.map.volcano_cells()[0];
+    let crater = crate::map::cell_to_world(cell.0, cell.1);
     let stage = |game: &Game| game.volcanoes[0].phase(game.time, &t).stage;
     // Wait until it is asleep, so the eruption is the rod's.
     while stage(&game) != crate::volcano::Stage::Asleep {
@@ -359,7 +360,7 @@ fn a_rod_on_vulkans_crater_sets_it_off() {
         step(&mut game, false);
     }
     assert!(game.time - from < t.volcano_erupt_seconds + 0.1, "an eruption's length");
-    assert!(!game.craters().holds((26, 15)));
+    assert!(!game.craters().holds(cell));
 }
 
 /// Every enemy keeps out of a call: one standing in the circle drives out

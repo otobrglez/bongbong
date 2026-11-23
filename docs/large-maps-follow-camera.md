@@ -863,8 +863,8 @@ shipped maps grew). The waves are paced by a director, stragglers are
 rolled in again through a nearer gate, and the flow fields are worked out
 only as far as they are read (all three below).
 
-**The first field map** is `longwater` (`maps/longwater.toml`, free play,
-laid out at 80 x 45 and 112 x 63 since the shipped maps grew by 40 % a
+**The first field map** is `longwater` (`maps/longwater.toml`, free play
+until it became the campaign's last level, 17, in BB-220; laid out at 80 x 45 and 112 x 63 since the shipped maps grew by 40 % a
 side; its header says how it plays): a fort on the south shore of a lake
 that crosses the whole map, a ford at each end and a causeway either side
 of the fort, six wave gates north of the water 14 to 19 s down the roads

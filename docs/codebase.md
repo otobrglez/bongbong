@@ -281,8 +281,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   docs/training-stage.md), the rest locked - the way back to a level already won (a replay moves
   nothing; only a win on the furthest level reached opens another). A fixed 704 x 336 panel in UI
   points centred in the chrome's area (the lobby's; `hud::UI_MIN_W` x `UI_MIN_H` is this panel and
-  its edges, so the UI frame shrinks the point on a window too small for it), sixteen tiles in two
-  rows of eight; **`tile_rect`/`back_rect` are the one geometry** the painter
+  its edges, so the UI frame shrinks the point on a window too small for it), twenty-one 89 x 58 pt
+  tiles in three rows of seven (`TILE_NUMBER_TOP`/`TILE_TITLE_TOP` place the text in one, held
+  inside it by a test); **`tile_rect`/`back_rect` are the one geometry** the painter
   (`render/level_select.rs`) and every hit test read, and `LevelSelectView`/`TileView` (`TileState`
   Won/Next/Locked, `current`, `focus`) the painter's plain data. `LevelSelect` holds only the
   keyboard's focus (the arrows walk the open tiles; the pointer takes it only by moving onto one);
@@ -344,17 +345,21 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   for the map's own `revision()` (FNV-1a of the canonical TOML, the stamp and the name left out;
   `cleared_par`), and `hostable()` is a shipped map as it ships or one carrying a valid stamp.
   `SHIPPED_MAPS` (default, default-desert, hunt-basic, waves-basic, portals, towers, `longwater` -
-  the 112 x 63 free-play field the follow camera is for, a lake across the map with a fort on its
-  south shore, waves through six gates north of the water -, `wildwood` - 224 x 126, twice
-  longwater a side, a Hunt across a forest to the enemy's moated keep, its weapons hidden in a maze,
-  a sealed crypt, a grove, forest hollows and an island only the portal ring reaches; written by
+  the 112 x 63 field the follow camera is for, a lake across the map with a fort on its
+  south shore, waves through six gates north of the water, the campaign's last level -, `wildwood`
+  - level 7, 224 x 126, twice
+  longwater a side, a Hunt across a forest to the enemy's moated keep (no rod and no rail), the
+  weapons first met there by the start and more hidden in a maze, a sealed crypt, a grove, forest
+  hollows and an island only the portal ring reaches; written by
   `tools/gen_wildwood.py`, which models the nav grid to seal every pocket the router could not
   reach -, `armory` - the 40 x 22 arena every
-  special weapon is tried on, the one shipped arena (docs/sonic-hammer.md) -, then the fifteen
-  hand-authored levels from `lotus-lagoon` (and `vulkan`, the volcano level) to `grand-campaign`,
+  special weapon is tried on, the one shipped arena (docs/sonic-hammer.md) -, then the other
+  fifteen levels from `lotus-lagoon` to `grand-campaign`, hand-authored but for `vulkan` (the volcano
+  level, 90 x 52 of rainforest written by `tools/gen_vulkan.py` the way wildwood is),
   each file's header saying how it plays, their crates meeting every weapon on the way
-  (docs/levels.md, "The weapons along the way"); every one a field map, 48 x 24 to 67 x 34, longwater and wildwood,
-  since they were scaled up by 40 % a side with their layouts - `tools/scale_map.py`: lines kept one
+  (docs/levels.md, "The weapons along the way"); every one a field map, 48 x 24 to 67 x 34 but
+  vulkan, longwater and wildwood, since they were scaled up by 40 % a side with their layouts -
+  `tools/scale_map.py`: lines kept one
   cell thick, single things single, two-wide fords two wide; then checked with the linter, since its
   reaches are in pixels) are embedded - all the web build can list, what the lobby's map stepper
   walks in that order and what the room server can open; a slug is drawn as-is in the stepper, so

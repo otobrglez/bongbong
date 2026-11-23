@@ -10,19 +10,22 @@
 # the lamps along the King's Road light the way - and show whoever stands in
 # them to the enemy. 224 x 126 cells, followed by the camera.
 #
-# West: the Hollow Lodge, the players' clearing - the bong in its fenced
-# garden, the lodge (shield, bong health), the store, two gun towers and a
-# tesla of your own, a pond. North of it the orchard farm (minigun in the
-# barn); in the north-west a hedge maze of firs, the gauss rail at its heart
-# and something in three of its dead ends, one of them a trap. The Tyre
+# Level 7 of the campaign. West: the Hollow Lodge, the players' clearing -
+# the bong in its fenced garden, the lodge (shield, bong health), the store,
+# two gun towers and a tesla of your own, a pond, and by the start the
+# weapons a campaign player meets first here: a gravity well, helicopter
+# and jet strikes, a tower pack. North of it the orchard farm (minigun in
+# the barn); in the north-west a hedge maze of firs, an EMP burst at its
+# heart and something in three of its dead ends, one of them a trap. The Tyre
 # Circuit, a race track walled with tyre stacks, speed on the track. The
 # ruined chapel on the north lane: missiles and laser by the altar, and a
-# crypt sealed in brick - shoot your way in for the gravity well.
+# crypt sealed in brick - shoot your way in for a second gravity well.
 #
 # Middle: the Great Mere, deep enough that no hull crosses it, a fishing pier
 # off its north shore with plasma at the end. On the island in the middle a
-# volcano sleeps and wakes, with the rod from god and the heat shield at its
-# foot - no ford reaches it. Four portals make a ring: one past the lodge,
+# volcano sleeps and wakes, with an FPV swarm and the heat shield at its
+# foot - no ford reaches it. No rod and no rail anywhere: on a Hunt either
+# ends the hunt in one press. Four portals make a ring: one past the lodge,
 # one on the island, one in a secret grove sealed in a fir wood north of the
 # mere (one hidden trail in, its mouth in bushes off the King's Road; the
 # FPV swarm and the tower pack inside), one in the Dead Wood. Each throws
@@ -2109,7 +2112,7 @@ cells."39,20" = { kind = "fir" }
 cells."40,20" = { kind = "fir" }
 cells."43,20" = { kind = "fir" }
 cells."49,20" = { kind = "spruce" }
-cells."56,20" = { kind = "pickup", pickup = "gauss_rail" }
+cells."56,20" = { kind = "pickup", pickup = "emp_burst" }
 cells."61,20" = { kind = "fir" }
 cells."64,20" = { kind = "spruce" }
 cells."67,20" = { kind = "fir" }
@@ -6024,7 +6027,10 @@ cells."6,57" = { kind = "bush" }
 cells."7,57" = { kind = "bush" }
 cells."8,57" = { kind = "tree" }
 cells."11,57" = { kind = "lamp" }
+cells."24,57" = { kind = "pickup", pickup = "tower_pack" }
 cells."26,57" = { kind = "lamp" }
+cells."29,57" = { kind = "pickup", pickup = "air_jet" }
+cells."31,57" = { kind = "pickup", pickup = "gravity_well" }
 cells."33,57" = { kind = "sandbag" }
 cells."44,57" = { kind = "road" }
 cells."45,57" = { kind = "road" }
@@ -6447,6 +6453,7 @@ cells."7,61" = { kind = "water" }
 cells."8,61" = { kind = "water" }
 cells."16,61" = { kind = "fence" }
 cells."24,61" = { kind = "fence" }
+cells."31,61" = { kind = "pickup", pickup = "air_heli" }
 cells."37,61" = { kind = "road" }
 cells."38,61" = { kind = "road" }
 cells."39,61" = { kind = "road" }
@@ -6690,7 +6697,7 @@ cells."102,63" = { kind = "water" }
 cells."103,63" = { kind = "water" }
 cells."104,63" = { kind = "water" }
 cells."105,63" = { kind = "water" }
-cells."108,63" = { kind = "pickup", pickup = "rod_from_god" }
+cells."108,63" = { kind = "pickup", pickup = "fpv_swarm" }
 cells."112,63" = { kind = "volcano" }
 cells."116,63" = { kind = "pickup", pickup = "heat_shield" }
 cells."119,63" = { kind = "water" }
