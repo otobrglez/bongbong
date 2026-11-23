@@ -84,6 +84,9 @@ pub mod interp;
 pub mod loopback;
 pub mod mailbox;
 pub mod now;
+// A client-owned hull against its room over a delayed link, end to end.
+#[cfg(test)]
+mod owned_tests;
 // Your own tank on the frame you pressed the key (stage 2,
 // docs/online-coop-prd.md §4.12). It owns a `Game` it only ever calls
 // `predict_seat` on, so it needs no socket and no renderer and its tests
@@ -123,7 +126,7 @@ pub mod wire;
 /// message (JSON, `serde(default)`) needs no bump. `Welcome::protocol`
 /// stays the welcome's first field, or a client on another number cannot
 /// read it.
-pub const PROTOCOL_VERSION: u16 = 41;
+pub const PROTOCOL_VERSION: u16 = 42;
 
 /// This build's version, the `bongbong` crate's: what a client reports
 /// about itself in `wire::ClientInfo` and the room server labels its

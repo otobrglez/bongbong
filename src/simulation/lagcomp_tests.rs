@@ -379,7 +379,7 @@ fn shoves(game: &Game) -> Vec<(usize, Vec2)> {
 /// still: the seat is owned for the coming update.
 fn own_seat(game: &mut Game) {
     let pose = game.seat_pose(0).expect("seat 0 has a pose");
-    let pose = SeatPose { velocity: Vec2::new(0.0, 0.0), ..pose };
+    let pose = SeatPose { velocity: Vec2::new(0.0, 0.0), ram: Vec2::new(0.0, 0.0), ..pose };
     game.accept_seat_pose(0, pose, 1).expect("the room takes the pose");
 }
 

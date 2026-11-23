@@ -15,6 +15,13 @@
 //! gate - answers with `Placed` too), and `stamp_presses` on the events
 //! it sends, so a seat's `Fired` names the intent its press came on.
 //!
+//! **One `Placed` answers a run of refusals.** The client snaps to it on
+//! arrival and drives on from there, and the poses it sent before it
+//! heard are refused on the way: the room holds to the `Placed` it sent
+//! for `PLACED_HOLD_TICKS` (`Game::place_answer`), takes a pose within the
+//! driving since of it, and sends no other meanwhile - so the run ends a
+//! round trip after it began, on the hull the client came back to.
+//!
 //! **When** a room ticks is shared too (`TickClock`, docs/online-coop-prd.md
 //! §4.16): tick n is due at a fixed point of wall time, whatever the ticks
 //! before it took. Every client sends one intent per tick of *its* wall
@@ -121,7 +128,9 @@ pub enum PoseOutcome {
     /// measures from.
     Applied(Position),
     /// The validator refused it (`Game::accept_seat_pose`'s reason); the
-    /// hull stayed, and the event tells the client where.
+    /// hull stayed, and the event tells the client where - none while the
+    /// `Placed` the client is coming back to is held
+    /// (`Game::place_answer`).
     Refused(&'static str, Option<WireEvent>),
     /// The packet carried no pose: the room drives the seat again.
     Released,
@@ -136,7 +145,7 @@ pub fn take_pose(game: &mut Game, seat: usize, pose: Option<SeatPose>, reach_tic
     match pose {
         Some(pose) => match game.accept_seat_pose(seat, pose, reach_ticks) {
             Ok(()) => PoseOutcome::Applied(pose.position),
-            Err(why) => PoseOutcome::Refused(why, game.seat_pose(seat).map(|at| placed(seat, at))),
+            Err(why) => PoseOutcome::Refused(why, game.place_answer(seat).map(|at| placed(seat, at))),
         },
         None => {
             game.release_seat(seat);
@@ -163,11 +172,16 @@ pub fn take_reticle(game: &mut Game, seat: usize, reticle: u16) {
 }
 
 /// After the tick: a `Placed` if the tick carried the hull further than
-/// `PLACED_PX` from where its pose put it.
-pub fn moved_since(game: &Game, seat: usize, applied: Position) -> Option<WireEvent> {
+/// `PLACED_PX` from where its pose put it, noted as the seat's last
+/// (`Game::note_placed`).
+pub fn moved_since(game: &mut Game, seat: usize, applied: Position) -> Option<WireEvent> {
     let at = game.seat_pose(seat)?;
     let (dx, dy) = (at.position.x - applied.x, at.position.y - applied.y);
-    ((dx * dx + dy * dy).sqrt() > PLACED_PX).then(|| placed(seat, at))
+    if (dx * dx + dy * dy).sqrt() <= PLACED_PX {
+        return None;
+    }
+    game.note_placed(seat, at.position);
+    Some(placed(seat, at))
 }
 
 /// Stamp every seat's `Fired` with the input tick its press came on
@@ -262,6 +276,7 @@ cells."8,8" = { kind = "start" }
                 position: Position::new(x, y),
                 rotation: Dir::Right.rotation(),
                 velocity: Position::new(vx, 0.0),
+                ram: Position::new(vx, 0.0),
             })
         };
         // Standing still, one packet a tick: every pose taken.
@@ -337,6 +352,7 @@ cells."8,8" = { kind = "start" }
                 position: Position::new(x_at(tick), start.position.y),
                 rotation: Dir::Right.rotation(),
                 velocity: Position::new(speed, 0.0),
+                ram: Position::new(speed, 0.0),
             })
         };
         // Driving right at top speed, a packet and a tick a tick.

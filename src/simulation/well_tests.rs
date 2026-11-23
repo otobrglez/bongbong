@@ -1014,7 +1014,7 @@ fn an_owned_hull_is_allowed_the_pull_and_no_more() {
     assert!(pull.side.length() <= grip, "and the seat's grip holds the side pull: {pull:?} against {grip}");
     let pose = |game: &mut Game, from: Position, by: Vec2| {
         game.place_tank(s, from, Some(270.0)).expect("placed");
-        game.accept_seat_pose(0, SeatPose { position: from + by, rotation: 270.0, velocity: Vec2::zero() }, n as u32)
+        game.accept_seat_pose(0, SeatPose { position: from + by, rotation: 270.0, velocity: Vec2::zero(), ram: Vec2::zero() }, n as u32)
     };
     // Toward the core, past its own reach and within the current's.
     let toward = Vec2::new(-(own + 6.0), 0.0);

@@ -77,6 +77,23 @@ pub(crate) enum Entry {
 }
 
 impl TerrainBox {
+    /// `entity`'s box as a snapshot of the world takes it, among the
+    /// seam-closing `cells` (`closes_seam`) round it.
+    fn of(entity: Entity, o: &Obstacle, cells: &HashSet<(i32, i32)>) -> TerrainBox {
+        let (gx, gy) = battlefield::pos_to_cell(o.position);
+        TerrainBox {
+            entity,
+            center: o.position,
+            half: battlefield::tile_half_extent(o.material, cells, gx, gy, o.hull_size() * 0.5),
+            material: o.material,
+            burning: o.burning,
+            // A cage (`Obstacle::cage`) stands as a tile with no
+            // chunks: every shot passes it.
+            chunks: if o.cage.is_some() { Some(0) } else { o.chunks.filter(|c| c.count() < crate::chunks::CHUNKS as u32).map(|c| c.standing()) },
+            cage: o.cage.is_some(),
+        }
+    }
+
     /// Where the segment `p0..p1`, `pad` wide on each side, enters this
     /// tile as `mode` meets it: `t` in `0..=1`, `None` where it passes.
     pub fn entry(&self, p0: Position, p1: Position, pad: f32, mode: Entry) -> Option<f32> {
@@ -276,38 +293,45 @@ fn bong_meets(p: Position, (centre, half): (Position, Position)) -> bool {
     (p.x - centre.x).abs() < half.x + bong.x && (p.y - centre.y).abs() < half.y + bong.y
 }
 
+/// Whether a standing tile closes the seam to a neighbour in `Terrain`.
+/// Trees are left out: they do not seam-close, here or in physics
+/// (`battlefield::tile_half_extent`), so they must not appear as a
+/// neighbour that closes somebody else's seam either; nor does a loose
+/// prop, which is wherever it was shoved.
+fn closes_seam(o: &Obstacle) -> bool {
+    !o.destroyed && !o.material.is_tree() && !o.material.is_loose()
+}
+
+/// Whether `p` lies inside a fixed tile as a hull meets it (`Entry::Solid`)
+/// as the world stands now: a tile still standing - not one that has died
+/// since the map was loaded - and fixed, since a loose prop is wherever a
+/// hull shoved it and only ever pushed aside. A tile's box is the one this
+/// tick's `Terrain` gives it, among the seam-closing tiles round it. What a
+/// client-owned hull's centre may not be inside (`Game::accept_seat_pose`).
+pub(crate) fn inside_fixed_tile(world: &hecs::World, p: Position) -> bool {
+    use crate::OBSTACLE_GRID_SIZE;
+    let within = |o: &Obstacle, cells: f32| {
+        let reach = cells * OBSTACLE_GRID_SIZE;
+        (o.position.x - p.x).abs() <= reach && (o.position.y - p.y).abs() <= reach
+    };
+    // A box reaches half a cell from its tile at most, so only the tiles
+    // within two cells can hold `p`, and only theirs and the ring round
+    // them can close one of their seams.
+    let mut query = world.query::<(Entity, &Obstacle)>();
+    let near: Vec<(Entity, &Obstacle)> = query.iter().filter(|(_, o)| !o.destroyed && within(o, 3.0)).collect();
+    let cells: HashSet<(i32, i32)> = near.iter().filter(|(_, o)| closes_seam(o)).map(|(_, o)| battlefield::pos_to_cell(o.position)).collect();
+    near.iter()
+        .filter(|(_, o)| !o.material.is_loose() && within(o, 2.0))
+        .any(|&(entity, o)| TerrainBox::of(entity, o, &cells).entry(p, p, 0.0, Entry::Solid).is_some())
+}
+
 impl Terrain {
     /// Snapshot the world's static terrain. Tiles already flagged
     /// `destroyed` (removed at the end of this frame) are left out.
     pub fn build(world: &hecs::World, width: f32, height: f32, grass: &[Position], water: &crate::ground::WaterLayout) -> Self {
-        // Trees are left out: they do not seam-close, here or in physics
-        // (`battlefield::tile_half_extent`), so they must not appear as a
-        // neighbour that closes somebody else's seam either.
-        let cells: HashSet<(i32, i32)> = world
-            .query::<&Obstacle>()
-            .iter()
-            .filter(|o| !o.destroyed && !o.material.is_tree() && !o.material.is_loose())
-            .map(|o| battlefield::pos_to_cell(o.position))
-            .collect();
-        let mut obstacles: Vec<TerrainBox> = world
-            .query::<(Entity, &Obstacle)>()
-            .iter()
-            .filter(|(_, o)| !o.destroyed)
-            .map(|(entity, o)| {
-                let (gx, gy) = battlefield::pos_to_cell(o.position);
-                TerrainBox {
-                    entity,
-                    center: o.position,
-                    half: battlefield::tile_half_extent(o.material, &cells, gx, gy, o.hull_size() * 0.5),
-                    material: o.material,
-                    burning: o.burning,
-                    // A cage (`Obstacle::cage`) stands as a tile with no
-                    // chunks: every shot passes it.
-                    chunks: if o.cage.is_some() { Some(0) } else { o.chunks.filter(|c| c.count() < crate::chunks::CHUNKS as u32).map(|c| c.standing()) },
-                    cage: o.cage.is_some(),
-                }
-            })
-            .collect();
+        let cells: HashSet<(i32, i32)> = world.query::<&Obstacle>().iter().filter(|o| closes_seam(o)).map(|o| battlefield::pos_to_cell(o.position)).collect();
+        let mut obstacles: Vec<TerrainBox> =
+            world.query::<(Entity, &Obstacle)>().iter().filter(|(_, o)| !o.destroyed).map(|(entity, o)| TerrainBox::of(entity, o, &cells)).collect();
         // Cell order, and the bongs in theirs: two boxes a shot enters at
         // the same instant are told apart by where they stand.
         obstacles.sort_by_key(|b| super::cell_order(b.center));

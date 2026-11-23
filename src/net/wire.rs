@@ -387,9 +387,16 @@ pub struct IntentMsg {
     pub y: i16,
     /// Facing, `dir_index`.
     pub dir: u8,
-    /// The body's velocity (`quantise_velocity`).
+    /// The body's velocity after the tick's step (`quantise_velocity`,
+    /// `SeatPose::velocity`).
     pub vx: i8,
     pub vy: i8,
+    /// The body's velocity going into the tick's step
+    /// (`quantise_velocity`, `SeatPose::ram`): what the room steps its
+    /// copy over the tick at, so the hull meets the room's faces, props
+    /// and hulls as fast as it met the client's.
+    pub rvx: i8,
+    pub rvy: i8,
     /// The server tick this client was drawing the world at when it made
     /// this input - the interpolation bracket's near end - and how far
     /// past it, in 256ths of a tick. What the room rewinds the enemies to
@@ -420,6 +427,8 @@ impl IntentMsg {
             dir: 0,
             vx: 0,
             vy: 0,
+            rvx: 0,
+            rvy: 0,
             view_tick: 0,
             view_frac: 0,
             reticle: 0,
@@ -450,6 +459,8 @@ impl IntentMsg {
         self.dir = dir_index(Dir::from_rotation(pose.rotation).unwrap_or(Dir::Up));
         self.vx = quantise_velocity(pose.velocity.x);
         self.vy = quantise_velocity(pose.velocity.y);
+        self.rvx = quantise_velocity(pose.ram.x);
+        self.rvy = quantise_velocity(pose.ram.y);
         self
     }
 
@@ -459,6 +470,7 @@ impl IntentMsg {
             position: crate::math::Vec2::new(dequantise_pos(self.x), dequantise_pos(self.y)),
             rotation: dir_from_index(self.dir).unwrap_or(Dir::Up).rotation(),
             velocity: crate::math::Vec2::new(dequantise_velocity(self.vx), dequantise_velocity(self.vy)),
+            ram: crate::math::Vec2::new(dequantise_velocity(self.rvx), dequantise_velocity(self.rvy)),
         })
     }
 

@@ -101,10 +101,11 @@
 //! the last intent, for at most `INTENT_COAST`; a seat with nobody
 //! connected reads as no input (`clear`). For a server-driven seat the
 //! repeat is exact. For an owned seat the pose is dead-reckoned along its
-//! reported velocity by the ticks since it was taken, for at most
-//! `DEAD_RECKON_TICKS`, then held still with no velocity - so the other
-//! players see a late packet as a hull that keeps going rather than one
-//! that freezes a tick and then jumps.
+//! reported velocity by the ticks since it was taken, its ram velocity
+//! (`SeatPose::ram`) kept with it, for at most `DEAD_RECKON_TICKS`, then
+//! held still with neither - so the other players see a late packet as a
+//! hull that keeps going rather than one that freezes a tick and then
+//! jumps, and a hull pushing into a sandbag goes on pushing.
 //!
 //! **A starved owned tick repeats the client's own last trigger** - not
 //! the merge the last read delivered, and not a trigger cleared for want
@@ -487,6 +488,8 @@ impl Inner {
             y,
             vx: if holding { 0 } else { last.vx },
             vy: if holding { 0 } else { last.vy },
+            rvx: if holding { 0 } else { last.rvx },
+            rvy: if holding { 0 } else { last.rvy },
             fire,
             ..last
         }
@@ -1004,25 +1007,29 @@ mod tests {
     }
 
     /// **A late packet keeps the hull going.** A starved tick carries an
-    /// owned pose along its velocity for `DEAD_RECKON_TICKS`, then holds
-    /// it still with no velocity; the ack does not move.
+    /// owned pose along its velocity for `DEAD_RECKON_TICKS`, its ram
+    /// velocity kept with it - a hull pushing into a prop goes on pushing -
+    /// then holds it still with neither; the ack does not move.
     #[test]
     fn a_starved_owned_tick_dead_reckons_then_holds() {
         let mailbox = Mailbox::new();
         let now = Instant::now();
-        // 60 px/s is exactly one pixel a tick.
-        mailbox.post(owned(7, 100.0, 60.0, false), now);
+        // 60 px/s is exactly one pixel a tick; it went into its last step
+        // at 120 px/s, something slowing it.
+        let ramming = IntentMsg { rvx: quantise_velocity(120.0), ..owned(7, 100.0, 60.0, false) };
+        mailbox.post(ramming, now);
         assert_eq!(dequantise_pos(mailbox.read(now).unwrap().x), 100.0);
         for n in 1..=DEAD_RECKON_TICKS {
             let read = mailbox.read(now).unwrap();
             assert_eq!(dequantise_pos(read.x), 100.0 + n as f32, "starved tick {n} reckons {n} px on");
             assert_eq!(dequantise_velocity(read.vx), 60.0, "and keeps going");
+            assert_eq!(dequantise_velocity(read.rvx), 120.0, "and keeps its ram");
             assert_eq!(dequantise_pos(read.y), 100.0);
         }
         for _ in 0..3 {
             let read = mailbox.read(now).unwrap();
             assert_eq!(dequantise_pos(read.x), 100.0 + DEAD_RECKON_TICKS as f32, "past the cap it holds");
-            assert_eq!((read.vx, read.vy), (0, 0), "and holds still");
+            assert_eq!((read.vx, read.vy, read.rvx, read.rvy), (0, 0, 0, 0), "and holds still");
         }
         assert_eq!(mailbox.acked_tick(), 7, "a reckoned tick acks nothing");
         assert_eq!(mailbox.starvations(), DEAD_RECKON_TICKS as u64 + 3);

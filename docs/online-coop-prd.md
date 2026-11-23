@@ -973,33 +973,65 @@ the drawn hulls (`Game::predict_seat`), and a snapshot never moves it -
 `Predictor::reconcile` in owned mode writes the room's world around the
 hull and puts the hull back where it was, replaying nothing. Every tick
 the packet carries the pose that tick produced (`IntentMsg::with_pose`:
-`owned`, `x, y` in quarter pixels, `dir`, `vx, vy`), and the room puts
-the seat there before the tick runs (`Game::accept_seat_pose`): the body
-is placed at the pose with the reported velocity, so `combat::ram` reads
-impact speed off it as before and the solver's contact response pushes
-the dynamic enemies out of its way, and `drive_player` leaves the seat
-alone for that tick (`Game::seat_owned`). A packet with no pose releases
-the seat to the room's own driving. **Validation, not simulation**: the
+`owned`, `x, y` in quarter pixels, `dir`, `vx, vy`, and `rvx, rvy`, the
+velocity the hull went into the tick's step at, `SeatPose::ram`), and the
+room puts the seat there before the tick runs (`Game::accept_seat_pose`):
+the body is placed one tick back along `ram`, moving at it, so the room's
+solver step carries it over the tick again against the room's own world
+and lands it on the pose - or against what stopped it there. The room's
+copy therefore meets a face, a prop or a hull at the speed the client's
+met it: the hard faces' throw, a pane's crack and the slam's
+`HullStruck` (`respond_to_contacts`), a sandbag, fence, tree, lamp post or
+range board giving way under a ram (`ram_props`), a loose drum shoved and
+`combat::ram` against a tank all happen in the room as in a local round,
+and the solver's contact response pushes the dynamic enemies out of its
+way; `drive_player` leaves the seat alone for that tick
+(`Game::seat_owned`). The post-step velocity is what the mailbox carries a
+starved tick's guess along (`rvx, rvy` with it). A packet with no pose
+releases the seat to the room's own driving. **Validation, not
+simulation**: the
 step from where the room has the hull is bounded by the chassis's top
 speed over the ticks the mailbox read vouches for
 (`Mailbox::pose_reach_ticks`: the driving since the last pose, held to the
 room's own ticks since it, never fewer than `POSE_REACH_TICKS`) plus
 `POSE_REACH_SLACK_PX`, and by a turn fit more (`tank_turn_fit_px` each
 way, docs/physics-engine-design.md "The turn") on the tick the pose turns
-the hull across its tracks; the pose must lie inside the field, off a solid
-tile and out of deep water; a wreck and a seat still rolling in through a
-gate own nothing. **The one correction path is `Placed`**: a refused pose
-holds the hull where it was and answers with `Placed { seat, x, y, dir }`,
-and so does a tick that moved an owned hull further than a contact could
-(`PLACED_PX`) - a portal, a gate, the round's end; the client snaps to it
-the way a teleport snaps (`Predictor::place_own`, also on this seat's
-`Teleported` and `TankEntered`). **Shoves are carried**: the next tick's
+the hull across its tracks; the pose must lie inside the field, out of
+every fixed tile standing now (`hits::inside_fixed_tile`, `Entry::Solid`
+against the live tiles - a wall that has died, a tree rammed down or the
+cell a loose drum was shoved off is open ground, as it is to the client's
+sandbox) and out of deep water; a wreck and a seat still rolling in
+through a gate own nothing. **The one correction path is `Placed`**: a
+refused pose holds the hull where it was and answers with `Placed { seat,
+x, y, dir }`, and so does a tick that moved an owned hull further than a
+contact could (`PLACED_PX`) - a portal, a gate, the round's end; the
+client snaps to it the way a teleport snaps (`Predictor::place_own`, also
+on this seat's `Teleported` and `TankEntered`). **One `Placed` answers a
+run of refusals**: the poses the client sent before it heard of the
+`Placed` are refused on their way, so the room holds to the one it sent
+for `PLACED_HOLD_TICKS` (two seconds; `Game::seat_placed`), answers the
+refusals meanwhile with nothing (`Game::place_answer`) and takes a pose
+within the driving since of where that `Placed` put the hull, however far
+its own copy went on meanwhile - the run ends a round trip after it began.
+A run that chased the client with a `Placed` a tick never ended while the
+hull moved on a link slower than the reach's four ticks. **Shoves are
+carried**: the next tick's
 pose would overwrite any push the room put on an owned hull, so the room
 sends the velocity change it applied - a hit's knockback, a blast, a ram,
 a missile launch's recoil - as `Shoved { seat, vx, vy }`, and the client
 adds it to its own body the moment the snapshot arrives
 (`Predictor::shove`), so the poses that follow carry it; a shell's, bolt's
-or bullet's recoil is the client's own at the launch and never echoed. The
+or bullet's recoil is the client's own at the launch and never echoed, and
+so is a hard face's throw: the sandbox's step throws the hull off the face
+it hit exactly as the room's `respond_to_contacts` does
+(`contact::throw_off_faces`), so the bounce is on the tick of the hit on
+any link, and the room's own throw only allows the validator the speed.
+A prop that gives way under a ram is the room's to break: the own hull
+stands against it until the room's collapse comes back, a round trip
+later than the local hull moves on (measured at 100 and 200 ms: through a
+sandbag row, a fence or a pine 3 to 12 ticks - 50 to 200 ms - after the
+local hull). Predicting the collapse would drive the hull through a prop
+still drawn standing, and take it back when the room disagreed. The
 client's sandbox takes the room's world, its `Fired` and its shoves
 whether or not the prediction is drawn (`online_predict_own_tank` off only
 stops the drawing), since every pose comes from it. The water's current
@@ -1021,7 +1053,7 @@ in: `reconcile`'s replay, the pose offset and its nudge and snap, the lead
 controller and `Snapshot::mailbox`, the provisional retirement dance,
 `Snapshot::acked` (the mailbox stays, as the ordered buffer it is, but a
 starvation now means only a hull that held still for a tick on the
-server, which nobody sees). What it added: seven bytes on the intent, the
+server, which nobody sees). What it added: nine bytes on the intent, the
 validator, `Placed`. The `online_client_hull` knob (Restart) keeps both
 models in the build until a real-link session has compared them; the
 room needs no knob, since it honours whatever each packet says.

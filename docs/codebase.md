@@ -511,7 +511,9 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   change the room put on a **client-owned** hull - a hit's knockback, a blast, a missile burst, a
   ram - for the owner to apply to the body it drives, since the next pose would otherwise erase it
   (`Frame::shoves` keeps an entry only for a seat owned this update, so a local round logs none);
-  recoil of the shots the client launches itself is not echoed. Projectiles integrate inside the
+  recoil of the shots the client launches itself, and a hard face's throw (`contact::throw_off_faces`
+  throws the client's hull in its sandbox step), are not echoed - only allowed the validator
+  (`Shoves::allow_knock`). Projectiles integrate inside the
   fixed-step loop and keep flying, damage-free, on the end screen. **The end screen** restarts the
   round after `restart_delay` unless `hold_end_screen` is set (a level's, docs/levels.md): then
   `restart_timer` counts down to zero and holds there, and the caller starts the next round -
@@ -523,13 +525,21 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   stage 3's validator (docs/online-coop-prd.md §4.14): a client that owns its hull reports where it
   is every tick, and if the step is within the chassis's top speed over `reach_ticks` - what the
   mailbox read vouches for (`Mailbox::pose_reach_ticks`), never fewer than `POSE_REACH_TICKS` - plus
-  `POSE_REACH_SLACK_PX`, inside the field, off a solid tile and out of deep water, the room places
-  the seat's body **one tick back along the reported velocity** (so the coming update's solver step
-  lands it on the pose rather than a tick past it) and records the update it owns (`seat_owned`
+  `POSE_REACH_SLACK_PX` - or, while the last `Placed` it sent is held (`seat_placed`,
+  `PLACED_HOLD_TICKS`), within the driving since of where that put the hull -, inside the field, out
+  of every fixed tile standing now (`hits::inside_fixed_tile`: `Entry::Solid` against the live,
+  non-loose tiles round the pose, so a dead wall's or a shoved drum's cell is open ground) and out of
+  deep water, the room places the seat's body **one tick back along `SeatPose::ram`** - the speed the
+  client's hull went into its step at - moving at it, so the coming update's solver step carries it
+  over the tick again against the room's own faces, props and hulls and lands it on the pose (or
+  against what stopped it there), `respond_to_contacts`, `ram_props` and `combat::ram` meeting it at
+  the speed a local round's would; and it records the update it owns (`seat_owned`
   holds that frame number - ownership lasts one update and lapses by itself, so a client that drops
   or stops sending poses is the room's to drive on the next tick); `drive_player` leaves an owned
   seat alone (the stick still fires - from the placed pose); a wreck or a seat in a gate lane owns
-  nothing; `seat_pose` reads it. `Event::Placed` is the mirror of the room's answer.
+  nothing; `seat_pose` reads it. `Event::Placed` is the mirror of the room's answer: `place_answer`
+  gives a refusal's, `None` while the last is held (one `Placed` answers a run of refusals, and the
+  client is taken back from it), and `note_placed` records every one sent.
   **`net::authority`** is the one rule every room applies it by - `take_pose` before the tick
   (applied / refused with a `Placed` / released), `moved_since` after it (`Placed` past `PLACED_PX`) -
   so the room server and the rig cannot drift. **`Game::tick_presentation(dt)`** is a frame's
@@ -709,9 +719,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     sweep, a gauss slug (`pierce_rewound`, `rail_tiles`), each ray of a flame
     (`first_shot_along`) and a shot a client draws ahead of the room - a whole tile by its box,
     a chunked one by its standing chunks, a cage not at all; `Entry::Solid` is what is on the
-    ground - a bong's walk to a pack (`first_solid_along`) and a grenade's bounce
-    (`solid_boxes`, bongs included) - the tile's body as the physics has it (`solid_box`), a
-    cage's whole cell. A sonic wave keeps its own cell grid (`Material::blocks_sound`).
+    ground - a bong's walk to a pack (`first_solid_along`), a grenade's bounce
+    (`solid_boxes`, bongs included) and a client-owned hull's pose (`inside_fixed_tile`: the live
+    fixed tiles round a point, each boxed as `build` boxes it, `TerrainBox::of`) - the tile's body
+    as the physics has it (`solid_box`), a cage's whole cell. A sonic wave keeps its own cell grid (`Material::blocks_sound`).
     `line_of_fire` is the cover a blast respects: permanent tiles only, inset
     `LINE_OF_FIRE_INSET_PX`, a tile the blast stands in ignored. The segment-against-box test is
     `shape::segment_hits_aabb`. Projectiles have no physics body;
@@ -1044,7 +1055,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `simulation/contact.rs` (`respond_to_contacts`, after the step and before the rams) throws a hull
   back off a hard face as a knock, cracks glass under a fast ram, reports `Event::HullStruck` and
   shakes a tree's crown (`TreeShake`, presentation the painters read, set on a replica from the
-  event). `Footing::in_brush` slows a hull a little in grass, reeds and bushes (`Game::brush`). Loose objects
+  event); a client-owned hull's throw is its client's (`throw_off_faces`, the same hardest hit and
+  knock in `Game::predict_seat_with`), so the room's goes untold. `Footing::in_brush` slows a hull a little in grass, reeds and bushes (`Game::brush`). Loose objects
   (docs/physics-engine-design.md "Loose objects", docs/sandbags-barrels-fences.md "Loose barrels"):
   `spawn_loose` is a barrel's dynamic body, `is_loose`/`touching_loose` keep it out of the contact
   kinds; `props::sync_loose` reads drums back after the step and sets one off on a hard knock
@@ -2803,7 +2815,8 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   synchronous code with no sockets, threads or raylib (shared by the room server and every client,
   wasm included); it never reads or writes a `Game`. `wire.rs`: `IntentMsg` (the human-settable
   `Intent` fields only - `fire_aim_offset`/`slow` are AI-only and never travel - plus, with `owned`,
-  the client's own hull pose in `x`/`y`/`dir`/`vx`/`vy`: stage 3, docs/online-coop-prd.md §4.14,
+  the client's own hull pose in `x`/`y`/`dir`/`vx`/`vy` and the velocity it went into the tick's step
+  at in `rvx`/`rvy` (`SeatPose::ram`; protocol 41): stage 3, docs/online-coop-prd.md §4.14,
   `IntentMsg::with_pose`/`pose`), `Snapshot` (`acked` and `mailbox` per seat - the input tick
   applied and `net::mailbox::Mailbox::wire_state` -, keyed families sorted by key - `TankState`,
   `ShotState`, `MissileState`, `GrenadeState` (position, height and the fuse in hundredths, so the
@@ -3102,8 +3115,11 @@ docs/sound-system-prd.md is the design; this is what each part owns.
     the seat's - and every packet carries the pose that tick produced (`send_one`:
     `RoomClient::prepare_intent` → `step_at` → `IntentMsg::with_pose` → `send_prepared`). The room
     puts the seat there (`Game::accept_seat_pose`, below) and answers a pose it refused or a hull it
-    moved itself with `WireEvent::Placed`, which - like this seat's `Teleported` and `TankEntered` -
-    `place_from` snaps the sandbox to (`Predictor::place_own`). Off, stage 2 predicts and reconciles
+    moved itself with `WireEvent::Placed` - one for a run of refusals -, which - like this seat's
+    `Teleported` and `TankEntered` - `place_from` snaps the sandbox to (`Predictor::place_own`). The
+    sandbox's step notes the speed the hull went into it at, which the pose carries
+    (`SeatPose::ram`), and throws the hull off a hard face itself (`contact::throw_off_faces`), so a
+    bounce is on the tick of the hit on any link. Off, stage 2 predicts and reconciles
     as before. `room_has_seat_at`/`own_hull_at` are what the server's
     `a_client_that_owns_its_hull_is_followed_by_the_room` compares. Knockback on an owned hull
     arrives as `WireEvent::Shoved`, which `note_fired` applies to the sandbox's body

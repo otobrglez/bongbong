@@ -169,7 +169,10 @@ locomotion model, one impulse a step on the body's real velocity
 
 A seat whose client owns its hull online is not driven here at all: the
 room accepts the pose the client sends, inside limits
-(`Game::accept_seat_pose`, docs/online-coop-prd.md section 4.14).
+(`Game::accept_seat_pose`, docs/online-coop-prd.md section 4.14), and
+steps its copy of the hull over the tick at the speed the client's hull
+went into its step at (`SeatPose::ram`), so the room's faces, props and
+hulls meet it as a local round's would.
 
 ### The turn
 
@@ -307,8 +310,10 @@ rams). A hull whose body went into the step at `hull_bounce_min_speed` (130
 px/s) or more along its contact with a hard face is thrown back along the
 normal at that share of the speed, with a skid of
 `hull_bounce_skid_seconds` so the drive does not take the throw back in a
-frame (`combat::knock`, so a client-owned seat is told through
-`Event::Shoved`). 130 px/s is over a driven hull's own push into a face it
+frame (`combat::knock_hull`). A client-owned hull is thrown by its client,
+on the same hit in its sandbox step (`contact::throw_off_faces`), so the
+room's throw goes untold - a `Shoved` for it would throw the hull twice,
+and a round trip late. 130 px/s is over a driven hull's own push into a face it
 rests on - one step of `tank_accel_force` is 70 to 90 px/s - so leaning on
 a wall never bounces; after a throw `hull_bounce_rest_seconds` passes
 before the same hull is thrown or reports a hit again, since it comes back
