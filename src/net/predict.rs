@@ -661,7 +661,9 @@ impl Predictor {
         self.history.clear();
     }
 
-    /// Where the owned hull is, to put on the wire.
+    /// Where the owned hull is, to put on the wire - with the speed it
+    /// went into its last step at (`SeatPose::ram`), which the room steps
+    /// its copy over the tick at.
     pub fn pose(&self) -> Option<crate::simulation::SeatPose> {
         self.sandbox.seat_pose(self.seat)
     }

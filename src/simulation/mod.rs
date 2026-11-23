@@ -119,9 +119,25 @@ pub struct SeatPose {
     pub position: Position,
     /// Degrees, 0 = up, one of the four facings.
     pub rotation: f32,
-    /// The body's velocity, so the room's ram reads impact speed off it.
+    /// The body's velocity after the step: where the hull is going, which
+    /// a starved tick's guess carries it along (`net::mailbox`).
     pub velocity: Vec2,
+    /// The body's velocity going into the step that left it here
+    /// (`Tank::ram_velocity`): `velocity` itself in open ground, the speed
+    /// it met a face, a prop or a hull at on a tick one stopped or threw
+    /// it. The room steps its copy of the hull over that tick at this
+    /// speed (`accept_seat_pose`), so its contacts, rams and props meet
+    /// the hull as a local round's do.
+    pub ram: Vec2,
 }
+
+/// How long the room holds to the last `Placed` it sent a client-owned
+/// seat, in ticks (`Game::accept_seat_pose`): two seconds, longer than
+/// any round trip a round is playable over. The client snaps to a
+/// `Placed` when it arrives and drives on from there, so a pose within
+/// that driving of it is taken meanwhile, and no second `Placed` chases
+/// the poses that were already on their way.
+pub const PLACED_HOLD_TICKS: u64 = 120;
 
 /// The least a client-owned hull may move between two poses the room
 /// accepts, in ticks of its top speed. An ordinary read covers one tick
@@ -1083,6 +1099,12 @@ pub struct Game {
     /// `accept_seat_pose` holds its slower pace to only
     /// `POSE_SLIME_GRACE_TICKS` later.
     seat_coated: [u64; MAX_SEATS],
+
+    /// The last `Placed` the room sent each client-owned seat: where it
+    /// put the hull, and the frame it did (`note_placed`). Held for
+    /// `PLACED_HOLD_TICKS`, while `accept_seat_pose` takes a pose within
+    /// the driving since of it and `place_answer` sends no other.
+    seat_placed: [Option<(Position, u64)>; MAX_SEATS],
     /// The sonic hammer's waves running out over the field
     /// (docs/sonic-hammer.md), in the order they were fired: struck by the
     /// rules on the round that simulates them (`tick_sonic_waves`), only
@@ -1883,6 +1905,7 @@ impl Game {
         self.seat_owned = [0; MAX_SEATS];
         self.seat_knock = [SeatKnock::default(); MAX_SEATS];
         self.seat_coated = [0; MAX_SEATS];
+        self.seat_placed = [None; MAX_SEATS];
         self.sonic_waves.clear();
         self.grass_flat.clear();
         self.grass_passes.clear();
@@ -2851,11 +2874,12 @@ impl Game {
     /// prediction sandbox (docs/online-coop-prd.md §4.12).
     ///
     /// This is deliberately not `update`: nothing here fires, ages,
-    /// damages, spawns or draws a single number of RNG. It is the hull
-    /// and the solver and nothing else, because that is the whole of what
-    /// a client may predict - locomotion is a pure function of intent
-    /// against a static world, which is what makes a replay land on the
-    /// server's answer rather than drift from it.
+    /// damages, spawns or draws a single number of RNG. It is the hull,
+    /// the solver and the hull's own throw off a hard face
+    /// (`contact::throw_off_faces`) and nothing else, because that is the
+    /// whole of what a client may predict - locomotion is a pure function
+    /// of intent against a static world, which is what makes a replay land
+    /// on the server's answer rather than drift from it.
     ///
     /// The caller owns a `Game` built the way `net::apply::welcome`
     /// builds a replica - same map, same seed - so the walls, the
@@ -2873,9 +2897,11 @@ impl Game {
     /// the client's gate would let a press start a charge: in the room's
     /// order - the hull driven, then the trigger, then a release's recoil
     /// (and an overcharge's spin), as `resolve_rails` kicks it before
-    /// `step_world`, then the solver's step - so a client's own hull crawls,
-    /// recoils and spins on the ticks the room's does. What the trigger
-    /// did, for a seat whose trigger is a charge.
+    /// `step_world`, then the solver's step, the speed it went into it at
+    /// noted (`Tank::ram_velocity`), then a hard face's throw - so a
+    /// client's own hull crawls, recoils, spins and bounces on the ticks
+    /// the room's does. What the trigger did, for a seat whose trigger is
+    /// a charge.
     pub(crate) fn predict_seat_with(&mut self, seat: usize, intent: Intent, dt: f32, trigger: Option<(bool, bool)>) -> Option<gauss::SeatCharge> {
         let entity = self.seats.get(seat).copied().flatten()?;
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
@@ -2892,10 +2918,12 @@ impl Game {
         // "Online").
         let wells = if zones.is_empty() { crate::well::WellField::default() } else { crate::well::WellField::at(zones, *time + *zone_lead) };
         let footing = Footing::at(water, lava, craters, *weather, tank.position, *time).on_rubble(rubble, tank.position).in_brush(brush, tank.position).pulled(&wells, &*tank);
-        // The seat's own skid and spin run on the client's ticks, as the
-        // room's do in `tick_timers` (`Predictor::shove` starts a skid).
+        // The seat's own skid, spin and rest from a throw run on the
+        // client's ticks, as the room's do in `tick_timers`
+        // (`Predictor::shove` starts a skid).
         tank.skid = (tank.skid - dt).max(0.0);
         tank.spin = (tank.spin - dt).max(0.0);
+        tank.bounce_rest = (tank.bounce_rest - dt).max(0.0);
         // The room's order (`drive_player`): a rod's reticle up takes the
         // stick and the hull stands.
         let aiming = tank.charge.and_then(|c| c.weapon.charge_rule()).is_some_and(|r| r.stick == crate::tank::Stick::Aim);
@@ -2918,12 +2946,22 @@ impl Game {
             let hull_cell = crate::map::world_to_cell(tank.position);
             charged = Some(gauss::SeatCharge { edge, weapon, start, muzzle, dir, reticle, hull_cell });
         }
+        // The speed the hull goes into the step at, as `step_world` notes
+        // it: what the pose tells the room it met things at
+        // (`SeatPose::ram`).
+        if let Some(handle) = tank.body {
+            tank.ram_velocity = physics.velocity(handle);
+        }
         physics.step();
         // The solver moved the body; the tank's own position is what
         // every reader (and the next tick's `Footing`) goes by.
         if let Some(handle) = tank.body {
             tank.position = physics.position(handle);
         }
+        // A hard face throws the hull back on this tick, as the room's
+        // `respond_to_contacts` throws it, not a round trip later.
+        let footing = Footing::at(water, lava, craters, *weather, tank.position, *time);
+        contact::throw_off_faces(physics, &mut tank, footing);
         // Ooze, as the room's `tick_ooze` runs it after the drive: a coat
         // laid by a puddle the snapshots put down, washed off in water,
         // running down - so the next tick's drive is slowed
@@ -2960,7 +2998,9 @@ impl Game {
     /// pose it applied and for a client to report its own.
     pub fn seat_pose(&self, seat: usize) -> Option<SeatPose> {
         let (position, rotation, velocity) = self.seat_motion(seat)?;
-        Some(SeatPose { position, rotation, velocity })
+        let entity = self.seats.get(seat).copied().flatten()?;
+        let ram = self.world.get::<&Tank>(entity).ok()?.ram_velocity;
+        Some(SeatPose { position, rotation, velocity, ram })
     }
 
     /// A client that owns its hull says where it is: put the seat there
@@ -2977,14 +3017,27 @@ impl Game {
     /// an ordinary read, the whole stall for the read that ends one,
     /// since an owned read takes every intent at or before its play
     /// point at once. A pose that turns the hull across its tracks may
-    /// stand it a turn fit further (`tank_turn_fit_px` each way). The pose
-    /// must lie inside the field, off a solid tile and out of deep water;
-    /// a wreck and a seat still rolling in through a gate own nothing. A
-    /// refusal leaves the hull where it was, and the room answers with
-    /// `Placed` so the client comes back to it.
+    /// stand it a turn fit further (`tank_turn_fit_px` each way). While
+    /// the last `Placed` the room sent is held (`seat_placed`), a pose may
+    /// instead lie within the driving since of where that put the hull:
+    /// the client snapped there when it arrived and drove on. The pose
+    /// must lie inside the field, out of every fixed tile standing now
+    /// (`hits::inside_fixed_tile` - a tile that died or a prop shoved off
+    /// its cell is no wall) and out of deep water; a wreck and a seat
+    /// still rolling in through a gate own nothing. A refusal leaves the
+    /// hull where it was, and the room answers with `Placed`
+    /// (`place_answer`) so the client comes back to it.
+    ///
+    /// A taken pose puts the body one tick back along `SeatPose::ram`, the
+    /// speed the client's hull went into its step at, moving at it: the
+    /// update's solver step carries it over that tick again, against the
+    /// room's own faces, props and hulls, so it ends the tick on the pose,
+    /// or against what stopped it there, having met what it met at the
+    /// speed it met it - which is what `respond_to_contacts`, `ram_props`
+    /// and `combat::ram` read.
     pub fn accept_seat_pose(&mut self, seat: usize, pose: SeatPose, reach_ticks: u32) -> Result<(), &'static str> {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return Err("no such seat") };
-        let (from, reach, knock) = {
+        let (at, pace, pull, fit) = {
             let Ok(tank) = self.world.get::<&Tank>(entity) else { return Err("no tank") };
             if tank.is_wreck() {
                 return Err("a wreck");
@@ -2992,7 +3045,6 @@ impl Game {
             if tank.body.is_none() {
                 return Err("still entering");
             }
-            let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
             // The ground's own drift - a current, a gust - carries a hull
             // past its top speed, and the rules put it there.
             let footing = Footing::at(&self.water, &self.lava, &self.craters, self.weather, tank.position, self.time);
@@ -3007,17 +3059,17 @@ impl Game {
             // act along a track axis, so what they carry the hull lies in the
             // disc whose diameter runs from it toward the core that far: the
             // reach is that disc grown by the hull's own.
-            let mut well = Vec2::zero();
+            let mut pull = None;
             if self.zones.iter().any(|z| z.well().is_some()) {
                 let t = tuning();
                 let field = crate::well::WellField::at(&self.zones, self.time + PHYSICS_FIXED_DT);
-                let pull = field.hull_pull(tank.position, tank.mass_factor(), &t);
-                let toward = pull.current.length();
+                let hull = field.hull_pull(tank.position, tank.mass_factor(), &t);
+                let toward = hull.current.length();
                 if toward > 0.0 {
                     let grip = t.tank_turn_grip_force * footing.grip / tank.mass();
-                    let slide = (pull.side.length() - grip).max(0.0) * WELL_SIDE_REACH_SECONDS;
+                    let slide = (hull.side.length() - grip).max(0.0) * WELL_SIDE_REACH_SECONDS;
                     let room = (self.physics.max_speed() - tank.effective_speed() - drift).max(0.0);
-                    well = pull.current * ((toward + slide).min(room) * PHYSICS_FIXED_DT * ticks * 0.5 / toward);
+                    pull = Some((hull.current, (toward + slide).min(room), toward));
                 }
             }
             // A turn stands the hull where its new shape fits (`fit_turn`):
@@ -3029,24 +3081,46 @@ impl Game {
             // `POSE_SLIME_GRACE_TICKS` after it went on, once its client
             // has heard of it.
             let coated_for = self.frame.saturating_sub(self.seat_coated[seat]);
-            let pace = if coated_for >= POSE_SLIME_GRACE_TICKS { tank.slime_pace() } else { 1.0 };
-            let reach = (tank.effective_speed() * pace + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX + well.length() + fit;
-            // A knock carries it past that too, by no more than the knock
-            // could slide it in all (`SeatKnock`).
-            (tank.position + well, reach, self.seat_knock[seat].extra(self.frame, ticks))
+            let slime = if coated_for >= POSE_SLIME_GRACE_TICKS { tank.slime_pace() } else { 1.0 };
+            (tank.position, tank.effective_speed() * slime + drift, pull, fit)
         };
-        let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
-        let step = (dx * dx + dy * dy).sqrt();
+        // Over `ticks` ticks of driving: where a well carried the hull, how
+        // far it may have gone from there, and how much further a knock
+        // carries it, by no more than the knock could slide it in all
+        // (`SeatKnock`).
+        let (knocks, frame) = (self.seat_knock[seat], self.frame);
+        let reach_over = |ticks: f32| {
+            let well = pull.map_or(Vec2::zero(), |(current, carry, toward)| current * (carry * PHYSICS_FIXED_DT * ticks * 0.5 / toward));
+            let reach = pace * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX + well.length() + fit;
+            (well, reach, knocks.extra(frame, ticks))
+        };
+        let distance = |from: Position| {
+            let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
+            (dx * dx + dy * dy).sqrt()
+        };
+        let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
+        let (well, reach, knock) = reach_over(ticks);
+        let step = distance(at + well);
+        // How far past its reach the pose went, which the knocks pay for.
+        let mut past = step - reach;
         if step > reach + knock {
-            return Err("further than the hull could have gone");
+            // The client snaps to a `Placed` when it arrives and drives on
+            // from it: while it is held, the driving since it went out.
+            let held = self.seat_placed[seat].filter(|&(_, sent)| frame.saturating_sub(sent) <= PLACED_HOLD_TICKS);
+            let Some((placed, sent)) = held else { return Err("further than the hull could have gone") };
+            let (well, reach, knock) = reach_over(ticks + frame.saturating_sub(sent) as f32);
+            let step = distance(placed + well);
+            if step > reach + knock {
+                return Err("further than the hull could have gone");
+            }
+            past = step - reach;
         }
         let (width, height) = self.map.field_size();
         let inset = OBSTACLE_GRID_SIZE * 0.5;
         if !(inset..=width - inset).contains(&pose.position.x) || !(inset..=height - inset).contains(&pose.position.y) {
             return Err("outside the field");
         }
-        let (col, row) = map::world_to_cell(pose.position);
-        if self.map.solid_at(col, row) {
+        if hits::inside_fixed_tile(&self.world, pose.position) {
             return Err("inside a solid tile");
         }
         if self.water.depth_at(pose.position) == crate::ground::Depth::Deep {
@@ -3055,19 +3129,35 @@ impl Game {
         if self.lava.depth_at(pose.position) == crate::ground::Depth::Deep {
             return Err("in deep lava");
         }
-        // One tick back along the reported velocity: the coming update's
-        // solver step carries the body forward by exactly that much, so
-        // it ends the tick on the pose the client reported - with the
-        // velocity the contacts and `combat::ram` read - rather than one
-        // tick past it.
-        let back = Position::new(
-            pose.position.x - pose.velocity.x * PHYSICS_FIXED_DT,
-            pose.position.y - pose.velocity.y * PHYSICS_FIXED_DT,
-        );
-        self.seat_knock[seat].spend(step - reach);
-        self.place_seat(seat, back, pose.rotation, pose.velocity);
+        let back = Position::new(pose.position.x - pose.ram.x * PHYSICS_FIXED_DT, pose.position.y - pose.ram.y * PHYSICS_FIXED_DT);
+        self.seat_knock[seat].spend(past);
+        self.place_seat(seat, back, pose.rotation, pose.ram);
         self.seat_owned[seat] = self.frame + 1;
         Ok(())
+    }
+
+    /// The room refused a client-owned seat's pose: where it has the hull,
+    /// for the `Placed` that brings the client back to it - noted as the
+    /// seat's last (`note_placed`). `None` while the last one is held
+    /// (`PLACED_HOLD_TICKS`): the poses refused meanwhile were on their way
+    /// before the client heard of it, and it comes back to that one.
+    pub fn place_answer(&mut self, seat: usize) -> Option<SeatPose> {
+        let held = self.seat_placed.get(seat)?.is_some_and(|(_, sent)| self.frame.saturating_sub(sent) <= PLACED_HOLD_TICKS);
+        if held {
+            return None;
+        }
+        let at = self.seat_pose(seat)?;
+        self.note_placed(seat, at.position);
+        Some(at)
+    }
+
+    /// The room told `seat`'s client its hull is at `at` (`Placed`): a
+    /// refusal's answer, or a tick that moved the hull itself - a portal,
+    /// a gate. Held for `PLACED_HOLD_TICKS` (`seat_placed`).
+    pub fn note_placed(&mut self, seat: usize, at: Position) {
+        if let Some(placed) = self.seat_placed.get_mut(seat) {
+            *placed = Some((at, self.frame));
+        }
     }
 
     /// The tick of the world a seat's client was drawing when it made the
@@ -3105,10 +3195,13 @@ impl Game {
     }
 
     /// The room drives this seat again from the next update: nobody is
-    /// reporting its pose.
+    /// reporting its pose, nor coming back to a `Placed`.
     pub fn release_seat(&mut self, seat: usize) {
         if let Some(owned) = self.seat_owned.get_mut(seat) {
             *owned = 0;
+        }
+        if let Some(placed) = self.seat_placed.get_mut(seat) {
+            *placed = None;
         }
     }
 

@@ -378,7 +378,7 @@ fn an_owned_hull_is_allowed_its_knock() {
     game.place_tank(mate, Position::new(196.0, 192.0), Some(90.0)).unwrap();
     let ahead = |game: &Game, by: f32| {
         let at = pos(game, mate);
-        SeatPose { position: Position::new(at.x + by, at.y), rotation: 90.0, velocity: Vec2::new(300.0, 0.0) }
+        SeatPose { position: Position::new(at.x + by, at.y), rotation: 90.0, velocity: Vec2::new(300.0, 0.0), ram: Vec2::new(300.0, 0.0) }
     };
     // Past four ticks of a medium chassis's top speed and the slack, within
     // the knock's speed over them.

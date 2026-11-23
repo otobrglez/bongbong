@@ -400,7 +400,7 @@ fn a_seats_pose_may_stand_a_turn_fit_further_on_the_tick_it_turns() {
     let top = with_tank(&game.world, player, |t| t.effective_speed());
     let own = top * PHYSICS_FIXED_DT * POSE_REACH_TICKS + POSE_REACH_SLACK_PX;
     let fit = Tuning::DEFAULT.tank_turn_fit_px;
-    let pose = |by: Vec2, facing: Dir| SeatPose { position: at + by, rotation: facing.rotation(), velocity: Vec2::zero() };
+    let pose = |by: Vec2, facing: Dir| SeatPose { position: at + by, rotation: facing.rotation(), velocity: Vec2::zero(), ram: Vec2::zero() };
     // Still facing along y: the chassis's own reach and no further.
     assert!(game.accept_seat_pose(0, pose(Vec2::new(own + 1.0, 0.0), Dir::Up), 1).is_err(), "no turn, no fit");
     // Turned across: the fit's reach on top, each way.

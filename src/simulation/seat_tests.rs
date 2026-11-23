@@ -515,7 +515,7 @@ fn an_owned_pose_is_taken_when_reachable_and_refused_otherwise() {
     let still = Vec2::new(0.0, 0.0);
 
     // A step within reach is taken, facing and all.
-    let near = SeatPose { position: Position::new(from.position.x + reach * 0.5, from.position.y), rotation: Dir::Right.rotation(), velocity: still };
+    let near = SeatPose { position: Position::new(from.position.x + reach * 0.5, from.position.y), rotation: Dir::Right.rotation(), velocity: still, ram: still };
     assert_eq!(game.accept_seat_pose(0, near, 1), Ok(()));
     assert!(game.seat_is_owned(0));
     let at = game.seat_pose(0).expect("the seat");
@@ -534,6 +534,7 @@ fn an_owned_pose_is_taken_when_reachable_and_refused_otherwise() {
         position: Position::new(here.position.x + 3.0, here.position.y),
         rotation: Dir::Right.rotation(),
         velocity: Vec2::new(180.0, 0.0),
+        ram: Vec2::new(180.0, 0.0),
     };
     assert_eq!(game.accept_seat_pose(0, moving, 1), Ok(()));
     game.update(Input::default(), PHYSICS_FIXED_DT, W, H);
@@ -618,6 +619,96 @@ fn an_owned_pose_inside_a_tile_is_refused() {
     let step = SeatPose { position: target, ..from };
     assert_eq!(game.accept_seat_pose(0, step, 1), Err("inside a solid tile"));
     assert_eq!(game.seat_pose(0).expect("the seat").position, from.position);
+}
+
+/// The pose validator reads the tiles standing now, not the map they were
+/// loaded from: a pose over a wall that has died, or over the cell a loose
+/// drum was shoved off, is taken, while one inside a standing wall is still
+/// refused.
+#[test]
+fn an_owned_pose_over_a_dead_tile_or_a_shoved_drums_cell_is_taken() {
+    use super::props::DamageCause;
+    use super::{POSE_REACH_SLACK_PX, POSE_REACH_TICKS, SeatPose};
+    // Where the reach ends, one round on the plain map says; the next
+    // rounds put a tile there.
+    let probe = game_on(&map_with(""), 0, PlayerCount::ONE, 7);
+    let from = probe.seat_pose(0).expect("the seat");
+    let reach = probe.tank_snapshots()[0].top_speed * PHYSICS_FIXED_DT * POSE_REACH_TICKS + POSE_REACH_SLACK_PX;
+    let target = Position::new(from.position.x + reach - 1.0, from.position.y);
+    let (col, row) = crate::map::world_to_cell(target);
+    assert_ne!((col, row), crate::map::world_to_cell(from.position), "the reach has to cross into the next cell for this fixture");
+    let tile_at = |game: &Game| game.world.query::<(Entity, &Obstacle)>().iter().find(|(_, o)| o.key_cell() == (col, row) && !o.destroyed).map(|(e, _)| e);
+
+    // A brick wall: refused while it stands, taken once it has died.
+    let mut game = game_on(&map_with(&format!("cells.\"{col},{row}\" = {{ kind = \"wall\", material = \"brick\" }}")), 0, PlayerCount::ONE, 7);
+    let from = game.seat_pose(0).expect("the seat");
+    let step = SeatPose { position: target, ..from };
+    assert_eq!(game.accept_seat_pose(0, step, 1), Err("inside a solid tile"));
+    let wall = tile_at(&game).expect("the brick stands");
+    let mut f = Frame::new(PHYSICS_FIXED_DT, W, H, game.rng.take().expect("a seeded round"), Terrain::build(&game.world, W, H, &game.grass_cells, &game.water));
+    assert!(game.damage_obstacle(&mut f, wall, f32::MAX, DamageCause::Ram), "the brick died");
+    game.rng = Some(f.rng);
+    step_round(&mut game);
+    assert!(tile_at(&game).is_none(), "the brick is gone");
+    let from = game.seat_pose(0).expect("the seat");
+    assert_eq!(game.accept_seat_pose(0, SeatPose { position: target, ..from }, 1), Ok(()), "a pose over the dead brick's cell");
+
+    // A loose drum shoved three cells on: its home cell is open ground.
+    let mut game = game_on(&map_with(&format!("cells.\"{col},{row}\" = {{ kind = \"barrel\" }}")), 0, PlayerCount::ONE, 7);
+    let drum = tile_at(&game).expect("the drum stands");
+    let body = game.world.get::<&Obstacle>(drum).expect("the drum").body;
+    game.physics.set_position(body, cell_to_world(col + 3, row));
+    step_round(&mut game);
+    assert_ne!(game.world.get::<&Obstacle>(drum).expect("the drum").cell(), (col, row), "the drum left its cell");
+    let from = game.seat_pose(0).expect("the seat");
+    assert_eq!(game.accept_seat_pose(0, SeatPose { position: target, ..from }, 1), Ok(()), "a pose over the shoved drum's home cell");
+}
+
+/// One step of a round with nobody driving.
+fn step_round(game: &mut Game) {
+    step(game, Input::default());
+}
+
+/// **One `Placed` answers a run of refusals** (docs/online-coop-prd.md
+/// §4.14): the room answers the first refused pose with where it has the
+/// hull and holds to that for `PLACED_HOLD_TICKS`, sending nothing for the
+/// poses refused meanwhile; and a pose within the driving since of that
+/// `Placed` is taken however far the room's own copy has gone on since.
+#[test]
+fn a_refused_pose_is_answered_once_and_the_client_is_taken_back_from_it() {
+    use super::{PLACED_HOLD_TICKS, POSE_REACH_SLACK_PX, POSE_REACH_TICKS, SeatPose};
+    let mut game = game_on(&map_with(""), 0, PlayerCount::ONE, 7);
+    let from = game.seat_pose(0).expect("the seat");
+    let speed = game.tank_snapshots()[0].top_speed;
+    let reach = speed * PHYSICS_FIXED_DT * POSE_REACH_TICKS + POSE_REACH_SLACK_PX;
+    let far = SeatPose { position: Position::new(from.position.x, from.position.y - reach * 3.0), ..from };
+    assert_eq!(game.accept_seat_pose(0, far, 1), Err("further than the hull could have gone"));
+    let placed = game.place_answer(0).expect("the first refusal is answered");
+    assert_eq!(placed.position, from.position, "with where the room has the hull");
+    assert_eq!(game.accept_seat_pose(0, far, 1), Err("further than the hull could have gone"));
+    assert_eq!(game.place_answer(0), None, "a refusal while the Placed is held is not answered again");
+
+    // The room drives its copy on while the client hears of the Placed:
+    // twenty ticks right, further than one pose's reach from where it was.
+    let right = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+    for _ in 0..20 {
+        step(&mut game, Input::single(right));
+    }
+    let copy = game.seat_pose(0).expect("the seat");
+    let still = Vec2::zero();
+    let back = SeatPose { position: Position::new(placed.position.x + speed * PHYSICS_FIXED_DT, placed.position.y), velocity: still, ram: still, ..copy };
+    assert!(copy.position.distance_to(back.position) > reach, "the fixture's copy went on past one pose's reach");
+    assert_eq!(game.accept_seat_pose(0, back, 1), Ok(()), "the client's pose a tick on from the Placed is taken");
+    assert!((game.seat_pose(0).expect("the seat").position.x - back.position.x).abs() < 0.5, "and the hull is put there");
+
+    // Once the hold is over, a refusal is answered again.
+    for _ in 0..=PLACED_HOLD_TICKS {
+        step_round(&mut game);
+    }
+    let here = game.seat_pose(0).expect("the seat");
+    let far = SeatPose { position: Position::new(here.position.x, here.position.y - reach * 3.0), ..here };
+    assert_eq!(game.accept_seat_pose(0, far, 1), Err("further than the hull could have gone"));
+    assert!(game.place_answer(0).is_some(), "past the hold a refusal is answered");
 }
 
 // --- A seat driving back in through a gate (docs/online-coop-prd.md
