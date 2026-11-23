@@ -200,7 +200,7 @@ enemy there carries one of the six BB-36 weapons.
 | 5 Carnival | EMP burst (13,21), laser, missiles, plasma, flamethrower, minigun, grenades, sonic hammer | EMP - six waves of light tanks among a hundred drums, enemies arming from the crates |
 | 6 Jungle Temple | plasma, laser, minigun, flamethrower, missiles, FPV swarm (13,23) | FPV swarm - over the temple walls; the miniguns beside it are the counter |
 | 7 Wildwood | gravity well (31,57), jet (29,57) and helicopter (31,61) strikes, tower pack (24,57), EMP burst, FPV swarm, sonic hammer, grenades, flamethrower, laser, plasma, missiles, minigun | gravity well, tower pack - by the start, with seconds of each out in the forest (the crypt, the hangar, the secret grove); the air strikes again |
-| 8 Hedge Maze | laser, plasma, missiles | |
+| 8 Hedge Maze | jet (56,17) and helicopter (56,30) strikes, grenades (41,17), missiles (41,30), laser, plasma, minigun, flamethrower, sonic hammer, EMP burst, FPV swarm, gravity well | air strikes again - in the fountain court's stores beside grenades and missiles, every blast 256 px or more from the bong; a weapon in every corner of the maze |
 | 9 Archipelago | laser, missiles, plasma | |
 | 10 Harbor Lights | laser (6,7), plasma, missiles, gauss rail (4,20) | gauss rail - through brick and glass warehouses, little iron |
 | 11 No Man's Land | gauss rail (15,17), gauss rail (16,17), helicopter and jet strikes, grenades, missiles, minigun, plasma, flamethrower | |
