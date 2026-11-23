@@ -1055,9 +1055,11 @@ pub mod canvas;
 pub mod casings;
 pub mod chunks;
 pub mod crate_fx;
+pub mod crows;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
 pub mod damage_stage;
+pub mod ducks;
 pub mod decal;
 #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
 pub mod devserver;
@@ -1066,6 +1068,8 @@ pub mod establish;
 pub mod bong;
 pub mod feedback;
 pub mod fireball;
+pub mod fauna;
+pub mod fireflies;
 pub mod fish;
 pub mod follow;
 pub mod frame_stages;

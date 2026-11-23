@@ -4952,6 +4952,107 @@ tunables! {
         fish_stream_seconds: f32 = 24.0 in 0.0 ..= 600.0;
     }
 
+    group fauna {
+        /// Crows on open grass (`crows.rs`, docs/field-life.md): cosmetic,
+        /// read by nothing in the simulation. Off leaves the grass empty.
+        crow_enabled: bool = true in 0 ..= 1 @ Restart;
+        /// Open grass cells per flock (a 34 x 17 arena's few hundred hold
+        /// two or three), at most `crow_max_flocks` - roosts in trees count
+        /// apart - each flock at least `crow_spacing_cells` from the next.
+        crow_flock_cells: f32 = 150.0 in 10.0 ..= 5000.0 @ Restart;
+        crow_max_flocks: i32 = 12 in 0 ..= 64 @ Restart;
+        crow_spacing_cells: f32 = 8.0 in 1.0 ..= 64.0 @ Restart;
+        /// The most crows a flock holds; each takes a hashed count from
+        /// a little over half of this up.
+        crow_per_flock: i32 = 8 in 0 ..= 16 @ Restart;
+        /// The share of the trees with a crow or three in the crown.
+        crow_roost_share: f32 = 0.05 in 0.0 ..= 1.0 @ Restart;
+        /// How near a hull, a shot or a hit, and a blast have to come to a
+        /// crow on the grass before its flock flies, px; and a strike on a
+        /// crow's tree, from the trunk.
+        crow_flush_px: f32 = 88.0 in 0.0 ..= 400.0;
+        crow_shot_px: f32 = 48.0 in 0.0 ..= 400.0;
+        crow_blast_px: f32 = 220.0 in 0.0 ..= 800.0;
+        crow_tree_px: f32 = 28.0 in 0.0 ..= 200.0;
+        /// The longest a crow waits after the first lifts off, s.
+        crow_stagger_seconds: f32 = 0.3 in 0.0 ..= 2.0;
+        /// A crow's flight: its pace (px/s), how high it flies (px) and
+        /// climbs (px/s; it comes down twice as fast), how fast it turns
+        /// (degrees a second), wing beats a second.
+        crow_fly_speed: f32 = 72.0 in 10.0 ..= 300.0;
+        crow_altitude_px: f32 = 26.0 in 0.0 ..= 80.0;
+        crow_climb_speed: f32 = 36.0 in 1.0 ..= 200.0;
+        crow_turn_deg: f32 = 160.0 in 10.0 ..= 720.0;
+        crow_flap_hz: f32 = 5.0 in 0.0 ..= 20.0;
+        /// How long a flushed crow flies straight away, then swings round
+        /// the flock's new spot before it comes in, s.
+        crow_scatter_seconds: f32 = 1.0 in 0.0 ..= 10.0;
+        crow_circle_seconds: f32 = 2.5 in 0.0 ..= 20.0;
+        /// How far from what flushed it a flock settles, px.
+        crow_land_min_px: f32 = 160.0 in 0.0 ..= 2000.0;
+        crow_land_max_px: f32 = 480.0 in 0.0 ..= 4000.0;
+        /// About how often a crow on the grass hops or turns, s.
+        crow_hop_seconds: f32 = 2.5 in 0.2 ..= 30.0;
+        /// How dark a flier's shadow is, stepped to eighths.
+        crow_shadow_opacity: f32 = 0.375 in 0.0 ..= 1.0;
+        /// Mallards on a lake's open water (`ducks.rs`). Off leaves the
+        /// lakes to the fish.
+        duck_enabled: bool = true in 0 ..= 1 @ Restart;
+        /// The most ducks a group holds (each takes a hashed count from
+        /// half of this up), deep cells per group, and the fewest deep
+        /// cells a lake needs to hold one.
+        duck_per_group: i32 = 5 in 0 ..= 12 @ Restart;
+        duck_group_cells: f32 = 60.0 in 4.0 ..= 2000.0 @ Restart;
+        duck_min_lake_cells: i32 = 9 in 1 ..= 200 @ Restart;
+        /// A duck's paddling pace and the pace it paddles off from a hull
+        /// at, px/s, and how long it stays wary.
+        duck_speed: f32 = 6.0 in 0.0 ..= 60.0;
+        duck_paddle_speed: f32 = 24.0 in 0.0 ..= 120.0;
+        duck_calm_seconds: f32 = 3.0 in 0.1 ..= 20.0;
+        /// How long a group keeps making for one spot of its lake, s.
+        duck_drift_seconds: f32 = 9.0 in 0.5 ..= 120.0;
+        /// How near a hull comes before a duck paddles off, and a shot or a
+        /// hit, and a blast, before its group flies, px.
+        duck_shy_px: f32 = 96.0 in 0.0 ..= 400.0;
+        duck_shot_px: f32 = 44.0 in 0.0 ..= 400.0;
+        duck_blast_px: f32 = 180.0 in 0.0 ..= 800.0;
+        /// The longest a duck waits after the first runs, s; how long its
+        /// run on the water lasts, s.
+        duck_stagger_seconds: f32 = 0.4 in 0.0 ..= 2.0;
+        duck_run_seconds: f32 = 0.6 in 0.05 ..= 3.0;
+        /// A duck's flight: its pace (px/s), how high (px), wing beats a
+        /// second, and how far from what put it up it lands, px.
+        duck_fly_speed: f32 = 64.0 in 10.0 ..= 300.0;
+        duck_altitude_px: f32 = 22.0 in 0.0 ..= 80.0;
+        duck_flap_hz: f32 = 4.0 in 0.0 ..= 20.0;
+        duck_land_min_px: f32 = 160.0 in 0.0 ..= 2000.0;
+        /// How strongly a paddling duck's wake shows, and a flier's
+        /// shadow, stepped to eighths.
+        duck_wake_opacity: f32 = 0.625 in 0.0 ..= 1.0;
+        duck_shadow_opacity: f32 = 0.375 in 0.0 ..= 1.0;
+        /// Fireflies at night (`fireflies.rs`). Off leaves the night dark.
+        firefly_enabled: bool = true in 0 ..= 1 @ Restart;
+        /// The share of the cells near trees and soft cover that hold one,
+        /// and the most a round keeps.
+        firefly_density: f32 = 0.12 in 0.0 ..= 1.0 @ Restart;
+        firefly_max: i32 = 160 in 0 ..= 2000 @ Restart;
+        /// How strongly they show at dusk (night is 1).
+        firefly_dusk: f32 = 0.5 in 0.0 ..= 1.0;
+        /// The glow round a firefly, px, its strength at the core, how far
+        /// it drifts about its spot, px, and about how many times a second
+        /// it glows in and out.
+        firefly_glow_px: f32 = 11.0 in 0.0 ..= 48.0;
+        firefly_opacity: f32 = 0.8 in 0.0 ..= 1.0;
+        firefly_drift_px: f32 = 7.0 in 0.0 ..= 48.0;
+        firefly_pulse_hz: f32 = 0.35 in 0.0 ..= 4.0;
+        /// How near a blast puts a firefly out, px; how far it pushes the
+        /// nearest, px; how long it takes to drift back and to light again, s.
+        firefly_blast_px: f32 = 140.0 in 0.0 ..= 800.0;
+        firefly_push_px: f32 = 60.0 in 0.0 ..= 400.0;
+        firefly_return_seconds: f32 = 4.0 in 0.05 ..= 60.0;
+        firefly_relight_seconds: f32 = 3.0 in 0.05 ..= 60.0;
+    }
+
     group training {
         /// A wrecked seat in a training round (docs/training-stage.md)
         /// comes back as a fresh tank inside the last door opened, this
