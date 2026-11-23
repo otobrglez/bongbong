@@ -199,9 +199,14 @@ probe-fixtures *args: (_probe-maps "probe-fixtures" "maps/test/*.toml" "--frames
 # minigun rebuilt (its spin-up, half the damage, the rounds that glance):
 # seed base 1000 reads 16 against master's 15, and over three seed bases
 # (30 rounds) 38 against master's 37 - the one extra tank, not a trend.
+# spin=4 (3 before) is maze, re-read 2026-11-23 (BB-222) with 9 laser
+# charges a crate and pickups back in 12.5 s: seed base 1000 reads 4
+# against master's 3, and over three seed bases (30 rounds) 12 against
+# master's 11 (seed base 3000 alone reads 5 on master), the same tanks
+# turning at the same corner of the maze both ways - not a trend.
 # Re-baseline as `probe-fixtures` is: on purpose, never to go green. CI
 # runs this recipe too.
-survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=16 --budget staircase=14 --budget spin=3 --budget churn=25 --budget clustering=3 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 --budget offbox-fire=0"
+survive_ceilings := "--budget stale-start=0 --budget stall=0 --budget border-stuck=6 --budget jitter=16 --budget staircase=14 --budget spin=4 --budget churn=25 --budget clustering=3 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=5 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 --budget offbox-fire=0"
 
 probe-survive *args: (_probe-maps "probe-survive" "maps/test/*.toml" "--scenario survive --frames 1800 --rounds 10 --seed 1000 " + survive_ceilings + " " + args)
 
