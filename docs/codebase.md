@@ -2369,8 +2369,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
 - `lobby.rs` (docs/online-coop-prd.md §4.10) — the room screen, headless like `hud.rs`: hosting and
   joining without a command line. Five faces (`Stage`), derived from whether a room has been opened
   and how far along it is rather than stored, so the screen cannot disagree with the client -
-  `Start` (map and mission steppers over `map::SHIPPED_MAPS` and the three missions, then `HOST A
-  ROOM`/`JOIN A ROOM`), `Code` (the entry), `Waiting`, `Room` (the code, its QR, the seats, `I'M
+  `Start` (map and mission steppers over `map::hostable_maps` and the three missions - landing on a
+  map lands the mission on the one it was built for, `map::hostable_missions`, since the room plays
+  the lobby's mission over the map's - then `HOST A ROOM`/`JOIN A ROOM`), `Code` (the entry), `Waiting`, `Room` (the code, its QR, the seats, `I'M
   READY`/`START`/`LEAVE`/`KICK`) and `Closed`. The `Room` face is where a round comes back to: with
   `RoomView::ended` set it carries the outcome as its line and the host's action reads `REMATCH`,
   dead until every other seat has readied again. A seat row's name is cut to `LOBBY_SEAT_NICK_W`,

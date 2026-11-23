@@ -19,7 +19,7 @@
 //! exactly the path the command line takes.
 
 use crate::level::Mission;
-use crate::map::hostable_maps;
+use crate::map::{hostable_maps, hostable_missions};
 use crate::math::{Rectangle, Vec2};
 use crate::net::client::Phase;
 use crate::net::rooms::{self, CODE_ALPHABET, CODE_LETTERS, RoomCode, RoomsHost, SiteBase};
@@ -92,6 +92,14 @@ pub const LOBBY_KEY_GAP: f32 = 8.0;
 
 /// The missions a host can pick, in the order the stepper walks them.
 pub const MISSIONS: [Mission; 3] = [Mission::Protect, Mission::Hunt, Mission::Destroy];
+
+/// Where in `MISSIONS` the mission the `map`th hostable map was built for
+/// sits: the mission stepper starts there.
+fn map_mission(map: usize) -> usize {
+    let missions = hostable_missions();
+    let kind = missions[map % missions.len()];
+    MISSIONS.iter().position(|m| *m == kind).unwrap_or(0)
+}
 
 /// Which face of the lobby is up. Derived from whether a room has been
 /// opened and how far along it is, never stored, so the screen can never
@@ -326,7 +334,7 @@ impl Lobby {
     /// `BONGBONG_ROOMS` named, which is also what the invite link
     /// carries.
     pub fn new(site: SiteBase, rooms: RoomsHost) -> Lobby {
-        Lobby { rooms, site, entry_open: false, entry: String::new(), map: 0, mission: 0, entry_note: None, qr: None }
+        Lobby { rooms, site, entry_open: false, entry: String::new(), map: 0, mission: map_mission(0), entry_note: None, qr: None }
     }
 
     /// Which face is up.
@@ -514,9 +522,12 @@ impl Lobby {
         }
     }
 
+    /// Step the map, and the mission with it to the one that map was built
+    /// for; the mission stepper can still change it afterwards.
     fn step_map(&mut self, by: isize) -> LobbyAction {
         let n = hostable_maps().len();
         self.map = (self.map + n).wrapping_add_signed(by) % n;
+        self.mission = map_mission(self.map);
         LobbyAction::None
     }
 
@@ -971,11 +982,33 @@ mod lobby_tests {
         assert_eq!(lobby.map(), hostable_maps()[1]);
         lobby.update(&tap(centre(button_rect(AREA, Button::MapPrev))), AREA, None);
         lobby.update(&tap(centre(button_rect(AREA, Button::MapPrev))), AREA, None);
-        assert_eq!(lobby.map(), hostable_maps()[hostable_maps().len() - 1], "the stepper wraps");
+        let last = hostable_maps().len() - 1;
+        assert_eq!(lobby.map(), hostable_maps()[last], "the stepper wraps");
+        assert_eq!(lobby.mission(), hostable_missions()[last], "the map brings its own mission");
         lobby.update(&tap(centre(button_rect(AREA, Button::MissionNext))), AREA, None);
-        assert_eq!(lobby.mission(), Mission::Hunt);
+        let picked = MISSIONS[(map_mission(last) + 1) % MISSIONS.len()];
+        assert_ne!(picked, hostable_missions()[last]);
+        assert_eq!(lobby.mission(), picked, "the host can still change it");
         let action = lobby.update(&tap(centre(button_rect(AREA, Button::Host))), AREA, None);
-        assert_eq!(action, LobbyAction::Host { map: hostable_maps()[hostable_maps().len() - 1].into(), mission: Mission::Hunt });
+        assert_eq!(action, LobbyAction::Host { map: hostable_maps()[last].into(), mission: picked });
+    }
+
+    /// A room plays the mission the lobby sends (`server/src/room.rs`
+    /// overrides the map's with it), so landing on a map lands the mission
+    /// stepper on the one that map was built for: a Destroy map opens with
+    /// no bong to guard, a Hunt map with the enemy's bong to kill.
+    #[test]
+    fn every_hostable_map_opens_on_its_own_mission() {
+        let mut lobby = lobby();
+        let maps = hostable_maps();
+        let kinds: std::collections::BTreeSet<_> = hostable_missions().iter().map(|m| m.name()).collect();
+        assert_eq!(kinds.len(), 3, "the shipped maps cover every mission, so the test covers each");
+        for (i, name) in maps.iter().enumerate() {
+            assert_eq!(lobby.map(), *name);
+            let action = lobby.update(&tap(centre(button_rect(AREA, Button::Host))), AREA, None);
+            assert_eq!(action, LobbyAction::Host { map: name.to_string(), mission: hostable_missions()[i] }, "{name}");
+            lobby.update(&tap(centre(button_rect(AREA, Button::MapNext))), AREA, None);
+        }
     }
 
     /// The map stepper draws a map as its slug, uppercased, 24 pt in from

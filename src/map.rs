@@ -1289,6 +1289,22 @@ pub fn hostable_maps() -> &'static [&'static str] {
     })
 }
 
+/// The mission each of `hostable_maps` was built for (its `mission.kind`),
+/// in the same order, worked out once: what the lobby's mission stepper
+/// lands on when its map stepper lands on that map.
+pub fn hostable_missions() -> &'static [crate::level::Mission] {
+    static MISSIONS: std::sync::OnceLock<Vec<crate::level::Mission>> = std::sync::OnceLock::new();
+    MISSIONS.get_or_init(|| {
+        hostable_maps()
+            .iter()
+            .map(|name| {
+                let (_, text) = SHIPPED_MAPS.iter().find(|(n, _)| n == name).expect("a hostable map is shipped");
+                MapFile::from_toml_str(text).expect("a hostable map parses").mission.kind
+            })
+            .collect()
+    })
+}
+
 /// Whether this build keeps the maps the builder saves: everywhere while
 /// map modding is on (`mapstore`, the player's own store on every
 /// platform); with it off, native yes - under `maps_dir()` - and the web,
