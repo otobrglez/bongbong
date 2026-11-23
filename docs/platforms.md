@@ -53,8 +53,13 @@ any other frame, then `end_round` on the tick before the one `Game::update` woul
 `Game::restart_countdown` is the reading - so a room never starts a round nobody asked for), the
 snapshots (`net::encode::snapshot` stamped with the room's clock, the events of the two ticks
 between banked through `encode::wire_events` and prepended; a delta every `SNAPSHOT_EVERY` ticks
-encoded once for everyone, a full one for a seat that just joined or skipped; a `Welcome` in a round
-is `encode::welcome` on the live world - holes and all - with the round's tuning patch), the lobby
+encoded once for everyone, a full one for a seat that just joined or skipped - carrying, ahead of its
+own events, what the snapshots that seat skipped held that its replica needs as state
+(`authority::Banked`: a tile's death above all, which no full snapshot can say), a seat banking more
+than `BANK_MAX` let go to come back with a `Welcome`; a `Welcome` in a round is
+`encode::welcome_with_map` on the live world - holes and all - with the round's tuning patch, its
+map named to a client whose `ClientInfo::maps` digest is the server's own and deflated to any other
+(`WireMap`, worked out once per room)), the lobby
 (`Create`/`Join`/`Ready`/`Start`/`Leave`/`Kick`/`Chat` in,
 `RoomCreated`/`Roster`/`Started`/`Ended`/`Said`/`Error` out - the reply variants live in
 `net::wire::Lobby`), seats owned by device token for the room's life, never by name (a join under a
@@ -78,8 +83,9 @@ schedule from now (counted as dropped), the schedule stops while the room is not
 is never paid back as a burst, and the tick arm is polled before commands - with one command served
 between back-to-back late ticks, so a flood of lobby or dev traffic can neither delay a tick nor be
 starved by an overloaded room. `/metrics` adds tick lateness (p50/p99), late, dropped and overrun
-ticks and intent starvations. `conn.rs` is one task per socket with a bounded `Outbox`: a slow
-client skips snapshots, never queues them. **A greeting on another protocol goes no further**: a
+ticks and intent starvations. `conn.rs` is one task per socket with a bounded `Outbox`
+(`OUTBOX_DEPTH`, about 267 ms of snapshots at 60 Hz): a slow client skips snapshots, never queues
+them. **A greeting on another protocol goes no further**: a
 `Create` or `Join` whose `ClientInfo::protocol` is not the server's is refused before a room is
 made or a seat given (`protocol_refusal`, logged and counted under the client's build in
 `bongbong_clients`), with the socket left open so the line stays on the player's screen; one with

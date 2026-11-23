@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::ai::Intent;
 use crate::bong::Side;
 use crate::level::{LevelOverrides, Mission, SpawnKind, Tier};
+use crate::map::MapFile;
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::pickup::PickupKind;
@@ -1285,8 +1286,9 @@ pub struct Welcome {
     /// The receiving client's seat.
     pub seat: u8,
     pub roster: Vec<Seat>,
-    /// The map the round runs on (`map::to_toml_string`).
-    pub map_toml: String,
+    /// The map the round runs on: a shipped one by name, any other
+    /// deflated (`WireMap`).
+    pub map: WireMap,
     /// The round's seed: ground, grass and layout come out identical.
     pub seed: u64,
     /// The room's tuning diff, a JSON patch for `tuning::submit_json`.
@@ -1319,6 +1321,79 @@ pub struct Welcome {
     pub burnt_grass: Vec<u16>,
     /// The complete state at the tick the welcome was cut.
     pub snapshot: Snapshot,
+}
+
+/// The most bytes a deflated map may inflate to (`WireMap::open`): the
+/// biggest field a map may ask for, 250 cells a side, written out cell by
+/// cell is a few megabytes, so a stream that claims more is not a map.
+pub const MAP_TEXT_MAX: usize = 16 * 1024 * 1024;
+
+/// How a `Welcome` carries its round's map (docs/online-coop-prd.md §4.3).
+/// Every client embeds `map::SHIPPED_MAPS`, so a shipped map goes by its
+/// name and a hash of its text - a few dozen bytes where Wildwood's TOML
+/// is 430 KB - and a map no client has, a builder's, goes as its TOML
+/// deflated, about a tenth of it. A room names a shipped map only to a
+/// client whose shipped maps are its own (`ClientInfo::maps`); any other
+/// client is sent it deflated, so one a release behind the room still
+/// plays the room's map.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireMap {
+    /// One of `map::SHIPPED_MAPS` by name, with `map::fnv1a` of its text as
+    /// the room's build ships it: a client whose copy hashes otherwise
+    /// refuses the welcome rather than build another map.
+    Shipped { name: String, hash: u64 },
+    /// The map's TOML (`MapFile::to_toml_string`), raw DEFLATE.
+    Deflated(Vec<u8>),
+}
+
+impl WireMap {
+    /// `map` by name, when it is the shipped map its name says, as this
+    /// build ships it: `None` for a builder's map, a modified copy and a
+    /// map with no name.
+    pub fn shipped(map: &MapFile) -> Option<WireMap> {
+        let name = map.name.as_deref()?;
+        let text = crate::map::shipped_text(name)?;
+        let mut shipped = MapFile::from_toml_str(text).ok()?;
+        shipped.name = map.name.clone();
+        (shipped == *map).then(|| WireMap::Shipped { name: name.to_string(), hash: crate::map::fnv1a(text.as_bytes()) })
+    }
+
+    /// `map`'s TOML, deflated.
+    pub fn deflated(map: &MapFile) -> Result<WireMap, String> {
+        let text = map.to_toml_string()?;
+        Ok(WireMap::Deflated(miniz_oxide::deflate::compress_to_vec(text.as_bytes(), 6)))
+    }
+
+    /// `shipped`, else `deflated`: the map as a client of this build is
+    /// sent it.
+    pub fn of(map: &MapFile) -> Result<WireMap, String> {
+        match WireMap::shipped(map) {
+            Some(by_name) => Ok(by_name),
+            None => WireMap::deflated(map),
+        }
+    }
+
+    /// The map the room plays: the shipped text by name, or the deflated
+    /// TOML, parsed. Refuses a shipped map this build does not have or
+    /// ships another text of, and bytes that do not inflate to a map
+    /// within `MAP_TEXT_MAX`.
+    pub fn open(&self) -> Result<MapFile, String> {
+        match self {
+            WireMap::Shipped { name, hash } => {
+                let text = crate::map::shipped_text(name).ok_or_else(|| format!("the room plays map {name:?}, which this build does not ship"))?;
+                if crate::map::fnv1a(text.as_bytes()) != *hash {
+                    return Err(format!("the room plays another version of map {name:?} than this build ships"));
+                }
+                MapFile::from_toml_str(text)
+            }
+            WireMap::Deflated(bytes) => {
+                let text = miniz_oxide::inflate::decompress_to_vec_with_limit(bytes, MAP_TEXT_MAX)
+                    .map_err(|e| format!("the room's map does not inflate: {e}"))?;
+                let text = String::from_utf8(text).map_err(|_| "the room's map is not text".to_string())?;
+                MapFile::from_toml_str(&text)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1357,6 +1432,12 @@ pub struct ClientInfo {
     /// Where it runs: `web`, `ios`, `android`, `macos`, `windows`, `linux`
     /// or `other`.
     pub platform: String,
+    /// `map::shipped_digest` of the client's build: a room whose own is the
+    /// same sends a shipped map to it by name (`WireMap::Shipped`), and to
+    /// a client without it or with another the map's text deflated. Absent
+    /// from an older client's greeting, and left out when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maps: Option<u64>,
 }
 
 impl ClientInfo {
@@ -1366,6 +1447,7 @@ impl ClientInfo {
             version: super::BUILD_VERSION.to_string(),
             protocol: super::PROTOCOL_VERSION,
             platform: platform().to_string(),
+            maps: Some(crate::map::shipped_digest()),
         }
     }
 }
@@ -1817,7 +1899,7 @@ mod tests {
             nick: "oto".into(),
             device_token: "tok".into(),
             code: "AK7QX".into(),
-            client: Some(ClientInfo { version: "0.2.4".into(), protocol: 10, platform: "web".into() }),
+            client: Some(ClientInfo { version: "0.2.4".into(), protocol: 10, platform: "web".into(), maps: None }),
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""client":{"version":"0.2.4","protocol":10,"platform":"web"}"#), "{json}");

@@ -1348,7 +1348,12 @@ fn hand_over(snapshot: &Snapshot, cutoff: Option<f64>, seat: Option<u8>, out: &m
 /// opposed to a cosmetic that is only worth showing on time.
 ///
 /// Kept: a round starting over (`net::apply` re-inits on it) or ending; a
-/// tile's death (the tile family says nothing of a tile that is gone); a
+/// tile's death (the tile family says nothing of a tile that is gone) and
+/// a loose drum's (`LooseGone`, the one a replica knows a pushed drum's
+/// death by, since `apply` keys it by the cell it was placed in, not the
+/// one its `ObstacleDestroyed` names); what a snapshot never repeats - an
+/// oil print (`OilPrinted`), a trampled cell (`GrassTrampled`), a lantern
+/// set down (`LanternSet`, which spends one of the seat's); a
 /// fuel drum's launch (its flight is no snapshot family); a hull moved by
 /// the room - `Placed`, `Teleported`, `TankEntered` - and a `Shoved`, which
 /// the own hull takes as state; this seat's `Fired`, which confirms a
@@ -1363,6 +1368,10 @@ pub fn carries_state(event: &WireEvent, seat: Option<u8>) -> bool {
         WireEvent::RoundStarted { .. }
         | WireEvent::RoundEnded { .. }
         | WireEvent::ObstacleDestroyed { .. }
+        | WireEvent::LooseGone { .. }
+        | WireEvent::OilPrinted { .. }
+        | WireEvent::GrassTrampled { .. }
+        | WireEvent::LanternSet { .. }
         | WireEvent::DrumLaunched { .. }
         | WireEvent::LavaBombLaunched { .. }
         | WireEvent::Placed { .. }
@@ -2790,5 +2799,23 @@ mod tests {
         assert!(carries_state(&anchor(0), Some(0)));
         assert!(!carries_state(&anchor(1), Some(0)));
         assert!(!carries_state(&anchor(crate::net::wire::NO_SEAT), Some(0)));
+    }
+
+    /// What no later snapshot repeats is state however late it comes
+    /// (BB-250): a loose drum's death, which the replica knows by its
+    /// `LooseGone`; an oil print; a trampled cell; a lantern set down,
+    /// which spends one of its seat's. Dropped from a stale snapshot, each
+    /// was lost for the rest of the round.
+    #[test]
+    fn what_no_later_snapshot_repeats_is_kept_however_late() {
+        for event in [
+            WireEvent::LooseGone { col: 3, row: 4 },
+            WireEvent::OilPrinted { col: 3, row: 5, dir: 1, fade: 6 },
+            WireEvent::GrassTrampled { col: 3, row: 6 },
+            WireEvent::LanternSet { seat: 1, x: 96, y: 64 },
+        ] {
+            assert!(carries_state(&event, Some(0)), "{event:?}");
+            assert!(carries_state(&event, None), "{event:?}");
+        }
     }
 }

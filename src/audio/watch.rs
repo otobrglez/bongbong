@@ -142,6 +142,13 @@ pub const WATCHERS: &[WatcherSpec] = &[
         online: "the same: both events are sent",
     },
     WatcherSpec { id: "tell", entity: "tank", reads: "Tank::tell turning on", cues: &["warning.windup"], online: "from the replicated tell" },
+    WatcherSpec {
+        id: "disabled",
+        entity: "tank, tower",
+        reads: "Tank::disabled and Tower::disabled going out: an EMP's ring putting the electrics out",
+        cues: &["weapon.emp_burst.disabled", "tower.disabled"],
+        online: "the same: TankState::disabled and the tile's DISABLED flag replicate",
+    },
     WatcherSpec { id: "fire", entity: "fire", reads: "Game::burning_cells, burning_tiles, burning_wrecks, clustered", cues: &["world.fire"], online: "the same" },
     WatcherSpec { id: "wreck", entity: "wreck", reads: "burning wrecks, inside the fire clusters", cues: &["world.fire"], online: "the same" },
     WatcherSpec { id: "sky", entity: "weather", reads: "Game::look (rain, sand, snow)", cues: &["world.rain", "world.wind", "world.wind.soft", "world.night"], online: "the same: the sky is the map's" },
@@ -293,6 +300,12 @@ pub struct Watchers {
     /// The last frame's lightning, for a flash's rising edge.
     lightning: f32,
     flashes: u64,
+    /// Whether each tank's electrics were out last frame
+    /// (`Tank::disabled`), by owner slot.
+    tanks_out: HashMap<usize, bool>,
+    /// Whether each tower was offline last frame (`Tower::disabled`), by
+    /// where it stands.
+    towers_out: HashMap<u64, bool>,
 }
 
 const ENGINE: u64 = 1 << 56;
@@ -329,6 +342,7 @@ const WHINE: u64 = 20 << 56;
 const FUSE: u64 = 13 << 56;
 const PORTAL: u64 = 14 << 56;
 const VOLCANO: u64 = 15 << 56;
+const TOWER_OUT: u64 = 16 << 56;
 
 /// A key from a position, for a loop whose source has no id.
 fn at_key(tag: u64, p: Vec2) -> u64 {
@@ -492,6 +506,7 @@ impl Watchers {
     /// plays; `now` is the director's clock.
     pub fn sample(&mut self, game: &Game, own: &[usize], now: f64, t: &Tuning, wishes: &mut Vec<Wish>, plays: &mut Vec<Play>) {
         self.tanks_and_treads(game, own, t, wishes, plays);
+        self.outages(game, plays);
         self.grounds(game, own, now, t, wishes, plays);
         self.waters(game, t, wishes);
         self.landings(game, t, plays);
@@ -566,6 +581,38 @@ impl Watchers {
             }
         }
         self.tanks.retain(|slot, _| live.contains(slot));
+    }
+
+    /// An EMP's ring putting electrics out (docs/emp-burst.md): a tank's
+    /// `Tank::disabled` or a tower's `Tower::disabled` going from nothing
+    /// to running, heard where it stands. A replica's snapshots set both
+    /// (`TankState::disabled`, the tile's `DISABLED` flag) and its
+    /// `tick_presentation` runs them down without reaching nothing, so the
+    /// edge is the room's own, a round trip late. One already out when
+    /// first read - a joiner's, a tank rolling in - went out before this
+    /// window could hear it, and a ring that tops a running outage up puts
+    /// nothing new out.
+    fn outages(&mut self, game: &Game, plays: &mut Vec<Play>) {
+        let mut live = HashSet::new();
+        for tank in game.world.query::<&Tank>().iter() {
+            let slot = tank.owner_slot();
+            live.insert(slot);
+            let out = tank.disabled > 0.0;
+            if self.tanks_out.insert(slot, out) == Some(false) && out {
+                plays.push(Play::new("weapon.emp_burst.disabled", At::Point(tank.position)).source(slot as u64));
+            }
+        }
+        self.tanks_out.retain(|slot, _| live.contains(slot));
+        let mut standing = HashSet::new();
+        for tower in game.tower_views() {
+            let key = at_key(TOWER_OUT, tower.position);
+            standing.insert(key);
+            let out = tower.disabled > 0.0;
+            if self.towers_out.insert(key, out) == Some(false) && out {
+                plays.push(Play::new("tower.disabled", At::Point(tower.position)).source(key));
+            }
+        }
+        self.towers_out.retain(|key, _| standing.contains(key));
     }
 
     /// Where the listeners are this frame: what the water beds are picked

@@ -165,8 +165,7 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         Event::SonicBlast { x, y, .. } => one(Play::new("weapon.sonic_hammer.fire", point(x, y))),
         Event::TellStarted { .. } => Binding::Watched("tell"),
         Event::EmpPulse { x, y, .. } => one(Play::new("weapon.emp_burst.fire", point(x, y))),
-        Event::Disabled { x, y, .. } => one(Play::new("weapon.emp_burst.disabled", point(x, y))),
-        Event::TowerDisabled { x, y } => one(Play::new("tower.disabled", point(x, y))),
+        Event::Disabled { .. } | Event::TowerDisabled { .. } => Binding::Watched("disabled"),
         Event::MissileDud { x, y } => on_water(game, x, y, Play::new("weapon.missiles.dud", point(x, y)), ids::WATER_PLOP.0, 1.0),
         Event::RailSlug { x0, y0, leg, overcharged, .. } => {
             if leg == 0 {

@@ -853,7 +853,7 @@ mod tests {
                 Seat { seat: 0, nick: "host".into(), chassis: 3 },
                 Seat { seat: 1, nick: "second".into(), chassis: 5 },
             ],
-            map_toml: "size = [34, 17]\n".into(),
+            map: crate::net::wire::WireMap::Shipped { name: "default".into(), hash: 7 },
             seed: 0xB0B5,
             tuning_json: "{}".into(),
             overrides: Default::default(),

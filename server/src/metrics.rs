@@ -523,7 +523,7 @@ mod tests {
         m.round_started("lotus-lagoon", "protect");
         m.round_started("lotus-lagoon", "protect");
         m.round_ended("lotus-lagoon", "protect", "won");
-        let web = ClientLabel::of(Some(&ClientInfo { version: "0.2.4".into(), protocol: 10, platform: "web".into() }));
+        let web = ClientLabel::of(Some(&ClientInfo { version: "0.2.4".into(), protocol: 10, platform: "web".into(), maps: None }));
         let key = m.client_opened(&web);
         m.client_seated(&web);
         m.client_opened(&ClientLabel::of(None));
@@ -551,11 +551,11 @@ mod tests {
     #[test]
     fn client_labels_are_bounded() {
         use bongbong::net::wire::ClientInfo;
-        let odd = ClientLabel::of(Some(&ClientInfo { version: "1.0\"} x{".into(), protocol: 10, platform: "toaster".into() }));
+        let odd = ClientLabel::of(Some(&ClientInfo { version: "1.0\"} x{".into(), protocol: 10, platform: "toaster".into(), maps: None }));
         assert_eq!((odd.version.as_str(), odd.platform.as_str()), ("invalid", "other"));
         let m = Metrics::new();
         for i in 0..CLIENT_LABELS_MAX + 5 {
-            let label = ClientLabel::of(Some(&ClientInfo { version: format!("0.0.{i}"), protocol: 10, platform: "web".into() }));
+            let label = ClientLabel::of(Some(&ClientInfo { version: format!("0.0.{i}"), protocol: 10, platform: "web".into(), maps: None }));
             m.client_opened(&label);
         }
         let text = m.render(RoomCounts::default(), false);

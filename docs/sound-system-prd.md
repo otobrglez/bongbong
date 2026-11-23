@@ -623,7 +623,7 @@ layers = [
 - **Own fire at the press.**
   - The own seat's fire, press shows and impacts play when the predictor makes them. `OnlineRound` exposes what `fly_own_shots` (`src/net/round.rs:1301`) drains: `take_muzzles`, `take_press_shows` and `take_impacts` (`src/net/predict.rs:1559-1571`).
   - **Skips.** The audio skips the room's `Fired` for its own seat, which still arrives an interpolation delay late (`src/net/apply.rs:783`). It also skips the second copy of `WellAnchored` and `ChargeEnded`.
-- **Never-sent events** are heard from replicated state edges instead: `TankState`'s tell, charge and disabled flags, and the tower state on the wire. These are the 20 on `NOT_SENT` plus `MissileLocked` (BB-201).
+- **Never-sent events** are heard from replicated state edges instead: `TankState`'s tell, charge and disabled flags, and the tower state on the wire. An EMP's outages are the `disabled` watcher's (`watch::Watchers::outages`): a tank's `Tank::disabled` or a tower's `Tower::disabled` going from nothing to running plays `weapon.emp_burst.disabled` or `tower.disabled` where it stands, in a local round and on a replica alike, since the snapshot carries both (`TankState::disabled`, the tile's `DISABLED` flag) and `tick_presentation` runs them down without reaching nothing; the `Disabled` and `TowerDisabled` events bind to the watcher and stay on `NOT_SENT`. The heli's `AirSalvo` is sent instead (protocol 43): its cue plays at the salvo's mark, which no family carries. `NOT_SENT` holds 19 (BB-250).
 - **Hook gaps.** Each is its own Linear issue. Where the wire changes it bumps `PROTOCOL_VERSION`. None draws RNG.
 
   | Change | What it is for |
@@ -915,6 +915,10 @@ Where the build departs from the text:
   reads, and the probe's render and a replica hear the same creatures. Alarms and landings play on
   their edges; calls are hashed on the round clock and kept sparse; the fireflies shimmer as a bed
   per swarm. Nothing goes on the wire.
+- **Online outages and salvos (BB-250):** the EMP's knock-out of a tank's or a tower's electrics
+  is the `disabled` watcher's on every round, a replica's included, and the heli's salvo travels as
+  `WireEvent::AirSalvo` (protocol 43), so `weapon.emp_burst.disabled`, `tower.disabled` and
+  `air.salvo` play online (`audio_tests::an_emps_outages_and_a_helis_salvo_sound_on_a_replica`).
 - **Still to make:** the 156 needs not yet in the manifest, the announcer, and music. Online, the
   kill sting and the missile pod's reload are silent (neither replicates); `Wreck`'s cause, `Ram`'s
   speed, `BongBite`'s position, `RoundEnded`'s reason and `ObstacleDestroyed`'s cause are still

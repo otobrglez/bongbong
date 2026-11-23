@@ -328,7 +328,8 @@ Snapshot { tick: u32, server_ms: u32,
 
 // once, on join and on every rejoin
 Welcome  { protocol: u16, sim_version: &str, seat: u8, roster: [{ seat, nick, chassis }],
-           map_toml, seed: u64, tuning_json, mission, spawn, oil_cells, oil_prints,
+           map: Shipped { name, hash: u64 } | Deflated(bytes),  // see below
+           seed: u64, tuning_json, mission, spawn, oil_cells, oil_prints,
            dead_cells, trampled_cells, burnt_grass,
            snapshot: Snapshot /* full */ }
 
@@ -345,6 +346,22 @@ carries the tick it was lobbed, so neither changes in flight. The towers'
 four families (docs/defence-towers-prd.md §13, protocol 41) travel in a delta
 inside one optional `TowerDelta`, one byte while none of them changed.
 
+**The map in a `Welcome`** (`net::wire::WireMap`, protocol 43) goes by name
+when it can. Every client embeds `SHIPPED_MAPS`, so a shipped map is its name
+and the FNV-1a of its text - Wildwood's 442 KB of TOML welcomes in under
+300 B - and a map no client has, a builder's, is its TOML deflated with
+`miniz_oxide` (pure Rust, so the server, the page and every native client
+carry the same codec; Wildwood would be 60 KB, Grand Campaign 17 KB). A
+client tells a room its shipped maps in `ClientInfo::maps` (one digest over
+every name and text, `map::shipped_digest`), and the room names its map
+only to a client whose digest is its own; any other client - one a release
+apart, or one that said nothing - is sent the text deflated, so it still
+plays the room's map. A client handed a name whose hash its own copy does
+not match refuses the welcome with the reason rather than build another
+map. The map was sent whole and uncompressed before, on every join,
+reconnect, rematch and `room_tuning`: 432 KB for Wildwood, which a link
+below about 0.7 Mbit/s could not land inside the client's 5 s give-up.
+
 Positions in quarter pixels fit an `i16` on fields up to 8192 px wide. Encode
 with `postcard`; JSON for the lobby. Events and tile deltas are reliable by
 construction on a WebSocket and sit in their own part of the packet so a
@@ -354,8 +371,9 @@ Compression, in the order it pays, all but the last built in phase 1: quantise
 and varint (about 300 B for an eight-tank snapshot); delta against the
 previous snapshot (the baseline is simply the last snapshot sent, since a
 WebSocket loses nothing; about 80 to 120 B); projectiles as events once
-`Ricochet` exists (60 to 90 B); deflate the one-off `Welcome` (about 20 KB to
-4 KB). Stream compression (`permessage-deflate`) only if a real link shows it
+`Ricochet` exists (60 to 90 B); the one-off `Welcome` names a shipped map and
+deflates any other (built: about 20 KB to 0.3 KB, or to 2.9 KB deflated on the
+default map). Stream compression (`permessage-deflate`) only if a real link shows it
 is needed. Never compress the intent stream.
 
 ### 4.4 Events and the client's reactions
@@ -530,8 +548,14 @@ upgrade), tokio for the rest.
   snapshot once and hands the same bytes to every seat's writer.
 - One task per connection reads, decodes, and drops intents into the seat's
   mailbox; lobby messages go to the room task over a command channel. The
-  writer has a bounded queue; a slow client gets snapshots skipped, never
-  queued.
+  writer has a bounded queue (`OUTBOX_DEPTH`, 16: about 267 ms at 60 Hz); a
+  slow client gets snapshots skipped, never queued. What a skipped snapshot
+  carried that the replica needs as state - a tile's death, which no full
+  snapshot can say, a loose drum gone, an oil print, a trampled cell, a
+  lantern set down, a round starting or ending, a hull placed or shoved, the
+  seat's own `Fired` - is banked for the seat (`net::authority::Banked`) and
+  goes ahead of the next full snapshot's own events; a seat that banks more
+  than `BANK_MAX` is let go, to come back with a `Welcome`.
 - Seats outlive connections, in memory: nickname, device token, chassis,
   connection state, last acked tick. A disconnect starts a 30 s grace; a
   reconnect with the same token reclaims the seat and gets a fresh `Welcome`;
@@ -1402,7 +1426,7 @@ cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
 | Intent up, 60 Hz, one intent per packet (decision 15) | 0.4–0.8 KB/s payload, ~3 KB/s framed; stage 3's pose adds about 8 bytes a packet |
 | Snapshot down, 60 Hz, 8 tanks + 24 shots, delta | ~6–8 KB/s payload, ~12 KB/s framed (1.7 KB/s was measured on a real two-seat round at 30 Hz, before the cadence doubled) |
 | Worst case, ~40 tanks in a wave round (`wave_max_alive`'s cap of 31 plus eight seats) | ~10 KB/s payload |
-| `Welcome`, deflated | ~4 KB once |
+| `Welcome` | ~0.3–3 KB once: a shipped map by name (Wildwood 286 B at its first tick), a builder's deflated (the default map's 23 KB of TOML, 2.9 KB) |
 | Server tick, 12 enemies + 1 player (measured, section 3) | ≈ 230 µs on a 2.1 GHz Xeon vCPU, ≈ 95 µs of it per-frame fixed cost |
 | Server tick, 12 enemies + 8 seats (projected) | ≈ 320 µs; ≈ 550 µs at `wave_max_alive` |
 | CPU per room at 60 Hz | ≈ 2 % of a core at 8 seats, ≈ 3 % worst case; 30–50 rooms per vCPU of that class, more on a desktop core |

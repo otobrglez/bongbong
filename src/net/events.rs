@@ -33,7 +33,7 @@ use crate::simulation::{Event, HitCause, HitTarget};
 
 /// The serde tags (`Event`'s `event` field) of the variants
 /// `WireEvent::from_event` never sends.
-pub const NOT_SENT: [&str; 20] = [
+pub const NOT_SENT: [&str; 19] = [
     "physics_quarantine",
     "beat_done",
     "door_opened",
@@ -53,7 +53,6 @@ pub const NOT_SENT: [&str; 20] = [
     "tower_disabled",
     "charge_started",
     "drone_lock_lost",
-    "air_salvo",
 ];
 
 /// What the flamethrower lit (`Event::Ignited`'s `what`), in wire order.
@@ -324,6 +323,10 @@ pub enum WireEvent {
     /// A round struck the drone or (`aircraft`) the helicopter `id` over
     /// (`x`, `y`) and it flies on; `Event::AirHit`.
     AirHit { id: u16, aircraft: bool, x: i16, y: i16 },
+    /// The helicopter `id` fired a salvo at (`x`, `y`); `Event::AirSalvo`.
+    /// Its rockets are the missile family; this is the launch a replica
+    /// hears, at the point the event names, which no family carries.
+    AirSalvo { id: u16, x: i16, y: i16 },
 }
 
 /// `WireEvent::AirSupportCalled::arrive` for a call waiting behind another.
@@ -458,8 +461,8 @@ impl WireEvent {
             | Event::Disabled { .. }
             | Event::TowerDisabled { .. }
             | Event::ChargeStarted { .. }
-            | Event::DroneLockLost { .. }
-            | Event::AirSalvo { .. } => return None,
+            | Event::DroneLockLost { .. } => return None,
+            Event::AirSalvo { id, x, y } => WireEvent::AirSalvo { id: (id & 0xFFFF) as u16, x: q(x), y: q(y) },
             Event::AirSupportCalled { id, seat, sortie, arrive } => WireEvent::AirSupportCalled {
                 id: (id & 0xFFFF) as u16,
                 seat,
@@ -807,6 +810,7 @@ impl WireEvent {
             }
             WireEvent::DryFired { slot, weapon } => Event::DryFired { slot: slot as usize, weapon: weapon.name() },
             WireEvent::AirHit { id, aircraft, x, y } => Event::AirHit { id: id as u32, aircraft, x: d(x), y: d(y) },
+            WireEvent::AirSalvo { id, x, y } => Event::AirSalvo { id: id as u32, x: d(x), y: d(y) },
             WireEvent::TeslaStrike { x0, y0, x1, y1, chained } => {
                 Event::TeslaStrike { x0: d(x0), y0: d(y0), x1: d(x1), y1: d(y1), chained }
             }

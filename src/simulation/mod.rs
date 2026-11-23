@@ -552,11 +552,12 @@ pub enum Event {
     EmpPulse { slot: usize, x: f32, y: f32 },
     /// The tank in owner slot `slot`, at (`x`, `y`), was disabled by an
     /// EMP's ring (`Tank::disable`). Not sent: `TankState::disabled` is
-    /// what draws.
+    /// what draws, and what the sound's `disabled` watcher hears go out
+    /// (`audio::watch`), on a replica as in a local round.
     Disabled { slot: usize, x: f32, y: f32 },
     /// The tower at (`x`, `y`) went offline under an EMP's ring
     /// (`Tower::disable`). Not sent: the tile's `DISABLED` flag is what
-    /// draws.
+    /// draws, and what the `disabled` watcher hears go out.
     TowerDisabled { x: f32, y: f32 },
     /// A missile an EMP killed came down at (`x`, `y`) a dud: no blast.
     MissileDud { x: f32, y: f32 },
@@ -612,8 +613,8 @@ pub enum Event {
     /// Call `id`'s aircraft came in at (`x`, `y`), outside the field;
     /// `armed` false when it found no enemy to attack.
     AirSupportArrived { id: u32, seat: u8, sortie: crate::air_support::Sortie, x: f32, y: f32, armed: bool },
-    /// The helicopter `id` fired a salvo at (`x`, `y`). Not sent: the
-    /// missiles are the state.
+    /// The helicopter `id` fired a salvo at (`x`, `y`): its rockets are
+    /// the missiles, and this is the launch a client hears.
     AirSalvo { id: u32, x: f32, y: f32 },
     /// One of the jet `id`'s cannon bursts, or (`bomb`) one of its bombs,
     /// landed at (`x`, `y`).
