@@ -409,8 +409,8 @@ impl Game {
     /// Strike the air target `key` with `by` (docs/fpv-swarm.md
     /// "Shot down"): a bullet counts a hit, `fpv_drone_hits` of them bring
     /// a drone down; anything else downs it at once. `Event::DroneDowned`
-    /// when it goes down. True when it did. The one thing that changes an
-    /// air target.
+    /// when it goes down, `Event::AirHit` for a round it flies on through.
+    /// True when it went down. The one thing that changes an air target.
     pub(super) fn strike_air(&mut self, f: &mut Frame, key: AirKey, by: AirStrike) -> bool {
         let id = match key {
             AirKey::Drone(id) => id,
@@ -425,6 +425,7 @@ impl Game {
         if by == AirStrike::Bullet {
             d.hits += 1;
             if d.hits < tuning().fpv_drone_hits.max(1) {
+                f.events.push(Event::AirHit { id, aircraft: false, x: d.ground.x, y: d.ground.y });
                 return false;
             }
         }

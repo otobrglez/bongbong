@@ -238,7 +238,7 @@ impl Game {
             let d = crate::emp::box_reach(c, bong.position, half);
             if d <= t.rod_kill_radius_px {
                 bong.hurt_by(f32::MAX, Some(owner));
-                f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: MAX_DAMAGE, killed: true, x: bong.position.x, y: bong.position.y, cause: HitCause::Rod });
+                f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: MAX_DAMAGE, killed: true, x: bong.position.x, y: bong.position.y, cause: HitCause::Rod, by: Some(owner.slot()) });
                 dead.push(bong.position);
             } else if bong.position.distance_to(c) <= t.rod_shove_radius_px {
                 bong.stun(t.rod_bong_stun_seconds);

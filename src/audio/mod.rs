@@ -313,6 +313,9 @@ impl Audio {
             if self.room_copy_of_own_press(event) {
                 continue;
             }
+            if let Event::Ricochet { id, shot, x, y, heading, .. } = *event {
+                self.watch.ricocheted(id, shot, Vec2::new(x, y), heading, self.time);
+            }
             if let Binding::Play(plays) = bind::bind(event, game) {
                 self.pending.extend(plays);
             }
@@ -327,15 +330,16 @@ impl Audio {
 
     /// Whether `event` is the room's late copy of a press this window
     /// already sounded (docs/sound-system-prd.md section 4.10): the own
-    /// seat's cannon, plasma, well anchor or charge end. The shows of the
-    /// weapons drawn on the press never reach the replica (`apply.rs`).
+    /// seat's cannon, plasma, well anchor, charge end or dry click. The
+    /// shows of the weapons drawn on the press never reach the replica
+    /// (`apply.rs`).
     fn room_copy_of_own_press(&self, event: &Event) -> bool {
         let Some(own) = self.predicted else {
             return false;
         };
         match *event {
             Event::Fired { slot, weapon } => slot == own && matches!(weapon, "shell" | "plasma" | "minigun"),
-            Event::WellAnchored { slot, .. } | Event::ChargeEnded { slot, .. } => slot == own,
+            Event::WellAnchored { slot, .. } | Event::ChargeEnded { slot, .. } | Event::DryFired { slot, .. } => slot == own,
             _ => false,
         }
     }
@@ -369,6 +373,12 @@ impl Audio {
             }
             PressSound::Orb => "weapon.gravity_well.fire",
             PressSound::Anchor => "weapon.gravity_well.anchor",
+            PressSound::Dry => {
+                if let Binding::Play(plays) = bind::bind(&Event::DryFired { slot, weapon: "shell" }, game) {
+                    self.pending.extend(plays);
+                }
+                return;
+            }
         };
         self.pending.push(Play::new(cue, At::Slot(slot)).source(slot as u64));
     }
@@ -449,8 +459,14 @@ impl Audio {
         game.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot).map(|t| t.position)
     }
 
-    /// Starts one one-shot, if the mix lets it.
+    /// Starts one one-shot, if the mix lets it: one for a seat this window
+    /// does not play (`Hears::Seat`) never does.
     fn start(&mut self, game: &Game, play: Play, own: &[usize], t: &Tuning) {
+        if let bind::Hears::Seat(seat) = play.hears
+            && !own.contains(&seat)
+        {
+            return;
+        }
         let Some((id, cue)) = self.bank.manifest().resolve(&play.cue).map(|(k, c)| (k.to_string(), c.clone())) else {
             return;
         };
@@ -462,7 +478,7 @@ impl Audio {
             },
             At::Nowhere => None,
         };
-        let mine = matches!(play.at, At::Slot(s) if own.contains(&s));
+        let mine = matches!(play.at, At::Slot(s) if own.contains(&s)) || matches!(play.hears, bind::Hears::Seat(_));
         let pinned = mine || cue.priority == Priority::Warning;
         let mut heard = match at {
             Some(p) => self.space.hear(p, Vec2::new(0.0, 0.0), cue.class, t),
@@ -504,7 +520,7 @@ impl Audio {
                 continue;
             }
             let pcm = takes[play.take.unwrap_or(h as usize) % takes.len()].clone();
-            let pitch = play.pitch * heard.doppler * pitch_j;
+            let pitch = play.pitch * layer.pitch * heard.doppler * pitch_j;
             let pan = (heard.pan + play.pan).clamp(-1.0, 1.0);
             let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan, pitch, cutoff: heard.cutoff, send: heard.send };
             let vid = self.voice_id();
@@ -562,7 +578,7 @@ impl Audio {
                 for &(vid, li) in &inst.voices {
                     let layer = &cue.layers[li.min(cue.layers.len() - 1)];
                     let w = layer.weight(heard.distance);
-                    let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff, send: heard.send };
+                    let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch: pitch * layer.pitch, cutoff: heard.cutoff, send: heard.send };
                     self.commands.push(Command::Update { id: vid, params });
                 }
                 continue;
@@ -579,7 +595,7 @@ impl Audio {
                 }
                 let pcm = takes[(h as usize) % takes.len()].clone();
                 let w = layer.weight(heard.distance);
-                let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch, cutoff: heard.cutoff, send: heard.send };
+                let params = VoiceParams { gain: gain * w * db_to_gain(layer.gain_db), pan: heard.pan, pitch: pitch * layer.pitch, cutoff: heard.cutoff, send: heard.send };
                 let offset = (h >> 16) as f32 / (1u64 << 48) as f32 * pcm.seconds();
                 let vid = self.voice_id();
                 self.commands.push(Command::Start { id: vid, pcm, bus: cue.bus.index(), looped: true, params, delay: 0.0, offset, fade_in: 0.15 });

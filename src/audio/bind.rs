@@ -7,9 +7,10 @@
 //! A binding names the cue it wants by its most specific id; the manifest
 //! resolves it to the nearest one it has (`Manifest::resolve`).
 
+use crate::bong::Side;
 use crate::math::Vec2;
 use crate::obstacle::{Drum, Material};
-use crate::simulation::{Event, Game, HitTarget, Outcome};
+use crate::simulation::{Event, Game, HitCause, HitTarget, Outcome};
 use crate::tank::{ActiveWeapon, ChargeEnd, Tank};
 use crate::tower::TowerKind;
 use crate::tuning::tuning;
@@ -47,11 +48,30 @@ pub struct Play {
     /// Added to the pan the sound's place gives it: a twin gun's barrels a
     /// little apart.
     pub pan: f32,
+    /// Who hears it.
+    pub hears: Hears,
+}
+
+/// Who hears a sound: anyone in earshot, or only a window that plays one
+/// seat - a warning aimed at it, its own hit marker, the inside of its own
+/// hull. `bind` names the seat; the director, which knows the window's
+/// seats, keeps the sound or drops it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hears {
+    All,
+    /// The seat in this owner slot.
+    Seat(usize),
 }
 
 impl Play {
     pub fn new(cue: impl Into<String>, at: At) -> Play {
-        Play { cue: cue.into(), at, strength: 1.0, pitch: 1.0, after: 0.0, source: 0, take: None, pan: 0.0 }
+        Play { cue: cue.into(), at, strength: 1.0, pitch: 1.0, after: 0.0, source: 0, take: None, pan: 0.0, hears: Hears::All }
+    }
+
+    /// Heard only by a window that plays the seat in `slot`.
+    pub fn for_seat(mut self, slot: usize) -> Play {
+        self.hears = Hears::Seat(slot);
+        self
     }
 
     pub fn take(mut self, take: usize) -> Play {
@@ -129,6 +149,7 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
             Outcome::Playing => Binding::Silent("a round that goes on"),
         },
         Event::Fired { slot, weapon } => fired(game, slot, weapon),
+        Event::DryFired { slot, .. } => one(Play::new(ids::DRY_FIRE.0, At::Slot(slot)).source(slot as u64).for_seat(slot)),
         Event::Placed { .. } => Binding::Silent("a seat placed by the dev tools or a restart"),
         Event::LaserBeam { x0, y0, leg, .. } => {
             if leg == 0 {
@@ -138,18 +159,7 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
             }
         }
         Event::Shoved { .. } => Binding::Silent("the blow that shoved the tank sounds"),
-        Event::Hit { cause, .. } if !cause.is_shot() => Binding::Silent("the blast, fire, lava or slime that did it sounds"),
-        Event::Hit { target, damage, killed: _, x, y, cause } => {
-            let shot = source::hit_shot(cause);
-            let what = match target {
-                HitTarget::Player { .. } | HitTarget::Enemy { .. } => "hull".to_string(),
-                HitTarget::Bong { .. } => "bong".to_string(),
-                HitTarget::Obstacle { material } => format!("{}.{}", source::surface_family(material), source::material_name(material)),
-                HitTarget::Wall => "wall".to_string(),
-            };
-            let strength = (0.6 + damage / 40.0).clamp(0.5, 1.3);
-            one(Play::new(format!("hit.{shot}.{what}"), point(x, y)).strength(strength).source(key(x.to_bits() as u64, y.to_bits() as u64)))
-        }
+        Event::Hit { target, damage, killed, x, y, cause, by } => hit(game, Landed { target, damage, killed, at: Vec2::new(x, y), cause, by }),
         Event::SonicBlast { x, y, .. } => one(Play::new("weapon.sonic_hammer.fire", point(x, y))),
         Event::TellStarted { .. } => Binding::Watched("tell"),
         Event::EmpPulse { x, y, .. } => one(Play::new("weapon.emp_burst.fire", point(x, y))),
@@ -176,6 +186,10 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         Event::DroneLaunched { x, y, .. } => one(Play::new("weapon.fpv_swarm.launch", point(x, y))),
         Event::DroneBurst { x, y, .. } => on_water(game, x, y, Play::new("weapon.fpv_swarm.burst", point(x, y)), ids::WATER_BLAST.0, 0.5),
         Event::DroneDowned { x, y, .. } => one(Play::new("weapon.fpv_swarm.downed", point(x, y))),
+        Event::AirHit { id, aircraft, x, y } => {
+            let cue = if aircraft { ids::AIR_HIT_HELI } else { ids::AIR_HIT_DRONE };
+            one(Play::new(cue.0, point(x, y)).source(key(id as u64, aircraft as u64)))
+        }
         Event::DroneCrashed { x, y, .. } => on_water(game, x, y, Play::new("weapon.fpv_swarm.downed.crash", point(x, y)), ids::WATER_PLOP.0, 0.7),
         Event::DroneLockLost { .. } => Binding::Silent("the drone flies on; its lock tone stops with the watcher"),
         Event::AirSupportCalled { .. } => one(Play::new("air.called", At::Nowhere)),
@@ -212,8 +226,16 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         Event::PickupCollected { kind, x, y, .. } => one(Play::new(source::pickup_cue(kind), point(x, y))),
         Event::CrateBroken { cooked, x, y, .. } => one(Play::new(if cooked { "pickup.crate.cookoff" } else { "pickup.crate.break" }, point(x, y))),
         Event::PickupRespawned { x, y, .. } => one(Play::new("pickup.respawn", point(x, y))),
-        Event::Deflected { x, y, .. } => one(Play::new("hit.deflect", point(x, y))),
-        Event::Ricochet { x, y, .. } => one(Play::new("hit.ricochet", point(x, y))),
+        // Keyed by the shield, so one shield turning a stream is one
+        // sound at a time while two shields never hold each other back.
+        Event::Deflected { slot, x, y } => one(Play::new("hit.deflect", point(x, y)).source(key(slot as u64, 0xDEF))),
+        // By the shot and what it glanced off; keyed by its gun and kind,
+        // so one gun's glances thin out and another gun's are their own.
+        // Its whine follows the shot away (`watch.rs`'s ricochet watcher).
+        Event::Ricochet { slot, shot, off, x, y, .. } => {
+            let cue = format!("hit.ricochet.{}.{}", source::hit_shot(shot), struck(off));
+            one(Play::new(cue, point(x, y)).source(key(slot as u64, shot as u64)))
+        }
         Event::ShieldBroken { x, y, .. } => one(Play::new("hit.shield_break", point(x, y))),
         Event::ShellsCollided { x, y } => one(Play::new("hit.shells_collide", point(x, y))),
         Event::BongBite { slot, .. } => one(Play::new("bong.bite", At::Slot(slot))),
@@ -230,7 +252,7 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
             if collapsed {
                 one(Play::new(format!("destroy.{family}.collapse"), point(x, y)))
             } else {
-                one(Play::new(format!("chunk.{family}"), point(x, y)).strength((0.6 + broken as f32 * 0.1).min(1.2)))
+                one(Play::new(format!("chunk.{family}"), point(x, y)).strength((0.6 + broken.count_ones() as f32 * 0.1).min(1.2)))
             }
         }
         Event::ChunksCharred { .. } => Binding::Watched("fire"),
@@ -255,9 +277,14 @@ pub fn bind(event: &Event, game: &Game) -> Binding {
         Event::FireStarted { x, y, .. } => one(Play::new("world.fire.ignite", point(x, y)).source(key(x.to_bits() as u64, y.to_bits() as u64))),
         Event::Ignited { x, y, .. } => one(Play::new("world.fire.ignite", point(x, y)).source(key(x.to_bits() as u64, y.to_bits() as u64))),
         Event::OilPrinted { .. } => Binding::Silent("tread marks in oil, seen not heard"),
-        Event::MissileLocked { target, .. } => match target {
-            Some(target) => one(Play::new(ids::LOCK_ON.0, At::Slot(target)).source(target as u64)),
-            None => Binding::Silent("a lock on nothing"),
+        // The alarm is the locked seat's alone; the seat whose missile
+        // locked hears a soft chirp; nobody else hears either.
+        Event::MissileLocked { slot, target, .. } => match target {
+            Some(target) => Binding::Play(vec![
+                Play::new(ids::LOCK_ON.0, At::Slot(target)).source(target as u64).for_seat(target),
+                Play::new(ids::LOCK_ACQUIRED.0, At::Slot(slot)).source(slot as u64).for_seat(slot),
+            ]),
+            None => Binding::Silent("a lock on the ground point: no tank to warn"),
         },
         Event::MissileBlast { x, y, .. } => on_water(game, x, y, Play::new("explosion.missile", point(x, y)), ids::WATER_BLAST.0, 0.8),
         Event::GrenadeBlast { x, y, .. } => on_water(game, x, y, Play::new("explosion.grenade", point(x, y)), ids::WATER_BLAST.0, 0.8),
@@ -303,6 +330,110 @@ fn on_water(game: &Game, x: f32, y: f32, play: Play, water: &'static str, streng
 
 fn destroyed(material: Material) -> String {
     format!("destroy.{}.{}", source::surface_family(material), source::material_name(material))
+}
+
+/// One `Event::Hit`, as `hit` reads it.
+#[derive(Clone, Copy)]
+struct Landed {
+    target: HitTarget,
+    damage: f32,
+    killed: bool,
+    at: Vec2,
+    cause: HitCause,
+    by: Option<usize>,
+}
+
+/// What a shot struck, as the last part of a hit's or a ricochet's cue id:
+/// `hull`, `bong`, `wall`, or `<family>.<material>`.
+fn struck(target: HitTarget) -> String {
+    match target {
+        HitTarget::Player { .. } | HitTarget::Enemy { .. } => "hull".to_string(),
+        HitTarget::Bong { .. } => "bong".to_string(),
+        HitTarget::Obstacle { material } => format!("{}.{}", source::surface_family(material), source::material_name(material)),
+        HitTarget::Wall => "wall".to_string(),
+    }
+}
+
+/// The owner slot of the hull a hit landed on; `None` for anything else.
+fn hull_slot(target: HitTarget) -> Option<usize> {
+    match target {
+        HitTarget::Player { player } => Some(player as usize),
+        HitTarget::Enemy { slot } => Some(slot),
+        HitTarget::Bong { .. } | HitTarget::Obstacle { .. } | HitTarget::Wall => None,
+    }
+}
+
+/// A hit's sounds (docs/sound-system-prd.md section 4.4): the impact, by
+/// what landed on what (`impact`); a bong's death; and the shooter's own
+/// word on it (`marker`). A blast's share and the ground's burns make no
+/// impact - the blast, fire, lava or slime that did it sounds, though a
+/// shield that takes a blast's share whole thrums on its hull - and nor
+/// does the rod's crush, past its `RodImpact`.
+fn hit(game: &Game, h: Landed) -> Binding {
+    let mut plays = Vec::new();
+    if h.killed && matches!(h.target, HitTarget::Bong { .. }) {
+        plays.push(Play::new(ids::BONG_DEATH.0, At::Point(h.at)));
+    }
+    if h.cause.is_shot() && h.cause != HitCause::Rod {
+        plays.extend(impact(game, &h));
+    } else if let (HitCause::Blast, Some(slot)) = (h.cause, hull_slot(h.target))
+        && shield_took(game, slot, h.damage)
+    {
+        plays.push(Play::new(ids::HIT_SHIELD.0, At::Slot(slot)).source(key(slot as u64, HitCause::Blast as u64)));
+    }
+    plays.extend(marker(&h));
+    if plays.is_empty() { Binding::Silent("the blast, fire, lava, slime or rod that did it sounds") } else { Binding::Play(plays) }
+}
+
+/// Whether the shield of the hull in `slot` took a hit of `damage` whole:
+/// a shield takes all of one (`Tank::take_damage`), the one that breaks it
+/// too.
+fn shield_took(game: &Game, slot: usize, damage: f32) -> bool {
+    damage <= 0.0
+        && (tank_in(game, slot).is_some_and(|t| t.is_shielded()) || game.events().iter().any(|e| matches!(*e, Event::ShieldBroken { slot: s, .. } if s == slot)))
+}
+
+/// A shot landing: `hit.<shot>.<what>`. On a hull, pitched by the hull's
+/// mass, and heard from inside it by the window playing that seat
+/// (`source::hull_inside`); on a shield that took it whole, the shield's
+/// thrum instead. Keyed by the gun and the cause, so one gun's stream holds
+/// to its cue's cooldown and another gun's hits are their own.
+fn impact(game: &Game, h: &Landed) -> Vec<Play> {
+    let shot = source::hit_shot(h.cause);
+    let strength = (0.6 + h.damage / 40.0).clamp(0.5, 1.3);
+    let source = key(h.by.map_or(u64::MAX, |s| s as u64), h.cause as u64);
+    let Some(slot) = hull_slot(h.target) else {
+        return vec![Play::new(format!("hit.{shot}.{}", struck(h.target)), At::Point(h.at)).strength(strength).source(source)];
+    };
+    if shield_took(game, slot, h.damage) {
+        return vec![Play::new(ids::HIT_SHIELD.0, At::Point(h.at)).source(source)];
+    }
+    let mass = tank_in(game, slot).map_or(1.0, |t| t.mass_factor());
+    let pitch = source::hull_pitch(mass, tuning().audio_hull_mass_pitch);
+    let mut plays = vec![Play::new(format!("hit.{shot}.hull"), At::Point(h.at)).strength(strength).pitch(pitch).source(source)];
+    if let Some(inside) = source::hull_inside(h.cause) {
+        plays.push(Play::new(ids::HULL_INSIDE.0, At::Slot(slot)).strength(inside * strength).pitch(pitch).source(source).for_seat(slot));
+    }
+    plays
+}
+
+/// The shooter's own word on a hit, heard only by the window that plays
+/// it: a tick on a hull or a bong of the other side, a buzz on one of its
+/// own side - itself included. A tile or the field's edge says nothing, nor
+/// a tower's shot, and a blast only where it hurt.
+fn marker(h: &Landed) -> Option<Play> {
+    let by = h.by.filter(|&s| s != crate::shell::TOWER_SLOT)?;
+    if !(h.cause.is_shot() || (h.cause == HitCause::Blast && h.damage > 0.0)) {
+        return None;
+    }
+    // Only a seat is ever played, so its side is the players'.
+    let friendly = match h.target {
+        HitTarget::Player { .. } | HitTarget::Bong { side: Side::Player } => true,
+        HitTarget::Enemy { .. } | HitTarget::Bong { side: Side::Enemy } => false,
+        HitTarget::Obstacle { .. } | HitTarget::Wall => return None,
+    };
+    let cue = if friendly { ids::FRIENDLY_FIRE } else { ids::HIT_MARKER };
+    Some(Play::new(cue.0, At::Nowhere).source(by as u64).for_seat(by))
 }
 
 /// A tank's shot: the cannon tiered by its calibre; a twin gun's shells

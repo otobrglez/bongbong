@@ -533,7 +533,7 @@ impl Game {
             }
         }
         for (side, at, dmg, killed) in hurt {
-            f.events.push(Event::Hit { target: HitTarget::Bong { side }, damage: dmg, killed, x: at.x, y: at.y, cause: HitCause::Well });
+            f.events.push(Event::Hit { target: HitTarget::Bong { side }, damage: dmg, killed, x: at.x, y: at.y, cause: HitCause::Well, by: Some(owner.slot()) });
         }
     }
 

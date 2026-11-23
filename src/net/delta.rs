@@ -1040,7 +1040,7 @@ mod tests {
         }
         c.normalise();
         c.events = vec![
-            WireEvent::Hit { target: crate::net::events::WireHitTarget::Enemy { slot: 1 }, damage: 12.0, killed: false, x: 400, y: 800, cause: crate::simulation::HitCause::Shell },
+            WireEvent::Hit { target: crate::net::events::WireHitTarget::Enemy { slot: 1 }, damage: 12.0, killed: false, x: 400, y: 800, cause: crate::simulation::HitCause::Shell, by: None },
             WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: 0 },
         ];
         let busy = encode(&Msg::Delta(delta(&b, &c))).len();
