@@ -227,8 +227,9 @@ mod tests {
     /// change to the generator is a change to this row; Serpent River's
     /// moved with the laser crate by its start, and Wildwood's with its
     /// campaign crates by the start and no rod or rail (BB-220). Jungle
-    /// Temple is `tools/gen_jungle_temple.py`'s output (BB-228), and
-    /// Archipelago `tools/gen_archipelago.py`'s (BB-229), the same way.
+    /// Temple is `tools/gen_jungle_temple.py`'s output (BB-228),
+    /// Archipelago `tools/gen_archipelago.py`'s (BB-229) and Castle Moat
+    /// `tools/gen_castle_moat.py`'s (BB-234), the same way.
     #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 25] = [
         ("default", 0xc35e_5595_2de6_4cd3),
@@ -244,7 +245,7 @@ mod tests {
         ("vulkan", 0x395e_f95d_1bf2_027f),
         ("hedge-maze", 0x68c1_52d8_967f_f751),
         ("oasis-bazaar", 0x9f8f_c048_b56e_efd5),
-        ("castle-moat", 0x409a_b1b1_6c81_3664),
+        ("castle-moat", 0x3bb6_079d_9452_0951),
         ("archipelago", 0xcf0c_571c_f251_4d1b),
         ("black-gold", 0xcd33_1ccb_504a_594c),
         ("harbor-lights", 0x5382_14f7_f83d_bec7),
