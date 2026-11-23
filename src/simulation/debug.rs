@@ -1210,6 +1210,42 @@ impl Game {
         Ok(())
     }
 
+    /// Park a target in a controlled combat scenario without disabling its
+    /// electrics. It remains an enemy for hit tests and can be shoved.
+    pub fn debug_park_enemy(&mut self, slot: usize) -> Result<(), String> {
+        let entity = self.tank_entity_by_slot(slot).ok_or_else(|| format!("no tank in slot {slot}"))?;
+        let mut tank = self.world.get::<&mut Tank>(entity).map_err(|e| e.to_string())?;
+        if tank.is_player() || tank.is_wreck() || tank.body.is_none() {
+            return Err(format!("slot {slot} is not a live enemy on the field"));
+        }
+        tank.speed_scale = 0.0;
+        tank.disarm();
+        tank.shells_ammo = 0;
+        // The balance probe's longest target run is 60 seconds.
+        tank.recharge_timer = -60.0;
+        Ok(())
+    }
+
+    /// Set up a shield using its normal capacity and lifetime. Setting only
+    /// shield_hp through TankPatch intentionally does not start a clock.
+    pub fn debug_set_shield(&mut self, slot: usize, raised: bool) -> Result<(), String> {
+        let entity = self.tank_entity_by_slot(slot).ok_or_else(|| format!("no tank in slot {slot}"))?;
+        let mut tank = self.world.get::<&mut Tank>(entity).map_err(|e| e.to_string())?;
+        tank.shield_hp = 0.0;
+        tank.shield_timer = 0.0;
+        tank.shield_recharge_delay = 0.0;
+        tank.shield_broke = false;
+        if raised {
+            tank.raise_shield();
+        }
+        Ok(())
+    }
+
+    /// Unrounded health, including zero on the frame the bong dies.
+    pub fn debug_bong_health(&self) -> Option<f32> {
+        self.bong.and_then(|entity| self.world.get::<&Bong>(entity).ok().map(|bong| bong.health))
+    }
+
     /// Heal the players' bong back to full health while it lives - for
     /// tooling (the probe's `survive` scenario keeps it standing as it
     /// keeps the seats). A dead bong stays dead (`Bong::heal`).
@@ -1280,7 +1316,8 @@ impl Game {
             return Err(format!("row {row} is outside 0..{TANK_VARIANTS}"));
         }
         let rng = self.rng.as_mut().expect("checked above");
-        let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
+        let variance = tuning().enemy_speed_variance;
+        let factor = 1.0 + super::combat::roll_range(rng, -variance, variance);
         let mut enemy = Tank {
             row,
             shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],

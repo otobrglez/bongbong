@@ -1,0 +1,28 @@
+# Protect holdout. The two scripts share the same opening pickup lane as
+# practice, but enemies approach around a wider middle block and a drum.
+version = 1
+view = "whole"
+size = [28, 18]
+tanks = 3
+tank = "scout"
+weather = "clear"
+
+[cells]
+"12,10" = { kind = "start" }
+"13,12" = { kind = "bong" }
+"10,10" = { kind = "pickup", pickup = "minigun" }
+"8,10" = { kind = "pickup", pickup = "shield" }
+"18,13" = { kind = "pickup", pickup = "bong_health" }
+"11,6" = { kind = "wall", material = "brick" }
+"12,6" = { kind = "wall", material = "brick" }
+"13,6" = { kind = "wall", material = "brick" }
+"14,6" = { kind = "wall", material = "brick" }
+"15,6" = { kind = "wall", material = "brick" }
+"16,8" = { kind = "barrel", drum = "oil" }
+"18,9" = { kind = "sandbag" }
+
+[mission]
+kind = "protect"
+
+[spawn]
+kind = "band"

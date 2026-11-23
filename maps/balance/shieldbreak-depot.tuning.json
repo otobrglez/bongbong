@@ -1,0 +1,9 @@
+{
+  "player_armor_factor": 0.70175,
+  "shield_capacity": 82.98998,
+  "shield_seconds": 5.74081,
+  "shield_deflect_cost_factor": 2.00062,
+  "grenade_blast_damage_min": 31.8276,
+  "grenade_blast_damage_max": 53.04601,
+  "wave_gap_seconds": 6.0
+}
