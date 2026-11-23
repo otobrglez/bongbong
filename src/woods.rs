@@ -193,6 +193,11 @@ impl Woods {
         }
     }
 
+    /// Whether the woods have any trail through them.
+    pub fn has_trails(&self) -> bool {
+        !self.trails.is_empty()
+    }
+
     /// The centres of the trail cells, in cell order: cover like tall grass.
     pub fn trail_positions(&self) -> impl Iterator<Item = Position> + '_ {
         let mut cells: Vec<(i32, i32)> = self.trails.iter().copied().collect();

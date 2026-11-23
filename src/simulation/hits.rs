@@ -41,6 +41,7 @@ pub(crate) enum ShellTarget {
 }
 
 /// One obstacle tile's hit box this frame.
+#[derive(Clone, Copy)]
 pub(crate) struct TerrainBox {
     pub entity: Entity,
     pub center: Position,
@@ -78,13 +79,14 @@ pub(crate) enum Entry {
 
 impl TerrainBox {
     /// `entity`'s box as a snapshot of the world takes it, among the
-    /// seam-closing `cells` (`closes_seam`) round it.
-    fn of(entity: Entity, o: &Obstacle, cells: &HashSet<(i32, i32)>) -> TerrainBox {
+    /// seam-closing tiles (`closes_seam`) round it: `cells` answers which
+    /// cells hold one - a set's lookup, or `TileGrid`'s grid of them.
+    fn of(entity: Entity, o: &Obstacle, cells: impl Fn((i32, i32)) -> bool) -> TerrainBox {
         let (gx, gy) = battlefield::pos_to_cell(o.position);
         TerrainBox {
             entity,
             center: o.position,
-            half: battlefield::tile_half_extent(o.material, cells, gx, gy, o.hull_size() * 0.5),
+            half: battlefield::tile_half_extent_by(o.material, cells, gx, gy, o.hull_size() * 0.5),
             material: o.material,
             burning: o.burning,
             // A cage (`Obstacle::cage`) stands as a tile with no
@@ -148,8 +150,17 @@ impl TerrainBox {
 /// Static terrain snapshot for one frame - see the module doc. Built once
 /// per `Game::update`, after the bong's hop tick, and shared by the AI's
 /// line-of-sight checks, engagement-slot validation and every hit test.
+/// A round builds each tick's in the storage of the tick before's
+/// (`Game::kept_terrain`, `rebuilt`), so a tick allocates nothing for its
+/// tiles once the field has stood one.
+#[derive(Default)]
 pub(crate) struct Terrain {
+    /// Every tile standing, in cell order (`cell_order`), those of one
+    /// cell in the order a walk of the world meets them.
     obstacles: Vec<TerrainBox>,
+    /// `obstacles` filed by cell: what a query reads instead of all of
+    /// them (`tiles_along`).
+    grid: TileGrid,
     bongs: Vec<(Entity, Position)>,
     /// Every hull on the field, standing or wrecked, as the centre and
     /// half-extents of its movement box grown by `bong_hull_clearance_px`:
@@ -169,6 +180,53 @@ pub(crate) struct Terrain {
     /// taken: the extra half-extent a player's shot gets against an
     /// enemy's hull and turret boxes in `sweep`.
     player_shot_pad: f32,
+}
+
+/// How much further than its own geometry reaches a query reads cells,
+/// px: room for the rounding of a box test, which never meets a tile a
+/// whole pixel past where the segment and the pad reach.
+const GRID_MARGIN_PX: f32 = 1.0;
+
+/// A `Terrain`'s tiles filed by the cell each stands in
+/// (`battlefield::pos_to_cell`), so a query reads the cells it can reach
+/// rather than every tile on the field. The tiles are in cell order, row
+/// by row, so one cell's are one run of them and one row's cells one
+/// longer run: `starts[k]..starts[k + 1]` are cell `k`'s, counted row by
+/// row from `(col0, row0)`. A query reads the rows it reaches in order, a
+/// run each, and so meets the tiles a walk of them all would, in that
+/// walk's order, less the ones it cannot touch: it answers exactly as the
+/// whole walk does, an exact tie included.
+#[derive(Default)]
+struct TileGrid {
+    col0: i32,
+    row0: i32,
+    cols: usize,
+    rows: usize,
+    starts: Vec<u32>,
+    /// How far any tile's box reaches from its cell's centre, px: half a
+    /// cell (a loose tile stands anywhere in its cell) and the widest half
+    /// extent of any tile.
+    reach: f32,
+}
+
+impl TileGrid {
+    /// The tiles of row `row`'s cells `c0..=c1`, as a range of
+    /// `Terrain::obstacles`; empty where the columns are.
+    fn run(&self, row: i32, c0: i32, c1: i32) -> std::ops::Range<usize> {
+        if c0 > c1 {
+            return 0..0;
+        }
+        let base = (row - self.row0) as usize * self.cols;
+        self.starts[base + (c0 - self.col0) as usize] as usize..self.starts[base + (c1 - self.col0) as usize + 1] as usize
+    }
+
+    /// The cells along one axis whose tiles can reach `lo..=hi`: those
+    /// whose centre is within `grow` of it, held to `first..=last`. `lo >
+    /// hi` back where none are.
+    fn span(lo: f32, hi: f32, grow: f32, first: i32, last: i32) -> (i32, i32) {
+        let size = crate::OBSTACLE_GRID_SIZE;
+        (((lo - grow) / size).floor().max(first as f32) as i32, ((hi + grow) / size).ceil().min(last as f32) as i32)
+    }
 }
 
 /// How far back lag compensation reaches, in ticks: 250 ms at 60 Hz. A
@@ -322,39 +380,137 @@ pub(crate) fn inside_fixed_tile(world: &hecs::World, p: Position) -> bool {
     let cells: HashSet<(i32, i32)> = near.iter().filter(|(_, o)| closes_seam(o)).map(|(_, o)| battlefield::pos_to_cell(o.position)).collect();
     near.iter()
         .filter(|(_, o)| !o.material.is_loose() && within(o, 2.0))
-        .any(|&(entity, o)| TerrainBox::of(entity, o, &cells).entry(p, p, 0.0, Entry::Solid).is_some())
+        .any(|&(entity, o)| TerrainBox::of(entity, o, |cell| cells.contains(&cell)).entry(p, p, 0.0, Entry::Solid).is_some())
 }
 
 impl Terrain {
     /// Snapshot the world's static terrain. Tiles already flagged
     /// `destroyed` (removed at the end of this frame) are left out.
     pub fn build(world: &hecs::World, width: f32, height: f32, grass: &[Position], water: &crate::ground::WaterLayout) -> Self {
-        let cells: HashSet<(i32, i32)> = world.query::<&Obstacle>().iter().filter(|o| closes_seam(o)).map(|o| battlefield::pos_to_cell(o.position)).collect();
-        let mut obstacles: Vec<TerrainBox> =
-            world.query::<(Entity, &Obstacle)>().iter().filter(|(_, o)| !o.destroyed).map(|(entity, o)| TerrainBox::of(entity, o, &cells)).collect();
-        // Cell order, and the bongs in theirs: two boxes a shot enters at
-        // the same instant are told apart by where they stand.
-        obstacles.sort_by_key(|b| super::cell_order(b.center));
-        let bongs = super::ordered(world.query::<(Entity, &Bong)>().iter(), |(_, b)| super::bong_order(b)).into_iter().map(|(e, f)| (e, f.position)).collect();
+        Terrain::default().rebuilt(world, width, height, grass, water)
+    }
+
+    /// `build`, in this snapshot's storage: everything it held is
+    /// replaced, nothing of it is read.
+    pub fn rebuilt(mut self, world: &hecs::World, width: f32, height: f32, grass: &[Position], water: &crate::ground::WaterLayout) -> Self {
+        self.file_tiles(world);
+        // The bongs in their order: two boxes a shot enters at the same
+        // instant are told apart by where they stand.
+        self.bongs.clear();
+        self.bongs.extend(super::ordered(world.query::<(Entity, &Bong)>().iter(), |(_, b)| super::bong_order(b)).into_iter().map(|(e, f)| (e, f.position)));
         let clearance = tuning().bong_hull_clearance_px;
-        let hulls = world
-            .query::<&Tank>()
-            .iter()
-            .filter(|t| t.body.is_some())
-            .map(|t| {
-                let (hx, hy) = t.move_half_extents(t.facing_along_x());
-                (t.position, Position::new(hx + clearance, hy + clearance))
-            })
-            .collect();
-        Terrain {
-            obstacles,
-            bongs,
-            hulls,
-            walls: battlefield::wall_rects(width, height),
-            grass: grass.to_vec(),
-            water: water.clone(),
-            player_shot_pad: tuning().player_shot_hit_pad_px,
+        self.hulls.clear();
+        self.hulls.extend(world.query::<&Tank>().iter().filter(|t| t.body.is_some()).map(|t| {
+            let (hx, hy) = t.move_half_extents(t.facing_along_x());
+            (t.position, Position::new(hx + clearance, hy + clearance))
+        }));
+        self.walls = battlefield::wall_rects(width, height);
+        self.grass.clear();
+        self.grass.extend_from_slice(grass);
+        self.water = water.clone();
+        self.player_shot_pad = tuning().player_shot_hit_pad_px;
+        self
+    }
+
+    /// Every tile standing as its hit box, in cell order, filed by cell
+    /// (`TileGrid`). Cell order puts two boxes a shot enters at the same
+    /// instant by where they stand, and two in one cell (a drum shoved
+    /// into another's) by the order the world's walk meets them: a stable
+    /// counting sort over the cells, which is exactly a stable sort by
+    /// `cell_order`.
+    fn file_tiles(&mut self, world: &hecs::World) {
+        // The field's bounds in cells, and the cells whose tile closes a
+        // neighbour's seam (`closes_seam`).
+        let (mut lo, mut hi) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+        let mut seams: Vec<(i32, i32)> = Vec::new();
+        for o in world.query::<&Obstacle>().iter().filter(|o| !o.destroyed) {
+            let cell = battlefield::pos_to_cell(o.position);
+            lo = (lo.0.min(cell.0), lo.1.min(cell.1));
+            hi = (hi.0.max(cell.0), hi.1.max(cell.1));
+            if closes_seam(o) {
+                seams.push(cell);
+            }
         }
+        let grid = &mut self.grid;
+        self.obstacles.clear();
+        grid.starts.clear();
+        if lo.0 > hi.0 {
+            // No tiles, no cells: every query reads no row.
+            (grid.col0, grid.row0, grid.cols, grid.rows, grid.reach) = (0, 0, 0, 0, 0.0);
+            return;
+        }
+        let (cols, rows) = ((hi.0 - lo.0 + 1) as usize, (hi.1 - lo.1 + 1) as usize);
+        let index = |(gx, gy): (i32, i32)| (gy - lo.1) as usize * cols + (gx - lo.0) as usize;
+        // The seam-closing cells as a grid rather than a set: the same
+        // answer to every neighbour asked about, any outside the bounds
+        // holding none.
+        let mut closes = vec![false; cols * rows];
+        for &cell in &seams {
+            closes[index(cell)] = true;
+        }
+        let holds = |(gx, gy): (i32, i32)| gx >= lo.0 && gx <= hi.0 && gy >= lo.1 && gy <= hi.1 && closes[index((gx, gy))];
+        // The boxes in the walk's order.
+        let walked: Vec<TerrainBox> =
+            world.query::<(Entity, &Obstacle)>().iter().filter(|(_, o)| !o.destroyed).map(|(entity, o)| TerrainBox::of(entity, o, &holds)).collect();
+        let widest = walked.iter().fold(0.0f32, |w, b| w.max(b.half.x).max(b.half.y));
+        let cell_of = |b: &TerrainBox| index(battlefield::pos_to_cell(b.center));
+        // Counted into place: each cell's run starts past every earlier
+        // cell's, and a cell's tiles go in in the walk's order.
+        grid.starts.resize(cols * rows + 1, 0);
+        for b in &walked {
+            grid.starts[cell_of(b) + 1] += 1;
+        }
+        for k in 0..cols * rows {
+            grid.starts[k + 1] += grid.starts[k];
+        }
+        let mut next: Vec<u32> = grid.starts[..cols * rows].to_vec();
+        self.obstacles.extend_from_slice(&walked);
+        for b in walked {
+            let k = cell_of(&b);
+            self.obstacles[next[k] as usize] = b;
+            next[k] += 1;
+        }
+        grid.col0 = lo.0;
+        grid.row0 = lo.1;
+        grid.cols = cols;
+        grid.rows = rows;
+        grid.reach = crate::OBSTACLE_GRID_SIZE * 0.5 + widest;
+    }
+
+    /// The tiles a segment `p0..p1` grown by `pad` either side can meet -
+    /// a point's are the segment `p..p`'s - in the snapshot's order (see
+    /// `TileGrid`): the rows its bounds reach, and in each row the columns
+    /// the part of it that crosses the row's band reaches.
+    fn tiles_along(&self, p0: Position, p1: Position, pad: f32) -> impl Iterator<Item = &TerrainBox> + '_ {
+        let g = &self.grid;
+        let size = crate::OBSTACLE_GRID_SIZE;
+        let grow = g.reach + pad.max(0.0) + GRID_MARGIN_PX;
+        let (last_col, last_row) = (g.col0 + g.cols as i32 - 1, g.row0 + g.rows as i32 - 1);
+        // A coordinate that is not a number reads every tile, as the
+        // whole walk would have.
+        let finite = [p0.x, p0.y, p1.x, p1.y, grow].iter().all(|v| v.is_finite());
+        let (r0, r1) = if finite { TileGrid::span(p0.y.min(p1.y), p0.y.max(p1.y), grow, g.row0, last_row) } else { (g.row0, last_row) };
+        let d = Position::new(p1.x - p0.x, p1.y - p0.y);
+        (r0..=r1).flat_map(move |row| {
+            let (c0, c1) = if !finite {
+                (g.col0, last_col)
+            } else if d.y == 0.0 {
+                TileGrid::span(p0.x.min(p1.x), p0.x.max(p1.x), grow, g.col0, last_col)
+            } else {
+                // Where along the segment it is within `grow` of the row's
+                // centre line, and the columns that stretch reaches.
+                let centre = row as f32 * size;
+                let (a, b) = ((centre - grow - p0.y) / d.y, (centre + grow - p0.y) / d.y);
+                let (ta, tb) = (a.min(b).max(0.0), a.max(b).min(1.0));
+                if ta > tb {
+                    (1, 0)
+                } else {
+                    let (xa, xb) = (p0.x + d.x * ta, p0.x + d.x * tb);
+                    TileGrid::span(xa.min(xb), xa.max(xb), grow, g.col0, last_col)
+                }
+            };
+            self.obstacles[g.run(row, c0, c1)].iter()
+        })
     }
 
     /// This snapshot with another pad on enemy boxes for a player's shot -
@@ -402,8 +558,7 @@ impl Terrain {
     /// tiles that do not block sight - a gravity well's orb.
     pub fn first_tall_along(&self, p0: Position, p1: Position, half: f32) -> Option<f32> {
         let pad = Position::new(half, half);
-        self.obstacles
-            .iter()
+        self.tiles_along(p0, p1, half)
             .filter(|b| b.material.blocks_sight())
             .filter_map(|b| segment_hits_aabb(p0, p1, b.center, b.half + pad))
             .min_by(|a, b| a.total_cmp(b))
@@ -428,7 +583,7 @@ impl Terrain {
     /// The first tile the segment `p0..p1`, `pad` wide, enters as `mode`
     /// meets tiles (`TerrainBox::entry`), as a fraction of it.
     pub fn first_along(&self, p0: Position, p1: Position, pad: f32, mode: Entry) -> Option<f32> {
-        self.obstacles.iter().filter_map(|b| b.entry(p0, p1, pad, mode)).min_by(|a, b| a.total_cmp(b))
+        self.tiles_along(p0, p1, pad).filter_map(|b| b.entry(p0, p1, pad, mode)).min_by(|a, b| a.total_cmp(b))
     }
 
     /// Whether a blast at `from` reaches `to` with no permanent tile
@@ -439,7 +594,7 @@ impl Terrain {
     /// off on an iron wall's face still reaches its own side of it.
     pub fn line_of_fire(&self, from: Position, to: Position) -> bool {
         let inset = Position::new(LINE_OF_FIRE_INSET_PX, LINE_OF_FIRE_INSET_PX);
-        self.obstacles.iter().filter(|b| b.material.is_permanent()).all(|b| {
+        self.tiles_along(from, to, 0.0).filter(|b| b.material.is_permanent()).all(|b| {
             let half = b.half - inset;
             let inside = (from.x - b.center.x).abs() <= half.x && (from.y - b.center.y).abs() <= half.y;
             inside || segment_hits_aabb(from, to, b.center, half).is_none()
@@ -459,8 +614,7 @@ impl Terrain {
         let to = Position::new(from.x + dir.x * reach, from.y + dir.y * reach);
         let shot = Position::new(pad, pad);
         let across = if dir.x.abs() > dir.y.abs() { Position::new(0.0, lane) } else { Position::new(lane, 0.0) };
-        self.obstacles
-            .iter()
+        self.tiles_along(from, to, pad)
             .filter_map(|b| {
                 let t = segment_hits_aabb(from, to, b.center, b.half + shot)?;
                 if let Some(standing) = b.chunks {
@@ -502,7 +656,7 @@ impl Terrain {
     /// `bong_fits` against the tiles alone.
     fn bong_clears_tiles(&self, p: Position) -> bool {
         let half = bong_half();
-        !self.obstacles.iter().any(|b| {
+        !self.tiles_along(p, p, half.x.max(half.y)).any(|b| {
             (p.x - b.center.x).abs() < b.half.x + half.x && (p.y - b.center.y).abs() < b.half.y + half.y
         })
     }
@@ -532,8 +686,7 @@ impl Terrain {
     /// `line_of_sight` from inside the tile `own`: a tower looking out of
     /// its own cell, whose box every such segment starts in.
     pub fn line_of_sight_from(&self, own: Entity, from: Position, to: Position) -> bool {
-        self.obstacles
-            .iter()
+        self.tiles_along(from, to, tuning().shell_hit_half_extent)
             .filter(|b| b.entity != own && b.material.blocks_sight())
             .all(|b| !b.blocks_line(from, to))
             && self.bongs.iter().all(|&(_, p)| segment_hits_aabb(from, to, p, bong_half()).is_none())
@@ -546,8 +699,7 @@ impl Terrain {
     /// (sandbags, fences - `Material::blocks_sight`) are looked over, and
     /// a holed one is looked through (`TerrainBox::blocks_line`).
     pub fn line_of_sight_to_bong(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
-        self.obstacles
-            .iter()
+        self.tiles_along(from, to, tuning().shell_hit_half_extent)
             .filter(|b| b.material.blocks_sight())
             .all(|b| !b.blocks_line(from, to))
             && self
@@ -564,8 +716,7 @@ impl Terrain {
     /// is what lets a hunter shoot its way into a brick bunker instead of
     /// circling it for a line of sight that never comes.
     pub fn line_of_fire_to_bong(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
-        self.obstacles
-            .iter()
+        self.tiles_along(from, to, 0.0)
             .filter(|b| b.material.is_permanent())
             .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
             && self
@@ -668,7 +819,7 @@ impl Terrain {
             consider_hit(&mut best, segment_hits_aabb(p0, p1, pos, bong_half() + pad), 2, ShellTarget::Bong(entity));
         }
 
-        for b in &self.obstacles {
+        for b in self.tiles_along(p0, p1, half_extent) {
             if ignore.contains(&b.entity) {
                 continue;
             }
@@ -752,7 +903,7 @@ impl Terrain {
         }
         let cell_key = |c: Position| ((c.y / crate::OBSTACLE_GRID_SIZE).floor() as i64) * 65_536 + (c.x / crate::OBSTACLE_GRID_SIZE).floor() as i64;
         let mut stoppers: Vec<f32> = Vec::new();
-        for b in &self.obstacles {
+        for b in self.tiles_along(p0, p1, half_extent) {
             if let Some(t) = band.reaches(b.center, b.half + pad).then(|| b.entry(p0, p1, half_extent, Entry::Shot)).flatten() {
                 hits.push((t, 3, cell_key(b.center), ShellTarget::Obstacle(b.entity)));
                 if b.material.is_permanent() && (iron_stops || b.material != Material::Iron) {
@@ -801,7 +952,7 @@ impl Terrain {
         let pad = Position::new(half_extent, half_extent);
         let stops = |m: Material| m.is_permanent() && (iron_stops || m != Material::Iron);
         let mut tiles: Vec<(f32, Position, Material)> =
-            self.obstacles.iter().filter_map(|b| b.entry(p0, p1, half_extent, Entry::Shot).map(|t| (t, b.center, b.material))).collect();
+            self.tiles_along(p0, p1, half_extent).filter_map(|b| b.entry(p0, p1, half_extent, Entry::Shot).map(|t| (t, b.center, b.material))).collect();
         tiles.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.y.total_cmp(&b.1.y)).then(a.1.x.total_cmp(&b.1.x)));
         let wall = self.walls.iter().filter_map(|&(c, h)| segment_hits_aabb(p0, p1, c, h + pad)).min_by(f32::total_cmp).unwrap_or(1.0);
         let stop = tiles.iter().find(|&&(_, _, m)| stops(m)).map_or(wall, |&(t, _, _)| t.min(wall));
@@ -1034,5 +1185,234 @@ mod shell_sweep_tests {
         assert_eq!(obstacle_reflect_axis(Position::new(-30.0, 2.0), &hit), (true, false));
         // Approaching from above.
         assert_eq!(obstacle_reflect_axis(Position::new(3.0, -30.0), &hit), (false, true));
+    }
+}
+
+/// The cell grid a `Terrain` files its tiles in (`TileGrid`) against the
+/// walk of them all it stands in for: the same tiles in the same order,
+/// and every query answering as the whole walk does.
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+    use crate::map::MapFile;
+    use crate::simulation::Game;
+    use std::collections::HashSet;
+
+    const W: f32 = 70.0 * 32.0;
+    const H: f32 = 50.0 * 32.0;
+
+    /// A hash of `i` and `salt` as a fraction in 0..1, the same on every run.
+    fn unit(i: u32, salt: u32) -> f32 {
+        let h = i.wrapping_mul(0x9E37_79B9) ^ salt.wrapping_mul(0x85EB_CA6B);
+        let h = (h ^ (h >> 15)).wrapping_mul(0x2C1B_3C6D);
+        (h ^ (h >> 12)) as f32 / u32::MAX as f32
+    }
+
+    /// A field of a few screens with a tile on most cells - walls, trees,
+    /// fences, sandbags, drums - some of the walls broken into chunks or
+    /// down to their cage, some tiles alight, some destroyed, and every
+    /// loose one shoved off its cell, some into a cell another tile holds.
+    fn field() -> Game {
+        let mut map = String::from("version = 1\nsize = [70, 50]\ntanks = 0\ncells.\"2,2\" = { kind = \"start\" }\n");
+        for c in 4..68 {
+            for r in 4..48 {
+                let k = (c * 50 + r) as u32;
+                if unit(k, 1) < 0.3 {
+                    continue;
+                }
+                let kind = [
+                    "kind = \"wall\", material = \"brick\"",
+                    "kind = \"wall\", material = \"iron\"",
+                    "kind = \"wall\", material = \"wood\"",
+                    "kind = \"wall\", material = \"concrete\"",
+                    "kind = \"fence\"",
+                    "kind = \"tree\"",
+                    "kind = \"barrel\"",
+                    "kind = \"sandbag\"",
+                ][(unit(k, 2) * 8.0) as usize % 8];
+                map.push_str(&format!("cells.\"{c},{r}\" = {{ {kind} }}\n"));
+            }
+        }
+        let mut game = Game::default();
+        game.enemy_count_override = Some(0);
+        game.seed_override = Some(7);
+        game.map = MapFile::from_toml_str(&map).expect("the map parses");
+        let (width, height) = game.map.field_size();
+        game.init(width, height);
+        for (i, o) in game.world.query::<&mut Obstacle>().iter().enumerate() {
+            let i = i as u32;
+            if unit(i, 3) < 0.08 {
+                o.destroyed = true;
+            } else if o.material.is_loose() {
+                o.position = Position::new(o.position.x + (unit(i, 4) - 0.5) * 80.0, o.position.y + (unit(i, 5) - 0.5) * 80.0);
+            } else if o.material.is_wall() && unit(i, 6) < 0.3 {
+                o.chunks = Some(crate::chunks::Chunks::from_quantised((unit(i, 7) * u32::MAX as f32) as u32, 10.0));
+            } else if o.material.is_wall() && unit(i, 6) < 0.35 {
+                o.cage = Some(1);
+            }
+            if unit(i, 8) < 0.1 {
+                o.burning = true;
+            }
+        }
+        game
+    }
+
+    /// The snapshot's tiles as the whole walk takes them: every tile
+    /// standing in the world's order, its seams closed against a set of the
+    /// cells, then stably sorted by cell.
+    fn walked(world: &hecs::World) -> Vec<TerrainBox> {
+        let cells: HashSet<(i32, i32)> = world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| !o.destroyed && !o.material.is_tree() && !o.material.is_loose())
+            .map(|o| battlefield::pos_to_cell(o.position))
+            .collect();
+        let mut tiles: Vec<TerrainBox> = world
+            .query::<(Entity, &Obstacle)>()
+            .iter()
+            .filter(|(_, o)| !o.destroyed)
+            .map(|(entity, o)| {
+                let (gx, gy) = battlefield::pos_to_cell(o.position);
+                TerrainBox {
+                    entity,
+                    center: o.position,
+                    half: battlefield::tile_half_extent(o.material, &cells, gx, gy, o.hull_size() * 0.5),
+                    material: o.material,
+                    burning: o.burning,
+                    chunks: if o.cage.is_some() { Some(0) } else { o.chunks.filter(|c| c.count() < crate::chunks::CHUNKS as u32).map(|c| c.standing()) },
+                    cage: o.cage.is_some(),
+                }
+            })
+            .collect();
+        tiles.sort_by_key(|b| crate::simulation::cell_order(b.center));
+        tiles
+    }
+
+    type Key = (Entity, [u32; 4], Material, bool, Option<u16>, bool);
+
+    fn key(b: &TerrainBox) -> Key {
+        (b.entity, [b.center.x.to_bits(), b.center.y.to_bits(), b.half.x.to_bits(), b.half.y.to_bits()], b.material, b.burning, b.chunks, b.cage)
+    }
+
+    /// Segments of every kind a query asks with: points, a shell's step,
+    /// long cardinal lines, long and short diagonals, lines all but level,
+    /// ones on the cells' edges and ones off the field, each with a pad.
+    fn segments() -> Vec<(Position, Position, f32)> {
+        let pads = [0.0, 1.5, 3.0, 6.0, 22.0, 40.0];
+        let mut out = Vec::new();
+        for i in 0..4000u32 {
+            let p0 = Position::new(unit(i, 11) * (W + 200.0) - 100.0, unit(i, 12) * (H + 200.0) - 100.0);
+            let p0 = if i % 7 == 0 { Position::new((p0.x / 16.0).round() * 16.0, (p0.y / 16.0).round() * 16.0) } else { p0 };
+            let reach = [0.0, 6.0, 20.0, 400.0, 1500.0][i as usize % 5];
+            let angle = unit(i, 13) * std::f32::consts::TAU;
+            let d = match i % 4 {
+                0 => {
+                    let k = (i / 4) as usize % 4;
+                    Position::new(reach * [1.0, 0.0, -1.0, 0.0][k], reach * [0.0, 1.0, 0.0, -1.0][k])
+                }
+                1 => Position::new(reach, reach * 1.0e-4 * (unit(i, 14) - 0.5)),
+                _ => Position::new(reach * crate::math::cos(angle), reach * crate::math::sin(angle)),
+            };
+            out.push((p0, Position::new(p0.x + d.x, p0.y + d.y), pads[i as usize % pads.len()]));
+        }
+        out
+    }
+
+    /// Where `b` stands in the snapshot's tiles.
+    fn index_of(terrain: &Terrain, b: &TerrainBox) -> usize {
+        (b as *const TerrainBox as usize - terrain.obstacles.as_ptr() as usize) / std::mem::size_of::<TerrainBox>()
+    }
+
+    #[test]
+    fn the_tiles_are_filed_in_the_order_a_sorted_walk_puts_them() {
+        let game = field();
+        let terrain = Terrain::build(&game.world, W, H, &[], &game.water);
+        let walked = walked(&game.world);
+        assert!(walked.len() > 1500, "a field worth filing");
+        assert!(walked.iter().any(|b| b.chunks.is_some_and(|c| c != 0)) && walked.iter().any(|b| b.cage), "chunks and cages among them");
+        let shared = walked.windows(2).filter(|p| battlefield::pos_to_cell(p[0].center) == battlefield::pos_to_cell(p[1].center)).count();
+        assert!(shared > 0, "two tiles in one cell, whose order is the walk's");
+        assert_eq!(terrain.obstacles.len(), walked.len());
+        assert!(terrain.obstacles.iter().map(key).eq(walked.iter().map(key)), "the same boxes in the same order");
+        // Built again in its own storage, it is the same snapshot.
+        let again = terrain.rebuilt(&game.world, W, H, &[], &game.water);
+        assert!(again.obstacles.iter().map(key).eq(walked.iter().map(key)), "rebuilt in place");
+    }
+
+    #[test]
+    fn a_query_reads_every_tile_it_can_meet_in_the_walks_order() {
+        let game = field();
+        let terrain = Terrain::build(&game.world, W, H, &[], &game.water);
+        let bong = bong_half();
+        for (p0, p1, pad) in segments() {
+            let read: Vec<usize> = terrain.tiles_along(p0, p1, pad).map(|b| index_of(&terrain, b)).collect();
+            assert!(read.windows(2).all(|w| w[0] < w[1]), "{p0:?}..{p1:?}: in the walk's order, each once");
+            let read: HashSet<usize> = read.into_iter().collect();
+            for (i, b) in terrain.obstacles.iter().enumerate() {
+                let grown = Position::new(pad, pad);
+                let meets = b.entry(p0, p1, pad, Entry::Shot).is_some()
+                    || b.entry(p0, p1, pad, Entry::Solid).is_some()
+                    || segment_hits_aabb(p0, p1, b.center, b.half + grown).is_some()
+                    || (p0 == p1 && (p0.x - b.center.x).abs() < b.half.x + pad.max(bong.x) && (p0.y - b.center.y).abs() < b.half.y + pad.max(bong.y));
+                assert!(!meets || read.contains(&i), "{p0:?}..{p1:?} pad {pad}: the tile at {:?} is met but not read", b.center);
+            }
+        }
+        // A coordinate that is not a number reads every tile.
+        let nan = Position::new(f32::NAN, 10.0);
+        assert_eq!(terrain.tiles_along(nan, Position::new(5.0, 5.0), 0.0).count(), terrain.obstacles.len());
+        // An empty field reads none.
+        let empty = Terrain::default();
+        assert_eq!(empty.tiles_along(Position::new(0.0, 0.0), Position::new(500.0, 500.0), 3.0).count(), 0);
+    }
+
+    #[test]
+    fn the_queries_answer_as_the_whole_walk_does() {
+        let game = field();
+        let terrain = Terrain::build(&game.world, W, H, &[], &game.water);
+        let all = &terrain.obstacles;
+        let bits = |t: Option<f32>| t.map(f32::to_bits);
+        let mut seen = (0, 0, 0);
+        for (p0, p1, pad) in segments() {
+            for mode in [Entry::Shot, Entry::Solid] {
+                let walk = all.iter().filter_map(|b| b.entry(p0, p1, pad, mode)).min_by(|a, b| a.total_cmp(b));
+                seen.0 += walk.is_some() as usize;
+                assert_eq!(bits(terrain.first_along(p0, p1, pad, mode)), bits(walk), "{p0:?}..{p1:?} pad {pad} {mode:?}");
+            }
+            let sight = all.iter().filter(|b| b.material.blocks_sight()).all(|b| !b.blocks_line(p0, p1))
+                && terrain.bongs.iter().all(|&(_, p)| segment_hits_aabb(p0, p1, p, bong_half()).is_none());
+            seen.1 += sight as usize;
+            assert_eq!(terrain.line_of_sight(p0, p1), sight, "{p0:?}..{p1:?}: sight");
+            let inset = Position::new(LINE_OF_FIRE_INSET_PX, LINE_OF_FIRE_INSET_PX);
+            let fire = all.iter().filter(|b| b.material.is_permanent()).all(|b| {
+                let half = b.half - inset;
+                let inside = (p0.x - b.center.x).abs() <= half.x && (p0.y - b.center.y).abs() <= half.y;
+                inside || segment_hits_aabb(p0, p1, b.center, half).is_none()
+            });
+            assert_eq!(terrain.line_of_fire(p0, p1), fire, "{p0:?}..{p1:?}: line of fire");
+            let length = p0.distance_to(p1);
+            if length > 0.0 {
+                let dir = Position::new((p1.x - p0.x) / length, (p1.y - p0.y) / length);
+                let to = Position::new(p0.x + dir.x * length, p0.y + dir.y * length);
+                let across = if dir.x.abs() > dir.y.abs() { Position::new(0.0, 10.0) } else { Position::new(10.0, 0.0) };
+                let walk = all
+                    .iter()
+                    .filter_map(|b| {
+                        let t = segment_hits_aabb(p0, to, b.center, b.half + Position::new(pad, pad))?;
+                        if let Some(standing) = b.chunks {
+                            let (off, half) = crate::chunks::solid_box_of(standing)?;
+                            segment_hits_aabb(p0, to, Position::new(b.center.x + off.x, b.center.y + off.y), half + across)?;
+                        }
+                        Some((t, b))
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, b)| b.center);
+                seen.2 += walk.is_some() as usize;
+                assert_eq!(terrain.obstacle_ahead(p0, dir, length, pad, 10.0).map(|w| w.center), walk, "{p0:?} along {dir:?}: the wall ahead");
+            }
+            let bong = bong_half();
+            let clear = !all.iter().any(|b| (p0.x - b.center.x).abs() < b.half.x + bong.x && (p0.y - b.center.y).abs() < b.half.y + bong.y);
+            assert_eq!(terrain.bong_clears_tiles(p0), clear, "{p0:?}: a bong lands");
+        }
+        assert!(seen.0 > 1000 && seen.1 > 500 && seen.2 > 500, "the segments meet tiles and miss them: {seen:?}");
     }
 }

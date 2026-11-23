@@ -106,8 +106,8 @@ pub const SNAPSHOT_EVERY: u64 = 1;
 /// Seats a room takes: the simulation's own `MAX_SEATS`
 /// (docs/online-coop-prd.md §4.11), since the bar now reads a whole team
 /// (the compact strip in `hud.rs`). A join past it is refused by name.
-/// The wave plan is still authored for one tank, so a big team has an
-/// easy round until the curve scales with the seat count.
+/// The wave plan scales with the team that starts the round
+/// (`tuning_patch`).
 pub const SEATS_PLAYABLE: usize = MAX_SEATS;
 
 /// A waiting room with nobody connected is reaped after this.
@@ -526,6 +526,26 @@ impl Seat {
     }
 }
 
+/// What an ended room keeps of its round once the world is let go
+/// (`Room::end_round`): an ended room waits up to `ENDED_TTL` for a
+/// rematch, and a Wildwood world is tens of megabytes, so the room keeps
+/// only what is read of it in that time - how it went, the roster's
+/// chassis, and the welcome a seat reclaimed before the rematch is given.
+struct EndedRound {
+    outcome: Outcome,
+    frame: u64,
+    /// The seats the round was played with, for the dev tools' `room`.
+    #[cfg(feature = "dev-tools")]
+    players: usize,
+    /// Each seat's chassis row, as `Room::chassis` read it off the world.
+    chassis: [u8; MAX_SEATS],
+    /// The welcome into the round's last tick, cut for seat 0 with no
+    /// roster and no map: a reclaimed seat gets it with its own seat, the
+    /// roster, its map (`Room::wire_map`) and the room's clock as they
+    /// stand then (`Room::welcome`).
+    welcome: Welcome,
+}
+
 struct Room {
     hub: Arc<Hub>,
     code: String,
@@ -547,7 +567,10 @@ struct Room {
     seats: Vec<Option<Seat>>,
     /// Device tokens the host kicked; they do not come back.
     kicked: BTreeSet<String>,
+    /// The round in play, from `start` until `end_round` lets it go.
     game: Option<Box<Game>>,
+    /// What the room keeps of the round it ended, until the rematch.
+    ended: Option<EndedRound>,
     life: Lifecycle,
     /// When the next tick is due: running while the room ticks, stopped
     /// otherwise and started afresh when it ticks again.
@@ -670,6 +693,7 @@ impl Room {
             seats: Vec::new(),
             kicked: BTreeSet::new(),
             game: None,
+            ended: None,
             life: Lifecycle::new(Instant::now()),
             clock: TickClock::new(TICK),
             prev: Snapshot::default(),
@@ -811,8 +835,7 @@ impl Room {
             // A seat reclaimed after the round finished is welcomed into
             // the last tick of it, which no snapshot will ever follow, so
             // it is told the round is over in the same breath.
-            let outcome = self.game.as_ref().map_or(Outcome::Playing, |g| g.outcome());
-            self.lobby_to(seat, Lobby::Ended { outcome: outcome.into() });
+            self.lobby_to(seat, Lobby::Ended { outcome: self.outcome().into() });
         }
         self.broadcast_roster();
         self.refresh_stats();
@@ -830,7 +853,7 @@ impl Room {
         info!(code = self.code, seat = i, nick, "seat dropped, grace running");
         self.life.disconnect(now);
         if self.life.phase() == Phase::Paused {
-            info!(code = self.code, frame = self.game.as_ref().map_or(0, |g| g.frame()), "nobody connected, round paused");
+            info!(code = self.code, frame = self.frame(), "nobody connected, round paused");
         }
         self.broadcast_roster();
         self.refresh_stats();
@@ -939,6 +962,10 @@ impl Room {
         game.level_overrides = self.overrides;
         game.players = PlayerCount::from_count(players).expect("clamped to the seats a room takes");
         game.seed_override = Some(seed);
+        // The tread marks are presentation the wire never carries - every
+        // client presses its own replica's - so the room keeps none
+        // (`Game::no_wear`): neither the stamping nor the grid.
+        game.no_wear = true;
         let (w, h) = self.map.field_size();
         // The wave plan this team's size asks for, on the table for the
         // one call that reads it and in every `Welcome` behind it.
@@ -958,6 +985,7 @@ impl Room {
         // snapshot, which is frame 0's.
         self.pending_events.clear();
         self.game = Some(game);
+        self.ended = None;
         for seat in self.seats.iter_mut().flatten() {
             seat.ready = false;
             seat.mailbox.clear();
@@ -981,8 +1009,7 @@ impl Room {
     }
 
     fn end_round(&mut self, why: &str) {
-        let frame = self.game.as_ref().map_or(0, |g| g.frame());
-        let outcome = self.game.as_ref().map_or(Outcome::Playing, |g| g.outcome());
+        let (frame, outcome) = (self.frame(), self.outcome());
         self.life.end(Instant::now());
         info!(code = self.code, frame, ?outcome, why, "round ended");
         let outcome_label = match outcome {
@@ -998,6 +1025,45 @@ impl Room {
         self.lobby_to_all(Lobby::Ended { outcome: outcome.into() });
         self.broadcast_roster();
         self.refresh_stats();
+        self.let_world_go();
+    }
+
+    /// The round is over and nothing ticks it again: keep what an ended
+    /// room reads of it (`EndedRound`) and free the world - a big map's is
+    /// tens of megabytes, held for nothing through `ENDED_TTL` otherwise.
+    fn let_world_go(&mut self) {
+        let Some(game) = self.game.take() else { return };
+        // The map is left out: each seat is sent the room's as `wire_map`
+        // has it for that seat, as a live round's welcome is.
+        let welcome = encode::welcome_with_map(&game, WireMap::Deflated(Vec::new()), 0, Vec::new(), self.tuning_json.clone(), self.acked());
+        let chassis = std::array::from_fn(|seat| Room::chassis_of(&game, seat as u8));
+        self.ended = Some(EndedRound {
+            outcome: game.outcome(),
+            frame: game.frame(),
+            #[cfg(feature = "dev-tools")]
+            players: game.players.count(),
+            chassis,
+            welcome,
+        });
+    }
+
+    /// The round's clock: the live world's, else the ended round's, else 0.
+    fn frame(&self) -> u64 {
+        match (&self.game, &self.ended) {
+            (Some(game), _) => game.frame(),
+            (None, Some(ended)) => ended.frame,
+            (None, None) => 0,
+        }
+    }
+
+    /// How the round stands: the live world's outcome, else the ended
+    /// round's, else still playing.
+    fn outcome(&self) -> Outcome {
+        match (&self.game, &self.ended) {
+            (Some(game), _) => game.outcome(),
+            (None, Some(ended)) => ended.outcome,
+            (None, None) => Outcome::Playing,
+        }
     }
 
     /// The server began draining: this room's deadlines shorten to the
@@ -1099,7 +1165,15 @@ impl Room {
 
     /// The chassis row a seat's tank has, 0 before the round rolls it.
     fn chassis(&self, seat: u8) -> u8 {
-        let Some(game) = &self.game else { return 0 };
+        match (&self.game, &self.ended) {
+            (Some(game), _) => Room::chassis_of(game, seat),
+            (None, Some(ended)) => ended.chassis.get(seat as usize).copied().unwrap_or(0),
+            (None, None) => 0,
+        }
+    }
+
+    /// The chassis row `game` rolled for `seat`'s tank.
+    fn chassis_of(game: &Game, seat: u8) -> u8 {
         let kind = match seat {
             0 => game.player_chassis(),
             1 => game.player2_chassis(),
@@ -1131,8 +1205,11 @@ impl Room {
     /// The welcome for `seat`: in a round, `encode::welcome_with_map` on
     /// the live world (its current snapshot, the holes shot in the map, the
     /// pins the replica's `init` needs), so a joiner or a rejoiner builds
-    /// the round as it stands now; in a waiting room, the map and the
-    /// roster with an empty snapshot. The map goes as `wire_map` puts it.
+    /// the round as it stands now; in an ended room, the one cut from the
+    /// round's last tick as the world was let go (`EndedRound`), which is
+    /// what the live world would still have said; in a waiting room, the
+    /// map and the roster with an empty snapshot. The map goes as
+    /// `wire_map` puts it.
     fn welcome(&self, seat: u8) -> Welcome {
         let roster: Vec<WireSeat> = self
             .seats
@@ -1144,6 +1221,15 @@ impl Room {
         let map = self.wire_map(seat);
         if let Some(game) = &self.game {
             let mut welcome = encode::welcome_with_map(game, map, seat, roster, self.tuning_json.clone(), acked);
+            welcome.snapshot.server_ms = self.server_ms();
+            return welcome;
+        }
+        if let Some(ended) = &self.ended {
+            let mut welcome = ended.welcome.clone();
+            welcome.seat = seat;
+            welcome.roster = roster;
+            welcome.map = map;
+            welcome.snapshot.acked = acked;
             welcome.snapshot.server_ms = self.server_ms();
             return welcome;
         }
@@ -1595,7 +1681,17 @@ mod dev {
         }
 
         fn dev_tick(&self) -> u64 {
-            self.game.as_ref().map_or(0, |g| g.frame())
+            self.frame()
+        }
+
+        /// Why a tool that needs the world has none: no round yet, or
+        /// one that ended and was let go (`Room::let_world_go`).
+        fn no_world(&self) -> String {
+            if self.ended.is_some() {
+                "this room's round is over and its world was let go - start the rematch for a new one".into()
+            } else {
+                "this room has no round yet".into()
+            }
         }
 
         /// The room in full, seats and mailboxes included - the reading
@@ -1632,8 +1728,8 @@ mod dev {
                 "tick": self.dev_tick(),
                 "map": self.map.name,
                 "seed": self.round_seed,
-                "outcome": self.game.as_ref().map(|g| format!("{:?}", g.outcome())),
-                "players": self.game.as_ref().map(|g| g.players.count()),
+                "outcome": (self.game.is_some() || self.ended.is_some()).then(|| format!("{:?}", self.outcome())),
+                "players": self.game.as_ref().map(|g| g.players.count()).or(self.ended.as_ref().map(|e| e.players)),
                 "tuning_patch": serde_json::from_str::<Value>(&self.tuning_json).unwrap_or(Value::Null),
                 "dev_tuning": self.dev_rows,
                 "seats": seats,
@@ -1680,7 +1776,7 @@ mod dev {
         /// Freeze and advance exactly `ticks`, the game's `step` for a
         /// room: deterministic, and as fast as the ticks take.
         fn dev_step(&mut self, params: &Value) -> Result<Value, String> {
-            if self.game.is_none() {
+            if self.game.is_none() && self.ended.is_none() {
                 return Err("this room has no round yet - `room_open` it or have a client start it".into());
             }
             let ticks = params.get("ticks").and_then(Value::as_u64).unwrap_or(1);
@@ -1771,7 +1867,8 @@ mod dev {
             }
             let patch: TankPatch = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
             let (w, h) = self.map.field_size();
-            let game = self.game.as_mut().ok_or("this room has no round yet")?;
+            let no_world = self.no_world();
+            let game = self.game.as_mut().ok_or(no_world)?;
             game.debug_set_tank(slot, &patch)?;
             let tank = game.debug_snapshot(w, h, Detail::Compact).tanks.into_iter().find(|t| t.slot == slot);
             serde_json::to_value(tank).map_err(|e| e.to_string())
@@ -1785,7 +1882,8 @@ mod dev {
             let (Some(x), Some(y)) = (at("x"), at("y")) else {
                 return Err("x and y are required".into());
             };
-            let game = self.game.as_mut().ok_or("this room has no round yet")?;
+            let no_world = self.no_world();
+            let game = self.game.as_mut().ok_or(no_world)?;
             let at = game.debug_spawn_pickup(kind, Position::new(x, y))?;
             Ok(json!({ "kind": kind.name(), "x": at.x, "y": at.y }))
         }
@@ -1870,7 +1968,7 @@ mod dev {
                 Some("full") => Detail::Full,
                 _ => Detail::Compact,
             };
-            self.dev_snapshot_value(detail).ok_or_else(|| "this room has no round yet".to_string())
+            self.dev_snapshot_value(detail).ok_or_else(|| self.no_world())
         }
 
         /// Bank this tick's events into the ring `room_events` reads.
@@ -2146,6 +2244,61 @@ mod tests {
     /// reads has no pose, so its idle tank being carried off - a blast, a
     /// wave's gate - sends no `Placed` to a client that is not there, let
     /// alone one every tick.
+    /// **An ended room lets its world go** and keeps only what it is read
+    /// for until the rematch: the outcome, the roster's chassis, and the
+    /// welcome a seat reclaimed now is given - the one the live world
+    /// would have cut, byte for byte but for the clock.
+    #[cfg(feature = "dev-tools")]
+    #[tokio::test]
+    async fn an_ended_room_lets_its_world_go_and_still_welcomes_a_seat_back() {
+        use crate::metrics::Metrics;
+        use serde_json::json;
+
+        let map = r#"
+version = 1
+size = [16, 8]
+tanks = 0
+spawn.kind = "band"
+cells."1,1" = { kind = "bong" }
+cells."4,4" = { kind = "start" }
+cells."11,4" = { kind = "start2" }
+cells."8,2" = { kind = "wall", material = "brick" }
+"#;
+        let params = RoomParams::for_dev("", Some(map), None, Some(7)).expect("the room's setup");
+        let (_commands, rx) = mpsc::channel(1);
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let stats = Arc::new(RoomStats::new(params.map_label.clone(), params.mission));
+        let mut room = Room::new(hub, "TESTS".into(), params, rx, stats);
+        room.dev("room_open", &json!({ "seats": 2 })).expect("two bots seated");
+        for _ in 0..30 {
+            room.tick();
+        }
+        let clockless = |mut welcome: Welcome| {
+            welcome.snapshot.server_ms = 0;
+            codec::encode(&Msg::Welcome(welcome))
+        };
+        let live = clockless(room.welcome(1));
+        let (frame, chassis) = (room.frame(), [room.chassis(0), room.chassis(1)]);
+        assert!(frame >= 30 && room.game.is_some());
+
+        room.end_round("test");
+        assert!(room.game.is_none(), "the world is let go with the round");
+        assert_eq!(room.life.phase(), Phase::Ended);
+        assert_eq!((room.frame(), room.outcome()), (frame, Outcome::Playing), "the ended round's clock and result stay readable");
+        assert_eq!([room.chassis(0), room.chassis(1)], chassis, "the roster keeps its chassis");
+        assert_eq!(clockless(room.welcome(1)), live, "a seat reclaimed now is welcomed into the last tick, as before");
+        let kept = room.welcome(0);
+        assert_eq!((kept.seat, kept.roster.len()), (0, 2), "each seat its own number, with the roster as it stands");
+        assert!(room.dev("room_snapshot", &json!({})).is_err_and(|e| e.contains("over")), "the dev tools say why there is no world");
+
+        // The rematch makes a world again and forgets the last round's.
+        for seat in room.seats.iter_mut().flatten() {
+            seat.ready = true;
+        }
+        room.start(0).expect("the rematch");
+        assert!(room.game.is_some() && room.ended.is_none());
+    }
+
     #[cfg(feature = "dev-tools")]
     #[tokio::test]
     async fn a_seat_whose_client_left_is_not_placed() {

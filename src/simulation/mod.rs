@@ -1201,6 +1201,9 @@ pub struct Game {
     /// recorded at the end of each update: what a seat's shot is swept
     /// against when its client was drawing the past (`seat_rewind`).
     hit_history: HitBoxHistory,
+    /// The last update's `Terrain`, kept for its storage: the next update
+    /// builds its own in it (`Terrain::rebuilt`), reading nothing it held.
+    kept_terrain: Option<Terrain>,
     /// The player's bong - `None` in a mission without one (`Destroy`),
     /// and before the first `init`.
     pub(crate) bong: Option<Entity>,
@@ -1276,6 +1279,13 @@ pub struct Game {
     /// (docs/ground-memory.md): cosmetic, pressed by every hull's runs and
     /// read by nothing that plays.
     pub(crate) wear: crate::wear::WearGrid,
+    /// `init` gives the round ground that takes no marks
+    /// (`WearGrid::off`): set on a room's authority, which draws nothing
+    /// and sends no marks - every client presses its own replica's - so a
+    /// room pays neither the stamping nor the grid. Nothing that plays
+    /// reads the marks, so the round is the same with it either way. Kept
+    /// across restarts.
+    pub no_wear: bool,
     /// Seconds since the round started; drives animation. Read by `render`.
     pub(crate) time: f32,
     pub(crate) outcome: Outcome,
@@ -1837,7 +1847,7 @@ impl Game {
         self.lamps_left = [lamps; MAX_SEATS];
 
         self.world = hecs::World::new();
-        self.wear = crate::wear::WearGrid::new(tuning().wear_max_cells.max(1) as usize);
+        self.wear = if self.no_wear { crate::wear::WearGrid::off() } else { crate::wear::WearGrid::new(tuning().wear_max_cells.max(1) as usize) };
         self.time = 0.0;
         self.outcome = Outcome::Playing;
         self.restart_timer = 0.0;
@@ -2471,7 +2481,7 @@ impl Game {
         // (`frame_stages.rs`, the `sim.*` stages), so a map's cost can be
         // laid at the walk that makes it.
         let stage = crate::frame_stages::stage("sim.terrain");
-        let terrain = Terrain::build(&self.world, width, height, &self.cover_cells(), &self.water);
+        let terrain = self.kept_terrain.take().unwrap_or_default().rebuilt(&self.world, width, height, &self.cover_cells(), &self.water);
         drop(stage);
         // One nav grid for the whole frame - labelled, priced and with a
         // flow field per shared target (`route_grid_on`), on the occupancy
@@ -2620,9 +2630,11 @@ impl Game {
         self.finish_frame(f);
     }
 
-    /// Append the frame's effects and events and put the RNG back.
+    /// Append the frame's effects and events, put the RNG back and keep the
+    /// terrain's storage for the next frame's.
     fn finish_frame(&mut self, f: Frame) {
-        let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, shoves, rng, .. } = f;
+        let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, shoves, rng, terrain, .. } = f;
+        self.kept_terrain = Some(terrain);
         for &(seat, dv, skid) in shoves.log.iter().chain(&shoves.quiet) {
             if skid > 0.0 && seat < MAX_SEATS {
                 self.seat_knock[seat] = self.seat_knock[seat].with(dv.length(), skid, self.frame);
@@ -7895,6 +7907,40 @@ mod determinism_tests {
                     assert_eq!(key(ta), key(tb), "seed {seed:#x}, sample {i}, tank {t}: state diverged");
                 }
             }
+        }
+    }
+
+    /// The tread marks are presentation only: a round made with
+    /// `Game::no_wear`, as a room's authority is, keeps no marks at all and
+    /// plays the round that keeps them bit for bit - the same hulls, the
+    /// same events, the same tread state on every hull, frame by frame.
+    #[test]
+    fn a_round_without_tread_marks_replays_the_round_with_them() {
+        let run = |no_wear: bool| {
+            let mut game = Game::default();
+            game.no_wear = no_wear;
+            game.seed_override = Some(0xF406);
+            game.level_overrides.mission = Some(Mission::Hunt);
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+            game.enemy_count_override = Some(4);
+            game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
+            game.init(1280.0, 720.0);
+            let mut stream: Vec<(Vec<_>, Vec<_>, String)> = Vec::new();
+            for frame in 1..=600u32 {
+                let dir = [Dir::Right, Dir::Down, Dir::Left, Dir::Up][(frame / 90 % 4) as usize];
+                let input = Input::single(Intent { move_dir: Some(dir), fire: frame % 20 < 2, ..Intent::default() });
+                game.update(input, 1.0 / 60.0, 1280.0, 720.0);
+                let treads: Vec<_> = game.world.query::<&Tank>().iter().map(|t| (t.owner_slot(), t.hull_frame, format!("{:?}", t.tread))).collect();
+                stream.push((game.tank_snapshots().iter().map(key).collect(), treads, format!("{:?}", game.events())));
+            }
+            (stream, game.wear().presses(), game.wear().worn_cells())
+        };
+        let (marked, presses, worn) = run(false);
+        let (bare, bare_presses, bare_worn) = run(true);
+        assert!(presses > 0 && worn > 0, "the round with marks pressed some");
+        assert_eq!((bare_presses, bare_worn), (0, 0), "the round without keeps none");
+        for (frame, (a, b)) in marked.iter().zip(&bare).enumerate() {
+            assert!(a == b, "frame {}: the round without marks played differently", frame + 1);
         }
     }
 

@@ -280,8 +280,11 @@ impl Game {
         heated.dedup();
         // A cell under a standing tile never lights as ground: the tile
         // takes the heat instead (below).
-        let solid: std::collections::HashSet<(i32, i32)> =
-            self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).map(|o| o.cell()).collect();
+        let solid: std::collections::HashSet<(i32, i32)> = if heated.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).map(|o| o.cell()).collect()
+        };
         for cell in &heated {
             if solid.contains(cell) {
                 continue;
@@ -319,8 +322,18 @@ impl Game {
         let half = OBSTACLE_GRID_SIZE * 0.5;
         let mut collapse: Vec<(Entity, Position, &'static str)> = Vec::new();
         let mut ignited: Vec<(Position, &'static str)> = Vec::new();
+        if cones.is_empty() {
+            // No stream: every tile's heat only cools, each on its own, so
+            // the order the tiles are met in shows nowhere.
+            for o in self.world.query::<&mut Obstacle>().iter() {
+                if !(o.destroyed || o.burning || o.fuse.is_some()) {
+                    o.heat = (o.heat - decay).max(0.0);
+                }
+            }
+        }
         // In cell order: what a tile catching or giving way sets off.
-        for (entity, o) in super::ordered(self.world.query::<(Entity, &mut Obstacle)>().iter(), |(_, o)| super::cell_order(o.position)) {
+        let streams = if cones.is_empty() { 0 } else { usize::MAX };
+        for (entity, o) in super::ordered(self.world.query::<(Entity, &mut Obstacle)>().iter().take(streams), |(_, o)| super::cell_order(o.position)) {
             if o.destroyed || o.burning || o.fuse.is_some() {
                 continue;
             }

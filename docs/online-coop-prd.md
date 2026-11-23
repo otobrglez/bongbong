@@ -602,13 +602,20 @@ Tailscale, `docker buildx` for the image, and `kustomize edit set image` plus
   Service's endpoints. **Liveness is a TCP check, not `/health`.** An HTTP
   liveness probe would see that same 503 and restart the pod seconds into
   every deploy, killing every round the drain exists to protect.
-- Resources, from section 5: `requests` of 500m and 256 MiB against
-  `--max-rooms 25`, at about 2 % of a core and under 2 MB per room. Modest on
+- Resources, from section 5's measured rooms, sized by the biggest map:
+  `requests` of one CPU and 256 MiB, a memory limit of 1 GiB and
+  `--max-rooms 24`. Two dozen Wildwood rooms at 32 MB each are three quarters
+  of the limit, and the CPU request holds about five busy four-seat Wildwood
+  rooms on a core half as fast as the one measured, or two dozen rooms of the
+  smaller maps; past that the pod bursts into the node's headroom. Modest on
   purpose - the cluster is a single node shared with every other production
-  namespace, and a whole core reserved for a server nobody has found yet would
-  be a poor neighbour. **No CPU limit**, deliberately: the tick is 60 Hz with
-  a 16.6 ms budget, and a CFS quota would throttle at the period boundary and
-  stutter every room on the pod together. The request guarantees the share;
+  namespace, and cores reserved for a server nobody has found yet would make a
+  poor neighbour - but the memory limit is the one number that cannot be
+  modest: one out-of-memory kill drops every room on the pod, so
+  `--max-rooms` times a Wildwood room stays well inside it. **No CPU limit**,
+  deliberately: the tick is 60 Hz with a 16.6 ms budget, and a CFS quota
+  would throttle at the period boundary and stutter every room on the pod
+  together. The request guarantees the share;
   with no limit a busy pod still bursts into the node's headroom.
 - Pulling the image: the namespace needs a `regcred` dockerconfigjson secret
   attached to its **default ServiceAccount**, which is how `boo-prod` does it
@@ -1424,13 +1431,14 @@ cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
 | Item | Value |
 |---|---|
 | Intent up, 60 Hz, one intent per packet (decision 15) | 0.4–0.8 KB/s payload, ~3 KB/s framed; stage 3's pose adds about 8 bytes a packet |
-| Snapshot down, 60 Hz, 8 tanks + 24 shots, delta | ~6–8 KB/s payload, ~12 KB/s framed (1.7 KB/s was measured on a real two-seat round at 30 Hz, before the cadence doubled) |
-| Worst case, ~40 tanks in a wave round (`wave_max_alive`'s cap of 31 plus eight seats) | ~10 KB/s payload |
+| Snapshot down, 60 Hz, delta, per seat | ~6–10 KB/s payload in a round's quiet first minute; **~20–30 KB/s in a busy four-seat round** (measured 2026-11-23 on kept-alive six-minute rounds: Grand Campaign at four seats 30 KB/s on average, 25–33 a minute; Wildwood at two seats 22 KB/s, 28 in its later waves). A delta is encoded once a tick and every seat in step gets the same bytes |
+| Worst case, a big map deep in its waves (Wildwood at four seats: up to 41 tanks and 180 shots on the field) | ~45 KB/s payload per seat in its busiest minutes, 38 KB/s over six; ~1.1 KB in the busiest tick |
 | `Welcome` | ~0.3–3 KB once: a shipped map by name (Wildwood 286 B at its first tick), a builder's deflated (the default map's 23 KB of TOML, 2.9 KB) |
 | Server tick, 12 enemies + 1 player (measured, section 3) | ≈ 230 µs on a 2.1 GHz Xeon vCPU, ≈ 95 µs of it per-frame fixed cost |
 | Server tick, 12 enemies + 8 seats (projected) | ≈ 320 µs; ≈ 550 µs at `wave_max_alive` |
-| CPU per room at 60 Hz | ≈ 2 % of a core at 8 seats, ≈ 3 % worst case; 30–50 rooms per vCPU of that class, more on a desktop core |
-| Memory per room | < 2 MB |
+| Server tick by map (measured 2026-11-23: one M3 Pro core on a busy machine, CPU time a tick, kept-alive six-minute rounds with every seat driving and firing) | Grand Campaign at four seats: mean 0.3 ms, p99 0.9, max 1.4 (was 1.1 / 1.9 / 2.6). Wildwood at four seats: mean 1.8 ms, p99 6.3, max 10.1 (was 4.5 / 9.9 / 14.3); at two seats, whose last wave leaves 31 enemies alive at once: mean 2.2, p99 12.0, max 17.4 (was 4.2 / 14.7 / 20.6). What the tiles' hit tests, the flames' walk of every tile and the tread marks cost is gone (`hits::TileGrid`, `Game::no_wear`); three quarters of a heavy Wildwood tick is now the enemies' A* - guards routing home across the forest, one search each a tick - and that is where a slower core or a bigger wave would overrun first |
+| CPU per room at 60 Hz | ≈ 2 % of a core on Grand Campaign and the arenas; ≈ 11 % on Wildwood at four seats, more in a heavy minute. Size by Wildwood, the biggest campaign map |
+| Memory per room | the `Game`: ≈ 2.3 MB at the start on Grand Campaign, under 5 MB six minutes in; ≈ 13 MB at the start on Wildwood (8,064 tiles, their bodies and the nav grid), ≈ 20 MB six minutes in - the room keeps no tread marks (`Game::no_wear`), which were up to 8 MB more. On a live server (release, macOS's allocator) a Wildwood room took 24 MB of resident memory a room a minute in, a Grand Campaign one about 5; budget 32 MB for a Wildwood room late in its waves. An ended room lets its world go (`Room::let_world_go`), keeping a few kilobytes for a seat that comes back before the rematch |
 | Client replay per snapshot, stage 2 | < 0.2 ms |
 | Own-tank latency, stage 1 (prediction off) | ≈ 80–160 ms on a clean link (≤16 sample + 20–60 up + ≤16 tick + ≤17 cadence + 20–60 down + 33 interpolation), plus the jitter margin the adaptive delay adds on a dirty one |
 | Latency to a tank a player *aims at*, stage 2 | the same ≈ 80–160 ms. Prediction carries the local hull only, so what remains is paid by every other hull; the two terms that are a choice rather than a cost - the cadence and the interpolation delay - are 50 ms of it, down from 150 at 20 Hz |

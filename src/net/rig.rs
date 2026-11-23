@@ -446,6 +446,9 @@ impl Room {
             game.map.weather = sky.into();
         }
         game.weather_from_map = true;
+        // Nor any tread marks to keep: the replica presses its own
+        // (`Game::no_wear`), as it does against a room server.
+        game.no_wear = true;
         let (width, height) = game.map.field_size();
         game.init(width, height);
         self.game = Some(game);
