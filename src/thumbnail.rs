@@ -226,7 +226,8 @@ mod tests {
     /// "New props"). Vulkan is `tools/gen_vulkan.py`'s output (BB-220): a
     /// change to the generator is a change to this row; Serpent River's
     /// moved with the laser crate by its start, and Wildwood's with its
-    /// campaign crates by the start and no rod or rail (BB-220).
+    /// campaign crates by the start and no rod or rail (BB-220). Jungle
+    /// Temple is `tools/gen_jungle_temple.py`'s output (BB-228), the same.
     #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 25] = [
         ("default", 0xc35e_5595_2de6_4cd3),
@@ -247,7 +248,7 @@ mod tests {
         ("black-gold", 0x5982_660d_ca83_4f36),
         ("harbor-lights", 0x7851_0905_9e3f_ccd2),
         ("carnival", 0x5c94_a82c_7f27_0306),
-        ("jungle-temple", 0xb446_4b07_ae74_0292),
+        ("jungle-temple", 0xc450_038c_c32e_3432),
         ("serpent-river", 0x75cc_8ca8_7412_4d74),
         ("no-mans-land", 0x5523_d1fb_fd4e_1951),
         ("glasshouses", 0xc23c_430a_7218_e35b),
