@@ -1,4 +1,4 @@
-"""The home page's pictures, into site/public/art/: three shipped maps as the
+"""The home page's pictures, into site/public/art/: shipped maps as the
 game draws them, the four players' tanks and an enemy, and the seven bongs -
 all at the game's own pixels, which the page scales with `image-rendering:
 pixelated`.
@@ -13,10 +13,11 @@ the art or one of these maps changes.
     nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
         --run "python3 tools/web/gen_site_art.py [--mapshot target/release/mapshot]"
 
-With `--iphone BEZEL SCREEN` it also writes iphone.webp, the "Take it with
-you" picture: a simulator screenshot of the game (`just run-ios-sim` with
-BONGBONG_IOS_DEVICE on the newest iPhone, then `just ios-screenshot`) set into
-Apple's product bezel for that iPhone, landscape (Bezel-iPhone-<N>.dmg from
+With `--iphone-screen SCREEN` it also writes iphone.webp, the "Take it with
+you" picture: a landscape simulator screenshot of the game (`just run-ios-sim`
+with BONGBONG_IOS_DEVICE on the newest iPhone, then `just ios-screenshot`).
+`--iphone BEZEL SCREEN` instead sets that screenshot into Apple's product
+bezel for that iPhone, landscape (Bezel-iPhone-<N>.dmg from
 developer.apple.com/design/resources, under Apple's Design Resources license;
 the bezel itself never goes in the repo). Apple's marketing guidelines want
 the latest model and the bezel as provided - only scaled, never cropped,
@@ -38,10 +39,10 @@ OUT = os.path.join(ROOT, "site", "public", "art")
 # map's 1:1 render, (x, y, width, height) in field pixels. The cards are
 # 2:1 at about the size a card shows them; the bands are a page's width.
 CROPS = [
-    ("field-default", "default", (600, 420, 400, 200)),
-    ("field-archipelago", "archipelago", (40, 180, 400, 200)),
-    ("field-oasis", "oasis-bazaar", (330, 280, 400, 200)),
-    ("turn-default", "default", (610, 440, 400, 170)),
+    ("field-vulkan", "vulkan", (660, 560, 400, 200)),
+    ("field-archipelago", "archipelago", (148, 693, 400, 200)),
+    ("field-oasis", "oasis-bazaar", (575, 495, 400, 200)),
+    ("turn-default", "default", (540, 423, 400, 170)),
     ("band-archipelago", "archipelago", (0, 325, 1792, 160)),
     ("band-oasis", "oasis-bazaar", (0, 300, 1536, 160)),
 ]
@@ -80,6 +81,14 @@ def save(image, name, ext):
 IPHONE_WIDTH = 1120  # twice the widest the page shows it, for a 2x screen
 
 
+def save_iphone(picture):
+    height = round(picture.height * IPHONE_WIDTH / picture.width)
+    picture = picture.resize((IPHONE_WIDTH, height), Image.LANCZOS)
+    path = os.path.join(OUT, "iphone.webp")
+    picture.save(path, "WEBP", quality=90, method=6)
+    print(os.path.relpath(path, ROOT), picture.size)
+
+
 def iphone(bezel_path, screen_path):
     """The screenshot in the bezel's transparent screen, which is found by
     filling from the bezel's centre and clips the screenshot to its rounded
@@ -96,22 +105,24 @@ def iphone(bezel_path, screen_path):
     picture = Image.new("RGBA", bezel.size)
     picture.paste(screen, box[:2], opening.crop(box))
     picture.alpha_composite(bezel)
-    height = round(picture.height * IPHONE_WIDTH / picture.width)
-    picture = picture.resize((IPHONE_WIDTH, height), Image.LANCZOS)
-    path = os.path.join(OUT, "iphone.webp")
-    picture.save(path, "WEBP", quality=90, method=6)
-    print(os.path.relpath(path, ROOT), picture.size)
+    save_iphone(picture)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--mapshot", help="a built mapshot binary (default: cargo run --release --bin mapshot)")
-    parser.add_argument("--iphone", nargs=2, metavar=("BEZEL", "SCREEN"),
-                        help="also write iphone.webp: the landscape bezel PNG and a simulator screenshot")
+    mobile = parser.add_mutually_exclusive_group()
+    mobile.add_argument("--iphone", nargs=2, metavar=("BEZEL", "SCREEN"),
+                        help="also write iphone.webp with a landscape bezel PNG and a simulator screenshot")
+    mobile.add_argument("--iphone-screen", metavar="SCREEN",
+                        help="also write iphone.webp from a landscape simulator screenshot")
     args = parser.parse_args()
     os.makedirs(OUT, exist_ok=True)
     if args.iphone:
         iphone(*args.iphone)
+    elif args.iphone_screen:
+        with Image.open(args.iphone_screen) as picture:
+            save_iphone(picture.convert("RGB"))
 
     with tempfile.TemporaryDirectory() as shots:
         fields = render_maps(args.mapshot, shots)
