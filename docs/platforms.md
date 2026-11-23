@@ -497,6 +497,12 @@ not build on the nix toolchain).
 Native archives (Linux x86_64, Windows x86_64; macOS, the web, iOS and Android have their own paths)
 are built by `.github/workflows/release.yml`, generated from `dist-workspace.toml` (`[profile.dist]`
 in `Cargo.toml`). Trigger: bump `Cargo.toml`'s `version`, tag `v{X}.{Y}.{Z}`, push the tag.
+- **Windows: a window program, no console.** `src/main.rs` sets `windows_subsystem = "windows"` for
+  every build without debug assertions (release and `[profile.dist]`), so a double-click opens only
+  the game's window. Started from a terminal, it `AttachConsole`s to the parent's console before
+  clap runs, so `--help`, argument errors and Rust's logs print there. raylib's C `printf` lines
+  do not, since the C runtime's `stdout` was set up before the attach. A debug build keeps its
+  console. PR CI builds no Windows target, so this path is compiled only by the release workflow.
 - **Release notes are `CHANGELOG.md`**: dist puts the entry whose heading is `## X.Y.Z - YYYY-MM-DD`
   above the download table and makes that heading the release's title. `just release-prepare
   [VERSION]` runs `prepare-release.yml`: `tools/release/gather.sh` collects the PRs merged since the

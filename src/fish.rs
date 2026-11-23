@@ -192,14 +192,14 @@ fn unit_of(v: Vec2) -> Option<Vec2> {
     (l > 1e-4).then(|| v / l)
 }
 
-fn deep(water: &WaterLayout, (col, row): (i32, i32)) -> bool {
+pub(crate) fn deep(water: &WaterLayout, (col, row): (i32, i32)) -> bool {
     water.depth_of_cell(col, row) == Depth::Deep
 }
 
 /// The deep cells a fish in `here` can swim to next, in `STEPS` order: a
 /// diagonal only where both cells beside it are deep, so the way there
 /// never crosses dry ground.
-fn neighbours(water: &WaterLayout, here: (i32, i32)) -> Vec<(i32, i32)> {
+pub(crate) fn neighbours(water: &WaterLayout, here: (i32, i32)) -> Vec<(i32, i32)> {
     STEPS
         .iter()
         .filter(|&&(dx, dy)| {
@@ -208,6 +208,34 @@ fn neighbours(water: &WaterLayout, here: (i32, i32)) -> Vec<(i32, i32)> {
         })
         .map(|&(dx, dy)| (here.0 + dx, here.1 + dy))
         .collect()
+}
+
+/// The lakes of `water`: its deep cells joined edge to edge, each lake's
+/// cells sorted and the lakes in the order of their first cell.
+pub(crate) fn lakes(water: &WaterLayout) -> Vec<Vec<(i32, i32)>> {
+    let deep_cells: BTreeSet<(i32, i32)> = water.deep_grid_cells().collect();
+    let mut seen: BTreeSet<(i32, i32)> = BTreeSet::new();
+    let mut out = Vec::new();
+    for &start in &deep_cells {
+        if !seen.insert(start) {
+            continue;
+        }
+        let mut lake = vec![start];
+        let mut i = 0;
+        while i < lake.len() {
+            let (c, r) = lake[i];
+            for (dc, dr) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+                let n = (c + dc, r + dr);
+                if deep_cells.contains(&n) && seen.insert(n) {
+                    lake.push(n);
+                }
+            }
+            i += 1;
+        }
+        lake.sort();
+        out.push(lake);
+    }
+    out
 }
 
 impl Fish {
@@ -314,28 +342,7 @@ impl Shoal {
         if water.is_frozen() {
             return shoal;
         }
-        // The lakes: the deep cells joined edge to edge, in cell order.
-        let deep_cells: BTreeSet<(i32, i32)> = water.deep_grid_cells().collect();
-        let mut seen: BTreeSet<(i32, i32)> = BTreeSet::new();
-        for &start in &deep_cells {
-            if !seen.insert(start) {
-                continue;
-            }
-            let mut lake = vec![start];
-            let mut i = 0;
-            while i < lake.len() {
-                let (c, r) = lake[i];
-                for (dc, dr) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
-                    let n = (c + dc, r + dr);
-                    if deep_cells.contains(&n) && seen.insert(n) {
-                        lake.push(n);
-                    }
-                }
-                i += 1;
-            }
-            lake.sort();
-            shoal.lakes.push(lake);
-        }
+        shoal.lakes = lakes(water);
         let most = t.fish_per_school.max(0);
         if most == 0 {
             return shoal;
@@ -718,7 +725,7 @@ pub fn stream_fish(streams: &[(i32, i32)], salt: u32, time: f32, t: &Tuning) -> 
 /// The sixteen headings a fish is drawn in, as (cos, sin) clockwise from
 /// +x on the y-down field: written out so the picture is the same on
 /// every platform.
-const HEADINGS: [(f32, f32); 16] = [
+pub const HEADINGS: [(f32, f32); 16] = [
     (1.0, 0.0),
     (0.923_879_5, 0.382_683_43),
     (0.707_106_77, 0.707_106_77),
