@@ -1544,7 +1544,25 @@ impl Grid {
     /// skipped outright and the search is the plain grid A*, tie order
     /// included.
     fn search(&self, start: (usize, usize), goal: (usize, usize), hub: bool, keep: KeepOff) -> Option<SearchHit> {
-        SEARCH_TABLES.with_borrow_mut(|tables| self.search_in(tables, start, goal, hub, keep))
+        SEARCH_TABLES.with_borrow_mut(|tables| self.search_in::<OpenEntry>(tables, start, goal, hub, keep, f32::INFINITY))
+    }
+
+    /// The cost of the cheapest route from `start` to `goal` when it is at
+    /// most `most`, on a grid with no portal; `None` when it is dearer or
+    /// there is none. What `search_straight` asks of a step: the cost and
+    /// nothing else, so the search breaks its ties its own way
+    /// (`DeepEntry`, the entry furthest along first) - every tie order
+    /// finds the cheapest route, and this one heads down a plateau of
+    /// equal estimates instead of spreading across it. And it gives up as
+    /// soon as the cheapest entry left costs more than `most`: with the
+    /// plain Manhattan heuristic consistent, the entries come out cheapest
+    /// first and every one pushed costs at least what the one popped did,
+    /// so the goal could only come out dearer.
+    fn search_within(&self, start: (usize, usize), goal: (usize, usize), keep: KeepOff, most: u32) -> Option<u32> {
+        debug_assert!(self.portal_cells.is_empty(), "the hub's heuristic is not the plain one the bound leans on");
+        // Half a step over: a cost is a sum of whole steps.
+        let bound = most as f32 + 0.5;
+        SEARCH_TABLES.with_borrow_mut(|tables| self.search_in::<DeepEntry>(tables, start, goal, false, keep, bound)).map(|hit| hit.cost)
     }
 
     /// `search` through the hub, its first step straightened along `prefer`
@@ -1574,7 +1592,16 @@ impl Grid {
             if self.portal_cells.is_empty() && price + heuristic(next, goal) as u32 > hit.cost {
                 return None;
             }
-            let rest = if next == goal { 0 } else { self.search(next, goal, true, keep)?.cost };
+            // A route through `next` costs no less than the one found, so
+            // only one costing exactly what is left can make it as cheap:
+            // without a portal the search gives up past that.
+            let rest = if next == goal {
+                0
+            } else if self.portal_cells.is_empty() {
+                self.search_within(next, goal, keep, hit.cost - price)?
+            } else {
+                self.search(next, goal, true, keep)?.cost
+            };
             (price + rest == hit.cost).then_some(SearchHit { first_step: next, cost: hit.cost })
         };
         if let Some(along) = as_cheap(prefer) {
@@ -1590,9 +1617,13 @@ impl Grid {
         Some(hit)
     }
 
-    /// `search` on the thread's kept tables (`SearchTables`), begun here.
-    fn search_in(&self, t: &mut SearchTables, start: (usize, usize), goal: (usize, usize), hub: bool, keep: KeepOff) -> Option<SearchHit> {
+    /// `search` on the thread's kept tables (`SearchTables`), begun here,
+    /// its open set of `E`s - `OpenEntry` for every search whose route is
+    /// read, `DeepEntry` for one only costed (`search_within`) - giving up
+    /// on an entry dearer than `bound` (infinite but for `search_within`).
+    fn search_in<E: Open>(&self, t: &mut SearchTables, start: (usize, usize), goal: (usize, usize), hub: bool, keep: KeepOff, bound: f32) -> Option<SearchHit> {
         let hub = hub && !self.portal_cells.is_empty();
+        debug_assert!(self.cols < 0xFFFF && self.rows < 0xFFFF, "a node packs its column and row in 16 bits each");
         // One slot per cell plus the hub's sentinel slot at the end.
         t.begin(self.cols * self.rows + 1);
         let idx = |n: NavNode| n.idx(self.cols, self.rows);
@@ -1625,21 +1656,19 @@ impl Grid {
             let slot = idx(next);
             if tentative < t.g(slot) {
                 t.reach(slot, tentative, Some(node));
-                t.open.push(OpenEntry {
-                    node: next,
-                    priority: tentative + h(next),
-                });
+                E::set(t).push(E::of(next.packed(), tentative + h(next), tentative));
             }
         };
 
         let start_node = NavNode::Cell(start);
         t.reach(idx(start_node), 0.0, None);
-        t.open.push(OpenEntry {
-            node: start_node,
-            priority: h(start_node),
-        });
+        E::set(t).push(E::of(start_node.packed(), h(start_node), 0.0));
 
-        while let Some(OpenEntry { node, .. }) = t.open.pop() {
+        while let Some(entry) = E::set(t).pop() {
+            if entry.priority() > bound {
+                return None;
+            }
+            let node = NavNode::unpacked(entry.node());
             // A node is expanded (popped and relaxed) once at most. Without
             // the closed mark, a cell whose cost improves after its
             // expansion is pushed again and, once repopped, relaxes its
@@ -1717,13 +1746,24 @@ impl Grid {
 struct SearchTables {
     /// The running search's stamp; never 0 once one has begun.
     search: u32,
-    /// Per slot, the search that last gave it a cost and a parent.
-    reached: Vec<u32>,
-    /// Per slot, the search that expanded it.
-    closed: Vec<u32>,
-    g_score: Vec<f32>,
-    came_from: Vec<Option<NavNode>>,
+    /// Per node, everything the search keeps of it, side by side: one
+    /// read of memory a node, not one a table.
+    slots: Vec<Slot>,
     open: BinaryHeap<OpenEntry>,
+    /// `search_within`'s open set.
+    deep: BinaryHeap<DeepEntry>,
+}
+
+/// One node's row of `SearchTables`.
+#[derive(Clone, Copy)]
+struct Slot {
+    /// The search that last gave it a cost and a parent.
+    reached: u32,
+    /// The search that expanded it.
+    closed: u32,
+    g: f32,
+    /// The node it was reached from (`NavNode::packed`), or `NO_PARENT`.
+    from: u32,
 }
 
 impl SearchTables {
@@ -1732,46 +1772,47 @@ impl SearchTables {
     /// is never read - and a stamp that comes round to 0 forgets every
     /// slot rather than take an old one for the new search's.
     fn begin(&mut self, slots: usize) {
-        if self.reached.len() < slots {
-            self.reached.resize(slots, 0);
-            self.closed.resize(slots, 0);
-            self.g_score.resize(slots, f32::INFINITY);
-            self.came_from.resize(slots, None);
+        if self.slots.len() < slots {
+            self.slots.resize(slots, Slot { reached: 0, closed: 0, g: f32::INFINITY, from: NO_PARENT });
         }
         self.search = self.search.wrapping_add(1);
         if self.search == 0 {
-            self.reached.fill(0);
-            self.closed.fill(0);
+            for slot in &mut self.slots {
+                (slot.reached, slot.closed) = (0, 0);
+            }
             self.search = 1;
         }
         self.open.clear();
+        self.deep.clear();
     }
 
     /// The best known cost to `slot` this search, infinite when unreached.
     fn g(&self, slot: usize) -> f32 {
-        if self.reached[slot] == self.search { self.g_score[slot] } else { f32::INFINITY }
+        let s = &self.slots[slot];
+        if s.reached == self.search { s.g } else { f32::INFINITY }
     }
 
     /// The node `slot` was reached from this search, if any.
     fn parent(&self, slot: usize) -> Option<NavNode> {
-        if self.reached[slot] == self.search { self.came_from[slot] } else { None }
+        let s = &self.slots[slot];
+        (s.reached == self.search && s.from != NO_PARENT).then(|| NavNode::unpacked(s.from))
     }
 
     /// `slot` reached at `g` from `from`.
     fn reach(&mut self, slot: usize, g: f32, from: Option<NavNode>) {
-        self.reached[slot] = self.search;
-        self.g_score[slot] = g;
-        self.came_from[slot] = from;
+        let search = self.search;
+        let s = &mut self.slots[slot];
+        (s.reached, s.g, s.from) = (search, g, from.map_or(NO_PARENT, NavNode::packed));
     }
 
     /// Whether `slot` has been expanded this search.
     fn is_closed(&self, slot: usize) -> bool {
-        self.closed[slot] == self.search
+        self.slots[slot].closed == self.search
     }
 
     /// `slot` expanded.
     fn close(&mut self, slot: usize) {
-        self.closed[slot] = self.search;
+        self.slots[slot].closed = self.search;
     }
 }
 
@@ -1829,13 +1870,36 @@ impl NavNode {
             NavNode::Hub => cols * rows,
         }
     }
+
+    /// The node in four bytes, as the open set and the parents table keep
+    /// it: the column in the low half, the row in the high one, the hub
+    /// all ones. A grid is far under 65535 cells a side.
+    fn packed(self) -> u32 {
+        match self {
+            NavNode::Cell((col, row)) => col as u32 | (row as u32) << 16,
+            NavNode::Hub => PACKED_HUB,
+        }
+    }
+
+    /// The node `packed` packed.
+    fn unpacked(packed: u32) -> NavNode {
+        if packed == PACKED_HUB { NavNode::Hub } else { NavNode::Cell(((packed & 0xFFFF) as usize, (packed >> 16) as usize)) }
+    }
 }
 
-/// One entry in the open set: a node plus its f-score (g + heuristic).
-/// `BinaryHeap` is a max-heap, so `Ord` is reversed on `priority` to pop the
-/// lowest f-score first.
+/// The hub, packed (`NavNode::packed`).
+const PACKED_HUB: u32 = u32::MAX;
+
+/// No parent, in the parents table: a value no node packs to.
+const NO_PARENT: u32 = u32::MAX - 1;
+
+/// One entry in the open set: a node (`NavNode::packed`) plus its f-score
+/// (g + heuristic). `BinaryHeap` is a max-heap, so `Ord` is reversed on
+/// `priority` to pop the lowest f-score first. Only `priority` is ever
+/// compared, so the heap pops in an order the node's packing cannot touch;
+/// eight bytes an entry keep its sifting cheap.
 struct OpenEntry {
-    node: NavNode,
+    node: u32,
     priority: f32,
 }
 
@@ -1856,6 +1920,86 @@ impl Ord for OpenEntry {
             .priority
             .partial_cmp(&self.priority)
             .unwrap_or(Ordering::Equal)
+    }
+}
+
+/// What `Grid::search_in` needs of an entry of its open set: one made of a
+/// node (`NavNode::packed`), its f-score and its cost so far, read back
+/// for the node and the f-score, kept on the thread's tables.
+trait Open: Ord + Sized {
+    fn of(node: u32, priority: f32, g: f32) -> Self;
+    fn node(&self) -> u32;
+    fn priority(&self) -> f32;
+    /// This kind's open set on the thread's tables.
+    fn set(t: &mut SearchTables) -> &mut BinaryHeap<Self>;
+}
+
+impl Open for OpenEntry {
+    fn of(node: u32, priority: f32, _g: f32) -> Self {
+        OpenEntry { node, priority }
+    }
+
+    fn node(&self) -> u32 {
+        self.node
+    }
+
+    fn priority(&self) -> f32 {
+        self.priority
+    }
+
+    fn set(t: &mut SearchTables) -> &mut BinaryHeap<Self> {
+        &mut t.open
+    }
+}
+
+/// An entry of `Grid::search_within`'s open set: the lowest f-score first,
+/// as an `OpenEntry`, and of two alike the one further along (the larger
+/// cost so far), so a search crossing a plateau of equal estimates heads
+/// on to the goal instead of spreading across it. Only for a search whose
+/// cost alone is read: every tie order finds the cheapest route, but not
+/// the same one.
+struct DeepEntry {
+    node: u32,
+    priority: f32,
+    g: f32,
+}
+
+impl PartialEq for DeepEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for DeepEntry {}
+impl PartialOrd for DeepEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for DeepEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .priority
+            .partial_cmp(&self.priority)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| self.g.partial_cmp(&other.g).unwrap_or(Ordering::Equal))
+    }
+}
+
+impl Open for DeepEntry {
+    fn of(node: u32, priority: f32, g: f32) -> Self {
+        DeepEntry { node, priority, g }
+    }
+
+    fn node(&self) -> u32 {
+        self.node
+    }
+
+    fn priority(&self) -> f32 {
+        self.priority
+    }
+
+    fn set(t: &mut SearchTables) -> &mut BinaryHeap<Self> {
+        &mut t.deep
     }
 }
 
@@ -2067,7 +2211,7 @@ mod tests {
                     assert!(big.search((0, 0), (29, 19), true, KeepOff::NONE).is_some());
                     for hub in [true, false] {
                         let kept = hit(grid.search(from, to, hub, KeepOff::NONE));
-                        let fresh = hit(grid.search_in(&mut SearchTables::default(), from, to, hub, KeepOff::NONE));
+                        let fresh = hit(grid.search_in::<OpenEntry>(&mut SearchTables::default(), from, to, hub, KeepOff::NONE, f32::INFINITY));
                         assert_eq!(kept, fresh, "{label}: {from:?} to {to:?}, hub {hub}");
                     }
                 }
@@ -2077,6 +2221,33 @@ mod tests {
         SEARCH_TABLES.with_borrow_mut(|t| t.search = u32::MAX - 3);
         check("across the stamp's wrap");
         assert!(SEARCH_TABLES.with_borrow(|t| t.search) < 10_000, "the stamp came round");
+    }
+
+    /// A search held to a cost (`search_within`) finds what the plain one
+    /// finds when that costs no more, and nothing when it costs more - on a
+    /// grid with walls, a gap and dear cells, from every cell to a spread
+    /// of goals, at the bound, under it and over it.
+    #[test]
+    fn a_search_held_to_a_cost_finds_the_route_that_fits_and_no_other() {
+        let mut grid = Grid::build(SIDE, SIDE, CELL, 0.0, wall(5, &[8]).into_iter());
+        grid.weigh([at(2, 3), at(3, 3), at(7, 6), at(6, 8)].into_iter(), 4);
+        let cells: Vec<(usize, usize)> = (0..10).flat_map(|row| (0..10).map(move |col| (col, row))).collect();
+        let mut seen = (0, 0);
+        for &from in &cells {
+            for &to in cells.iter().step_by(3) {
+                if from == to {
+                    continue;
+                }
+                let Some(full) = grid.search(from, to, false, KeepOff::NONE) else { continue };
+                for most in [full.cost.saturating_sub(2), full.cost.saturating_sub(1), full.cost, full.cost + 1] {
+                    let held = grid.search_within(from, to, KeepOff::NONE, most);
+                    let fits = full.cost <= most;
+                    seen = (seen.0 + fits as usize, seen.1 + !fits as usize);
+                    assert_eq!(held, fits.then_some(full.cost), "{from:?} to {to:?} within {most}: costs {}", full.cost);
+                }
+            }
+        }
+        assert!(seen.0 > 100 && seen.1 > 100, "{seen:?}");
     }
 
     /// Past a portal cell a route may teleport, so the read stops at the

@@ -50,7 +50,11 @@ lead is steered by; a packet carrying a pose (`IntentMsg::owned`, stage 3) goes 
 `PLACED_PX` (`authority::moved_since`) puts a `WireEvent::Placed` on the next snapshot, and the dev
 `room` tool shows `owns_hull`/`pose_refusals` per seat), **the end screen** (ticked and sent like
 any other frame, then `end_round` on the tick before the one `Game::update` would call `init` on -
-`Game::restart_countdown` is the reading - so a room never starts a round nobody asked for), the
+`Game::restart_countdown` is the reading - so a room never starts a round nobody asked for; it then
+lets the world go, `let_world_go`, keeping only an `EndedRound` - the outcome, the roster's
+chassis and the welcome into the last tick a seat reclaimed before the rematch is given - rather
+than tens of megabytes through `ENDED_TTL`), the round's `Game` made with `no_wear` (no tread
+marks on the authority; docs/ground-memory.md "Online"), the
 snapshots (`net::encode::snapshot` stamped with the room's clock, the events of the two ticks
 between banked through `encode::wire_events` and prepended; a delta every `SNAPSHOT_EVERY` ticks
 encoded once for everyone, a full one for a seat that just joined or skipped - carrying, ahead of its

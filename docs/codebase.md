@@ -728,7 +728,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `shape::segment_hits_aabb`. Projectiles have no physics body;
     rapier is never consulted for hits. `Terrain` holds its tiles in cell order, its bongs in
     `bong_order` and sweeps enemies by slot, so an exact tie on entry time is settled by place,
-    never by storage order. A shot is swept only up to the portal it goes into
+    never by storage order. **Its tiles are filed by cell** (`TileGrid`, a counting sort that is
+    exactly a stable sort by `cell_order`, seams closed against a dense grid of the cells rather
+    than a hash set): every segment or point query reads only the rows its bounds reach and, in
+    each, the columns its stretch across the row reaches (`tiles_along`, grown by the widest
+    tile and `GRID_MARGIN_PX`), one slice a row - the tiles the walk of them all would meet, in
+    its order, less those it cannot touch - so a query costs the cells it crosses, not the field
+    (Wildwood's 8064 tiles), and answers exactly as the walk did (`grid_tests`). A round builds
+    each tick's `Terrain` in the storage of the tick before's (`Game::kept_terrain`,
+    `Terrain::rebuilt`). A shot is swept only up to the portal it goes into
     (`portals.rs`). `Terrain::line_of_sight` is the AI's fire gate. **Lag compensation**
     (docs/online-coop-prd.md §4.16, favour the shooter): `HitBoxHistory` is a ring of the last
     `REWIND_MAX_TICKS` (15, 250 ms) ticks of every live enemy's hull and turret boxes and every
@@ -1157,7 +1165,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   cell each enemy stands in (`route_crowd_cost`; 0 turns either off) - then a field per live player
   and for the player's bong; `route_grid` builds the same from scratch. Engage slots, waypoints and
   pickups still go through A*, on per-node tables the thread keeps between searches (`SearchTables`,
-  stamped per search), so a query costs the cells it reaches rather than the whole grid. **Crates a
+  stamped per search), so a query costs the cells it reaches rather than the whole grid; the open
+  set and the parents hold a node in four bytes (`NavNode::packed`) - the heap compares priorities
+  alone, so the packing never touches the order it pops in. `search_straight`'s check of a straight
+  step reads only a cost, so on a grid with no portal it asks `search_within`: the cheapest route's
+  cost when it is at most what the step must leave, found with ties broken toward the goal
+  (`DeepEntry`) and given up once the open set's cheapest entry is dearer - the same answer as a
+  full search, a fraction of its cells. **Crates a
   tank would leave** are its own, not the grid's: `Game::keep_off_cells` hands each enemy's `think`
   the nav cells under the crates it would not take (`TakeRules`, the collection rule - the 2 x 2
   round the corner a crate stands on, `Grid::cells_under`), and `steer`/`wander` route with them
@@ -1980,6 +1994,10 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   and under a biome per-material ramps from `PictureFrame::floor`, `Ramp::in_biome`)
   into a `TileAtlas` of the cells in view (`refresh_pictures`, at most `wear_bakes_per_frame`),
   drawn first in `paint_floor_marks`. `Game::driving()` hands `Fx::drive` every hull's `Tread`.
+  A room's authority (and the rig's) sets `Game::no_wear`, and `init` gives it `WearGrid::off()`:
+  ground that nothing presses, drips, splats or stirs, so it stays empty and costs the room
+  neither the stamping nor the grid - the wire carries no marks and every replica presses its own.
+  The hull's own tread state (`Tank::tread`, the track frame) is kept either way.
 - `crate_fx.rs` (docs/CRATES_SPEC.md) — the crates' shows, pure functions of age in the effects
   language: `drop` (the air drop a crate comes down in; drawn only - a crate can be taken the frame
   it appears), `glint_col` (the idle, hashed per crate) and `open` (`Opening::Taken` - planks fly,

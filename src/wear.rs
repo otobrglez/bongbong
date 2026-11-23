@@ -376,11 +376,15 @@ pub struct WearGrid {
     /// Round seconds the silt has not yet drifted.
     silt_due: f32,
     pictures: RefCell<Pictures>,
+    /// Ground that takes no marks (`off`): nothing presses, drips, splats
+    /// or stirs it, so it stays empty and every other pass over it finds
+    /// nothing to do.
+    off: bool,
 }
 
 impl Default for WearGrid {
     fn default() -> Self {
-        WearGrid { cells: BTreeMap::new(), presses: 0, max_cells: usize::MAX, silt_due: 0.0, pictures: RefCell::new(Pictures::default()) }
+        WearGrid { cells: BTreeMap::new(), presses: 0, max_cells: usize::MAX, silt_due: 0.0, pictures: RefCell::new(Pictures::default()), off: false }
     }
 }
 
@@ -388,6 +392,13 @@ impl WearGrid {
     /// A fresh round's ground, keeping at most `max_cells` worn cells.
     pub fn new(max_cells: usize) -> WearGrid {
         WearGrid { max_cells: max_cells.max(1), ..WearGrid::default() }
+    }
+
+    /// Ground that takes no marks at all: a room's authority's
+    /// (`Game::no_wear`), which draws nothing and sends no marks - every
+    /// client presses its own replica's.
+    pub fn off() -> WearGrid {
+        WearGrid { off: true, ..WearGrid::default() }
     }
 
     /// No ground is worn.
@@ -451,6 +462,9 @@ impl WearGrid {
     /// Press `s`'s runs into the ground at round time `now`; `surface`
     /// says what lies where. Returns the blocks a new pass pressed.
     pub fn press(&mut self, s: &Stamp, look: Look, surface: &dyn Fn(Position) -> Surface, now: f32, t: &Tuning) -> u32 {
+        if self.off {
+            return 0;
+        }
         let k = (s.scale * 0.5).max(0.01);
         let (sin, cos) = crate::math::sin_cos(s.heading.to_radians());
         let snap = |v: f32| if v.abs() < 1e-4 { 0.0 } else if (v.abs() - 1.0).abs() < 1e-4 { v.signum() } else { v };
@@ -547,6 +561,9 @@ impl WearGrid {
     /// Change the block at `at` with `f` if it lies on ground that takes
     /// a mark, making its cell if need be.
     fn touch(&mut self, at: Position, now: f32, surface: &dyn Fn(Position) -> Surface, f: impl FnOnce(&mut Block, Surface)) {
+        if self.off {
+            return;
+        }
         let surf = surface(at);
         if surf.is_water() || surf == Surface::Ice {
             return;
@@ -696,6 +713,9 @@ impl WearGrid {
     /// radius `half` (its hull's half-width), each block gaining up to
     /// `amount` (0 to 1), thinning to nothing at the rim.
     pub fn stir(&mut self, at: Position, half: f32, amount: f32, now: f32, surface: &dyn Fn(Position) -> Surface) {
+        if self.off {
+            return;
+        }
         let half = half.max(BLOCK_PX);
         let (b0, b1) = (block_at(Position::new(at.x - half, at.y - half)), block_at(Position::new(at.x + half, at.y + half)));
         for by in b0.1..=b1.1 {

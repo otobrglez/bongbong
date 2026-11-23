@@ -213,7 +213,7 @@ impl Game {
         if self.grass_flat.is_empty()
             && self.grass_trampled.is_empty()
             && self.smoke_cells.is_empty()
-            && self.woods.trail_positions().next().is_none()
+            && !self.woods.has_trails()
         {
             return Cow::Borrowed(&self.grass_cells);
         }

@@ -43,7 +43,7 @@ spec:
       containers:
         - name: rooms
           image: registry.folk-decibel.ts.net/bongbong/bongbong-server
-          args: [ "--listen", "0.0.0.0:4848", "--admin-listen", "0.0.0.0:4850", "--max-rooms", "25" ]
+          args: [ "--listen", "0.0.0.0:4848", "--admin-listen", "0.0.0.0:4850", "--max-rooms", "24" ]
           # Two ports: `http` carries /ws alone and is the one the Ingress
           # routes; `admin` carries /health, /ready and /metrics and is
           # reached only from inside the cluster - the kubelet's probes
@@ -85,13 +85,27 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
 
-          # Sized from docs/online-coop-prd.md §5: about 2 % of a core per
-          # room at eight seats and under 2 MB of memory, so 500m is
-          # roughly the 25 rooms `--max-rooms` allows. Deliberately modest:
-          # this is one node shared with every other production namespace
-          # on the cluster, and a whole core reserved for a server nobody
-          # has found yet would be a poor neighbour. Raise the two together
-          # when the rooms gauge approaches the cap.
+          # Sized from measured rooms (docs/online-coop-prd.md §5), by the
+          # biggest campaign map: a room costs what its map costs. Grand
+          # Campaign and the arenas tick in about 0.3 ms (2 % of a core) and
+          # hold about 5 MB; Wildwood, 8,064 tiles across 224 x 126 cells,
+          # ticks in about 1.8 ms at four seats (11 % of the measured core,
+          # twice that on one half as fast) and holds 24-32 MB.
+          #
+          # The memory limit is the number that cannot be modest: one
+          # out-of-memory kill drops every room on the pod. `--max-rooms 24`
+          # Wildwood rooms at 32 MB, plus the server's own few, are three
+          # quarters of 1 GiB - keep the cap at or under the limit over
+          # 42 MB when either moves. An ended room lets its world go
+          # (`Room::let_world_go`), so it holds next to nothing.
+          #
+          # The CPU request is deliberately modest - one node shared with
+          # every other production namespace on the cluster, and a server
+          # nobody has found yet: one core holds about five busy Wildwood
+          # rooms or two dozen small ones, and past that the pod bursts into
+          # the node's headroom. Raise it with the cap when the rooms gauge
+          # approaches it, or when `bongbong_tick_microseconds` p99 nears
+          # 16000.
           #
           # **No CPU limit on purpose.** The tick is 60 Hz with a 16.6 ms
           # budget; a CFS quota would throttle at the period boundary and
@@ -99,8 +113,8 @@ spec:
           # what guarantees the share, and a limit would only add jitter;
           # with none, a busy pod still bursts into the node's headroom.
           resources:
-            requests: { cpu: 500m, memory: 256Mi }
-            limits: { memory: 512Mi }
+            requests: { cpu: 1000m, memory: 256Mi }
+            limits: { memory: 1Gi }
 ---
 apiVersion: v1
 kind: Service

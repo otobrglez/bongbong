@@ -202,9 +202,15 @@ pub fn drop_cell(
 /// and a structure's outward-facing silhouette, both look and feel exactly
 /// as before - only the seams *between* a structure's own tiles close up.
 pub(crate) fn tile_hull_half_extent(cells: &HashSet<(i32, i32)>, gx: i32, gy: i32, base: f32) -> Position {
+    tile_hull_half_extent_by(|cell| cells.contains(&cell), gx, gy, base)
+}
+
+/// `tile_hull_half_extent` with the neighbouring cells answered by
+/// `holds` - a set's lookup, or a grid's (`hits::Terrain::build`).
+pub(crate) fn tile_hull_half_extent_by(holds: impl Fn((i32, i32)) -> bool, gx: i32, gy: i32, base: f32) -> Position {
     let full = OBSTACLE_GRID_SIZE * 0.5;
-    let has_x_neighbor = cells.contains(&(gx - 1, gy)) || cells.contains(&(gx + 1, gy));
-    let has_y_neighbor = cells.contains(&(gx, gy - 1)) || cells.contains(&(gx, gy + 1));
+    let has_x_neighbor = holds((gx - 1, gy)) || holds((gx + 1, gy));
+    let has_y_neighbor = holds((gx, gy - 1)) || holds((gx, gy + 1));
     Position::new(
         if has_x_neighbor { full } else { base },
         if has_y_neighbor { full } else { base },
@@ -228,10 +234,16 @@ pub(crate) fn tile_half_extent(
     gy: i32,
     base: f32,
 ) -> Position {
+    tile_half_extent_by(material, |cell| cells.contains(&cell), gx, gy, base)
+}
+
+/// `tile_half_extent` with the cells holding a tile answered by `holds` -
+/// a set's lookup, or a grid's (`hits::Terrain::build`).
+pub(crate) fn tile_half_extent_by(material: Material, holds: impl Fn((i32, i32)) -> bool, gx: i32, gy: i32, base: f32) -> Position {
     if material.is_tree() || material == Material::Lamp || material.is_loose() {
         return Position::new(base, base);
     }
-    tile_hull_half_extent(cells, gx, gy, base)
+    tile_hull_half_extent_by(holds, gx, gy, base)
 }
 
 /// Grid cell of a tile already placed at `pos` (a `Position` that's always

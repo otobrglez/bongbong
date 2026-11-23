@@ -278,8 +278,14 @@ other fire in `Snapshot::fires`, so a replica burns where the room burns.
 
 Nothing of the marks crosses the wire. A replica presses its own marks from the hulls the
 snapshots place (`Tank::track_from`, reset across a jump so no mark is laid
-across a portal or a placement) and throws its own effects from them, so its
-marks can differ from the room's by an interpolated pixel.
+across a portal or a placement) and throws its own effects from them. The room
+itself keeps no marks at all: its round is made with `Game::no_wear`, so `init`
+gives it `WearGrid::off()`, ground that nothing presses, drips, splats or stirs.
+It stays empty, every pass over it (the scour, the silt, a well's scrub, a
+wreck's char, the crushed grass) finds nothing to do, and a big map's room saves
+the stamping - an eighth of a Wildwood tick - and the grid's megabytes. A hull's
+own tread state is kept either way; nothing that plays reads the marks, so the
+room's round is the same without them.
 
 Trampled cells are the room's and travel: `WireEvent::GrassTrampled` puts each
 one into the replica's `grass_trampled` (quiet or drawn), and a joiner gets
