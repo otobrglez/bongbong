@@ -225,6 +225,8 @@ one (`throw_loose`). The fixed two are walls to the router; the loose three
 are not ("Loose barrels" above). What the AI sees over has a pass-over
 chance and the barrier, which hides, has none (`Material::blocks_sight`).
 Placed on the campaign where they fit: hay, crates, tyre stacks, barriers
-and tank traps round Serpent River's two camps and its villages, a row of
-tyres and two barriers in the Scrapyard, four lone tank traps across No
-Man's Land.
+and tank traps round Serpent River's two camps and its villages, tyre
+stacks banked along the Scrapyard's wire and strewn through its junk with
+tank traps and wooden crates (no barrier: a hull barely creeps one, and the
+router drives at it as if its cell were open, so near a way in it stalls
+the tank), four lone tank traps across No Man's Land.
