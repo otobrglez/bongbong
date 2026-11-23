@@ -198,7 +198,7 @@ enemy there carries one of the six BB-36 weapons.
 | 3 Glasshouses | sonic hammer (28,22), flamethrower (39,22), minigun, laser, missiles, plasma (six, all round the garden); more of each in the corner houses' stashes | flamethrower, in the Palm House beside the start; the sonic hammer again - to break the glass |
 | 4 Oasis Bazaar | minigun (seven), plasma, flamethrower, laser, grenades (17,18), (30,7) and (47,30), missiles, sonic hammer, jet (19,23) and helicopter strikes - six, scattered by a seeded draw | grenades again - by the yard's east gate, more by the khan's south postern to lob over its walls; the air strikes again - the jet by the yard's east gate, the rest out over the market; 34 oil and fuel drums in clusters |
 | 5 Carnival | EMP burst (13,21), laser, missiles, plasma, flamethrower, minigun, grenades, sonic hammer | EMP - six waves of light tanks among a hundred drums, enemies arming from the crates |
-| 6 Jungle Temple | plasma, laser, minigun, flamethrower, missiles, FPV swarm (13,23) | FPV swarm - over the temple walls; the miniguns beside it are the counter |
+| 6 Jungle Temple | FPV swarm (35,27), minigun, laser, plasma, missiles, grenades, flamethrower, sonic hammer, EMP burst, jet (31,21) and helicopter (51,20) strikes | FPV swarm - below the sanctum's south stair, the miniguns beside it the counter; the air support and the blast weapons in the base, eight cells and more from the bong |
 | 7 Wildwood | gravity well (31,57), jet (29,57) and helicopter (31,61) strikes, tower pack (24,57), EMP burst, FPV swarm, sonic hammer, grenades, flamethrower, laser, plasma, missiles, minigun | gravity well, tower pack - by the start, with seconds of each out in the forest (the crypt, the hangar, the secret grove); the air strikes again |
 | 8 Hedge Maze | jet (56,17) and helicopter (56,30) strikes, grenades (41,17), missiles (41,30), laser, plasma, minigun, flamethrower, sonic hammer, EMP burst, FPV swarm, gravity well | air strikes again - in the fountain court's stores beside grenades and missiles, every blast 256 px or more from the bong; a weapon in every corner of the maze |
 | 9 Archipelago | laser, missiles, plasma | |
@@ -227,7 +227,7 @@ The placements follow these rules:
   grenades, FPV swarm, air support, the gravity well - lies at least two of
   its blast's radii from that bong (256 px for the grenade), so the first
   fight it is used in is not at the bong. The campaign keeps it: Jungle
-  Temple's swarm lies 716 px from its bong, Serpent River's grenades 405 px and
+  Temple's swarm lies 272 px from its bong, Serpent River's grenades 405 px and
   its nearest air strike 273 px, Oasis Bazaar's nearer grenades
   345 px and its nearest air strike 385 px.
   `armory`, free play, does not: its grenades lie 233 px from the bong and

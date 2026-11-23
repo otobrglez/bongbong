@@ -600,9 +600,10 @@ is re-baselined for the crates, the trees and the tower.
 ### 3.5 In the campaign
 
 BB-46 (docs/levels.md, "The weapons along the way"): Jungle Temple (level 6)
-has the swarm's crate at 13,23, beside the two miniguns that are its
-counter: drones fly over the temple's walls, the wood's canopy hides a seat
-from an enemy's dive, and the players' four gun towers round the bong shoot
+has the swarm's crate at 35,27, below the sanctum's south stair - inside the
+start's sight box and 272 px from the bong - beside the two miniguns that are
+its counter: drones fly over the terrace's walls, the jungle's canopy hides a
+seat from an enemy's dive, and the players' gun towers round the bong shoot
 enemy drones down.
 
 ## 4. AI
