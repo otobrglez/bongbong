@@ -515,6 +515,9 @@ impl Room {
         let server_ms = self.server_ms();
         let Some(game) = &mut self.game else { return };
         let (width, height) = game.map.field_size();
+        // Its shots are keyed by that press, as a room keys them
+        // (`simulation::ShotKey`).
+        game.set_seat_press(0, Some(presses[0]));
         // The seat's own pose, the room server's rule (`net::authority`):
         // a client that owns its hull is put where it says before the
         // tick, and told if it is refused or moved.

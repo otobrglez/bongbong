@@ -19,17 +19,17 @@ frames the twin drew.
 just netlab run --profile typical --scenario shoot
 just netlab run --profile custom --delay-ms 80 --jitter-ms 20 --loss 0.02 --nagle
 just netlab run --remote wss://rooms.bongbong.io/pr-48 --scenario duel
-just netlab-suite --quick          # three profiles x three scenarios x hull on/off
-just netlab-suite                  # every profile, 20 s a run
+just netlab-suite --quick          # three profiles x three scenarios x hull on/off, then Wildwood
+just netlab-suite                  # every profile, 20 s a run, then Wildwood
 just netlab replay F --explain     # measure a --frames-out dump again
 ```
 
 `run` prints a summary (`--json-out F` writes the whole report, `--frames-out
 F` every frame each seat and the twin recorded - hulls, shots, events and the
 client's readings - with the tap's reading of the host's presses, and
-`--quiet` prints nothing); `suite` prints one markdown table, each run in its
-own process because the tuning table and the room server's base table are
-process-wide. For the same reason a test that calls `run::run` is the only
+`--quiet` prints nothing); `suite` prints one markdown table, a map column
+first, each run in its own process because the tuning table and the room
+server's base table are process-wide. For the same reason a test that calls `run::run` is the only
 test in its binary (`tests/lan_drive.rs`, `tests/late_server.rs`). `replay`
 measures a `--frames-out` dump offline, the same code path a run takes, and
 `--explain` lists every appearance of the host's own shots online - the
@@ -76,9 +76,26 @@ by timing (see the shot ledger).
 ## The scenarios
 
 Played on `maps/arena.toml` (an open field, so a stall is the link's and not
-a wall's), both seats in the same chassis (`--tank`, default the
-single-barrelled scout, so one press is one `Fired`), band enemies,
-`--mission destroy`, seed `0xB0B5`.
+a wall's) unless `--map` names another, both seats in the same chassis
+(`--tank`, default the single-barrelled scout, so one press is one `Fired`),
+band enemies, `--mission destroy`, seed `0xB0B5`.
+
+**The suite's tiled leg.** The arena has no tiles, so nothing there tells
+whether an own shot's provisional and the room's copy meet the same ones -
+the tile edges a shot grazes and the sandbags and fences it may pass over.
+The suite therefore plays `shoot` and `duel` again on Wildwood
+(`suite::TILED_MAP`, `maps/wildwood.toml`), whose seats start in a fenced
+garden with sandbags, a lamp and trees in their line of fire, with the
+client's hull on (the shipped default): on `typical` and `bad` in `--quick`,
+on every profile in the full suite. A hand-off there is a disagreement
+about a tile. What it costs: four runs on `--quick` (22 instead of 18: the
+whole quick suite took 203 s, about 35 s of it Wildwood's) and ten on the
+full suite (40 instead of 30, about three and a half minutes more on some
+eleven). A Wildwood run loads in under a second, but every frame is heavier -
+a client's frame CPU p50 about 0.9 ms against the arena's 0.1-0.4, the
+twin's 1.3 ms against 0.05 - so on a loaded machine its own-input and pacing
+rows read worse than the arena's for reasons that are not the link's; read
+its hand-off column.
 
 No scripted press may be refused for ammo. In-process the room shares this
 process's tuning table, so the magazine (`max_shells`) is pinned at 100 for

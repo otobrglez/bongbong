@@ -437,7 +437,7 @@ impl Game {
         let slot = self.take_slot();
         let row = TankKind::Titan.row();
         let shell = Shell::at(id, from, from, velocity, rotation, 0, row, Owner::Enemy(slot));
-        self.spawn_shot(shell, 0);
+        self.spawn_shot(shell, 0, None);
     }
 
     /// Whether the players' bong is on its way to the running beat's cell,

@@ -1,8 +1,9 @@
 # Test lane (Phase 6 of docs/gameplay-verification-design.md), as two jobs
 # that run side by side: `test` (the library's tests, with raylib and then
 # headless with the dev tools) and `check` (the whole workspace compiles,
-# clippy's errors on the headless library, the room server's tests, the
-# waves round played end to end, then the budgeted probe sweeps). One
+# clippy's errors on the headless library, the room server's tests with and
+# without its dev tools, netlab's, the waves round played end to end, then
+# the budgeted probe sweeps). One
 # after the other they were the longest check on a PR.
 # Deliberately separate from the deploy lanes (cloudflare-deploy.yml /
 # pr-preview.yml) and never touching release.yml (cargo-dist-generated).
@@ -122,9 +123,19 @@ jobs:
       - name: cargo clippy, headless library
         run: cargo clippy --lib --no-default-features --features dev-tools
 
-      # The room server and the `net/` code it shares with the client.
-      - name: cargo test -p bongbong-server
-        run: cargo test -p bongbong-server
+      # The room server and the `net/` code it shares with the client, and
+      # netlab's own tests (the link model, the tap's parser, the report,
+      # and three whole runs on a loopback). One command, so the game crate
+      # (headless, `online`) is built once for both.
+      - name: cargo test -p bongbong-server -p netlab
+        run: cargo test -p bongbong-server -p netlab
+
+      # The room server again with its dev surface (`devserver.rs`,
+      # `tests/devtools.rs` and the tests behind the feature), which the
+      # release image and the run above leave out. Only the game crate and
+      # the server rebuild.
+      - name: cargo test -p bongbong-server --features dev-tools
+        run: cargo test -p bongbong-server --features dev-tools
 
       # The sound map's guard (docs/sound-system-prd.md section 4.11): every
       # cue the code, the catalogue and the watchers name resolves in the

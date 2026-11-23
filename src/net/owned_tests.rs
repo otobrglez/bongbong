@@ -323,3 +323,21 @@ fn a_run_of_refusals_ends_on_the_one_placed_the_client_obeys() {
         assert_eq!(jumps, 1, "delay {delay}: the hull jumped once, to the Placed");
     }
 }
+
+/// An owned hull's shell leaves where the room's copy of it leaves, even
+/// with the hull drifting across its line of fire - turned up on the press
+/// with its speed still carrying it right, which a shot grazing a tile's
+/// edge meets or misses by: the room fires before its tick's step, from
+/// where the pose puts its copy, and the provisional is drawn from there
+/// (`Predictor::launch_shift`).
+#[test]
+fn an_owned_hulls_shot_leaves_where_the_rooms_copy_does_while_it_drifts() {
+    let mut link = Link::new(round(""), 0);
+    link.run(|_| drive(Dir::Right), 40);
+    link.step(Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() });
+    let drift = link.hull[link.hull.len() - 1].x - link.hull[link.hull.len() - 2].x;
+    assert!(drift > 1.0, "the hull still drifts right on the press: {drift}");
+    let (_, drawn) = link.client.shots().next().expect("the provisional");
+    let room = link.room.world.query::<&crate::shell::Shell>().iter().map(|s| s.position).next().expect("the room's shell");
+    assert!(drawn.position.distance_to(room) < 0.3, "the provisional leaves at {:?}, the room's copy at {room:?}", drawn.position);
+}

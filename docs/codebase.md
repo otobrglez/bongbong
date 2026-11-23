@@ -747,7 +747,15 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     moves only the enemy and bong boxes back to that tick - who is a candidate is decided in the
     present, a tank with no entry is tested where it stands, and seats, tiles and walls stay
     current. The laser takes the firing seat's rewind; a shield deflection zeroes a shot's. A round
-    with no seat views - every local round - rewinds nothing, and recording draws no RNG.
+    with no seat views - every local round - rewinds nothing, and recording draws no RNG. **A
+    seat's shot in a room is keyed** (`weapons::ShotKey`: the seat, the input tick its pull's
+    `Fired` names - `Game::set_seat_press`, which the room and the rig set from
+    `Mailbox::press_tick` before each update - and its place among the pull's shots, counted at
+    spawn by `take_shot_key`; a component attached only in a round whose presses are stamped, taken
+    off by a shield deflection): its pass-over rolls are `ShotKey::passes_over_tile`, a hash of the
+    key, the round's seed and the tile's cell that draws no RNG, which the client's drawn copy
+    (`PresentWorld::shot_contact`) asks of the same tiles, so the two sail over the same sandbags
+    and fences. Every unkeyed shot - an enemy's, every local round's - rolls from the RNG.
   - `combat.rs` — the three things every weapon shares. **`hurt`/`Game::hurt_tank` is the one way
     a tank loses health** (`Hurt {amount, cap, by, at, report, crush}`): `Tank::take_damage` or the
     rod's `crush`, the hit flash, the credit (`Tank::credit`, which runs out after
@@ -806,7 +814,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     in `step_world` before the solver - so a knocked or skidding hull rams and a grazing one does
     not); `barrels`/`debug_detonate` (a tool's click: queued like
     `debug_kill`, applied as a fatal direct hit at the top of the next frame). Pass-over and
-    deflection rolls live in `resolve_projectiles`. Every cosmetic choice is hashed; only damage
+    deflection rolls live in `resolve_projectiles` (a keyed seat's shot in a room hashes its
+    pass-over from its `ShotKey` instead). Every cosmetic choice is hashed; only damage
     rolls and chance knobs strictly between 0 and 1 draw RNG, so prop-free maps replay unchanged.
     Tests: `props_tests.rs` (statistical over seeds).
   - `oil.rs` (docs/ground-memory.md "Oil prints") — `print_oil`, the phase after
@@ -3074,7 +3083,15 @@ docs/sound-system-prd.md is the design; this is what each part owns.
     shell/bullet/bolt and steps its `update`, muzzle frames first), is swept each frame against the
     drawn world (`Game::present_world` / `PresentWorld::shot_contact`: tiles, the field edge, every
     live tank but the shooter's, bongs - `Terrain::sweep` cannot serve, it finds enemies by their
-    `Ai`, which a replica strips) and stops there with its impact drawn at once; the room's copies
+    `Ai`, which a replica strips - each grown by the shot's half-width as the room's sweep grows
+    it: a tile through the same `TerrainBox::entry`, the edge by the room's own wall boxes; and over
+    the tiles its key passes it over, `Live::key` = this seat, the press's input tick and the shot's
+    place in the press, `Press::launched`, the room's `ShotKey` for its copy, through
+    `Terrain::first_shot_along_past`), from where the room's copy leaves - the room fires before
+    its tick's step, so the muzzle moves back by the sandbox's step (`Predictor::launch_shift`: an
+    owned hull's pose one tick back along its `ram`, quantised as the wire carries it, which is
+    where `accept_seat_pose` puts the room's copy; a room-driven hull's place before the step) -
+    and stops there with its impact drawn at once; the room's copies
     of this seat's shots (`ShotState::owner`, `Game::seat_shots`) are paired with the provisionals
     by the `Fired` that names the press's input tick
     (`Predictor::confirm_fired`/`observe_server_shots`) and taken off the picture

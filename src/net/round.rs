@@ -1359,13 +1359,14 @@ impl<T: Transport> OnlineRound<T> {
         // picture is the crossing in the room.
         let reach = tuning().shell_hit_half_extent * 2.0;
         let mut met: Vec<(u16, crate::math::Vec2)> = Vec::new();
-        predictor.advance_shots(dt, |kind, from, to, leaving| {
+        predictor.advance_shots(dt, |kind, from, to, leaving, key| {
             // Into a portal before anything else: judged no further, as the
             // room judges it (`Game::resolve_projectiles`).
             let portal = world.portal_entry(from, to, leaving);
             let to = portal.unwrap_or(to);
+            // Over the tiles its key passes it over, as its room copy goes.
             let mut world_hit = world
-                .shot_contact(Some(seat), from, to, shot_half_extent(kind))
+                .shot_contact(Some(seat), from, to, shot_half_extent(kind), Some(key))
                 .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Bong)));
             // A bullet stops at a drone of the other side's it crosses
             // first, as the room's sweep has it; the drone stays up until
@@ -1410,7 +1411,7 @@ impl<T: Transport> OnlineRound<T> {
                     let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * beam_reach, beam.start.y + beam.dir.y * beam_reach);
                     let far = world.portal_entry(beam.start, far, world.portal_inside(beam.start)).unwrap_or(far);
                     let end = world
-                        .shot_contact(Some(seat), beam.start, far, tuning().shell_hit_half_extent)
+                        .shot_contact(Some(seat), beam.start, far, tuning().shell_hit_half_extent, None)
                         .map_or(far, |(at, _)| at);
                     game.draw_beam(beam.lens, end, beam.variant);
                     game.flash_seat_laser(seat);
