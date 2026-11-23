@@ -4,6 +4,61 @@ What changed in each release of bongbong, newest first. Each entry is also
 that release's notes on GitHub, above the downloads. The 0.0.x builds before
 0.1.0 are in the git history.
 
+## 0.3.0 - 2026-11-23
+
+The game has sound. The campaign is rebuilt as eighteen bigger levels, with
+Wildwood and Longwater joining it, and motion, rams, hits and blasts all feel
+weightier. Enemies fight smarter, and every blast now hurts both sides.
+
+### New
+- Sound: generated effects, music and the bong's voice, placed around you in space. Every weapon, hit, ricochet, splash, footing and warning has its own sound, and a speaker button opens a sound panel with volume sliders (M mutes the game)
+- An eighteen-level campaign on a seven-by-three level select. Wildwood and Longwater join it, and almost every level is redrawn two to three times bigger, with walled bases, towers on both sides, more waves and many more crates: Lotus Lagoon, Serpent River, Glasshouse Gardens, Oasis Bazaar, Jungle Temple, Hedge Maze, Archipelago, Harbor Lights, No Man's Land, Carnival, Scrapyard, Vulkan, Black Gold, Castle Moat and Grand Campaign (#176)
+- Wildwood, a huge forest Hunt: ten waves, night falling seven minutes in, and weapons hidden in a hedge maze, a sealed crypt, a secret grove, forest hollows and a volcano island only a ring of portals reaches (#222)
+- Barrels are loose drums: drive into one to shove it, blasts throw them, and a hard knock sets one off. You can also push a wreck into place as cover, and a blast tosses supply crates a few cells away (#218, #219)
+- Five new props in the builder's WALL list: springy tyre stacks, hay bales that burn, wooden crates that splinter, heavy concrete barriers and tank traps that shots pass between (#220)
+- The gatling gun is now a minigun: it spins up, fires a tight stream of 30 rounds a second, drops spent casings and glances the odd round off. More ammo, less damage per round (#208)
+- Three places now have their own look: Serpent River is a river valley, Lotus Lagoon a floodplain and No Man's Land a karst frontier, with their own ground, water, walls, fences and tread marks. The builder has a LOOK row under THEME to pick one (#207, #209, #211, #214, #215, #216)
+- Crows, mallards and fireflies live on the field: flocks flush from a passing tank or a shot, ducks paddle off and take flight, and fireflies glow at night (#223)
+- In the last second before your grenade, missile or drone goes off, a ring shows its full reach. The end screen names anything you lost to friendly fire (#206)
+
+### Changed
+- Every blast now hurts every tank and both bongs, yours included, and a direct hit does full damage. Walls give cover from a blast, and air support holds its fire rather than hit you or your bong (#190, #206)
+- Smoother motion on any display: tanks, shots and the camera are drawn between simulation steps, and tanks turn with a cleaner rotation (#184, #199)
+- Rams, hits and kills are felt: sparks, a white flash and a jolt on a ram, a shake and a red edge when you are hurt, and a brief hold on a kill. Hard walls throw a fast tank back, sandbags and fences cushion it, glass cracks under a ram and brush slows you a little (#185, #197, #217)
+- Driving: a turn into a narrow lane is taken from any direction, an early or late turn still counts, and heavy tanks gather speed and stop more slowly than light ones (#196)
+- The follow camera is calmer: it stays still until you really move, settles quickly after a stop, shakes half as much and pushes your view away from a blow (#191, #204)
+- Enemies drive straighter, lead a moving target, use each gun at its own range, queue behind a parked friend instead of ramming it, and run to cover when hurt before coming back (#202)
+- The last few enemies of a round are called to you after a quiet spell, and a teammate wrecked on the final wave comes back. A win opens the next level only when the level was played as shipped (#205)
+- The helicopter now escorts the tank that called it and fires until its rockets run out; the jet flies like a plane and makes two passes. The HUD shows an aircraft's ammunition (#198)
+- The laser lasts longer (9 charges a crate, up to 27) and taken pickups come back sooner, after 12.5 s
+- Serpent River is fought under clear, dusk, rain, fog or snow, and snow freezes its river (#212)
+- Clear-sky rounds are brighter, as drawn, and the picture keeps even pixels at any window size (#192)
+- Desktop: a goodbye screen when you close the window, which asks first if a map's changes would be lost; EXIT beside BACK in the level select; and the mouse cursor hides while you play
+
+### Fixed
+- A blast near a gate while a wrecked teammate rolled back in could crash the round. A bong is let go when an EMP collapses the gravity well holding it, your own gun tower no longer shoots through your bong, and Boot Camp's end screen reads DESTROYED 2 / 2 (#181)
+- A tank drives through a breach in a wall without catching on its edges (#189)
+- On phones the touch hints no longer draw over the level select, PAUSED or a level's banner, and PAUSED shows alone when you pause during an intro (#201)
+- Ice now covers exactly the water that is drawn, rounded lake corners included (#212)
+
+### Online
+- Your own tank rams, bounces and cracks glass in a room as it does offline, is no longer yanked back driving over a moved drum or a destroyed wall, and its shots meet the same walls and fences as the room's copy
+- Tower turrets, tesla charges, slime and its slowdown, the EMP outage and the helicopter's salvo now show and sound online
+- Joining a room is faster: a shipped map is sent by name instead of in full. A room on a large map like Wildwood runs far cheaper on the server
+- A hosted room opens on the mission its map was built for. A client and a room server on different versions now say so in plain words instead of hanging. Players and the room server need this version to play together
+- Seat 8 is violet, so it stands out on water (#213)
+
+### Platforms
+- iOS and Android: sound now plays on phones, and on iOS your own music keeps playing
+- Built on raylib 6.2: Android no longer hangs when reopened, the desktop window fits the screen, and the web build is smaller (#210)
+- Web: a turning tank no longer shows as another tank, upright (#203)
+- Windows: no console window opens beside the game (#224)
+
+### Behind the scenes
+- CI now runs the field-map probe, clippy and the test suites it used to skip, and a seed plays the same round on the web as on native (#182, #188, #189)
+- New performance instruments and faster drawing of tiles, walls and margins (#183, #187, #195)
+- A PR gets its own room server only when labelled for co-op (#179)
+
 ## 0.2.10 - 2026-10-15
 
 The frog is gone: each side now fights for one of seven bongs. A battlefield
