@@ -206,7 +206,7 @@ enemy there carries one of the six BB-36 weapons.
 | 11 No Man's Land | gauss rail (14,20) and (14,22), helicopter (19,13) and jet (19,29) strikes, grenades (4,12), missiles, minigun (five), plasma (four), EMP burst, sonic hammer, FPV swarm, gravity well, laser, flamethrower | the rails again - both beside the starts in the redoubt, for the enemy's pillboxes (a gun tower dies to the second slug) |
 | 12 Scrapyard | flamethrower, missiles, minigun | |
 | 13 Vulkan | sonic hammer (68,37), helicopter strikes (three in the station), missiles, plasma, minigun, sonic hammer (48,21) | the hammer again - shove a tank into the lava |
-| 14 Black Gold | flamethrower, plasma, minigun, missiles, gravity well (1,13) | the well again - drums pulled together on the fuse lines |
+| 14 Black Gold | gravity well (5,5) and (40,16), jet (16,17) and helicopter (16,30) strikes, missiles (18,21), grenades (18,26), minigun (12,23), plasma (12,24), flamethrower, laser, sonic hammer, FPV swarm, EMP burst, gauss rail | the well again - by the depot's fuel dump, a second among the pump jacks, drums pulled together on the fuse lines; the air strikes, rockets and grenades in the Wildcat Depot's stores by the start; the gauss rail and the EMP in the enemy's control room under four towers |
 | 15 Castle Moat | laser, minigun, missiles | |
 | 16 Grand Campaign | plasma, laser, flamethrower, missiles, minigun, rod from god (31,17) | rod from god - against the super-heavies |
 | 17 Longwater | plasma, missiles, minigun, laser, flamethrower | |
