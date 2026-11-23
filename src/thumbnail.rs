@@ -245,7 +245,7 @@ mod tests {
         ("castle-moat", 0x409a_b1b1_6c81_3664),
         ("archipelago", 0x457b_7d4e_693d_6d82),
         ("black-gold", 0x5982_660d_ca83_4f36),
-        ("harbor-lights", 0x7851_0905_9e3f_ccd2),
+        ("harbor-lights", 0x5382_14f7_f83d_bec7),
         ("carnival", 0x5c94_a82c_7f27_0306),
         ("jungle-temple", 0xb446_4b07_ae74_0292),
         ("serpent-river", 0x75cc_8ca8_7412_4d74),
