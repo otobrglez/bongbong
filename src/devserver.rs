@@ -4967,7 +4967,8 @@ cells."1,1" = { kind = "wall" }"#;
         let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         assert_eq!(status["level"]["number"], 1, "{status}");
         assert_eq!(status["level"]["map"], "lotus-lagoon");
-        assert_eq!(status["stats"]["enemies"], 5);
+        let band = u64::from(s.game.map.tanks.expect("Lotus Lagoon names its band"));
+        assert_eq!(status["stats"]["enemies"], band);
 
         let enemies: Vec<usize> = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).collect();
         for enemy in enemies {
@@ -4975,7 +4976,7 @@ cells."1,1" = { kind = "wall" }"#;
         }
         s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
         let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
-        assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(5)), "{status}");
+        assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(band)), "{status}");
         let at = screen_button(&mut server, &tx, &mut s, "next");
         let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
         assert_eq!(m["level"]["number"], 2, "{m}");
@@ -5043,9 +5044,19 @@ cells."1,1" = { kind = "wall" }"#;
         let status = ask(&mut server, &tx, &mut s, "status", json!({ "sections": ["all"] })).unwrap();
         let screen = &status["ui"]["screen_buttons"];
         assert!(screen["level_1"].is_object() && screen["level_2"].is_null() && screen["back"].is_object(), "{screen}");
+        // Level 2's tile stands where `tile_rect` puts it beside level 1's,
+        // scaled to level 1's rect as the window reports it - whatever
+        // window the first level's map makes.
         let (ww, wh) = Layout::bare(w, h).window_size();
-        let r = crate::level_select::tile_rect(UiFrame::plain((ww as f32, wh as f32)).area, 2);
-        let locked = json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 });
+        let area = UiFrame::plain((ww as f32, wh as f32)).area;
+        let (t1, t2) = (crate::level_select::tile_rect(area, 1), crate::level_select::tile_rect(area, 2));
+        let one = &screen["level_1"];
+        let at = |k: &str| one[k].as_f64().unwrap() as f32;
+        let scale = at("w") / t1.width;
+        let locked = json!({
+            "x": at("x") + at("w") / 2.0 + (t2.x - t1.x) * scale,
+            "y": at("y") + at("h") / 2.0 + (t2.y - t1.y) * scale,
+        });
         let m = ask(&mut server, &tx, &mut s, "click", locked).unwrap();
         assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(true), Some(1)), "a locked tile: {m}");
 

@@ -238,7 +238,7 @@ mod tests {
         ("longwater", 0x81c7_dd5f_ddce_9c7e),
         ("wildwood", 0xcc29_2d23_6145_b997),
         ("armory", 0xbbcd_7d06_53c7_cd1d),
-        ("lotus-lagoon", 0x98a9_ea64_3091_f319),
+        ("lotus-lagoon", 0x1a4c_791a_1fa8_1127),
         ("vulkan", 0x395e_f95d_1bf2_027f),
         ("hedge-maze", 0xc954_49b8_7e29_a3c3),
         ("oasis-bazaar", 0x9f8f_c048_b56e_efd5),

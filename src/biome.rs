@@ -1125,14 +1125,43 @@ mod tests {
     }
 
     #[test]
-    fn lotus_lagoons_towers_by_the_water_get_one_apron_between_them() {
+    fn lotus_lagoons_towers_by_the_water_get_aprons_and_the_bridge_pair_one_between_them() {
         let map = MapFile::load(std::path::Path::new("maps/lotus-lagoon.toml")).unwrap();
         let places = places(&map);
-        // The two tesla towers at (21, 13) and (27, 13) guard the way in.
-        for cell in [(21, 13), (24, 13), (27, 13), (19, 11), (29, 15)] {
-            assert!(places.aprons.contains(&cell), "{cell:?} is paved");
+        let cells: Vec<((i32, i32), CellObject)> = map.iter_cells().map(|(c, r, o)| ((c, r), *o)).collect();
+        let water: Vec<(i32, i32)> = cells.iter().filter(|(_, o)| *o == CellObject::Water).map(|(p, _)| *p).collect();
+        let chebyshev = |a: (i32, i32), b: (i32, i32)| (a.0 - b.0).abs().max((a.1 - b.1).abs());
+        let (wet, dry): (Vec<(i32, i32)>, Vec<(i32, i32)>) = cells
+            .iter()
+            .filter(|(_, o)| o.tower().is_some())
+            .map(|(p, _)| *p)
+            .partition(|&t| water.iter().any(|&w| chebyshev(t, w) <= APRON_WATER));
+        // The pavilion's two gun towers and two teslas stand by the ring of
+        // water round the island; the enemy's towers stand inland.
+        assert!(wet.len() >= 4, "the pavilion's towers stand by the water: {wet:?}");
+        assert!(!dry.is_empty(), "and the enemy's do not: {dry:?}");
+        for &t in &wet {
+            for r in t.1 - APRON_REACH..=t.1 + APRON_REACH {
+                for c in t.0 - APRON_REACH..=t.0 + APRON_REACH {
+                    assert!(places.aprons.contains(&(c, r)), "({c}, {r}) round {t:?} is paved");
+                }
+            }
         }
-        assert!(!places.aprons.contains(&(18, 13)) && !places.aprons.contains(&(24, 16)), "and no further");
+        for t in &dry {
+            assert!(!places.aprons.contains(t), "{t:?} stands on no apron");
+        }
+        // The teslas either side of the south bridge share one apron across
+        // the way between them.
+        let teslas: Vec<(i32, i32)> = wet.iter().copied().filter(|&(c, r)| matches!(map.cell(c, r), Some(CellObject::Tesla { .. }))).collect();
+        let [a, b] = teslas[..] else { panic!("two teslas by the water: {teslas:?}") };
+        assert!(a.1 == b.1 && (b.0 - a.0).abs() <= APRON_PAIR, "{a:?} and {b:?} guard together");
+        let between = |p: (i32, i32)| (a.0.min(b.0)..=a.0.max(b.0)).contains(&p.0) && (p.1 - a.1).abs() <= APRON_REACH;
+        for c in a.0.min(b.0)..=a.0.max(b.0) {
+            assert!(places.aprons.contains(&(c, a.1)), "({c}, {}) between them is paved", a.1);
+        }
+        for &p in &places.aprons {
+            assert!(between(p) || wet.iter().any(|&t| chebyshev(p, t) <= APRON_REACH), "{p:?} is paved and no further");
+        }
         assert!(places.aprons.windows(2).all(|w| w[0] < w[1]), "in cell order, once each");
         // A look with no apron paves nothing.
         let none = bake(&VALLEY, 64, 64, &vec![FloorPx::Land; 64 * 64], &[], &Places { aprons: vec![(1, 1)], ..Places::default() }, 1);
