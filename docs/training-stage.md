@@ -350,9 +350,10 @@ in the level select while it is the furthest reached
 a player who knows the game picks Lotus Lagoon from the select (Esc, or
 the bar's level button) and never sees training again once Lotus Lagoon is
 won (`Campaign::won` moves `reached` past both). A progress file saved before Boot Camp existed
-names a later map and opens there, untouched. That makes sixteen levels,
-exactly one page of the select (`SELECT_TILES`); a seventeenth needs a
-second page. A couch round on Boot Camp seats one: `Game::init` sets the
+names a later map and opens there, untouched. The campaign has eighteen
+levels since Wildwood and Longwater joined it (BB-220), on the select's
+one page of twenty-one (`SELECT_TILES`, three rows of seven); a
+twenty-second needs a second page or a smaller tile. A couch round on Boot Camp seats one: `Game::init` sets the
 couch's count aside on a map with a training script and puts it back on
 the next map without one, and the corners offer no players button there
 (nor does the dialog open), so player 2 is back for Lotus Lagoon.

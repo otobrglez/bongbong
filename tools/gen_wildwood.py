@@ -15,7 +15,7 @@ how it plays):
 
 - the Hollow Lodge, the players' clearing round the bong, with friendly
   towers, and the orchard farm north of it;
-- a hedge maze of firs in the north-west with the gauss rail at its heart;
+- a hedge maze of firs in the north-west with an EMP burst at its heart;
 - the ruined chapel and its sealed brick crypt;
 - the Tyre Circuit, a race track walled with tyre stacks;
 - the Great Mere with a volcano on an island in the middle, reached only
@@ -359,6 +359,14 @@ def hollow_lodge():
         put(c, r, "wood_crate")
     pickup(25, 63, "health")
     pickup(29, 63, "ammo")
+    # Wildwood is level 7 (docs/levels.md): the weapons a campaign player
+    # meets first here lie by the start, inside its sight box, the blast
+    # ones two of their blast's radii and more from the bong (the gravity
+    # well's reach is 140 px; this one lies 12.5 cells off)
+    pickup(31, 57, "gravity_well")
+    pickup(29, 57, "air_jet")
+    pickup(31, 61, "air_heli")
+    pickup(24, 57, "tower_pack")
 
 
 def orchard():
@@ -433,7 +441,8 @@ def hedge_maze():
     for c, r in rect(c0 + 13, r0 + 13, c0 + 20, r0 + 20):
         clear(c, r)
     mid_c, mid_r = c0 + 16, r0 + 16
-    pickup(mid_c, mid_r, "gauss_rail")
+    # an EMP, not a gauss rail: on a Hunt two slugs would end the hunt
+    pickup(mid_c, mid_r, "emp_burst")
     pickup(mid_c + 1, mid_r + 1, "health")
     pickup(mid_c - 2, mid_r + 2, "ammo")
     put(mid_c - 3, mid_r - 3, "lamp")
@@ -514,7 +523,8 @@ def great_mere():
         if (c, r) != (cx, cy):
             reserved.add((c, r))
     put(cx, cy - 4, "portal")
-    pickup(cx - 4, cy, "rod_from_god")
+    # an FPV swarm, not a rod from god: on a Hunt one call would end it
+    pickup(cx - 4, cy, "fpv_swarm")
     pickup(cx + 4, cy, "heat_shield")
     pickup(cx, cy + 4, "health")
     for c, r in disc(cx, cy, 7.5):
@@ -1170,19 +1180,22 @@ HEADER = """\
 # the lamps along the King's Road light the way - and show whoever stands in
 # them to the enemy. 224 x 126 cells, followed by the camera.
 #
-# West: the Hollow Lodge, the players' clearing - the bong in its fenced
-# garden, the lodge (shield, bong health), the store, two gun towers and a
-# tesla of your own, a pond. North of it the orchard farm (minigun in the
-# barn); in the north-west a hedge maze of firs, the gauss rail at its heart
-# and something in three of its dead ends, one of them a trap. The Tyre
+# Level 7 of the campaign. West: the Hollow Lodge, the players' clearing -
+# the bong in its fenced garden, the lodge (shield, bong health), the store,
+# two gun towers and a tesla of your own, a pond, and by the start the
+# weapons a campaign player meets first here: a gravity well, helicopter
+# and jet strikes, a tower pack. North of it the orchard farm (minigun in
+# the barn); in the north-west a hedge maze of firs, an EMP burst at its
+# heart and something in three of its dead ends, one of them a trap. The Tyre
 # Circuit, a race track walled with tyre stacks, speed on the track. The
 # ruined chapel on the north lane: missiles and laser by the altar, and a
-# crypt sealed in brick - shoot your way in for the gravity well.
+# crypt sealed in brick - shoot your way in for a second gravity well.
 #
 # Middle: the Great Mere, deep enough that no hull crosses it, a fishing pier
 # off its north shore with plasma at the end. On the island in the middle a
-# volcano sleeps and wakes, with the rod from god and the heat shield at its
-# foot - no ford reaches it. Four portals make a ring: one past the lodge,
+# volcano sleeps and wakes, with an FPV swarm and the heat shield at its
+# foot - no ford reaches it. No rod and no rail anywhere: on a Hunt either
+# ends the hunt in one press. Four portals make a ring: one past the lodge,
 # one on the island, one in a secret grove sealed in a fir wood north of the
 # mere (one hidden trail in, its mouth in bushes off the King's Road; the
 # FPV swarm and the tower pack inside), one in the Dead Wood. Each throws

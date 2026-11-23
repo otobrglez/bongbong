@@ -6,7 +6,8 @@ use sola_raylib::prelude::*;
 
 use crate::hud::{UiFrame, BUILD_COLOR, DIM, HUD_TEXT_SIZE, TEXT, UI_SMALL_TEXT};
 use crate::level_select::{
-    back_rect, content_rect, panel_rect, tile_rect, LevelSelectView, TileState, TileView, TILE_NUMBER_SIZE, TILE_TITLE_SIZE,
+    back_rect, content_rect, panel_rect, tile_rect, LevelSelectView, TileState, TileView, TILE_NUMBER_SIZE, TILE_NUMBER_TOP,
+    TILE_TITLE_LEADING, TILE_TITLE_SIZE, TILE_TITLE_TOP,
 };
 use crate::math::{Color, Rectangle};
 use crate::text::width;
@@ -25,12 +26,6 @@ const DEAD: Color = Color::new(70, 70, 78, 255);
 /// The tick on a won level: the bong's green, the one colour the game
 /// already means "safe" by.
 const TICK: Color = Color::new(120, 220, 90, 255);
-
-/// The tile's number sits this far below its top edge, the title's first
-/// line this far, and each further line a line and this much below.
-const NUMBER_TOP: f32 = 12.0;
-const TITLE_TOP: f32 = 48.0;
-const TITLE_LEADING: f32 = 3.0;
 
 /// Draw the whole screen over the window: the dim over all of it, the
 /// panel centred in the chrome's area. In UI points: call inside the UI
@@ -75,12 +70,12 @@ fn draw_tile<D: RaylibDraw>(d: &mut D, r: Rectangle, tile: &TileView) {
 
     let label = tile.number.to_string();
     let w = width(&label, TILE_NUMBER_SIZE);
-    d.draw_text(&label, (r.x + (r.width - w as f32) / 2.0) as i32, (r.y + NUMBER_TOP) as i32, TILE_NUMBER_SIZE, number);
-    let mut y = r.y + TITLE_TOP;
+    d.draw_text(&label, (r.x + (r.width - w as f32) / 2.0) as i32, (r.y + TILE_NUMBER_TOP) as i32, TILE_NUMBER_SIZE, number);
+    let mut y = r.y + TILE_TITLE_TOP;
     for line in &tile.lines {
         let w = width(line, TILE_TITLE_SIZE);
         d.draw_text(line, (r.x + (r.width - w as f32) / 2.0) as i32, y as i32, TILE_TITLE_SIZE, title);
-        y += TILE_TITLE_SIZE as f32 + TITLE_LEADING;
+        y += TILE_TITLE_SIZE as f32 + TILE_TITLE_LEADING;
     }
 
     let corner = Vector2::new(r.x + r.width - 18.0, r.y + 7.0);

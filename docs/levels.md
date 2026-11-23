@@ -11,12 +11,12 @@ after a win, the same one after a loss - instead of restarting the round.
 | Topic | Decision |
 |---|---|
 | The list | `levels.toml` at the repository root: `[[level]]` entries in play order, each naming a map (`map`, its file stem under `maps/`, one of `SHIPPED_MAPS`) and the `title` its banner shows. The maps stay separate files. Compiled in. |
-| Order | Boot Camp, the training stage (docs/training-stage.md), first and `skippable`, numbered `LEVEL 0` (`Levels::number`) so Lotus Lagoon is still level 1; then roughly easy to hard: Lotus Lagoon (5 tanks) next, Grand Campaign (7 waves) last. Edit `levels.toml` to change it. |
+| Order | Boot Camp, the training stage (docs/training-stage.md), first and `skippable`, numbered `LEVEL 0` (`Levels::number`) so Lotus Lagoon is still level 1; then roughly easy to hard: Lotus Lagoon (5 tanks) next, the two big fields among them - Wildwood (level 7) and Longwater, last (level 17). Edit `levels.toml` to change it. |
 | Progression | Only a win opens the next level, and only a win of the level as it ships ("Honest locks" below). A loss offers the same level again. Winning the last level shows "all levels complete" and leads back to level 1 (Lotus Lagoon - never back to Boot Camp). |
 | Start and save | A session opens on the furthest level reached. On the web that is the page's `localStorage` (`bongbong.level`); on a desktop or a phone, a file. Progress is kept by map name, so reordering the list keeps it. Winning the last level is kept beside it (`complete` in the file, `bongbong.complete` on the web), so its tile shows as won; a store from before that reads as not complete. |
-| End screen | Counts down like free play's (`restart_delay`, 3 s), inside the button it will press: `NEXT LEVEL IN 3, 2, 1` after a win, `PLAY AGAIN IN 3, 2, 1` after a loss, then takes that way by itself - a press on the counting button takes it at once. The last level's win counts nothing down: `ALL 15 LEVELS COMPLETE!` waits for `BACK TO LEVEL 1`, going round being the player's call. The buttons - `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win - take a way at once; Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select, which, like a dialog or the builder, stops the countdown. Whatever way it takes, nothing goes black: the screen's words lift out over its last `round_verdict_lift_seconds` (0.3 s) while its dim stays, and the screen dissolves block by block into the round it leads to over `round_dissolve_seconds` (0.5 s; docs/effects.md, "Between rounds"). |
+| End screen | Counts down like free play's (`restart_delay`, 3 s), inside the button it will press: `NEXT LEVEL IN 3, 2, 1` after a win, `PLAY AGAIN IN 3, 2, 1` after a loss, then takes that way by itself - a press on the counting button takes it at once. The last level's win counts nothing down: `ALL 17 LEVELS COMPLETE!` waits for `BACK TO LEVEL 1`, going round being the player's call. The buttons - `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win - take a way at once; Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select, which, like a dialog or the builder, stops the countdown. Whatever way it takes, nothing goes black: the screen's words lift out over its last `round_verdict_lift_seconds` (0.3 s) while its dim stays, and the screen dissolves block by block into the round it leads to over `round_dissolve_seconds` (0.5 s; docs/effects.md, "Between rounds"). |
 | Stats | Time (the round clock, which stands still behind the banner and while paused) and enemies destroyed out of all the round brings, split by seat in a couch round. |
-| Banner | `LEVEL 3 / 15` over the mission banner (Boot Camp is level 0 and is not counted: `Levels::count`, which the last win's line reads too), the level's title under it at half the banner's size (36 px under 72). |
+| Banner | `LEVEL 3 / 17` over the mission banner (Boot Camp is level 0 and is not counted: `Levels::count`, which the last win's line reads too), the level's title under it at half the banner's size (36 px under 72). |
 | Builder edits | A level edited in the builder is played as edited for the rest of the session, every time it comes round. On a desktop the builder's Save writes it to `maps/<map>.toml`, which later sessions read first. |
 | Free play | Any map that is not a level (`-m`, the builder's Load list, a Save As under a new name) restarts on its own after `restart_delay`, as every round did before; its end screen shows the same numbers. |
 | Online | Unchanged: a room's round counts down to the room's lobby. |
@@ -156,11 +156,15 @@ a no-op in a round that never needs it (docs/gameplay-verification-design.md,
 the lobby's shape: a fixed 704 x 336 panel over the dimmed field (it fits
 the smallest field the game ships, 768 x 384), `tile_rect` and `back_rect`
 the one geometry the painter and every hit test read, and a
-`LevelSelectView` of plain data. Sixteen tiles in two rows of eight, 77 x
-90 px: the number, the title on at most two balanced lines (`wrap`), a tick
-on a level won, a padlock on a locked one, the amber of the furthest
-reached, a white edge where the keyboard's focus is and a pip on the level
-the round behind is. A test holds `levels.toml` to the one page.
+`LevelSelectView` of plain data. Twenty-one tiles in three rows of seven,
+89 x 58 px - the campaign's eighteen and room for three more: the number
+(20 px) at the top, the title under it on at most two balanced lines
+(`wrap`, 81 px a line at 12 px), a tick on a level won, a padlock on a
+locked one, the amber of the furthest reached, a white edge where the
+keyboard's focus is and a pip on the level the round behind is. The text's
+offsets in a tile (`TILE_NUMBER_TOP`, `TILE_TITLE_TOP`) are the headless
+module's, so a test holds a two-line title inside the tile, and another
+holds `levels.toml` to the one page.
 
 `Session::level_select` is the screen's state; while it is up `playing()`
 is false, so the round is frozen the way the dialogs freeze it and resumes
@@ -190,20 +194,22 @@ enemy there carries one of the six BB-36 weapons.
 |---|---|---|
 | 0 Boot Camp | minigun | minigun |
 | 1 Lotus Lagoon | missiles, minigun, plasma | missiles, plasma |
-| 2 Vulkan | sonic hammer (35,27) | sonic hammer - shove a tank into the lava |
-| 3 Glasshouses | plasma, laser, minigun, missiles, flamethrower, sonic hammer (8,7) | laser, flamethrower; the hammer again, to break the glass |
+| 2 Serpent River | laser (18,13), plasma, missiles, laser (56,18) | laser - in the meadow by the start; the second on the far bank, for crossing |
+| 3 Glasshouses | plasma, laser, minigun, missiles, flamethrower, sonic hammer (8,7) | flamethrower; sonic hammer - to break the glass |
 | 4 Oasis Bazaar | minigun (seven), plasma, flamethrower, laser, grenades (17,18), (30,7) and (47,30), missiles, sonic hammer, jet (19,23) and helicopter strikes - six, scattered by a seeded draw | grenades - by the yard's east gate, more by the khan's south postern to lob over its walls; air strikes - the jet by the yard's east gate, in the start's view, the rest out over the market; 34 oil and fuel drums in clusters |
-| 5 Carnival | laser, missiles, flamethrower, plasma, EMP burst (19,11) | EMP - eight tanks and a field of missile crates |
+| 5 Carnival | EMP burst (13,21), laser, missiles, plasma, flamethrower, minigun, grenades, sonic hammer | EMP - six waves of light tanks among a hundred drums, enemies arming from the crates |
 | 6 Jungle Temple | plasma, laser, minigun, flamethrower, missiles, FPV swarm (13,23) | FPV swarm - over the temple walls; the miniguns beside it are the counter |
-| 7 Hedge Maze | laser, plasma, missiles | |
-| 8 Archipelago | laser, missiles, plasma | |
-| 9 Harbor Lights | laser (6,7), plasma, missiles, gauss rail (4,20) | gauss rail - through brick and glass warehouses, little iron |
-| 10 Serpent River | plasma, missiles, laser | |
-| 11 No Man's Land | missiles, minigun, flamethrower, rod from god (25,19) | rod from god - waves in the open, no bong to lose |
+| 7 Wildwood | gravity well (31,57), jet (29,57) and helicopter (31,61) strikes, tower pack (24,57), EMP burst, FPV swarm, sonic hammer, grenades, flamethrower, laser, plasma, missiles, minigun | gravity well, tower pack - by the start, with seconds of each out in the forest (the crypt, the hangar, the secret grove); the air strikes again |
+| 8 Hedge Maze | laser, plasma, missiles | |
+| 9 Archipelago | laser, missiles, plasma | |
+| 10 Harbor Lights | laser (6,7), plasma, missiles, gauss rail (4,20) | gauss rail - through brick and glass warehouses, little iron |
+| 11 No Man's Land | gauss rail (15,17), gauss rail (16,17), helicopter and jet strikes, grenades, missiles, minigun, plasma, flamethrower | |
 | 12 Scrapyard | flamethrower, missiles, minigun | |
-| 13 Black Gold | flamethrower, plasma, minigun, missiles, gravity well (1,13) | gravity well - drums pulled together on the fuse lines |
-| 14 Castle Moat | laser, minigun, missiles | |
-| 15 Grand Campaign | plasma, laser, flamethrower, missiles, minigun, rod from god (31,17) | the rod again, against the super-heavies |
+| 13 Vulkan | sonic hammer (68,37), helicopter strikes (three in the station), missiles, plasma, minigun, sonic hammer (48,21) | the hammer again - shove a tank into the lava |
+| 14 Black Gold | flamethrower, plasma, minigun, missiles, gravity well (1,13) | the well again - drums pulled together on the fuse lines |
+| 15 Castle Moat | laser, minigun, missiles | |
+| 16 Grand Campaign | plasma, laser, flamethrower, missiles, minigun, rod from god (31,17) | rod from god - against the super-heavies |
+| 17 Longwater | plasma, missiles, minigun, laser, flamethrower | |
 
 The placements follow these rules:
 

@@ -8,8 +8,10 @@ posts the map places and lanterns the players set down - light the way, and
 show whoever stands in their light to the enemy. A heat shield keeps every
 kind of heat off a tank for a while.
 
-The level that shows the volcano and its lava is `maps/vulkan.toml`, level 2,
-fought under a clear sky with no lamp posts (a dark sky and its lights
+The level that shows the volcano and its lava is `maps/vulkan.toml`, level 13 -
+a 90 x 52 Protect round in rainforest, three rivers of lava and a lava lake
+round the cone, written by `tools/gen_vulkan.py` (BB-220; its header says how
+it plays) - fought under a clear sky with no lamp posts (a dark sky and its lights
 were too much on top of the eruptions); no shipped map places a lamp post
 or `nightfall` now, so the lamps and the night are tried on a map of
 one's own (`weather`, `nightfall`, `kind = "lamp"`).

@@ -840,9 +840,9 @@ tunables! {
         /// Laser charges granted per pickup. While `Tank::laser_charges > 0`
         /// and the laser is the live weapon, firing resolves an instant hit
         /// the same frame (no travel time) and consumes one charge.
-        laser_charges_per_pickup: i32 = 6 in 1 ..= 200;
+        laser_charges_per_pickup: i32 = 9 in 1 ..= 200;
         /// The most laser charges a tank carries, crates stacked.
-        laser_charges_max: i32 = 18 in 1 ..= 200;
+        laser_charges_max: i32 = 27 in 1 ..= 200;
         /// Per-hit damage range - lower than a player shell's, since a laser
         /// never misses; toned down to compensate for guaranteed accuracy.
         laser_damage_min: f32 = 8.0 in 0.0 ..= 100.0;
@@ -1947,7 +1947,7 @@ tunables! {
     group pickups {
         /// Seconds after a pickup is collected before a fresh one spawns at
         /// a random empty map slot - keeps the field topped up.
-        pickup_respawn_seconds: f32 = 15.0 in 0.0 ..= 120.0;
+        pickup_respawn_seconds: f32 = 12.5 in 0.0 ..= 120.0;
         /// A pickup is collected once a tank's hull box, grown by this many
         /// px on every side, overlaps the pickup's 32 px square
         /// (`Pickup::in_reach`): touching it is enough, from the side, the

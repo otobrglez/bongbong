@@ -8,7 +8,7 @@
 # sight.
 #
 # - The pad, west: the start with three helicopter crates above it and
-#   three jet crates below. A crate comes back 15 s after it is taken, so
+#   three jet crates below. A crate comes back 12.5 s after it is taken, so
 #   there is always another; a second one taken while a sortie is up
 #   queues (`+1` in the HUD's box).
 # - The waves: ten waves of two tanks roll in through the two gates on the

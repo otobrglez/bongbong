@@ -701,12 +701,12 @@ enemy's pick are not in the snapshot (§12): the probe's trace reads them.
 
 ### 3.5 In the campaign
 
-BB-46 (docs/levels.md, "The weapons along the way"): No Man's Land (level
-11) has the rod's first crate at 25,19, a cell of its own behind the sandbag
-line: waves in the open and no bong to lose. Grand Campaign (level 15) has
-the second at 31,17, on the lake shore beside the fort, against the
-super-heavies - mind the players' bong in the fort, which a circle kills. It
-is never on a Hunt map, where one call ends the hunt.
+BB-46 (docs/levels.md, "The weapons along the way"): the rod's one crate in
+the campaign is Grand Campaign's (level 16), at 31,17 on the lake shore
+beside the fort, inside the start's sight box, against the super-heavies -
+mind the players' bong in the fort, which a circle kills. No Man's Land had
+the first until its rebuild (BB-151) gave it gauss rails and air strikes
+instead. It is never on a Hunt map, where one call ends the hunt.
 
 ## 4. AI
 

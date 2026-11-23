@@ -5,7 +5,7 @@
 # as dotted keys on purpose - a `[spawn]` header would swallow every
 # `cells.` line after it.
 #
-# Free play, not a level. 112 x 63 cells: under the follow camera
+# Level 17, the campaign's last. 112 x 63 cells: under the follow camera
 # (docs/large-maps-follow-camera.md) about three phone screens across and
 # four down, eight 40 x 22.5 views of a monitor played alone - every gate a
 # walk from the fort but no region a long way from the next.

@@ -30,9 +30,10 @@ pub const SELECT_H: f32 = 336.0;
 pub const SELECT_MARGIN: f32 = 20.0;
 
 /// Tiles per row and rows: the one page holds `SELECT_TILES` levels, and a
-/// test holds `levels.toml` to it.
-pub const SELECT_COLUMNS: usize = 8;
-pub const SELECT_ROWS: usize = 2;
+/// test holds `levels.toml` to it. Seven by three is 89 x 58 pt a tile in
+/// the fixed panel - the campaign's eighteen and room for three more.
+pub const SELECT_COLUMNS: usize = 7;
+pub const SELECT_ROWS: usize = 3;
 pub const SELECT_TILES: usize = SELECT_COLUMNS * SELECT_ROWS;
 pub const SELECT_TILE_GAP: f32 = 6.0;
 
@@ -48,10 +49,25 @@ pub const SELECT_BACK_H: f32 = 48.0;
 
 /// A tile's number, and its title under it on at most two lines
 /// (`wrap`).
-pub const TILE_NUMBER_SIZE: i32 = 28;
+pub const TILE_NUMBER_SIZE: i32 = 20;
 pub const TILE_TITLE_SIZE: i32 = 12;
 /// The inset a tile's title keeps from either side.
 pub const TILE_PAD: f32 = 4.0;
+/// Inside a tile: the number this far below its top edge, the title's
+/// first line this far, and each further line a line and this much below
+/// the one before - so a two-line title ends `tile_text_bottom(2)` down,
+/// inside the tile's height. The painter places the text by these.
+pub const TILE_NUMBER_TOP: f32 = 5.0;
+pub const TILE_TITLE_TOP: f32 = 28.0;
+pub const TILE_TITLE_LEADING: f32 = 3.0;
+
+/// How far below a tile's top edge a title of `lines` lines ends.
+pub fn tile_text_bottom(lines: usize) -> f32 {
+    if lines == 0 {
+        return TILE_NUMBER_TOP + TILE_NUMBER_SIZE as f32;
+    }
+    TILE_TITLE_TOP + lines as f32 * TILE_TITLE_SIZE as f32 + (lines - 1) as f32 * TILE_TITLE_LEADING
+}
 
 /// The panel, centred in the chrome's `area` (UI points).
 pub fn panel_rect(area: Rect) -> Rectangle {
@@ -352,6 +368,19 @@ mod level_select_tests {
                     assert!(apart, "tiles {j} and {i} overlap");
                 }
             }
+        }
+    }
+
+    /// A tile holds what is painted in it: the number above the title, and
+    /// a title on its two lines (the most `wrap` gives) ending inside the
+    /// tile with a little to spare, on the smallest area as on any.
+    #[test]
+    fn a_tile_holds_its_number_and_a_two_line_title() {
+        assert!(TILE_NUMBER_TOP + TILE_NUMBER_SIZE as f32 <= TILE_TITLE_TOP, "the number runs into the title");
+        for area in areas() {
+            let r = tile_rect(area, 0);
+            assert_eq!((r.width, r.height), (89.0, 58.0), "{area:?}");
+            assert!(tile_text_bottom(2) + 2.0 <= r.height, "a two-line title leaves the tile: {} of {}", tile_text_bottom(2), r.height);
         }
     }
 
