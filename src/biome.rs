@@ -1185,11 +1185,11 @@ mod tests {
         assert_eq!(places.races.len(), 1, "one timber building stands by the water: {:?}", places.races);
         let (from, _) = places.races[0];
         let mill = crate::map::world_to_cell(crate::Position::new(from.0, from.1));
-        assert!((31..=34).contains(&mill.0) && (8..=10).contains(&mill.1), "the race leaves the watermill, not {mill:?}");
+        assert!((48..=53).contains(&mill.0) && (13..=16).contains(&mill.1), "the race leaves the watermill, not {mill:?}");
         assert!(!places.fields.is_empty());
         for &(cell, across) in &places.fields {
             assert_eq!(map.cell(cell.0, cell.1), Some(&CellObject::TallGrass), "{cell:?} is a field of tall grass");
-            assert!(across, "the farm's fences run east-west, so do its furrows");
+            assert!(across, "the hamlet's and the farm's fences run east-west, so do their furrows");
         }
     }
 
