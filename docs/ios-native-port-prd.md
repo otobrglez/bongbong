@@ -146,7 +146,7 @@ SDK, no simulator runtime, no iOS Rust standard library. Brought up on
 - **The simulator build works** (`just ios-setup`, `just ios-smoke`,
   `just run-ios-sim`; CLAUDE.md's "iOS simulator build" section is the
   reference): SDL3 `release-3.4.16` static and raylib 6.0 (`PLATFORM=SDL`,
-  `OPENGL_VERSION="ES 2.0"`, `-DMA_NO_COREAUDIO`) for the simulator slice,
+  `OPENGL_VERSION="ES 2.0"`, `raudio.c` as Objective-C) for the simulator slice,
   the game linked through `nobuild` + `build.rs`, a hand-made bundle with
   no Xcode project and no signing, driven by `simctl`. The GL ES 2 smoke
   test passes on the 26.3.1 runtime (no `glDrawElements` crash), and the
@@ -201,9 +201,9 @@ What differs from the plan in sections 6 and 7:
   SDL's objects (window properties `SDL.window.uikit.opengl.*`). Found by
   probing one GL call at a time in the simulator.
 - **raudio**: miniaudio's CoreAudio backend includes AVFoundation's
-  Objective-C header from a C file on iOS. Built with `-DMA_NO_COREAUDIO`
-  (null audio backend) since the game has no audio; audio later means
-  compiling `raudio.c` as Objective-C.
+  Objective-C header, so `raudio.c` builds as Objective-C
+  (`tools/ios/raylib-ios-audio.patch`, BB-216), with an Ambient,
+  mix-with-others session started again after an interruption.
 - **Frame pacing**: the simulator ignores the GL swap interval, so iOS
   uses `target_fps` 60 rather than vsync; its GL ES is Apple's software
   renderer, so simulator frame times say nothing about a phone.

@@ -2201,7 +2201,9 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   their layers by distance; `resolve` falls a dotted id back to its nearest ancestor; `ids` the
   cue ids code names.
 - `audio/bank.rs` — samples decoded on first use (`lewton`), and a dev build's placeholder for a
-  sample with no file.
+  sample with no file. Files come through a `Reader`: `read_disk` everywhere but the window on
+  Android, which hands in `render::audio::read_raylib` (raylib's `LoadFileData`, the one that
+  reads the APK's assets).
 - `audio/dsp/` — the engine: voices (linear resampler, SVF high-cut, gain and pan ramps, delayed
   start, fades, a send to the room), nine buses with ducks and pauses, the room (`reverb.rs`, a
   four-line FDN with a damped loop), master gain, mono, a watchdog that fades the mix when the
