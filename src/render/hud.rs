@@ -783,6 +783,21 @@ pub fn draw_banner(d: &mut impl RaylibDraw, area: Rect, text: &str, size: i32, y
     size
 }
 
+/// Draw the goodbye a desktop window shows on closing (`hud::Goodbye`):
+/// its title and the line under it, centred in the chrome's `area`, in UI
+/// points, over whatever the caller cleared the window to.
+pub fn draw_goodbye(d: &mut impl RaylibDraw, area: Rect, goodbye: &crate::hud::Goodbye) {
+    let t = text();
+    let (title, line) = goodbye.lines();
+    let (title, line) = (t.get(title), t.get(line));
+    let cy = (area.y + area.h / 2.0).round() as i32;
+    let size = draw_banner(d, area, &title, crate::hud::GOODBYE_TITLE_SIZE, cy - crate::hud::GOODBYE_TITLE_SIZE, TEXT);
+    let line_size = crate::hud::GOODBYE_LINE_SIZE;
+    let w = width(&line, line_size);
+    let tint = if goodbye.kind == crate::hud::GoodbyeKind::Unsaved { BUILD_COLOR } else { TEXT };
+    d.draw_text(&line, (area.x + area.w / 2.0).round() as i32 - w / 2, cy - crate::hud::GOODBYE_TITLE_SIZE + size + 20, line_size, tint);
+}
+
 /// The friendly-fire line's red: the palette's, the grenade band's.
 const FRIENDLY_FIRE_COLOR: Color = Color::new(0xE4, 0x42, 0x19, 255);
 

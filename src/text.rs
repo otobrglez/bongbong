@@ -91,6 +91,11 @@ keys! {
     ROUND_RESTARTING = "round-restarting";
     ROUND_BACK_TO_LOBBY = "round-back-to-lobby";
     PAUSED = "paused";
+    GOODBYE_TITLE = "goodbye-title";
+    GOODBYE_SAVED = "goodbye-saved";
+    GOODBYE_SEE_YOU = "goodbye-see-you";
+    GOODBYE_UNSAVED_TITLE = "goodbye-unsaved-title";
+    GOODBYE_UNSAVED_KEYS = "goodbye-unsaved-keys";
     SOUND_TITLE = "sound-title";
     SOUND_ON = "sound-on";
     SOUND_OFF = "sound-off";
@@ -758,7 +763,8 @@ pub fn fit_size(text: &str, size: i32, max_px: i32) -> i32 {
 mod text_tests {
     use super::*;
     use crate::hud::{
-        BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, HUD_LABEL_SIZE, QUESTION_W,
+        BANNER_MIN_SIZE, BANNER_SIZE, BANNER_SUB_SIZE, DIALOG_BUTTON_W, DIALOG_W, GOODBYE_LINE_SIZE, GOODBYE_TITLE_SIZE,
+        HUD_LABEL_SIZE, QUESTION_W,
         HUD_TEXT_SIZE, INFO_TITLE_W, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE,
         MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE, RESULT_SEATS_SIZE, RESULT_STATS_GAP,
         RESULT_TEXT_PX, RESULT_TITLE_SIZE, UI_SMALL_TEXT, WAVE_BANNER_SIZE,
@@ -1061,6 +1067,13 @@ mod text_tests {
             (keys::ROUND_WON, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::ROUND_TRAINED, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::ROUND_LOST, RESULT_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
+            // The goodbye a desktop window shows on closing (`hud::Goodbye`),
+            // centred in the smallest area the chrome is laid out in.
+            (keys::GOODBYE_TITLE, GOODBYE_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::GOODBYE_UNSAVED_TITLE, GOODBYE_TITLE_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::GOODBYE_SAVED, GOODBYE_LINE_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::GOODBYE_SEE_YOU, GOODBYE_LINE_SIZE, RESULT_TEXT_PX, vec![]),
+            (keys::GOODBYE_UNSAVED_KEYS, GOODBYE_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_ALL_CLEAR, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("count", 14.into())]),
             (keys::RESULT_UNCOUNTED, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![]),
             (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),

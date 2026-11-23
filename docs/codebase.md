@@ -38,8 +38,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   the art and builds an `App` - what the window keeps from frame to frame: the session, the sheets
   (`SheetSet`, whose `textures(theme, blocks)` is the one `Textures` the round and the builder draw
   from), the shaders, the render targets, the layers beside the round (particles, feedback,
-  indicators, the bong's voice), the cameras and the clocks - and `game_loop::run` calls
-  `App::frame` on it, a blocking loop natively and the browser's own on the web. A frame is
+  indicators, the bong's voice), the cameras and the clocks - and `App::frame` is called on it by
+  `game_loop::run` on the web, iOS and Android, and on desktop by a loop of `run`'s own. raylib flags
+  a window close for one frame only and `game_loop::run` ends on it, so the desktop loop takes that
+  frame to open the goodbye (`hud::Goodbye`: thanks, "your campaign progress is saved" once a level
+  is won, which `save_progress` wrote the frame it was; a question instead where the builder's map
+  is `dirty`). It closes by itself after `GOODBYE_SECONDS`, or at once on a key, a click or a
+  second close, and Esc on the question goes back to the game. A frame is
   `frame_input` (the dev tools' requests, the window laid out as a `Presentation`, staged tuning
   applied, the buttons and dialogs hit-tested, then the round's `Input` gathered: the one place
   raylib's input is read; its `Frame` is what the later phases take), then in Build `frame_build`

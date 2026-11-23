@@ -36,6 +36,7 @@ use crate::{
     PHYSICS_FIXED_DT,
 };
 use clap::Parser;
+#[cfg(any(target_os = "emscripten", target_os = "ios", target_os = "android"))]
 use sola_raylib::core::game_loop;
 use sola_raylib::prelude::{KeyboardKey, RaylibHandle};
 
@@ -1907,7 +1908,52 @@ pub fn run(args: Args) {
         shown_alpha,
         carried,
     };
+    #[cfg(any(target_os = "emscripten", target_os = "ios", target_os = "android"))]
     game_loop::run(rl, thread, target_fps, move |rl, thread| app.frame(rl, thread));
+    // A desktop window runs a loop of its own, so a window asked to close
+    // can say goodbye first (`hud::Goodbye`): raylib flags a close for one
+    // frame only, and `game_loop::run` ends on that frame. `app` was made
+    // after `rl`, so it drops first, its textures before the window, as
+    // `game_loop::run` drops its callback before the handle.
+    #[cfg(not(any(target_os = "emscripten", target_os = "ios", target_os = "android")))]
+    {
+        let mut rl = rl;
+        if target_fps > 0 {
+            rl.set_target_fps(target_fps as u32);
+        }
+        let mut goodbye: Option<crate::hud::Goodbye> = None;
+        loop {
+            let close = rl.window_should_close();
+            let Some(mut shown) = goodbye else {
+                if close {
+                    let first = app.goodbye();
+                    goodbye = Some(first);
+                    rl.show_cursor();
+                    app.draw_goodbye(&mut rl, &thread, &first);
+                } else {
+                    app.frame(&mut rl, &thread);
+                }
+                continue;
+            };
+            let escape = rl.is_key_pressed(KeyboardKey::KEY_ESCAPE);
+            let enter = rl.is_key_pressed(KeyboardKey::KEY_ENTER) || rl.is_key_pressed(KeyboardKey::KEY_KP_ENTER);
+            let click = {
+                use sola_raylib::prelude::MouseButton;
+                [MouseButton::MOUSE_BUTTON_LEFT, MouseButton::MOUSE_BUTTON_RIGHT, MouseButton::MOUSE_BUTTON_MIDDLE]
+                    .into_iter()
+                    .any(|b| rl.is_mouse_button_pressed(b))
+            };
+            let other = rl.get_key_pressed().is_some() || click;
+            match shown.step(rl.get_frame_time(), close, escape, enter, other) {
+                crate::hud::GoodbyeStep::Quit => break,
+                crate::hud::GoodbyeStep::Back => goodbye = None,
+                crate::hud::GoodbyeStep::Stay => {
+                    goodbye = Some(shown);
+                    app.draw_goodbye(&mut rl, &thread, &shown);
+                }
+            }
+        }
+    }
 }
 
 /// The sheets and the turn shader every frame draws from, loaded once.
@@ -2097,6 +2143,30 @@ struct Shot {
 }
 
 impl App {
+    /// The goodbye for this window closing now: thanks, and what is kept -
+    /// the campaign once a level of it is won, which is saved the frame it
+    /// is (`save_progress`) - or a question where the builder's map has
+    /// changes not saved (`hud::Goodbye`).
+    #[cfg(not(any(target_os = "emscripten", target_os = "ios", target_os = "android")))]
+    fn goodbye(&self) -> crate::hud::Goodbye {
+        let saved = self.session.campaign.as_ref().is_some_and(|c| c.is_won(0));
+        crate::hud::Goodbye::new(saved, self.session.builder.dirty())
+    }
+
+    /// One frame of the goodbye: the window cleared dark and the words centred in the chrome's area (`render::hud::draw_goodbye`).
+    #[cfg(not(any(target_os = "emscripten", target_os = "ios", target_os = "android")))]
+    fn draw_goodbye(&self, rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread, goodbye: &crate::hud::Goodbye) {
+        use sola_raylib::prelude::{Camera2D, RaylibDraw, RaylibMode2DExt, Vector2};
+        let ui = ui_frame(rl, false);
+        let camera = crate::render::view::onto_window(
+            Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: ui.scale },
+            crate::render::view::window_camera_units(rl),
+        );
+        let mut d = rl.begin_drawing(thread);
+        d.clear_background(crate::math::Color::new(14, 16, 14, 255));
+        d.draw_mode2D(camera, |mut d, _| crate::render::hud::draw_goodbye(&mut d, ui.area, goodbye));
+    }
+
     /// One frame, in the order every frame keeps: the window and the
     /// player read (`frame_input`), then the builder drawn (`frame_build`)
     /// or the round stepped, framed and drawn (`frame_sim`, `frame_camera`,
