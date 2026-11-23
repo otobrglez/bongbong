@@ -49,8 +49,22 @@ export function installModule(
     },
   };
   window.Module = module;
+  opaqueCanvas(canvas);
   keepAudioWithThePage();
   return module;
+}
+
+/** The game's canvas is opaque: its WebGL context is made without an alpha
+ *  channel. The game blits each finished picture keeping the alpha already
+ *  under it (`render::view::draw_opaque`), which a desktop window ignores
+ *  but a browser composites - over a canvas with alpha the field would come
+ *  out see-through, showing the page behind it. Without one nothing can. */
+function opaqueCanvas(canvas: HTMLCanvasElement | null): void {
+  if (!canvas) return;
+  const get = canvas.getContext.bind(canvas) as (type: string, attrs?: object) => RenderingContext | null;
+  const webgl = (type: string) => type === "webgl" || type === "webgl2" || type === "experimental-webgl";
+  canvas.getContext = ((type: string, attrs?: object) =>
+    get(type, webgl(type) ? { ...attrs, alpha: false } : attrs)) as typeof canvas.getContext;
 }
 
 /** The Web Audio contexts raylib's audio (miniaudio) plays the game's sound

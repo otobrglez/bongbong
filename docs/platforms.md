@@ -233,6 +233,10 @@ Target `wasm32-unknown-emscripten`, run through `sola-raylib`'s `game_loop::run`
   is the field's**: emscripten's GLFW listens for keys on the window in the capture phase and would
   drive the tank, restart on R and swallow Backspace, so `input.ts` adds a listener on the same
   window and phase first and stops every key event whose target is a field.
+- **The canvas is opaque**: `runtime.ts`'s `opaqueCanvas` makes its WebGL context with `alpha: false`.
+  The game blits each finished picture keeping the alpha already under it (`render::view::draw_opaque`),
+  which a desktop window ignores; a browser composites the canvas's alpha, so over a context with one
+  the field came out see-through - the page's background where the battlefield should be (BB-244).
 - **The canvas fills its box** (docs/large-maps-follow-camera.md §10): `.stage` takes the space it
   is given at any shape - the column's width and `100dvh` less a 72 px strip for the key hints and
   the way down to the page below (none under 540 px tall or on a touch screen) and the safe-area
