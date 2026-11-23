@@ -501,10 +501,13 @@ posts.
 ### 3.5 In the campaign
 
 BB-46 (docs/levels.md, "The weapons along the way"): Carnival (level 5) has
-the EMP's crate at 19,11, five cells from the start among the lasers: eight
-tanks and a field of missile crates the enemies arm from, so a pulse stops a
-crowd and kills a volley in the air, and there is no player bong or tower of
-the players' to switch off.
+the EMP's first crate at 13,21 in the showmen's camp, five cells from the
+start, and two more out in the fair - in the log flume's station and on the
+boating lake's island (BB-227). Six waves of light and medium tanks roll in
+past crates they arm from - missiles, lasers, plasma, grenades - so a pulse
+stops a crowd and kills a volley in the air; and the rival circus's camp
+holds the enemy's tesla, two gun towers and a bio slush for a pulse to
+switch off, as the four towers in the players' camp are an enemy pulse's.
 
 ## 4. AI
 
