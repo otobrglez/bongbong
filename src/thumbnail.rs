@@ -253,7 +253,7 @@ mod tests {
         ("serpent-river", 0x75cc_8ca8_7412_4d74),
         ("no-mans-land", 0xf61b_2a3f_da22_6019),
         ("glasshouses", 0xc23c_430a_7218_e35b),
-        ("scrapyard", 0xd37f_d36a_0ed7_6dd4),
+        ("scrapyard", 0x5c9b_93bc_2f81_f474),
         ("grand-campaign", 0xee89_f6f6_937d_9311),
         ("boot-camp", 0x973a_9707_e1bf_7b2d),
     ];
