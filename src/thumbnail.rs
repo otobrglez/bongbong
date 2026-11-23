@@ -250,7 +250,7 @@ mod tests {
         ("jungle-temple", 0xb446_4b07_ae74_0292),
         ("serpent-river", 0x48b0_ee5d_6673_1186),
         ("no-mans-land", 0x5523_d1fb_fd4e_1951),
-        ("glasshouses", 0x2fda_8bc0_d144_e270),
+        ("glasshouses", 0xc23c_430a_7218_e35b),
         ("scrapyard", 0xd37f_d36a_0ed7_6dd4),
         ("grand-campaign", 0xee89_f6f6_937d_9311),
         ("boot-camp", 0x973a_9707_e1bf_7b2d),

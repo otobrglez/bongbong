@@ -2547,10 +2547,13 @@ mod session_tests {
         assert!(!s.builder.dirty());
     }
 
-    /// Two band levels, so a win on the second is the last level's.
+    /// Two band levels, so a win on the second is the last level's. The
+    /// armory (free play's band of four) is the second: `finish` wins by
+    /// wrecking the enemies on the field, and a wave level has none there
+    /// when its round opens.
     fn two_levels() -> crate::levels::Levels {
         crate::levels::Levels::parse(
-            "[[level]]\nmap = \"lotus-lagoon\"\ntitle = \"Lotus Lagoon\"\n[[level]]\nmap = \"glasshouses\"\ntitle = \"Glasshouse Gardens\"\n",
+            "[[level]]\nmap = \"lotus-lagoon\"\ntitle = \"Lotus Lagoon\"\n[[level]]\nmap = \"armory\"\ntitle = \"Armory\"\n",
         )
         .expect("the test's levels parse")
     }
@@ -2585,7 +2588,7 @@ mod session_tests {
     #[test]
     fn the_banner_and_the_last_win_count_the_same_levels() {
         let levels = crate::levels::Levels::parse(
-            "[[level]]\nmap = \"boot-camp\"\ntitle = \"Boot Camp\"\nskippable = true\n[[level]]\nmap = \"lotus-lagoon\"\ntitle = \"Lotus Lagoon\"\n[[level]]\nmap = \"glasshouses\"\ntitle = \"Glasshouse Gardens\"\n",
+            "[[level]]\nmap = \"boot-camp\"\ntitle = \"Boot Camp\"\nskippable = true\n[[level]]\nmap = \"lotus-lagoon\"\ntitle = \"Lotus Lagoon\"\n[[level]]\nmap = \"armory\"\ntitle = \"Armory\"\n",
         )
         .expect("the test's levels parse");
         let mut s = level_session(levels, 2);
@@ -2776,7 +2779,7 @@ mod session_tests {
         assert!(s.play_chrome().result.is_none(), "no end screen mid-round");
 
         finish(&mut s, true);
-        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("glasshouses".to_string(), false)), "the next level is reached");
+        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("armory".to_string(), false)), "the next level is reached");
         assert_eq!(s.take_progress(), None, "once");
         let view = s.play_chrome().result.expect("the end screen");
         let seconds = crate::tuning::tuning().restart_delay.ceil() as u32;
@@ -2793,14 +2796,14 @@ mod session_tests {
             step(&mut s);
         }
         assert_eq!((s.level(), s.game.outcome()), (Some(1), Outcome::Playing), "on to the next level by itself");
-        assert_eq!(s.builder.map().name.as_deref(), Some("glasshouses"), "the builder holds the level on the field");
+        assert_eq!(s.builder.map().name.as_deref(), Some("armory"), "the builder holds the level on the field");
         assert_eq!(s.builder.history().undo_depth(), 0, "and undo cannot walk back into the last one");
         assert_eq!(s.play_chrome().level.expect("a level").number, 2);
 
         // The last level: every level complete, and no countdown round
         // to the first.
         finish(&mut s, true);
-        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("glasshouses".to_string(), true)), "the last level opens nothing further, and winning it is kept");
+        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("armory".to_string(), true)), "the last level opens nothing further, and winning it is kept");
         let buttons = s.play_chrome().result.and_then(|v| v.buttons).expect("the buttons");
         assert_eq!(buttons, ResultButtons { next: Some(NextLevel::FirstAgain { levels: 2 }), countdown: None, uncounted: false });
         for _ in 0..end_frames(&s) + 60 {
@@ -2947,7 +2950,7 @@ mod session_tests {
         s.game.players = PlayerCount::TWO;
         s.play_again();
         finish(&mut s, true);
-        assert_eq!(s.take_progress().map(|p| p.level), Some("glasshouses".to_string()), "a couch's win counts");
+        assert_eq!(s.take_progress().map(|p| p.level), Some("armory".to_string()), "a couch's win counts");
     }
 
     /// The level select stands over a frozen round and starts only a
@@ -2981,7 +2984,7 @@ mod session_tests {
 
         // Won: level 2 is reached, and the end screen opens the screen.
         finish(&mut s, true);
-        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("glasshouses".to_string(), false)));
+        assert_eq!(s.take_progress().map(|p| (p.level, p.complete)), Some(("armory".to_string(), false)));
         to_verdict(&mut s);
         assert!(s.press_result(centre(result_rects(&s).expect("the buttons").levels), area()));
         assert!(s.level_select.is_some());
@@ -3029,7 +3032,7 @@ mod session_tests {
         to_verdict(&mut s);
         assert!(!s.enter_result() && !s.next_level());
         // A level's map by name makes it that level, however it arrives.
-        s.replace_map(crate::map::open_map("glasshouses").unwrap());
+        s.replace_map(crate::map::open_map("armory").unwrap());
         assert_eq!(s.level(), Some(1));
         assert!(s.game.hold_end_screen);
     }
