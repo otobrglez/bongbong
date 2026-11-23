@@ -369,6 +369,9 @@ pub struct Fx {
     /// and stepped on the round's clock rather than this layer's, so a
     /// lockstep replays them; a new round makes them again by itself.
     shoal: crate::fish::Shoal,
+    /// The crows, ducks and fireflies on the field (`fauna.rs`): hashed,
+    /// never rolled, and stepped on the round's clock like the fish.
+    fauna: crate::fauna::Fauna,
     /// The gravity wells pulling at the last `observe`
     /// (docs/gravity-well.md): particles in their reach spiral in.
     wells: crate::well::WellField,
@@ -395,6 +398,12 @@ impl Fx {
     /// The fish, for the renderer (`render::fish`).
     pub fn shoal(&self) -> &crate::fish::Shoal {
         &self.shoal
+    }
+
+    /// The field's crows, ducks and fireflies, for the renderer
+    /// (`render::fauna`).
+    pub fn fauna(&self) -> &crate::fauna::Fauna {
+        &self.fauna
     }
 
     /// Every hit still playing, oldest first, for the renderer.
@@ -944,8 +953,10 @@ impl Fx {
     /// runs two steps calls this after each or the first step's bursts are
     /// gone before the draw. A frame already consumed emits nothing.
     pub fn observe_events(&mut self, game: &Game) {
-        // The fish keep their own count of the frames they have seen.
+        // The fish and the field's creatures keep their own count of the
+        // frames they have seen.
         self.shoal.observe(game);
+        self.fauna.observe(game);
         if game.frame() != self.last_frame {
             // A restart rewinds the counter, which is also the moment the
             // old round's particles should go.

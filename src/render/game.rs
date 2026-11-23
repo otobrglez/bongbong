@@ -1427,6 +1427,9 @@ impl Game {
         // The fish under the water's surface (`fish.rs`): over its tiles,
         // under everything that burns, stands or flies over it.
         crate::render::fish::draw_fish(d, textures, self, fx.shoal(), cull);
+        // The ducks on the water and the crows on the grass (`fauna.rs`):
+        // on the floor, under everything that stands.
+        crate::render::fauna::draw_ground(d, textures, self, fx.fauna(), cull);
         // What the hulls threw up off the ground - dust, powder, a ford's
         // foam - lying on it, under the hulls and under the light.
         crate::render::fx::draw_ground(fx, d, cull);
@@ -1435,6 +1438,7 @@ impl Game {
         // aircraft - on the ground under them, under the tanks; they
         // themselves fly over everything that stands, below.
         self.paint_air_shadows(&mut GpuCanvas::new(d, textures));
+        crate::render::fauna::draw_air_shadows(d, textures, self, fx.fauna(), cull);
 
         // Burning ground cells' flames stand among the tanks
         // (`paint_standing_hit`); their light is below.
@@ -1562,6 +1566,8 @@ impl Game {
         // `paint_field_glowing`), and air support over them: it flies
         // highest (docs/air-support.md "Drawing").
         self.paint_air(&mut GpuCanvas::new(d, textures));
+        // The crows and ducks in the air, and the crows in the crowns.
+        crate::render::fauna::draw_air(d, textures, self, fx.fauna(), cull);
 
         // Over everything that stands: each volcano's plume, steam while
         // it sleeps and ash from the rumble on (docs/volcano.md). It is
@@ -1700,6 +1706,9 @@ impl Game {
                 }
             });
         }
+
+        // The fireflies at night (`fireflies.rs`), with their own light.
+        crate::render::fauna::draw_glowing(d, textures, self, fx.fauna(), cull);
 
         // The locate cue's P1..P8 labels, over the grass, the crowd and
         // the trees - the point is to be found under all of it.

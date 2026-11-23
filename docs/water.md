@@ -129,6 +129,9 @@ pack (docs/bong-health-pack-prd.md).
   layer lives in `fx::Fx`, steps on the round's clock, hashes every
   choice and draws no RNG, so nothing in the simulation, the wire or a
   seeded replay sees a fish.
+- **Ducks** (`ducks.rs`, docs/field-life.md): mallards on the same open
+  water, paddling off from a hull and taking off from a shot or a blast;
+  none under ice.
 
 - **Sound** (docs/sound-system-prd.md): a hull splashes going into a ford and
   pours off coming out, then drips while its tracks are wet; lakes lap and
