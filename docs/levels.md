@@ -203,7 +203,7 @@ enemy there carries one of the six BB-36 weapons.
 | 8 Hedge Maze | jet (56,17) and helicopter (56,30) strikes, grenades (41,17), missiles (41,30), laser, plasma, minigun, flamethrower, sonic hammer, EMP burst, FPV swarm, gravity well | air strikes again - in the fountain court's stores beside grenades and missiles, every blast 256 px or more from the bong; a weapon in every corner of the maze |
 | 9 Archipelago | laser, missiles, plasma | |
 | 10 Harbor Lights | gauss rail (42,35), grenades (40,25), missiles (56,25), helicopter (42,39) and jet (54,39) strikes, laser (54,3), plasma, minigun, flamethrower, EMP burst, sonic hammer, FPV swarm (85,48), a second gauss rail (40,13), grenades, missiles and a helicopter strike out on the docks | gauss rail - in the harbourmaster's yard by the start, a slug through brick, glass and timber; the grenades, missiles and air strikes round the bong in the yard, each past two of its blasts from it |
-| 11 No Man's Land | gauss rail (15,17), gauss rail (16,17), helicopter and jet strikes, grenades, missiles, minigun, plasma, flamethrower | |
+| 11 No Man's Land | gauss rail (14,20) and (14,22), helicopter (19,13) and jet (19,29) strikes, grenades (4,12), missiles, minigun (five), plasma (four), EMP burst, sonic hammer, FPV swarm, gravity well, laser, flamethrower | the rails again - both beside the starts in the redoubt, for the enemy's pillboxes (a gun tower dies to the second slug) |
 | 12 Scrapyard | flamethrower, missiles, minigun | |
 | 13 Vulkan | sonic hammer (68,37), helicopter strikes (three in the station), missiles, plasma, minigun, sonic hammer (48,21) | the hammer again - shove a tank into the lava |
 | 14 Black Gold | flamethrower, plasma, minigun, missiles, gravity well (1,13) | the well again - drums pulled together on the fuse lines |
@@ -235,8 +235,7 @@ The placements follow these rules:
 - **Kept setup draws.** A crate takes over a spare ammo or speed-up cell, or
   one cell of a cluster, never a health cell (only health draws its bonus
   roll when a round starts, so the round's opening draws are unchanged),
-  never a level's only ammo and never its only crate of an older weapon. No
-  Man's Land, with no spare slot, gains one cell.
+  never a level's only ammo and never its only crate of an older weapon.
 
 `armory` (free play, `-m maps/armory.toml`) keeps every weapon side by side:
 the BB-36 six and the grenades down the player's column, the laser, plasma,

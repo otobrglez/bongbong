@@ -664,7 +664,7 @@ start's sight box, and a second in the town hall at 40,13 (BB-230,
 only in the moored tanker's hull and the boatyard crane's foot, so a slug
 crosses the town. The players' own bong (48,32) stands off the start's row
 and column, and a slug hurts either side's bong. No Man's Land (level 11)
-has two more at 15,17 and 16,17, by its start. It is never on a Hunt map, where two slugs kill the hunted bong.
+has two more at 14,20 and 14,22, beside its starts in the redoubt. It is never on a Hunt map, where two slugs kill the hunted bong.
 
 ## 4. AI
 
