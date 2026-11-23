@@ -2249,6 +2249,10 @@ docs/sound-system-prd.md is the design; this is what each part owns.
   `to_ui`/`to_window`), and the builder stands its controls on three plates in the same style
   (`editor::chrome::Bar`, in UI points too, drawn by `render::hud::draw_cluster_plate`);
   `UiFrame::hints` (`Hints::Keys`/`Touch`, `Hints::follow`) is the input the chrome's words name.
+  `CursorIdle` hides the mouse cursor on a round being played once the mouse has rested
+  `ui_cursor_hide_seconds`, and shows it the frame it moves, presses or scrolls; never where
+  `Session::round_covered`, with no keyboard or under `--touch-from-mouse` (`App::hide_idle_cursor`,
+  the raylib half).
   **`corners(&UiFrame, &CornerShape) -> Corners` is the one geometry** the painter
   (`render::hud::draw_corners`, fixed slot tables pinned by `corner_tests`), `app.rs`'s hit tests
   and the dev server read (`Corners::hit`/`buttons`/`keep_out`/`chip`): the left cluster is the

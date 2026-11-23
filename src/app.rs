@@ -1912,6 +1912,8 @@ pub fn run(args: Args) {
         refresh,
         shown_alpha,
         carried,
+        cursor: crate::hud::CursorIdle::default(),
+        cursor_hidden: false,
     };
     #[cfg(any(target_os = "emscripten", target_os = "ios", target_os = "android"))]
     game_loop::run(rl, thread, target_fps, move |rl, thread| app.frame(rl, thread));
@@ -2096,6 +2098,10 @@ struct App {
     refresh: crate::pacing::Refresh,
     shown_alpha: f32,
     carried: Input,
+    /// How long the mouse has rested, for hiding the cursor in play
+    /// (`hud::CursorIdle`), and whether raylib has it hidden now.
+    cursor: crate::hud::CursorIdle,
+    cursor_hidden: bool,
 }
 
 /// What `App::frame_input` hands the rest of a frame: the window as the
@@ -2656,7 +2662,34 @@ impl App {
             // keyboard's intent for as many frames as it asked.
             self.dev.shape_input(input)
         };
+        self.hide_idle_cursor(rl, touching);
         Frame { width, height, ui, plan, layout, view, this_screen, touch_screen, dt, raw_dt, input }
+    }
+
+    /// The mouse cursor out of the way on a round being played once the
+    /// mouse has rested (`hud::CursorIdle`): shown again the frame it moves,
+    /// presses or scrolls, and wherever the pointer is how one plays - the
+    /// builder, the lobby, a dialog, a pause, the banners, the end screen.
+    /// Never where there is no keyboard or the mouse stands in for a finger.
+    fn hide_idle_cursor(&mut self, rl: &mut RaylibHandle, touching: bool) {
+        use sola_raylib::prelude::MouseButton;
+        let delta = rl.get_mouse_delta();
+        let used = delta.x != 0.0
+            || delta.y != 0.0
+            || rl.get_mouse_wheel_move() != 0.0
+            || [MouseButton::MOUSE_BUTTON_LEFT, MouseButton::MOUSE_BUTTON_RIGHT, MouseButton::MOUSE_BUTTON_MIDDLE]
+                .into_iter()
+                .any(|b| rl.is_mouse_button_down(b));
+        let may_hide = crate::KEYBOARD_AVAILABLE && !self.touch_from_mouse && !touching && !self.session.round_covered();
+        let hide = self.cursor.step(used, may_hide, rl.get_frame_time(), tuning::tuning().ui_cursor_hide_seconds);
+        if hide != self.cursor_hidden {
+            if hide {
+                rl.hide_cursor();
+            } else {
+                rl.show_cursor();
+            }
+            self.cursor_hidden = hide;
+        }
     }
 
     /// The builder's frame once its input is taken: the round's clock held
