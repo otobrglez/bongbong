@@ -248,7 +248,7 @@ mod tests {
         ("harbor-lights", 0x7851_0905_9e3f_ccd2),
         ("carnival", 0x5c94_a82c_7f27_0306),
         ("jungle-temple", 0xb446_4b07_ae74_0292),
-        ("serpent-river", 0x48b0_ee5d_6673_1186),
+        ("serpent-river", 0x75cc_8ca8_7412_4d74),
         ("no-mans-land", 0x5523_d1fb_fd4e_1951),
         ("glasshouses", 0xc23c_430a_7218_e35b),
         ("scrapyard", 0xd37f_d36a_0ed7_6dd4),

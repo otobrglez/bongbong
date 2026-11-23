@@ -224,6 +224,7 @@ A blast throws the loose ones as it throws a drum, slower as they outweigh
 one (`throw_loose`). The fixed two are walls to the router; the loose three
 are not ("Loose barrels" above). What the AI sees over has a pass-over
 chance and the barrier, which hides, has none (`Material::blocks_sight`).
-Placed on the campaign where they fit: three bales on Serpent River's
-meadow by the bong, a row of tyres and two barriers in the Scrapyard, four
-lone tank traps across No Man's Land.
+Placed on the campaign where they fit: hay, crates, tyre stacks, barriers
+and tank traps round Serpent River's two camps and its villages, a row of
+tyres and two barriers in the Scrapyard, four lone tank traps across No
+Man's Land.

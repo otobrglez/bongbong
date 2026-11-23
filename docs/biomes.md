@@ -133,9 +133,8 @@ they share one colour).
   cells' squares (`biome::deepness`): every deep cell adds a cone 26 px
   across its centre, full to 16 px, so a run of cells is solid with a
   rounded edge that fades within about 10 px of the deep cells, and a lone
-  deep cell - Serpent River has one - is a round pool. The ford shows a
-  pebble of its bed (`WaterRamp::bed`) on about one block in 23 away from
-  the open water.
+  deep cell is a round pool. The ford shows a pebble of its bed
+  (`WaterRamp::bed`) on about one block in 23 away from the open water.
 - **What follows it.** The current marks take the ripple tone, the spray
   the ripple and water tones (`fx::water_tints`), the minimap its light
   and open-water tones (`minimap::Class::color_in`). Foam stays white. The
@@ -143,10 +142,10 @@ they share one colour).
 
 ### Decks (stage 2, BB-194)
 
-A road cell between two stretches of water - on Serpent River, (43, 18)
-and (44, 18) - is dry road to the rules, so today the river stops at one
-side and starts again on the other. With a biome the picture bridges it
-(`GroundGrid::bridge`): every such map road cell that no wall stands on is
+A road cell between two stretches of water - on Serpent River, (34, 33)
+to (38, 33), its main bridge - is dry road to the rules, so the river
+stops at one side and starts again on the other. With a biome the picture
+bridges it (`GroundGrid::bridge`): every such map road cell that no wall stands on is
 a `Deck`, the tiles round it are resolved as if it were water so the river
 runs on under it, a road keeps the rules' own reading so it still joins the
 deck, and the materials lay planks over it - a band 24 px across the road,
@@ -158,14 +157,13 @@ rules are BB-62.
 
 ### Planting and places (stage 3, BB-195)
 
-- **The map.** Serpent River's woods stand at least five cells from its
-  water, so it has no bank trees to swap. Instead the broadleaf trees on
-  the river-facing edges of the two nearest stands turned to willow, with
-  birch a step behind: 6 willows and 5 birches of its 52 broadleaves,
-  edited by hand in `maps/serpent-river.toml`. They are softer than a
+- **The map.** Serpent River's banks stay open meadow and gravel; the
+  trees that stand within three cells of its water are willow and birch
+  (`tools/gen_serpent_river.py`, which writes the map), and birch stands
+  among the pine and spruce of the slopes too. They are softer than a
   broadleaf (a willow takes 10 to fell, a birch 8 and goes over quicker
-  under a ram) and hide a hull just the same. This one change is
-  gameplay, and it lands with or without a biome.
+  under a ram) and hide a hull just the same. This is gameplay, and it
+  holds with or without a biome.
 - **Reeds on open banks.** Under a biome, an open bank cell with no tree
   within two cells grows reeds too, in clumps (`Woods::sheltered_reeds`):
   a hashed field over 3 x 3 cell blocks, never beside a road. They are
@@ -219,10 +217,10 @@ rules are BB-62.
 ### Everything that shows the map (stage 5, BB-197)
 
 - **The whole field.** The materials were always baked over the whole
-  field, so all of Serpent River takes the look at once: the western
-  meadow approach stays quiet - patches only - the wooded pockets sit in
-  meadow, and every reach of the river has its banks. Nothing in this stage
-  is placed by hand.
+  field, so all of Serpent River takes the look at once: the valley
+  floor's meadows stay quiet - patches only - the woods of the slopes sit
+  in meadow, and every reach of the river has its banks. Nothing in this
+  stage is placed by hand.
 - **The margins.** The floor carried past an arena (`GroundGrid::beyond`)
   carries the materials on (`biome::bake_beyond`, keyed by the world block
   so they meet the field's without a seam) and thins them away through the
@@ -246,7 +244,8 @@ rules are BB-62.
   packed earth and the road - and a hull's wet carry out of a ford prints
   the silt's mud into the meadow.
 
-Measured on 2026-11-22: a 1280x720 window holds frame p99 within noise with
+Measured on 2026-11-22, on Serpent River's 62 x 31 layout before its
+rebuild (BB-225): a 1280x720 window holds frame p99 within noise with
 the biome on (`tools/perf/scene.py`, 12 s a scene: Serpent River 7.06 off,
 7.03 on; Longwater 7.33, 7.30). The CPU canvas pays for blending the layer
 every frame (`just perf-paint`, 60 frames: Serpent River 13.7 to 15.8 ms,
