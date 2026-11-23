@@ -556,12 +556,14 @@ impl Physics {
             } else {
                 stats.touching_tank = true;
             }
+            let other_body = self.world.colliders.get(other).and_then(|c| c.parent());
             for manifold in pair.manifolds() {
                 for point in &manifold.points {
                     if point.data.impulse <= stats.max_impulse {
                         continue;
                     }
                     stats.max_impulse = point.data.impulse;
+                    stats.hardest = other_body.map(|b| (b, other_is_fixed));
                     // Where the hardest contact actually is, in world
                     // space. Without it a consumer can only guess - and
                     // putting a shower of sparks at a tank's centre rather
@@ -602,6 +604,8 @@ pub struct ContactStats {
     pub max_impulse: f32,
     /// World-space position of that strongest contact, when there is one.
     pub contact: Option<Position>,
+    /// The body that strongest contact is with, and whether it is fixed.
+    pub hardest: Option<(RigidBodyHandle, bool)>,
 }
 
 /// One fixed body a hull touches (`Physics::fixed_contacts`).

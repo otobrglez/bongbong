@@ -7,14 +7,14 @@
 //!
 //! Watchers read what a replica has too - positions, projectile ids, the
 //! tanks' replicated state - so an online round sounds like a local one;
-//! where a watcher reads what a replica lacks (`Game::contacts`, which a
-//! client never fills), `WATCHERS` says so.
+//! where a watcher reads what a replica lacks (`Game::contacts_against`,
+//! which a client never fills), `WATCHERS` says so.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::bullet::Bullet;
 use crate::math::Vec2;
-use crate::simulation::Game;
+use crate::simulation::{Game, HitCause};
 use crate::tank::Tank;
 use crate::tuning::Tuning;
 
@@ -67,9 +67,22 @@ pub const WATCHERS: &[WatcherSpec] = &[
     WatcherSpec { id: "wreck", entity: "wreck", reads: "burning wrecks, inside the fire clusters", cues: &["world.fire"], online: "the same" },
     WatcherSpec { id: "sky", entity: "weather", reads: "Game::look (rain, sand, snow)", cues: &["world.rain", "world.wind", "world.wind.soft", "world.night"], online: "the same: the sky is the map's" },
     WatcherSpec { id: "place", entity: "map", reads: "the map's theme and biome", cues: &["bed.grass", "bed.desert", "bed.valley", "bed.floodplain", "bed.karst"], online: "the same" },
-    WatcherSpec { id: "scrape", entity: "tank", reads: "Game::contacts held against a wall", cues: &["vehicle.scrape"], online: "silent: a client steps no physics (a slam is `Event::HullStruck`, which is sent)" },
+    WatcherSpec {
+        id: "scrape",
+        entity: "tank",
+        reads: "Game::contacts_against: a hull held against a face, and what the face is",
+        cues: &["vehicle.scrape", "vehicle.scrape.water"],
+        online: "silent: a client steps no physics (a slam is `Event::HullStruck`, which is sent)",
+    },
     WatcherSpec { id: "aircraft", entity: "aircraft", reads: "Game::aircraft", cues: &["air.heli", "air.jet"], online: "the same" },
     WatcherSpec { id: "flyby", entity: "shell, bullet", reads: "projectiles' closest approach to a seat's own tank", cues: &["flyby.shell", "flyby.bullet"], online: "the same: projectiles replicate" },
+    WatcherSpec {
+        id: "ricochet",
+        entity: "shell, bullet",
+        reads: "Event::Ricochet's shot id, then that shot's position and velocity until it is gone",
+        cues: &["hit.ricochet.whine"],
+        online: "the same, from the sent Ricochet; a seat's own shot, which the replica does not hold, is flown on from where it turned",
+    },
     WatcherSpec { id: "thunder", entity: "weather", reads: "weather::lightning on the round clock: a flash's rising edge", cues: &["world.thunder"], online: "the same: the clock is the round's" },
     WatcherSpec { id: "tesla", entity: "tesla tower", reads: "Game::tower_views charge", cues: &["world.tesla.charge"], online: "silent: tower charge is not on the wire" },
     WatcherSpec { id: "fuse", entity: "barrel", reads: "Game::fused_barrels", cues: &["world.fuse"], online: "the same" },
@@ -96,6 +109,8 @@ pub struct Watchers {
     /// Each projectile's nearest pass so far by a seat's own tank (px), and
     /// whether it already whooshed.
     passes: HashMap<u32, (f32, bool)>,
+    /// The shots that ricocheted, by id, whose whine follows them away.
+    whines: BTreeMap<u32, Whine>,
     /// The last frame's lightning, for a flash's rising edge.
     lightning: f32,
     flashes: u64,
@@ -113,6 +128,7 @@ const SCRAPE: u64 = 9 << 56;
 const CHARGE: u64 = 10 << 56;
 const AIR: u64 = 11 << 56;
 const TESLA: u64 = 12 << 56;
+const WHINE: u64 = 20 << 56;
 const FUSE: u64 = 13 << 56;
 const PORTAL: u64 = 14 << 56;
 const VOLCANO: u64 = 15 << 56;
@@ -120,6 +136,19 @@ const VOLCANO: u64 = 15 << 56;
 /// A key from a position, for a loop whose source has no id.
 fn at_key(tag: u64, p: Vec2) -> u64 {
     tag | (((p.x.round() as i32 as u32 as u64) & 0xFF_FFFF) << 24) | ((p.y.round() as i32 as u32 as u64) & 0xFF_FFFF)
+}
+
+/// A ricocheted shot's whine: what the shot is, where and how fast it left
+/// (for a shot this world does not hold - a seat's own online, drawn on its
+/// client's timeline - which the whine flies on for alone), when, and
+/// whether the shot was ever seen in the world since.
+#[derive(Clone, Copy, Debug)]
+struct Whine {
+    shot: HitCause,
+    from: Vec2,
+    velocity: Vec2,
+    since: f64,
+    seen: bool,
 }
 
 impl Watchers {
@@ -142,6 +171,7 @@ impl Watchers {
         self.fires(game, wishes);
         self.beds(game, t, wishes);
         self.scrapes(game, t, wishes);
+        self.whines(game, now, t, wishes);
         self.aircraft(game, wishes);
         self.flybys(game, own, t, plays);
         self.thunder(game, t, plays);
@@ -291,15 +321,70 @@ impl Watchers {
         wishes.push(Wish { key: PLACE, cue: place, at: None, velocity: Vec2::new(0.0, 0.0), gain: 1.0, pitch: 1.0, own: false });
     }
 
-    /// A hull held against a wall scrapes; its slam into it is
-    /// `Event::HullStruck`, which `bind.rs` plays.
+    /// A hull held against a face scrapes, with what the face is
+    /// (`source::scrape_cue`): steel on steel or stone, water slapping at
+    /// deep water's edge, nothing against lava or the bong. Its slam into
+    /// it is `Event::HullStruck`, which `bind.rs` plays.
     fn scrapes(&mut self, game: &Game, t: &Tuning, wishes: &mut Vec<Wish>) {
-        for (slot, at, impulse, _) in game.contacts() {
-            if impulse >= t.contact_fx_min_impulse * 4.0 && impulse < t.ram_fx_min_impulse {
+        for (slot, at, impulse, against) in game.contacts_against() {
+            if impulse >= t.contact_fx_min_impulse * 4.0
+                && impulse < t.ram_fx_min_impulse
+                && let Some(cue) = source::scrape_cue(against)
+            {
                 let gain = (impulse / 200.0).clamp(0.2, 1.0);
-                wishes.push(Wish { key: SCRAPE | slot as u64, cue: ids::SCRAPE.0, at: Some(at), velocity: Vec2::new(0.0, 0.0), gain, pitch: 1.0, own: false });
+                // A hull that slides off the wall into the water is another
+                // loop, not the wall's playing on.
+                let wet = if cue == ids::SCRAPE_WATER.0 { 1 << 32 } else { 0 };
+                wishes.push(Wish { key: SCRAPE | wet | slot as u64, cue, at: Some(at), velocity: Vec2::new(0.0, 0.0), gain, pitch: 1.0, own: false });
             }
         }
+    }
+
+    /// The shot `id`, a `shot`, ricocheted at `at` and flies on along
+    /// `heading` (degrees, 0 = up): its whine starts (`Event::Ricochet`,
+    /// read by the director as each step's events come).
+    pub fn ricocheted(&mut self, id: u32, shot: HitCause, at: Vec2, heading: f32, now: f64) {
+        let t = crate::tuning::tuning();
+        let speed = match shot {
+            HitCause::Bullet => t.minigun_bullet_speed,
+            HitCause::Plasma => t.plasma_speed,
+            _ => t.shell_speed,
+        };
+        let a = heading.to_radians();
+        let velocity = Vec2::new(libm::sinf(a), -libm::cosf(a)) * speed;
+        self.whines.insert(id, Whine { shot, from: at, velocity, since: now, seen: false });
+    }
+
+    /// Each ricocheted shot's whine, following it by its id with its
+    /// velocity, so it pans and bends away as the shot goes - a seat's own
+    /// shell coming back past it too, which no fly-by sounds. It fades over
+    /// `audio_whine_seconds` and stops when the shot is gone; a shot this
+    /// world never holds is flown on from where it turned.
+    fn whines(&mut self, game: &Game, now: f64, t: &Tuning, wishes: &mut Vec<Wish>) {
+        if self.whines.is_empty() {
+            return;
+        }
+        let mut live: HashMap<(u32, bool), (Vec2, Vec2)> = HashMap::new();
+        for s in game.world.query::<&crate::shell::Shell>().iter().filter(|s| s.state == crate::shell::ShellState::Flying) {
+            live.insert((s.id, true), (s.position, s.velocity));
+        }
+        for b in game.world.query::<&Bullet>().iter().filter(|b| b.state == crate::bullet::BulletState::Flying) {
+            live.insert((b.id, false), (b.position, b.velocity));
+        }
+        let life = t.audio_whine_seconds.max(0.01) as f64;
+        self.whines.retain(|&id, w| {
+            let age = now - w.since;
+            let here = live.get(&(id, w.shot != HitCause::Bullet)).copied();
+            w.seen |= here.is_some();
+            if age >= life || (w.seen && here.is_none()) {
+                return false;
+            }
+            let (at, velocity) = here.unwrap_or((w.from + w.velocity * age as f32, w.velocity));
+            let fade = (1.0 - age / life) as f32;
+            let (gain, pitch) = if w.shot == HitCause::Bullet { (0.6, 1.2) } else { (1.0, 0.75) };
+            wishes.push(Wish { key: WHINE | id as u64, cue: ids::RICOCHET_WHINE.0, at: Some(at), velocity, gain: gain * fade, pitch, own: false });
+            true
+        });
     }
 
     /// A shell or a round passing close by a seat's own tank whooshes once,

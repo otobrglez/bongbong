@@ -10,7 +10,7 @@ use crate::bong::BongKind;
 use crate::map::{Theme, Weather};
 use crate::obstacle::{Material, Surface as Face};
 use crate::pickup::PickupKind;
-use crate::simulation::HitCause;
+use crate::simulation::{Against, HitCause};
 use crate::tank::{ActiveWeapon, TankKind};
 use crate::tower::TowerKind;
 use crate::wear::Surface;
@@ -166,6 +166,43 @@ pub fn slam_cue(face: Face) -> &'static str {
         Face::Yielding => "vehicle.slam.tree",
         Face::Soft => "vehicle.slam.soft",
         Face::Springy => "vehicle.slam.rubber",
+    }
+}
+
+/// A struck hull's pitch against its cue's sample: heavier armour rings
+/// lower, by `mass_factor` (`tank_mass_factor`) to the `exponent`
+/// (`audio_hull_mass_pitch`).
+pub fn hull_pitch(mass_factor: f32, exponent: f32) -> f32 {
+    libm::powf(1.0 / mass_factor.max(0.1), exponent)
+}
+
+/// How loud a hit on a hull rings inside it, for the seat it struck
+/// (`hit.hull_inside`), against the hit's own strength; `None` for what
+/// does not ring the hull - a beam, a stream, a bolt of lightning, the
+/// rod's crush and the world's burns.
+pub fn hull_inside(cause: HitCause) -> Option<f32> {
+    match cause {
+        HitCause::Shell | HitCause::Rail => Some(1.0),
+        HitCause::Sonic => Some(0.9),
+        HitCause::Plasma => Some(0.8),
+        HitCause::Well => Some(0.7),
+        HitCause::Spall => Some(0.5),
+        HitCause::Bullet => Some(0.35),
+        HitCause::Laser | HitCause::Flame | HitCause::Tesla | HitCause::Rod | HitCause::Blast | HitCause::Lava | HitCause::Fire | HitCause::Slime => None,
+    }
+}
+
+/// What a hull held against a face scrapes with (`Game::contacts_against`):
+/// steel on another hull or a solid face, water slapping at deep water's
+/// edge, nothing against lava's edge or the bong (`Surface::Plain`).
+pub fn scrape_cue(against: Against) -> Option<&'static str> {
+    match against {
+        Against::Hull => Some("vehicle.scrape"),
+        Against::DeepWater => Some("vehicle.scrape.water"),
+        Against::Face(face) => match face {
+            Face::Plain => None,
+            Face::Hardest | Face::Hard | Face::Brittle | Face::Firm | Face::Yielding | Face::Soft | Face::Springy => Some("vehicle.scrape"),
+        },
     }
 }
 

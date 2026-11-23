@@ -2842,7 +2842,7 @@ mod follow_tests {
             seats.fight = fight.clone();
             for i in 0..frames {
                 if bitten && i == 0 {
-                    let hit = Event::Hit { target: crate::simulation::HitTarget::Bong { side: crate::bong::Side::Player }, damage: 6.0, killed: false, x: 0.0, y: 0.0, cause: crate::simulation::HitCause::Shell };
+                    let hit = Event::Hit { target: crate::simulation::HitTarget::Bong { side: crate::bong::Side::Player }, damage: 6.0, killed: false, x: 0.0, y: 0.0, cause: crate::simulation::HitCause::Shell, by: None };
                     f.note(i as u64 + 1, &[hit], 1);
                 }
                 shots.push(f.update(&seats, DT, &s, r));
@@ -2987,7 +2987,7 @@ mod follow_tests {
         ];
         let bong = at + Vec2::new(-300.0, 200.0);
         let events = if i % 20 == 0 {
-            vec![Event::Hit { target: crate::simulation::HitTarget::Bong { side: crate::bong::Side::Player }, damage: 6.0, killed: false, x: bong.x, y: bong.y, cause: crate::simulation::HitCause::Shell }]
+            vec![Event::Hit { target: crate::simulation::HitTarget::Bong { side: crate::bong::Side::Player }, damage: 6.0, killed: false, x: bong.x, y: bong.y, cause: crate::simulation::HitCause::Shell, by: None }]
         } else {
             Vec::new()
         };

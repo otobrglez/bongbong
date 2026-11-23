@@ -250,7 +250,7 @@ impl Game {
                             _ => Some(HitTarget::Wall),
                         };
                         if let Some(target) = hit {
-                            f.events.push(Event::Hit { target, damage: 0.0, killed: false, x: at.x, y: at.y, cause: HitCause::Rail });
+                            f.events.push(Event::Hit { target, damage: 0.0, killed: false, x: at.x, y: at.y, cause: HitCause::Rail, by: Some(shot.owner.slot()) });
                         }
                         stopped = Some(at);
                         break;
@@ -361,7 +361,7 @@ impl Game {
                     }
                     let d = t.gauss_bong_damage * keep;
                     bong.hurt_by(d, Some(shooter));
-                    f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: HitCause::Rail });
+                    f.events.push(Event::Hit { target: HitTarget::Bong { side: bong.side }, damage: d, killed: bong.is_dead(), x: at.x, y: at.y, cause: HitCause::Rail, by: Some(shooter.slot()) });
                     (bong.is_dead(), bong.position)
                 };
                 if dead {
@@ -379,7 +379,7 @@ impl Game {
                     (o.material, !o.burning && o.fuse.is_none())
                 };
                 if material == Material::Iron {
-                    f.events.push(Event::Hit { target: HitTarget::Obstacle { material }, damage: 0.0, killed: false, x: at.x, y: at.y, cause: HitCause::Rail });
+                    f.events.push(Event::Hit { target: HitTarget::Obstacle { material }, damage: 0.0, killed: false, x: at.x, y: at.y, cause: HitCause::Rail, by: Some(shooter.slot()) });
                     return Some(Pierced::Tile(material));
                 }
                 if !standing {
@@ -388,7 +388,7 @@ impl Game {
                 let mark = f.events.len();
                 let d = *damage;
                 let killed = self.damage_obstacle(f, entity, d, DamageCause::Pierce { dir });
-                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y, cause: HitCause::Rail });
+                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y, cause: HitCause::Rail, by: Some(shooter.slot()) });
                 *damage *= if material.is_tower() { t.gauss_pierce_keep } else { t.gauss_tile_keep };
                 Some(Pierced::Tile(material))
             }

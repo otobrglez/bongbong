@@ -7,10 +7,9 @@
 //! exhaustive `match` with no wildcard, so a variant added to `Event` fails
 //! to compile here until it is either mirrored or put on the not-sent
 //! list. The AI's trace (`AiAction`, `EngageSlot`, `StuckEscape`, `Breach`,
-//! `Retreat`, `Alert`, `Retarget`), `MissileLocked` (which tank a seeker
-//! picked - a decision, not a picture; its `MissileBlast` does travel),
-//! `Rerolled` (a straggler taken off out of every seat's sight - the
-//! replica sees the hull leave and come back through its gate by itself),
+//! `Retreat`, `Alert`, `Retarget`), `Rerolled` (a straggler taken off out
+//! of every seat's sight - the replica sees the hull leave and come back
+//! through its gate by itself),
 //! `StragglersCalled` (the round's last tanks sent at a seat - a decision),
 //! `PhysicsQuarantine` (logged server-side) and a training round's
 //! `BeatDone`, `DoorOpened`, `FlagTaken` and `BongRevived` (a training map
@@ -154,7 +153,9 @@ pub enum WireEvent {
     /// applied on the tick it fired (0 for an enemy), so the client pairs
     /// it with the press it drew (`encode::wire_events_acked`).
     Fired { slot: u16, weapon: WeaponKind, input_tick: u32 },
-    Hit { target: WireHitTarget, damage: f32, killed: bool, x: i16, y: i16, cause: HitCause },
+    /// `by` is the shooter's owner slot (`Event::Hit::by`), `None` for the
+    /// world's own.
+    Hit { target: WireHitTarget, damage: f32, killed: bool, x: i16, y: i16, cause: HitCause, by: Option<u16> },
     Wreck { slot: u16, x: i16, y: i16 },
     Ram { slot: u16, other_slot: u16, damage: f32 },
     PickupCollected { slot: u16, kind: PickupKind, x: i16, y: i16, spilled: bool },
@@ -198,12 +199,12 @@ pub enum WireEvent {
     Ignited { x: i16, y: i16, what: IgnitedWhat },
     CookOff { x: i16, y: i16 },
     /// `slot`'s seeker missile came down and burst at (`x`, `y`);
-    /// `Event::MissileBlast`. `MissileLocked` does not travel - see
-    /// the not-sent list.
+    /// `Event::MissileBlast`.
     MissileBlast { slot: u16, x: i16, y: i16 },
-    /// `slot`'s shot bounced off iron or a barrel at (`x`, `y`) and flies
-    /// on along `heading` (`wire::quantise_heading`); `Event::Ricochet`.
-    Ricochet { slot: u16, x: i16, y: i16, heading: u8 },
+    /// `slot`'s shot `id` (`ShotState::id`), a `shot`, bounced off `off` at
+    /// (`x`, `y`) and flies on along `heading` (`wire::quantise_heading`);
+    /// `Event::Ricochet`.
+    Ricochet { slot: u16, id: u16, shot: HitCause, off: WireHitTarget, x: i16, y: i16, heading: u8 },
     /// A tesla coil's bolt; `Event::TeslaStrike` (docs/defence-towers-prd.md).
     TeslaStrike { x0: i16, y0: i16, x1: i16, y1: i16, chained: bool },
     /// A tower fired along `heading` (`wire::quantise_heading`);
@@ -313,6 +314,16 @@ pub enum WireEvent {
     LooseGone { col: u8, row: u8 },
     /// Seat or enemy `slot`'s hull hit a fixed face; `Event::HullStruck`.
     HullStruck { slot: u16, material: Option<Material>, surface: crate::obstacle::Surface, x: i16, y: i16, nx: f32, ny: f32, speed: f32, bounced: bool },
+    /// `slot`'s seeker missile locked on the tank in owner slot `target`
+    /// (`NO_TARGET` for the ground point (`x`, `y`) it was aimed at);
+    /// `Event::MissileLocked`: the warning its target's player hears.
+    MissileLocked { slot: u16, target: u16, x: i16, y: i16 },
+    /// Seat `slot`'s press of `weapon` found too little ammo;
+    /// `Event::DryFired`.
+    DryFired { slot: u16, weapon: WeaponKind },
+    /// A round struck the drone or (`aircraft`) the helicopter `id` over
+    /// (`x`, `y`) and it flies on; `Event::AirHit`.
+    AirHit { id: u16, aircraft: bool, x: i16, y: i16 },
 }
 
 /// `WireEvent::AirSupportCalled::arrive` for a call waiting behind another.
@@ -366,8 +377,8 @@ impl WireEvent {
                 });
                 WireEvent::Fired { slot: slot_u16(slot), weapon: kind, input_tick: 0 }
             }
-            Event::Hit { target, damage, killed, x, y, cause } => {
-                WireEvent::Hit { target: target.into(), damage, killed, x: q(x), y: q(y), cause }
+            Event::Hit { target, damage, killed, x, y, cause, by } => {
+                WireEvent::Hit { target: target.into(), damage, killed, x: q(x), y: q(y), cause, by: by.map(slot_u16) }
             }
             Event::Wreck { slot, x, y } => WireEvent::Wreck { slot: slot_u16(slot), x: q(x), y: q(y) },
             Event::Ram { slot, other_slot, damage } => {
@@ -572,9 +583,26 @@ impl WireEvent {
             Event::MissileBlast { slot, x, y } => {
                 WireEvent::MissileBlast { slot: slot_u16(slot), x: q(x), y: q(y) }
             }
-            Event::Ricochet { slot, x, y, heading } => {
-                WireEvent::Ricochet { slot: slot_u16(slot), x: q(x), y: q(y), heading: quantise_heading(heading) }
+            Event::Ricochet { slot, id, shot, off, x, y, heading } => WireEvent::Ricochet {
+                slot: slot_u16(slot),
+                id: crate::net::encode::shot_wire_id(id),
+                shot,
+                off: off.into(),
+                x: q(x),
+                y: q(y),
+                heading: quantise_heading(heading),
+            },
+            Event::MissileLocked { slot, target, x, y } => {
+                WireEvent::MissileLocked { slot: slot_u16(slot), target: target.map_or(NO_TARGET, slot_u16), x: q(x), y: q(y) }
             }
+            Event::DryFired { slot, weapon } => {
+                let kind = WeaponKind::parse(weapon).unwrap_or_else(|| {
+                    debug_assert!(false, "unknown weapon name {weapon:?} in Event::DryFired");
+                    WeaponKind::Shell
+                });
+                WireEvent::DryFired { slot: slot_u16(slot), weapon: kind }
+            }
+            Event::AirHit { id, aircraft, x, y } => WireEvent::AirHit { id: (id & 0xFFFF) as u16, aircraft, x: q(x), y: q(y) },
             Event::TeslaStrike { x0, y0, x1, y1, chained } => {
                 WireEvent::TeslaStrike { x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), chained }
             }
@@ -607,10 +635,6 @@ impl WireEvent {
             | Event::Retreat { .. }
             | Event::Alert { .. }
             | Event::Retarget { .. } => return None,
-            // Never sent: which tank a missile picked is the server's
-            // decision, not a picture. The burst it ends in travels, and
-            // that is the only part `fx.rs` reads.
-            Event::MissileLocked { .. } => return None,
         })
     }
 
@@ -625,8 +649,8 @@ impl WireEvent {
             }
             WireEvent::RoundEnded { outcome } => Event::RoundEnded { outcome: outcome.into() },
             WireEvent::Fired { slot, weapon, .. } => Event::Fired { slot: slot as usize, weapon: weapon.name() },
-            WireEvent::Hit { target, damage, killed, x, y, cause } => {
-                Event::Hit { target: target.into(), damage, killed, x: d(x), y: d(y), cause }
+            WireEvent::Hit { target, damage, killed, x, y, cause, by } => {
+                Event::Hit { target: target.into(), damage, killed, x: d(x), y: d(y), cause, by: by.map(usize::from) }
             }
             WireEvent::Wreck { slot, x, y } => Event::Wreck { slot: slot as usize, x: d(x), y: d(y) },
             WireEvent::Ram { slot, other_slot, damage } => {
@@ -769,9 +793,20 @@ impl WireEvent {
             WireEvent::MissileBlast { slot, x, y } => {
                 Event::MissileBlast { slot: slot as usize, x: d(x), y: d(y) }
             }
-            WireEvent::Ricochet { slot, x, y, heading } => {
-                Event::Ricochet { slot: slot as usize, x: d(x), y: d(y), heading: dequantise_heading(heading) }
+            WireEvent::Ricochet { slot, id, shot, off, x, y, heading } => Event::Ricochet {
+                slot: slot as usize,
+                id: id as u32,
+                shot,
+                off: off.into(),
+                x: d(x),
+                y: d(y),
+                heading: dequantise_heading(heading),
+            },
+            WireEvent::MissileLocked { slot, target, x, y } => {
+                Event::MissileLocked { slot: slot as usize, target: (target != NO_TARGET).then_some(target as usize), x: d(x), y: d(y) }
             }
+            WireEvent::DryFired { slot, weapon } => Event::DryFired { slot: slot as usize, weapon: weapon.name() },
+            WireEvent::AirHit { id, aircraft, x, y } => Event::AirHit { id: id as u32, aircraft, x: d(x), y: d(y) },
             WireEvent::TeslaStrike { x0, y0, x1, y1, chained } => {
                 Event::TeslaStrike { x0: d(x0), y0: d(y0), x1: d(x1), y1: d(y1), chained }
             }
@@ -844,6 +879,7 @@ mod tests {
             Event::RoundStarted { seed: 7, enemies: 12, mission: Mission::Hunt, spawn: SpawnKind::Waves },
             Event::RoundEnded { outcome: Outcome::Won },
             Event::Fired { slot: 300, weapon: "plasma" },
+            Event::DryFired { slot: 1, weapon: "shell" },
             Event::Hit {
                 target: HitTarget::Obstacle { material: Material::Glass },
                 damage: 12.5,
@@ -851,6 +887,7 @@ mod tests {
                 x: 100.25,
                 y: 200.5,
                 cause: HitCause::Sonic,
+                by: Some(3),
             },
             Event::Wreck { slot: 3, x: 64.0, y: 96.75 },
             Event::Ram { slot: 0, other_slot: 5, damage: 3.25 },
@@ -899,6 +936,7 @@ mod tests {
             Event::DroneLaunched { id: 17, slot: 0, x: 140.0, y: 96.0, target: Some(4), bong: false },
             Event::DroneBurst { id: 17, slot: 0, x: 400.0, y: 210.0, crown: true },
             Event::DroneDowned { id: 18, x: 300.0, y: 180.0, height: 36.0, by: "tesla" },
+            Event::AirHit { id: 19, aircraft: true, x: 300.0, y: 180.25 },
             Event::DroneCrashed { id: 18, x: 310.0, y: 184.0 },
             Event::DroneLockLost { id: 19, why: "canopy" },
             Event::AirSupportCalled { id: 50, seat: 1, sortie: crate::air_support::Sortie::Jet, arrive: Some(900.0 * crate::PHYSICS_FIXED_DT) },
@@ -923,7 +961,9 @@ mod tests {
             Event::FireStarted { x: 48.0, y: 48.0, pool: true },
             Event::Ignited { x: 48.0, y: 80.0, what: "sandbag" },
             Event::CookOff { x: 64.0, y: 96.75 },
-            Event::Ricochet { slot: 2, x: 320.0, y: 64.0, heading: 90.0 },
+            Event::Ricochet { slot: 2, id: 77, shot: HitCause::Bullet, off: HitTarget::Obstacle { material: Material::Barrel }, x: 320.0, y: 64.0, heading: 90.0 },
+            Event::MissileLocked { slot: 5, target: Some(0), x: 320.0, y: 64.0 },
+            Event::MissileBlast { slot: 5, x: 330.0, y: 70.0 },
             Event::TeslaStrike { x0: 160.0, y0: 80.0, x1: 240.5, y1: 96.25, chained: true },
             Event::TowerFired { kind: "bio_slush", x: 160.0, y: 67.0, heading: 90.0 },
             Event::GlobSplashed { x: 300.0, y: 180.0 },
@@ -966,7 +1006,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 88, "one sample per Event variant");
+        assert_eq!(seen.len(), 92, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }
@@ -990,7 +1030,7 @@ mod tests {
     fn the_blast_and_the_grounds_causes_survive_the_wire() {
         for cause in [HitCause::Blast, HitCause::Lava, HitCause::Fire, HitCause::Slime] {
             assert!(!cause.is_shot());
-            let event = Event::Hit { target: HitTarget::Enemy { slot: 4 }, damage: 6.5, killed: false, x: 320.25, y: 160.5, cause };
+            let event = Event::Hit { target: HitTarget::Enemy { slot: 4 }, damage: 6.5, killed: false, x: 320.25, y: 160.5, cause, by: None };
             let wire = WireEvent::from_event(&event).expect("sent");
             let back: WireEvent = postcard::from_bytes(&postcard::to_stdvec(&wire).unwrap()).unwrap();
             let sim = back.to_event().expect("a simulation form");
@@ -1002,7 +1042,7 @@ mod tests {
     /// back as themselves (`HitCause::Well`, `AirStrike::Well`).
     #[test]
     fn the_wells_causes_survive_the_wire() {
-        let hit = Event::Hit { target: HitTarget::Enemy { slot: 4 }, damage: 6.5, killed: false, x: 320.25, y: 160.5, cause: HitCause::Well };
+        let hit = Event::Hit { target: HitTarget::Enemy { slot: 4 }, damage: 6.5, killed: false, x: 320.25, y: 160.5, cause: HitCause::Well, by: Some(0) };
         let downed = Event::DroneDowned { id: 21, x: 300.0, y: 180.0, height: 36.0, by: "well" };
         for event in [hit, downed] {
             let wire = WireEvent::from_event(&event).expect("sent");
@@ -1014,11 +1054,13 @@ mod tests {
 
     #[test]
     fn ricochet_carries_its_heading_both_ways() {
-        let wire = WireEvent::Ricochet { slot: 1, x: 4, y: 8, heading: 64 };
+        let off = WireHitTarget::Obstacle { material: Material::Iron };
+        let wire = WireEvent::Ricochet { slot: 1, id: 9, shot: HitCause::Shell, off, x: 4, y: 8, heading: 64 };
         assert_eq!(wire.ricochet_heading(), Some(90.0));
-        let Some(Event::Ricochet { slot, x, y, heading }) = wire.to_event() else { panic!("a ricochet has a simulation form") };
-        assert_eq!((slot, x, y, heading), (1, 1.0, 2.0, 90.0));
-        let back = WireEvent::from_event(&Event::Ricochet { slot: 1, x: 1.0, y: 2.0, heading: 90.4 }).unwrap();
+        let Some(Event::Ricochet { slot, id, x, y, heading, .. }) = wire.to_event() else { panic!("a ricochet has a simulation form") };
+        assert_eq!((slot, id, x, y, heading), (1, 9, 1.0, 2.0, 90.0));
+        let event = Event::Ricochet { slot: 1, id: 9, shot: HitCause::Shell, off: HitTarget::Obstacle { material: Material::Iron }, x: 1.0, y: 2.0, heading: 90.4 };
+        let back = WireEvent::from_event(&event).unwrap();
         assert_eq!(back, wire, "the heading lands on its nearest step");
         assert!(WireEvent::try_from(&Event::Retreat { slot: 1, on: true }).is_err());
     }
@@ -1037,6 +1079,18 @@ mod tests {
             };
             assert_eq!(back, weapon);
         }
+    }
+
+    /// A shot's id travels as the low 16 bits a replica keys its shots by
+    /// (`encode::shot_wire_id`), and a hit's shooter as its slot.
+    #[test]
+    fn a_ricochets_shot_and_a_hits_shooter_travel() {
+        let event = Event::Ricochet { slot: 0, id: 0x1_0005, shot: HitCause::Bullet, off: HitTarget::Enemy { slot: 3 }, x: 8.0, y: 8.0, heading: 0.0 };
+        let Some(WireEvent::Ricochet { id, off, .. }) = WireEvent::from_event(&event) else { panic!("sent") };
+        assert_eq!((id, off), (5, WireHitTarget::Enemy { slot: 3 }));
+        let hit = Event::Hit { target: HitTarget::Player { player: 1 }, damage: 4.0, killed: false, x: 8.0, y: 8.0, cause: HitCause::Shell, by: Some(crate::shell::TOWER_SLOT) };
+        let Some(Event::Hit { by, .. }) = WireEvent::from_event(&hit).and_then(|w| w.to_event()) else { panic!("sent") };
+        assert_eq!(by, Some(crate::shell::TOWER_SLOT), "a tower's slot comes back as itself");
     }
 
     #[test]

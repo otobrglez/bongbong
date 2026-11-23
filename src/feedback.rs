@@ -414,7 +414,7 @@ mod tests {
     fn a_blow_is_read_from_where_it_struck() {
         use crate::simulation::{Event, HitCause, HitTarget};
         let hull = Position::new(500.0, 300.0);
-        let hit = |player: u8, damage: f32, x: f32, y: f32| Event::Hit { target: HitTarget::Player { player }, damage, killed: false, x, y, cause: HitCause::Shell };
+        let hit = |player: u8, damage: f32, x: f32, y: f32| Event::Hit { target: HitTarget::Player { player }, damage, killed: false, x, y, cause: HitCause::Shell, by: None };
         assert_eq!(blow_of(hull, &[hit(0, 20.0, 488.0, 300.0)], 0), Some(Vec2::new(1.0, 0.0)), "struck on its left, driven right");
         assert_eq!(blow_of(hull, &[hit(0, 20.0, 500.0, 330.0)], 0), Some(Vec2::new(0.0, -1.0)));
         let both = blow_of(hull, &[hit(0, 30.0, 488.0, 300.0), hit(0, 10.0, 500.0, 312.0)], 0).expect("a way");

@@ -55,8 +55,10 @@ pub type AnyRound = OnlineRound<Box<dyn Transport>>;
 
 /// One press this client drew itself, for its sound to play at the press
 /// rather than a round trip later (docs/sound-system-prd.md section 4.10):
-/// a provisional shot leaving the gun, or the show of a weapon drawn on the
-/// press. Drained once a frame by the window (`OnlineRound::take_press_sounds`).
+/// a provisional shot leaving the gun, the show of a weapon drawn on the
+/// press, or a shell or plasma press with too little ammo (`Dry`, the
+/// room's `Event::DryFired`). Drained once a frame by the window
+/// (`OnlineRound::take_press_sounds`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PressSound {
     Shell,
@@ -71,6 +73,7 @@ pub enum PressSound {
     Rod,
     Orb,
     Anchor,
+    Dry,
 }
 
 /// How many snapshots the lead waits between two adjustments, and how
@@ -1346,6 +1349,9 @@ impl<T: Transport> OnlineRound<T> {
                 crate::simulation::ProvisionalKind::Bullet => PressSound::Bullet,
                 crate::simulation::ProvisionalKind::Plasma => PressSound::Plasma,
             });
+        }
+        for _ in 0..predictor.take_dry_presses() {
+            self.press_sounds.push(PressSound::Dry);
         }
         // An own shell meets an opposing one where the room's
         // `shell_vs_shell` would have them meet: both are drawn on the

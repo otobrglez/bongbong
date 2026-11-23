@@ -5183,6 +5183,12 @@ tunables! {
         audio_occlusion_max_db: f32 = (-24.0) in -80.0 ..= 0.0;
         /// The high-cut a fully occluded sound falls to (Hz).
         audio_occlusion_cutoff_hz: f32 = 800.0 in 100.0 ..= 20000.0;
+        /// How long a ricochet's whine follows the shot away (s), fading as
+        /// it goes.
+        audio_whine_seconds: f32 = 0.7 in 0.05 ..= 5.0;
+        /// How much a struck hull's mass lowers its ring: the pitch is
+        /// `1 / mass_factor` to this power (`source::hull_pitch`).
+        audio_hull_mass_pitch: f32 = 0.3 in 0.0 ..= 2.0;
         /// The speed sound travels at (px a second) for the propagation
         /// delay; about 1700 is the real one at the game's scale.
         audio_sound_speed_px: f32 = 3000.0 in 300.0 ..= 50000.0;

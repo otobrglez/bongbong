@@ -160,6 +160,11 @@ pub struct Layer {
     pub until_px: f32,
     #[serde(default)]
     pub gain_db: f32,
+    /// A pitch scale on the sample, 1 as made: one sample serving a
+    /// smaller sound than it was made for (a round on wood playing the
+    /// shell's splinter higher).
+    #[serde(default = "unity")]
+    pub pitch: f32,
 }
 
 /// How wide a band's edge fades (px).
@@ -188,6 +193,9 @@ fn default_takes() -> u8 {
 }
 fn default_polyphony() -> u8 {
     4
+}
+fn unity() -> f32 {
+    1.0
 }
 fn far_away() -> f32 {
     1.0e9
@@ -249,6 +257,17 @@ cue_ids! {
     ROUND_WON = "round.won";
     ROUND_LOST = "round.lost";
     WAVE_START = "round.wave";
+    HIT_MARKER = "ui.hit_marker";
+    FRIENDLY_FIRE = "ui.friendly_fire";
+    LOCK_ACQUIRED = "warning.lock.acquired";
+    DRY_FIRE = "weapon.dry_fire";
+    HIT_SHIELD = "hit.shield";
+    HULL_INSIDE = "hit.hull_inside";
+    BONG_DEATH = "bong.death";
+    RICOCHET_WHINE = "hit.ricochet.whine";
+    SCRAPE_WATER = "vehicle.scrape.water";
+    AIR_HIT_DRONE = "hit.air.drone";
+    AIR_HIT_HELI = "hit.air.heli";
     FLYBY_SHELL = "flyby.shell";
     FLYBY_BULLET = "flyby.bullet";
     FLYBY_MISSILE = "flyby.missile";
