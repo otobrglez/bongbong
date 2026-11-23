@@ -354,13 +354,13 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `tools/gen_wildwood.py`, which models the nav grid to seal every pocket the router could not
   reach -, `armory` - the 40 x 22 arena every
   special weapon is tried on, the one shipped arena (docs/sonic-hammer.md) -, then the other
-  fifteen levels from `lotus-lagoon` to `grand-campaign`, hand-authored but for `vulkan` (the volcano
-  level, 90 x 52 of rainforest written by `tools/gen_vulkan.py` the way wildwood is),
+  fifteen levels from `lotus-lagoon` to `grand-campaign`, each written by its own generator
+  `tools/gen_<map>.py` - a change to the generator is a change to the map - but `oasis-bazaar`,
+  whose TOML is its source (the campaign rebuild: a walled base round the players' bong or start,
+  towers on both sides, drums and stashes; `vulkan` is 90 x 52 of rainforest round the volcano),
   each file's header saying how it plays, their crates meeting every weapon on the way
-  (docs/levels.md, "The weapons along the way"); every one a field map, 48 x 24 to 67 x 34 but
-  vulkan, longwater and wildwood, since they were scaled up by 40 % a side with their layouts -
-  `tools/scale_map.py`: lines kept one
-  cell thick, single things single, two-wide fords two wide; then checked with the linter, since its
+  (docs/levels.md, "The weapons along the way"); every one a field map, 68 x 34 to 116 x 59,
+  checked with the linter, since its
   reaches are in pixels) are embedded - all the web build can list, what the lobby's map stepper
   walks in that order and what the room server can open; a slug is drawn as-is in the stepper, so
   keep one within its 204 px at `HUD_TEXT_SIZE`. `map_source` is the text `open_map` parses (the
