@@ -2033,6 +2033,25 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   `BLUE_PALE` glint) at `fish_opacity`; `render/fish.rs`'s `draw_fish` paints them in
   `paint_field_lit` straight after the floor. Knobs: the `fish` tuning group. Tests: `fish::tests`
   (`preview`, ignored, writes `target/fish-preview.png`).
+- `fauna.rs`, `crows.rs`, `ducks.rs`, `fireflies.rs` (docs/field-life.md) — the field's other life,
+  built as the fish are: `Fauna` (kept in `fx::Fx`; `Fx::fauna`) holds the round's `Crows`, `Ducks`
+  and `Fireflies`, rebuilt on a new round from the field (`Ground::of`: open grass, the trees and
+  their crowns, the glades near trees and soft cover; the lakes from `fish::lakes`) and stepped on
+  the round's clock in ticks from `Fx::observe_events`. Each step reads a `Stir` (live hulls, shots
+  in the air, hits, beams, blasts and wrecks, trees struck, hit or felled): a flock of crows on the
+  grass flushes, flies off, circles and settles on other open grass; crows in a crown flush when
+  their tree is struck; a duck paddles off from a hull and a group runs, takes off and lands on other
+  open water from a shot or a blast; a blast pushes fireflies away and puts them out. Every choice
+  hashed (`pyro::unit`), no RNG, nothing on the wire; no duck on ice, no firefly by day
+  (`fireflies::shown`). A creature is a grid of blocks facing up (`fauna::compose_grid`), turned to
+  one of sixteen headings less the diagonals (`drawn_heading`) by sampling, its shadow the same
+  grid in black (`compose_shadow`). `render/fauna.rs` paints them in the round's layers: on the floor
+  after the fish (`draw_ground`), with `paint_air_shadows` and `paint_air` (`draw_air_shadows`,
+  `draw_air`; a perched crow swings with its tree's `TreeShake`), and the fireflies over the lit
+  field in `paint_field_glowing` (`draw_glowing`). Not in `paint_field`, so mapshot's pinned hashes
+  and a headless screenshot never show them. Knobs: the `fauna` tuning group (`crow_*`, `duck_*`,
+  `firefly_*`). Tests: each module's `tests`, `fauna::tests::a_lake_map_comes_alive` on a shipped
+  map, and `fauna::tests::preview` (ignored, writes `target/fauna-preview.png`).
 - `feedback.rs` (docs/effects.md, "Being hit, ramming, a kill") — what the seats this screen plays
   feel, headless and owned by `app.rs`: `Feedback::observe_events` reads a `Reading` of the round
   once a simulated frame (each local seat's hull damage and kill count, and the way the frame's

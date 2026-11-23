@@ -23,6 +23,7 @@ pub mod canvas;
 pub mod shapes;
 pub mod decal;
 pub mod dissolve;
+pub mod fauna;
 pub mod fish;
 pub mod bong;
 pub mod fx;
