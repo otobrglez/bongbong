@@ -8,6 +8,7 @@
 
 use crate::tuning::tuning;
 use crate::ai::Intent;
+use crate::keys::Steer;
 use crate::editor::{BuilderInput, CanvasScreen, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
 use crate::hud::{self, players_dialog_rects, CornerButton, CornerShape, Corners, Fade, UiFrame, BAR_FILL};
@@ -27,7 +28,7 @@ use crate::net::transport::Transport;
 use crate::render::shockwave::{RippleFx, Ripples};
 use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
-use crate::tank::{Dir, TankKind};
+use crate::tank::TankKind;
 use crate::touch::TouchPoint;
 use crate::framing::{Screen, Seating, SightBox, ViewRules};
 use crate::view::{Camera, FollowFrame, ScaleCap, View};
@@ -47,22 +48,13 @@ use sola_raylib::prelude::{KeyboardKey, RaylibHandle};
 /// Player 1 is always the arrows + Space; from two seats up, player 2 is
 /// WASD + Left Shift, otherwise idle (docs/two-players.md). The keyboard
 /// has no third or fourth pair of keys: the seats past these two are a
-/// room's, and their intents arrive over the wire.
-fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
-    let dir = |up: KeyboardKey, down: KeyboardKey, left: KeyboardKey, right: KeyboardKey| {
-        if rl.is_key_down(up) {
-            Some(Dir::Up)
-        } else if rl.is_key_down(down) {
-            Some(Dir::Down)
-        } else if rl.is_key_down(left) {
-            Some(Dir::Left)
-        } else if rl.is_key_down(right) {
-            Some(Dir::Right)
-        } else {
-            None
-        }
-    };
-    let arrows = dir(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
+/// room's, and their intents arrive over the wire. Of a seat's held
+/// direction keys the newest wins, kept from frame to frame in `steer`
+/// (`keys::Steer`).
+fn gather_intents(rl: &RaylibHandle, players: PlayerCount, steer: &mut [Steer; 2]) -> (Intent, Intent) {
+    // Held keys in `Dir::ALL` order: up, down, left, right.
+    let held = |keys: [KeyboardKey; 4]| keys.map(|k| rl.is_key_down(k));
+    let arrows = steer[0].update(held([KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT]));
     // The lamp key sets a lantern down (docs/volcano.md): Enter beside the
     // arrows, E beside WASD.
     let player1 = Intent {
@@ -74,7 +66,7 @@ fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
     if players.count() < 2 {
         return (player1, Intent::default());
     }
-    let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
+    let wasd = steer[1].update(held([KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D]));
     (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), lamp: rl.is_key_down(KeyboardKey::KEY_E), ..Intent::default() })
 }
 
@@ -1912,6 +1904,7 @@ pub fn run(args: Args) {
         refresh,
         shown_alpha,
         carried,
+        steer: Default::default(),
         cursor: crate::hud::CursorIdle::default(),
         cursor_hidden: false,
     };
@@ -2100,6 +2093,9 @@ struct App {
     refresh: crate::pacing::Refresh,
     shown_alpha: f32,
     carried: Input,
+    /// The arrows' and WASD's held direction keys in the order they went
+    /// down, so the newest steers (`gather_intents`).
+    steer: [Steer; 2],
     /// How long the mouse has rested, for hiding the cursor in play
     /// (`hud::CursorIdle`), and whether raylib has it hidden now.
     cursor: crate::hud::CursorIdle,
@@ -2638,7 +2634,7 @@ impl App {
             // itself decides what to do with it (e.g. whether a wreck can move),
             // so nothing simulation-related needs to know a `RaylibHandle`
             // exists. See simulation.rs's module doc comment.
-            let (mut player1, player2) = gather_intents(rl, self.session.game.players);
+            let (mut player1, player2) = gather_intents(rl, self.session.game.players, &mut self.steer);
             // A touch screen drives player 1 through the same intent the
             // keyboard does; a held key still wins the direction, a tap or a
             // key both fire. Fed every frame, dialog or not, so a lifted

@@ -1094,6 +1094,7 @@ pub mod ground;
 mod ground_mask;
 pub mod hud;
 pub mod indicators;
+pub mod keys;
 pub mod knock;
 pub mod lamp;
 pub mod laser;
