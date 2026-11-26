@@ -281,7 +281,7 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 
 | Family | Travels | Derived | Local |
 |---|---|---|---|
-| Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's); `despawn_timer` armed the first frame a wreck is seen, so the fade costs no bytes | `visual_rotation`, `turret_visual_rotation`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
+| Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, a "hit this interval" bit, `flame_held`, the minigun turret's swing, target and lock (`minigun_track`, `minigun_target`, protocol 44) | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's); `despawn_timer` armed the first frame a wreck is seen, so the fade costs no bytes | `visual_rotation`, `turret_visual_rotation`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
 | Bong (two) | `position`, `health`, a state byte with phase, `hop_end` while hopping | animation frame | — |
 | Obstacle (one per solid cell: 578 on the default 34 x 17 field, more on a map with its own `size`) | layout in `Welcome`; then deltas: `health`, `burning`, `fuse` armed with total, `scorched` mask, `destroyed`, a ram-lean byte | `variant`, `edge_mask` (recomputed as `refresh_edge_masks` does), `burn_frame` from time since ignition | `burn_frame_timer`, `heat` (ignition is an event) |
 | Towers and ooze (docs/defence-towers-prd.md §13) | each standing tower's heading, charge and fire (`TowerState`); globs in the air with their lob tick, ooze cells with the tick they dry on, each tank's coat (`GlobState`, `OozeState`, `CoatState`); `TeslaStrike` per bolt | the turret's turn and the charge between snapshots (interpolated); the glob's arc from its age; a ruin and the wreck show from the tile's `ObstacleDestroyed` | `droop`, the bolt's display window, a glob's and a puddle's age between snapshots, the coat's last tenth |
@@ -871,7 +871,9 @@ what is deliberately not.
 leaving the muzzle - the shell or plasma bolt on the frame of the press, a
 twin-barrel chassis's second shell `tank_twin_shot_delay_seconds` later, and
 the minigun's whole burst, its first bullet after what is left of the
-barrels' spin-up and the rest one every `minigun_round_ticks`, burst after
+barrels' spin-up and the rest on the round schedule (`minigun_round_tick`),
+along the turret swing the client tracks on the world it draws
+(docs/BULLETS_SPEC.md §8 "Online"), burst after
 burst while the key is held; collisions with static terrain,
 water and every other hull (exact for the statics, the server's answer wins
 for the hulls). **Not predicted:** damage, knockback, ram, pickups, buffs, the

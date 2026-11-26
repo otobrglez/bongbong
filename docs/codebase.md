@@ -576,6 +576,17 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     names the portal it is `leaving`, which it cannot enter until it has left the swirl.
     `Event::ShotTeleported` (no id for a beam) is a small blue flare in `fx.rs`, no ripple. The AI
     does not know: an enemy lined up through a portal fires as through open ground.
+  - `minigun.rs` (docs/BULLETS_SPEC.md §8) — the minigun's tracking turret: `track_minigun_phase`
+    (before `player_phase`) swings each turret of a tank carrying the minigun up to its cone off the
+    hull's heading onto the nearest opposing tank it can see - `minigun_marks` seats first then
+    enemies by slot, the towers' sight rule (unconcealed, in line of sight, a seat only from inside
+    its sight box), the target kept while valid, ties to the lower slot, no RNG - at its slew rate,
+    faster through a kill chain; `step` is the pure tick the room, an offline round and a client
+    share. An owned seat's swing is its client's claim (`claim_minigun_track`, held to the cone
+    and the slew by `take_claim`); the client tracks its own seat on the replica
+    (`track_shown_seat`, the world the room rewinds to) and hands the swing to the predictor's
+    sandbox (`set_seat_minigun_track`). A seat's round staggers the enemy it lands on
+    (`Tank::stagger_timer`, set in `combat::apply_hit`, multiplied into the drive's pace).
   - `missiles.rs` — the seeker missiles' world half (`missile.rs` is the flight): `guide_missiles`
     (before `step_world`) locks a missile at the top of its climb onto the nearest opposing live
     tank within `missile_seek_range` (ties on slot; none = the launcher's aim point) and keeps its
@@ -847,7 +858,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
     `tower_upkeep` (it burns below `tower_burn_below` or under the flamethrower's heat, at
     `tower_burning_fire_factor`), then the tesla (charges on an opposing hull in reach, concealed or
     not, strikes at full charge through `apply_hit` and chains `tesla_chain_jumps`), the gun tower
-    (turns at its rate, leads, bursts of minigun bullets owned by `Owner::Tower` inside its fire
+    (turns at its rate, leads, bursts of minigun bullets owned by `Owner::Tower` at
+    `gun_tower_bullet_speed` inside its fire
     cone, holds while a friend is in the line; the hit test skips its own side) or the bio slush
     (lobs a `Glob` between its minimum and maximum range, scatter hashed). `resolve_globs` splashes
     the landed ones (a coat - `Tank::slime_timer`, `slime_pace` - and ooze on dry cells),
@@ -1624,8 +1636,8 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   (`Tank::alternate_shot` for twin barrels); the flying frame is identical across rows. Every
   projectile carries a per-round `id` from one counter (`Game::spawn_pending`), and each state enum
   maps to its sheet column (`col`/`from_col`), the wire's spelling. Bullets have a 3-state machine
-  and leave the minigun module, boresighted onto the gun line `minigun_boresight_px` ahead
-  (`Bullet::spawn`), once the gun's barrels have spun up (`Tank::minigun_spin`; the fire model is
+  and leave the minigun module on its tracking turret, boresighted onto the turret's line
+  `minigun_boresight_px` ahead (`Bullet::spawn`, `Tank::minigun_aim`), once the gun's barrels have spun up (`Tank::minigun_spin`; the fire model is
   docs/BULLETS_SPEC.md §8, held by `minigun_tests`); plasma rows are keyed by variant not chassis, never ricochet, and fly as a
   shader orb (`static/plasma_orb.fs`: a lit sphere with 3D-noise energy spun about a per-bolt axis,
   teal electric with lightning, purple arcane with spiral arms, a comet tail, worked out per 2 px
@@ -3148,8 +3160,10 @@ docs/sound-system-prd.md is the design; this is what each part owns.
     ammo of presses not yet accounted for is subtracted, shells and plasma fire on the press edge
     and the minigun while held (`drive_player`'s rule) - and draws its shots from the sandbox's
     muzzle as each falls due (`Game::seat_shot`: the shell or bolt at once, a twin barrel's second
-    `tank_twin_shot_delay_seconds` on, a burst's bullets `minigun_round_ticks` apart after what is
-    left of the barrels' spin-up - the sandbox turns them as the room does - with a hashed spread), handed to the replica every frame (`Game::add_provisional_shot`). A press is
+    `tank_twin_shot_delay_seconds` on, a burst's bullets on the round schedule
+    (`minigun_round_tick`) after what is left of the barrels' spin-up - the sandbox turns them as
+    the room does - along the turret swing this client tracks (`set_minigun_track`), with a hashed
+    spread), handed to the replica every frame (`Game::add_provisional_shot`). A press is
     `note_fired` when its `Fired` *arrives* (its ammo is in the sandbox now) and `confirm_fired`
     when the interpolator *hands that `Fired` over*, by the input tick it names; a `Fired` with no
     press waiting seeds the local gate from its input tick; a press nobody claims within the refusal

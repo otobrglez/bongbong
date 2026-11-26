@@ -33,6 +33,7 @@ mod engage;
 mod field;
 mod flame;
 mod hits;
+mod minigun;
 mod missiles;
 mod grenades;
 mod sonic;
@@ -2521,6 +2522,7 @@ impl Game {
             self.bong_phase(&mut f);
             self.pickup_phase(&mut f);
             self.portal_phase(&mut f, &grid);
+            self.track_minigun_phase(&mut f);
             self.player_phase(input, &mut f);
             self.rollin_phase(&mut f);
             self.tick_seat_still(f.dt);
@@ -2785,6 +2787,7 @@ impl Game {
             tank.burn_timer = (tank.burn_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
+            tank.stagger_timer = (tank.stagger_timer - dt).max(0.0);
             tank.tick_missile_pod();
             tank.tick_recoil(dt);
             tank.skid = (tank.skid - dt).max(0.0);
@@ -6449,6 +6452,8 @@ impl Game {
                         tank.velocity.y * tank.throttle,
                     ),
                     top_speed: tank.base_speed(),
+                    minigun_track: tank.minigun_track,
+                    minigun_target: tank.minigun_target,
                     damage: tank.damage,
                     shells_ammo: tank.shells_ammo,
                     minigun_ammo: tank.minigun_ammo,
@@ -6545,6 +6550,10 @@ pub struct TankSnapshot {
     pub commanded_velocity: Position,
     /// Rolled base top speed, before damage/boost scaling.
     pub top_speed: f32,
+    /// The minigun turret's swing off the hull's heading, degrees
+    /// (`Tank::minigun_track`), and the slot it tracks.
+    pub minigun_track: f32,
+    pub minigun_target: Option<usize>,
     pub damage: f32,
     pub shells_ammo: i32,
     pub minigun_ammo: i32,
@@ -7106,7 +7115,7 @@ fn drive_tank_with(
     let along_x = tank.facing_along_x();
     // Ooze slows a hull like a ford does (docs/defence-towers-prd.md
     // section 6): the top speed and the drive together.
-    let pace = footing.pace * tank.slime_pace();
+    let pace = footing.pace * tank.slime_pace() * tank.stagger_pace();
     // A charging rail crawls (docs/gauss-rail.md): a lower top speed, as
     // `intent.slow` is, not a lazier drive - and the throttle says so, so
     // what was asked of the hull reads as asked. Exactly 1 with no charge.
@@ -8201,10 +8210,10 @@ mod determinism_tests {
         // moved neither: no blast in these rounds reaches a hull or a bong
         // it used to spare.
         // In the two-seat round an enemy picks up a minigun and fires it
-        // from frame 386 (the one-seat round never does), so the minigun's
-        // fire model - its spin-up, round spacing, spread, damage and the
-        // rounds that glance (`minigun_ricochet_chance`) - moves the second
-        // pin alone (the BB-187 re-baseline).
+        // from frame 386, so the minigun's fire model - its spin-up, round
+        // spacing, spread, damage and the rounds that glance
+        // (`minigun_ricochet_chance`) - moved the second pin (the BB-187
+        // re-baseline).
         // A hull keeps `grass_pace` of its pace in tall grass and reeds and
         // `bush_pace` in a bush (BB-205, `Footing::in_brush`), and the
         // default map's meadows move both pins; with both at 1 the pair is
@@ -8220,8 +8229,14 @@ mod determinism_tests {
         // (`wreck_linear_damping` 16, `wreck_blast_factor`): with those at
         // 30 and 0 the two-seat pin is 4_061_215_847_753_561_933, the
         // one-seat round has no wreck a hull or a blast moves.
+        // The tracking minigun (BB-262, docs/BULLETS_SPEC.md §8) moves both
+        // pins from (15_897_095_261_118_420_066, 11_034_883_656_416_814_066):
+        // an enemy picks up a minigun and fires it in the one-seat round
+        // too (slot 1, from frame 233, into the default map's wood), and
+        // its stream is now 45 a second at 1,200 px/s on the 1, 1, 2 tick
+        // schedule, so its rounds land sooner and more of them.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (15_897_095_261_118_420_066, 11_034_883_656_416_814_066), "(one seat, two seats)");
+        assert_eq!((one, two), (13_687_200_790_828_665_699, 15_587_251_248_194_345_556), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round

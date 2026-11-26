@@ -17,7 +17,7 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    AirState, BonusPickup, CoatState, CraterState, GlobState, GrassFlatState, OozeState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, TowerState, Welcome, WellDrumState, WireMap, ZoneState, dir_index, bong_flags, quantise_bank, quantise_charge, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, crate_flags, tank_flags, tile_flags, tower_flags,
+    AirState, BonusPickup, CoatState, CraterState, GlobState, GrassFlatState, OozeState, RubbleState, CrateState, DroneState, FireState, BongState, GrenadeState, LampState, LooseState, MissileState, OilPrintState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, TowerState, Welcome, WellDrumState, WireMap, ZoneState, dir_index, bong_flags, quantise_bank, quantise_charge, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_track, quantise_velocity, crate_flags, tank_flags, tile_flags, tower_flags,
 };
 use crate::bullet::Bullet;
 use crate::bong::Bong;
@@ -251,6 +251,7 @@ fn tanks(game: &Game) -> Vec<TankState> {
                 (t.hit_flash_timer > 0.0, tank_flags::HIT),
                 (t.flame_held, tank_flags::FLAME),
                 (t.heat_shield_timer > 0.0, tank_flags::HEAT_SHIELD),
+                (t.minigun_locked(), tank_flags::LOCKED),
             ] {
                 if on {
                     flags |= bit;
@@ -276,6 +277,8 @@ fn tanks(game: &Game) -> Vec<TankState> {
                 shells: t.shells_ammo.clamp(0, u8::MAX as i32) as u8,
                 charge: t.charge.map_or(0, |c| c.ticks().clamp(1, u16::MAX as u32) as u16),
                 reticle: t.reticle.map_or(0, |r| reticle_code(cols, r.cell)),
+                track: quantise_track(t.minigun_track),
+                target: t.minigun_target.map_or(0, |slot| (slot + 1).min(u8::MAX as usize) as u8),
             }
         })
         .collect()
@@ -316,7 +319,7 @@ fn shots(game: &Game) -> Vec<ShotState> {
         out.push(shot(s.id, ShotKind::Shell, s.position, s.rotation, s.state.col(), s.variant, s.owner));
     }
     for b in game.world.query::<&Bullet>().iter() {
-        out.push(shot(b.id, ShotKind::Bullet, b.position, b.rotation, b.state.col(), 0, b.owner));
+        out.push(shot(b.id, ShotKind::Bullet, b.position, b.rotation, b.state.col(), b.wire_variant() as i32, b.owner));
     }
     for p in game.world.query::<&Plasma>().iter() {
         out.push(shot(p.id, ShotKind::Plasma, p.position, p.rotation, p.state.col(), plasma_variant_index(p.variant), p.owner));

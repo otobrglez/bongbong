@@ -3656,7 +3656,7 @@
    "source": "tank",
    "target": "weapon.minigun",
    "verb": "spins up",
-   "description": "A pull on barrels at rest logs Fired at once, and the barrels take 0.1 s to come up to speed before the first round.",
+   "description": "A pull on barrels at rest logs Fired at once, and the barrels take 0.05 s to come up to speed before the first round.",
    "trigger": {
     "type": "state_continuous",
     "name": "Event::Fired { weapon: \"minigun\" }, then Tank::minigun_spin rising from 0 toward 1",
@@ -3718,7 +3718,7 @@
    "source": "weapon.minigun",
    "target": "tank",
    "verb": "spins down",
-   "description": "After the last round, or when it runs dry mid-burst, the barrels run down over 0.6 s.",
+   "description": "After the last round, or when it runs dry mid-burst, the barrels run down over 0.4 s.",
    "trigger": {
     "type": "state_continuous",
     "name": "Tank::minigun_spin falling while minigun_burst is None",
@@ -3742,6 +3742,34 @@
    "base": "state",
    "online_work": false,
    "needs_data": true
+  },
+  {
+   "id": "weapons.minigun_lock",
+   "source": "weapon.minigun",
+   "target": "tank",
+   "verb": "locks on",
+   "description": "The minigun's tracking turret, swung up to 30° off the hull onto the nearest enemy it can see, holds it for 0.1 s and locks: the bracket closes. A wrecked target hands the lock to the next (the kill chain).",
+   "trigger": {
+    "type": "state_continuous",
+    "name": "Tank::minigun_locked() turning true, or its minigun_target changing while locked",
+    "where": "src/simulation/minigun.rs"
+   },
+   "online": "state_on_wire",
+   "visual": "the lock bracket in the seat's team colour (Game::paint_locks, src/game.rs); the turret sprite swung onto it",
+   "frequency": "frequent",
+   "sound": {
+    "cue": "minigun_lock",
+    "description": "a soft lock chirp for the seat whose turret locked",
+    "kind": "one_shot",
+    "priority": "medium",
+    "variants_by": [],
+    "notes": "The seat's own lock only, as its missile's. Watched in audio/watch.rs (ArmsEar::locked), so a replica chirps off TankState's LOCKED flag."
+   },
+   "gaps": [],
+   "domain": "weapons",
+   "base": "state",
+   "online_work": false,
+   "needs_data": false
   },
   {
    "id": "weapons.minigun_dry",
@@ -19526,6 +19554,32 @@
    "needs_data": true,
    "manifest": {
     "cue": "weapon.minigun.spin_down",
+    "proposed": null,
+    "fit": "covered"
+   }
+  },
+  {
+   "cue": "minigun_lock",
+   "priority": "medium",
+   "kind": "one_shot",
+   "descriptions": [
+    "a soft lock chirp for the seat whose turret locked"
+   ],
+   "interactions": [
+    "weapons.minigun_lock"
+   ],
+   "domains": [
+    "weapons"
+   ],
+   "triggers": [
+    "state_continuous"
+   ],
+   "variants_by": [],
+   "status": "state",
+   "online_work": false,
+   "needs_data": false,
+   "manifest": {
+    "cue": "warning.lock.acquired",
     "proposed": null,
     "fit": "covered"
    }

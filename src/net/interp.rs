@@ -1411,12 +1411,14 @@ fn flying(shot: &ShotState) -> bool {
     }
 }
 
-/// A shot kind's speed, pixels per second.
-fn shot_speed(kind: ShotKind) -> f32 {
+/// A shot's speed, pixels per second: its kind's, and for a bullet its
+/// shooter's - a gun tower's (`variant` 1) or a tank's
+/// (`Bullet::wire_variant`).
+fn shot_speed(kind: ShotKind, variant: u8) -> f32 {
     let t = tuning();
     match kind {
         ShotKind::Shell => t.shell_speed,
-        ShotKind::Bullet => t.minigun_bullet_speed,
+        ShotKind::Bullet => crate::bullet::Bullet::speed(variant == 1),
         ShotKind::Plasma => t.plasma_speed,
         ShotKind::Orb => t.well_orb_speed,
     }
@@ -1589,7 +1591,7 @@ fn extrapolate(from: &Snapshot, before: Option<&Snapshot>, ahead_ms: f64) -> Sna
     let shot_s = (ahead_ms.min(SHOT_EXTRAPOLATE_MS) / 1000.0) as f32;
     for shot in out.shots.iter_mut().filter(|s| flying(s)) {
         let (dx, dy) = heading_vector(shot.heading);
-        let travel = shot_speed(shot.kind) * shot_s;
+        let travel = shot_speed(shot.kind, shot.variant) * shot_s;
         shot.x = offset(shot.x, dx * travel);
         shot.y = offset(shot.y, dy * travel);
     }

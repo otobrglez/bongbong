@@ -761,36 +761,40 @@ tunables! {
     }
 
     group minigun {
-        /// Rounds granted per minigun pickup: eight seconds of the stream.
-        minigun_ammo_per_pickup: i32 = 240 in 1 ..= 2000;
+        /// Rounds granted per minigun pickup: six seconds of the stream.
+        minigun_ammo_per_pickup: i32 = 270 in 1 ..= 2000;
         /// The most minigun rounds a tank carries: a crate of the weapon
         /// carried adds its rounds on top, up to this (`Tank::take_weapon`,
         /// `ActiveWeapon::crate_load`) - seats and enemies alike.
-        minigun_ammo_max: i32 = 600 in 1 ..= 2000;
+        minigun_ammo_max: i32 = 540 in 1 ..= 2000;
         /// The least a pull of the trigger fires. A held trigger starts the
         /// next burst on the beat the last one ends, so the stream never
         /// breaks (`Tuning::minigun_burst_cooldown_seconds`); a tap fires
         /// this many and the barrels run down. Each round is an
-        /// individually simulated `Bullet`.
+        /// individually simulated `Bullet`. A whole number of the round
+        /// schedule's periods (three rounds in four ticks at 45 a second),
+        /// so one burst's rhythm runs on into the next.
         minigun_burst_size: u32 = 9 in 1 ..= 64;
-        /// Time between two rounds of a running gun, taken up to whole
-        /// simulation ticks (`Tuning::minigun_round_ticks`): two at the
-        /// default, thirty rounds a second.
-        minigun_bullet_delay_seconds: f32 = 0.03 in 0.005 ..= 1.0;
+        /// Rounds a running gun fires a second, laid on the tick grid by
+        /// whole-number division (`Tuning::minigun_round_tick`): at 45 the
+        /// gaps run 1, 1, 2 ticks. 60 is a round every tick.
+        minigun_rounds_per_second: u32 = 45 in 1 ..= 60;
         /// How long the barrels take to come up to speed from rest before
         /// the first round leaves (`Tank::minigun_spin`): a pull on a gun
         /// still turning waits only for what is left. 0 fires on the pull.
-        minigun_spinup_seconds: f32 = 0.1 in 0.0 ..= 3.0;
+        minigun_spinup_seconds: f32 = 0.05 in 0.0 ..= 3.0;
         /// How long the barrels take to run down from full speed once the
         /// gun stops.
-        minigun_spindown_seconds: f32 = 0.6 in 0.0 ..= 5.0;
+        minigun_spindown_seconds: f32 = 0.4 in 0.0 ..= 5.0;
         /// Each bullet's direction is jittered by up to this many degrees
         /// off the aim line, stacked on top of any point-blank misfire
-        /// skew: a tight stream, not a spray.
-        minigun_bullet_spread_deg: f32 = 1.5 in 0.0 ..= 90.0;
-        /// Bullet flight speed (px/s) - faster than a shell: a zippy tracer,
-        /// not a lobbed shell.
-        minigun_bullet_speed: f32 = 595.65 in 50.0 ..= 5000.0;
+        /// skew: a lively stream the turret walks onto its target.
+        minigun_bullet_spread_deg: f32 = 2.5 in 0.0 ..= 90.0;
+        /// A tank's bullet flight speed (px/s): more than twice a shell's,
+        /// so a round lands about a fifth of a second after it leaves at
+        /// the engagement ring. A gun tower's bullets fly at
+        /// `gun_tower_bullet_speed`.
+        minigun_bullet_speed: f32 = 1200.0 in 50.0 ..= 5000.0;
         /// Where the minigun's line crosses the gun line, in px ahead of the
         /// pivot (`Bullet::spawn`): the module sits beside the main gun, so
         /// its bullets are boresighted onto the gun line here - nearer, a
@@ -800,17 +804,21 @@ tunables! {
         /// Bullet hit-box half-extent (px) - smaller than a shell's, a
         /// lighter caliber.
         minigun_bullet_hit_half_extent: f32 = 2.0 in 0.5 ..= 32.0;
-        /// Per-bullet damage, deliberately well below a laser or shell hit -
-        /// a single round is a non-event; it is the held stream that
-        /// wears a tank down. One shared range for player and enemy,
-        /// scaled only by `tank_damage_factor`.
-        minigun_bullet_damage_min: f32 = 1.0 in 0.0 ..= 100.0;
-        minigun_bullet_damage_max: f32 = 2.0 in 0.0 ..= 100.0;
+        /// A seat's per-bullet damage, scaled by `tank_damage_factor`: a
+        /// round is a fifth of a shell, the held stream (45 a second) out-
+        /// kills the main gun - a parked tank in under a second.
+        minigun_bullet_damage_min: f32 = 3.0 in 0.0 ..= 100.0;
+        minigun_bullet_damage_max: f32 = 4.0 in 0.0 ..= 100.0;
+        /// An enemy's per-bullet damage: half a seat's, as an enemy shell
+        /// (`enemy_damage_*`) is half a seat's.
+        minigun_enemy_damage_min: f32 = 1.5 in 0.0 ..= 100.0;
+        minigun_enemy_damage_max: f32 = 2.0 in 0.0 ..= 100.0;
         /// The share of a tank's bullets that glance off what they strike
         /// - a tank, a bong, a tile - and fly off at a sharp angle, spent:
         /// harmless to it and to whatever they meet after
-        /// (`Projectile::try_glance`). A gun tower's never do.
-        minigun_ricochet_chance: f32 = 0.05 in 0.0 ..= 1.0;
+        /// (`Projectile::try_glance`). A gun tower's never do. 0 rolls
+        /// nothing: a tracked stream lands.
+        minigun_ricochet_chance: f32 = 0.0 in 0.0 ..= 1.0;
         /// How sharply a glancing round turns away, degrees off its line,
         /// either way at random between the two.
         minigun_ricochet_min_deg: f32 = 100.0 in 0.0 ..= 180.0;
@@ -824,6 +832,32 @@ tunables! {
         /// rotation - see `Tank::minigun_cycle_timer`); slower as the
         /// barrels spin up and run down.
         minigun_cycle_seconds: f32 = 0.05 in 0.01 ..= 1.0;
+        /// How far either side of the hull's heading a seat's minigun
+        /// turret swings onto a target (`Game::track_minigun_phase`),
+        /// degrees.
+        minigun_track_cone_deg: f32 = 30.0 in 0.0 ..= 90.0;
+        /// An enemy's turret swing either side of its heading, degrees:
+        /// half a seat's.
+        minigun_enemy_track_cone_deg: f32 = 15.0 in 0.0 ..= 90.0;
+        /// How fast a seat's minigun turret slews, degrees a second.
+        minigun_track_slew_deg: f32 = 360.0 in 1.0 ..= 3600.0;
+        /// How fast an enemy's minigun turret slews: half a seat's.
+        minigun_enemy_track_slew_deg: f32 = 180.0 in 1.0 ..= 3600.0;
+        /// How far (px) the turret reaches for a target.
+        minigun_track_range_px: f32 = 440.0 in 32.0 ..= 2000.0;
+        /// Seconds on one target before it counts as locked: the bracket
+        /// closes on it.
+        minigun_lock_seconds: f32 = 0.1 in 0.0 ..= 2.0;
+        /// After a locked target is wrecked the turret slews at
+        /// `minigun_chain_slew_factor` times its rate for this long, onto
+        /// the next: the kill chain.
+        minigun_chain_seconds: f32 = 0.15 in 0.0 ..= 2.0;
+        minigun_chain_slew_factor: f32 = 2.0 in 1.0 ..= 10.0;
+        /// How long an enemy tank hit by a seat's minigun round drives at
+        /// `minigun_stagger_pace` of its pace: it can't simply drive out of
+        /// the stream. Seats are never staggered.
+        minigun_stagger_seconds: f32 = 0.3 in 0.0 ..= 3.0;
+        minigun_stagger_pace: f32 = 0.6 in 0.05 ..= 1.0;
         /// How fast a spent case leaves the gun's port, px/s: sideways off
         /// the barrel's line, a little back (`casings.rs`) - fast enough
         /// that it lands clear of the hull, where it can be seen.
@@ -1872,6 +1906,9 @@ tunables! {
         gun_tower_burst_gap_seconds: f32 = 0.9 in 0.0 ..= 10.0;
         /// Spread either side of the aim, degrees, rolled per bullet.
         gun_tower_spread_deg: f32 = 3.0 in 0.0 ..= 45.0;
+        /// A gun tower's bullet flight speed (px/s), its own: a tank's
+        /// minigun rounds fly at `minigun_bullet_speed`.
+        gun_tower_bullet_speed: f32 = 595.65 in 50.0 ..= 5000.0;
         /// Bullet damage, rolled per hit.
         gun_tower_damage_min: f32 = 3.0 in 0.0 ..= 100.0;
         gun_tower_damage_max: f32 = 5.0 in 0.0 ..= 100.0;
@@ -4792,6 +4829,15 @@ tunables! {
         shell_tracer_length: f32 = 40.0 in 0.0 ..= 160.0;
         /// Length (px) of a minigun bullet's tracer streak.
         bullet_tracer_length: f32 = 26.0 in 0.0 ..= 160.0;
+        /// Every this-many-th round of a tank's minigun (by its round id)
+        /// draws a long white-hot tracer, so the stream reads as one line.
+        bullet_long_tracer_every: u32 = 3 in 1 ..= 16;
+        /// The long tracer's length against `bullet_tracer_length`.
+        bullet_long_tracer_scale: f32 = 1.8 in 1.0 ..= 4.0;
+        /// A hull hit by minigun rounds flashes white on the first and then
+        /// every this-many-th (`fx::Fx`'s hit count), not on all 45 a
+        /// second.
+        bullet_hit_flash_every: u32 = 4 in 1 ..= 16;
         /// Length (px) of the fading afterimage chain a plasma bolt leaves.
         plasma_trail_length: f32 = 52.0 in 0.0 ..= 160.0;
         /// Radius (px) of the plasma orb drawn in flight
@@ -5456,11 +5502,18 @@ impl Tuning {
         (self.sight_box_half_cols * crate::OBSTACLE_GRID_SIZE, self.sight_box_half_rows * crate::OBSTACLE_GRID_SIZE)
     }
 
-    /// Whole simulation ticks between two rounds of a running minigun:
-    /// `minigun_bullet_delay_seconds` taken up to the tick grid, never
-    /// less than one.
-    pub fn minigun_round_ticks(&self) -> u32 {
-        ((self.minigun_bullet_delay_seconds / crate::PHYSICS_FIXED_DT).ceil() as u32).max(1)
+    /// The tick, counted from a burst's first round, that its round `n`
+    /// leaves on: `n` rounds at `minigun_rounds_per_second` laid on the
+    /// 60 Hz grid by whole-number division, so the gaps are exact and the
+    /// same on every platform (1, 1, 2 at 45 a second).
+    pub fn minigun_round_tick(&self, n: u32) -> u32 {
+        n * TICKS_PER_SECOND / self.minigun_rounds_per_second.clamp(1, TICKS_PER_SECOND)
+    }
+
+    /// Whole ticks from round `n` of a burst to round `n + 1`: never less
+    /// than one.
+    pub fn minigun_round_gap(&self, n: u32) -> u32 {
+        (self.minigun_round_tick(n + 1) - self.minigun_round_tick(n)).max(1)
     }
 
     /// Whole ticks a pull waits for its first round on barrels turning at
@@ -5475,7 +5528,7 @@ impl Tuning {
     /// for its first: every round's beat, the last one's included, so the
     /// next burst's first round keeps the stream's time.
     pub fn minigun_burst_ticks(&self, spinup: u32, rounds: u32) -> u32 {
-        spinup + rounds.max(1) * self.minigun_round_ticks()
+        spinup + self.minigun_round_tick(rounds.max(1))
     }
 
     /// Fire cooldown held for a minigun burst of `rounds` whose first
@@ -5677,6 +5730,11 @@ thread_local! {
     /// `tuning()` in place of the live one while it is set.
     static IN_FORCE: std::cell::RefCell<Option<Arc<Tuning>>> = const { std::cell::RefCell::new(None) };
 }
+
+/// Simulation ticks in a second: `PHYSICS_FIXED_DT`'s rate as a whole
+/// number, for schedules counted in whole ticks
+/// (`Tuning::minigun_round_tick`).
+pub const TICKS_PER_SECOND: u32 = 60;
 
 /// A countdown that a step of `PHYSICS_FIXED_DT` a tick runs out on exactly
 /// its `ticks`-th tick (at once for 0): half a tick short of the whole, so
@@ -5948,19 +6006,22 @@ mod tests {
         assert_eq!(t.engage_ring_radius(), 400.0);
         t.sight_box_half_rows = 8.0;
         assert_eq!(t.sight_box_half_px(), (368.0, 256.0));
-        // Two ticks a round at the default, and a burst's cooldown runs
-        // out on the tick its last round's beat ends.
-        assert_eq!(t.minigun_round_ticks(), 2);
-        assert_eq!(t.minigun_spinup_ticks(0.0), 6);
+        // Three rounds in four ticks at the default - gaps of 1, 1, 2 -
+        // and a burst's cooldown runs out on the tick its last round's
+        // beat ends.
+        assert_eq!((0..7).map(|n| t.minigun_round_tick(n)).collect::<Vec<_>>(), [0, 1, 2, 4, 5, 6, 8]);
+        assert_eq!((0..6).map(|n| t.minigun_round_gap(n)).collect::<Vec<_>>(), [1, 1, 2, 1, 1, 2]);
+        assert_eq!(t.minigun_spinup_ticks(0.0), 3);
         assert_eq!(t.minigun_spinup_ticks(1.0), 0);
-        assert_eq!(t.minigun_burst_ticks(6, 9), 6 + 18);
+        assert_eq!(t.minigun_burst_ticks(3, 9), 3 + 12);
         let mut left = t.minigun_burst_cooldown_seconds(0, 9);
         let mut ticks = 0;
         while left > 0.0 {
             left -= crate::PHYSICS_FIXED_DT;
             ticks += 1;
         }
-        assert_eq!(ticks, 18);
+        assert_eq!(ticks, 12);
+        assert_eq!(TICKS_PER_SECOND as f32 * crate::PHYSICS_FIXED_DT, 1.0);
     }
 
     #[test]

@@ -30,7 +30,7 @@ not a chassis-matched recolor.
 | 2 | `Hit` | Small impact spark |
 
 Three states, not `ShellState`'s seven — rounds leave far too close together
-(`minigun_round_ticks`, two ticks apart at 60 Hz) for an elaborate
+(`Tuning::minigun_round_tick`, one or two ticks apart at 60 Hz) for an elaborate
 multi-frame wind-up/impact sequence to read well at burst cadence. `Muzzle`
 and `Hit` are both short, single-beat flashes (0.025s / 0.08s) rather than
 `Shell`'s three-frame fire sequence and three-frame impact sequence.
@@ -88,19 +88,12 @@ nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
 
 ## 6. Rust constants
 
-The sheet's constants. The gameplay numbers that once sat here are
-`tunables!` rows now (`src/tuning.rs`, `group minigun`); §8 describes them.
+The sheet's constants. The gameplay numbers are `tunables!` rows
+(`src/tuning.rs`, `group minigun`), described in §8.
 
 ```rust
 pub const MINIGUN_BULLET_TEXTURE_SIZE: f32 = 32.0;
 pub const MINIGUN_BULLET_SCALE: f32 = 2.0;              // matches SHELL_SCALE
-pub const MINIGUN_BULLET_SPEED: f32 = 900.0;            // faster than SHELL_SPEED (500)
-pub const MINIGUN_BULLET_HIT_HALF_EXTENT: f32 = 2.0;    // smaller than SHELL_HIT_HALF_EXTENT (3.0)
-pub const MINIGUN_BULLET_DAMAGE_MIN: f32 = 2.0;
-pub const MINIGUN_BULLET_DAMAGE_MAX: f32 = 4.0;
-pub const MINIGUN_BULLET_SHADOW_OFFSET_MIN: f32 = 5.0;
-pub const MINIGUN_BULLET_SHADOW_OFFSET_MAX: f32 = 10.0;
-pub const MINIGUN_BULLET_SHADOW_OPACITY: f32 = 0.30;
 ```
 
 ---
@@ -116,36 +109,81 @@ pub const MINIGUN_BULLET_SHADOW_OPACITY: f32 = 0.30;
 
 ## 8. The fire model
 
-The minigun is an M134-style rotary gun: a bundle of three barrels that turns
-before it fires.
+The minigun is an M134-style rotary gun on a tracking turret: a bundle of
+three barrels that turns before it fires, on a turret that swings onto the
+nearest enemy it can see (BB-262).
 
 - **Spin-up.** A pull on barrels at rest logs its `Fired` at once and fires
-  its first round `minigun_spinup_seconds` (0.1 s) later; the barrels'
+  its first round `minigun_spinup_seconds` (0.05 s) later; the barrels'
   speed is `Tank::minigun_spin`, 0..1. A pull while they still turn waits
   only for what is left of the way up (`Tuning::minigun_spinup_ticks`).
-  After the last round they run down over `minigun_spindown_seconds`.
-- **The stream.** A pull fires `minigun_burst_size` (9) rounds, one every
-  `minigun_round_ticks` (2 ticks, 30 a second). The burst's cooldown is
-  tick-exact (`tuning::tick_timer`), so a held trigger chains one burst into
-  the next with no gap and the barrels stay at full speed: one unbroken
+  After the last round they run down over `minigun_spindown_seconds` (0.4 s).
+- **The stream.** `minigun_rounds_per_second` (45) laid on the 60 Hz grid
+  by whole-number division (`Tuning::minigun_round_tick`): round `n` of a
+  burst leaves `n * 60 / 45` ticks after its first, gaps of 1, 1, 2 ticks,
+  exact on every platform. A pull fires `minigun_burst_size` (9, three of
+  the schedule's periods) rounds; the burst's cooldown is tick-exact
+  (`tuning::tick_timer`), so a held trigger chains one burst into the next
+  on the schedule's beat and the barrels stay at full speed: one unbroken
   stream. A tap fires the nine.
-- **Spread.** Each round leaves within `minigun_bullet_spread_deg` (±1.5°)
-  of the boresight.
-- **Glances.** `minigun_ricochet_chance` (5%) of a tank's rounds glance off
-  what they strike - a tank, a bong, a tile - instead of hitting it, and fly
-  off 100-160° off their line (`minigun_ricochet_min_deg`/`_max_deg`), spent:
-  harmless to it and to whatever they meet after (`Projectile::try_glance`,
-  a roll of the round's RNG; `Event::Ricochet`, so a replica draws the
-  spark). Once in a round's flight; a gun tower's never glance.
-- **Balance.** 1-2 damage a round at 30 a second, about half the old gun's
-  rate (3-6 at 20), and less again for the glances; a crate is 240 rounds,
-  eight seconds of fire, and a tank carries up to 600.
-- **The tell.** The spin-up is what an enemy reads a gun turning toward it
-  by; an enemy turning its own gun on a diving drone judges the shot where
-  the drone will be when the barrels are up (`ai.rs`, the `air` tier).
-- **Online.** The client's predictor runs the same spin and the same tick
-  grid (`net/predict.rs`), and a replica's barrels turn for each `Fired`
-  the room reports (`Tank::kick_minigun`). The wire is unchanged.
+- **The turret** (`simulation/minigun.rs`). While a tank carries the
+  minigun its turret swings up to `minigun_track_cone_deg` (30°) off the
+  hull's heading at `minigun_track_slew_deg` (360°/s) onto a target, and
+  every round leaves the slewed muzzle along that swing
+  (`Tank::minigun_aim`, `Bullet::spawn`). The target is the nearest
+  opposing tank in `minigun_track_range_px` (440) and in the cone that the
+  shooter can see - not concealed (grass, a woods trail, smoke), in line of
+  sight, a seat only from inside its sight box, the towers' rule - kept
+  while it stays so, ties to the lower slot, no RNG. Held
+  `minigun_lock_seconds` (0.1 s) it is locked; a locked target wrecked
+  starts a kill chain, `minigun_chain_seconds` at `minigun_chain_slew_factor`
+  times the slew, onto the next. No target, the turret comes back to the
+  hull's line. Driving stays four-way: only the gun turns. An enemy's
+  turret swings half as far (`minigun_enemy_track_cone_deg`, 15°) at half
+  the rate.
+- **Spread.** Each round leaves within `minigun_bullet_spread_deg` (±2.5°)
+  of the turret's boresight: a lively stream the turret walks onto its
+  target.
+- **Glances.** `minigun_ricochet_chance` (0 at the default, which rolls
+  nothing: a tracked stream lands). Set above 0, that share of a tank's
+  rounds glance off what they strike and fly off 100-160° off their line
+  (`minigun_ricochet_min_deg`/`_max_deg`), spent (`Projectile::try_glance`,
+  `Event::Ricochet`). A gun tower's never glance.
+- **Balance.** A seat's round does 3-4 (`minigun_bullet_damage_*`), an
+  enemy's half that (`minigun_enemy_damage_*`), as an enemy shell is half a
+  seat's; both scaled by `tank_damage_factor`. At 45 a second that is about
+  158 damage a second against the main gun's ~133 tapped: a parked assault
+  tank 250 px off falls in 0.87 s (29 rounds) on the dev server, against
+  2.88 s before. Rounds fly at `minigun_bullet_speed` (1,200 px/s), a fifth
+  of a second to the engagement ring; a gun tower's at its own
+  `gun_tower_bullet_speed`. A crate is 270 rounds, six seconds of fire, and
+  a tank carries up to 540.
+- **The stagger.** An enemy tank a seat's round lands on drives at
+  `minigun_stagger_pace` (0.6) of its pace for `minigun_stagger_seconds`
+  (0.3 s, `Tank::stagger_timer`): it can't simply drive out of the stream.
+  A seat is never staggered.
+- **What shows it.** The turret sprite eases toward the swing
+  (`Tank::turret_goal`). A lock bracket - four 2 px corners - closes on the
+  target in the seat's team colour; an enemy's turret locked on a seat
+  draws it in red (`Game::paint_locks`). Every `bullet_long_tracer_every`-th
+  round (by its id) draws a long white-hot tracer, and a hull flashes on the
+  first minigun hit and every `bullet_hit_flash_every`-th after
+  (`fx::Fx`), not 45 times a second.
+- **The tell.** The spin-up and the turret swinging onto it are what an
+  enemy's gun reads by; an enemy turning its own gun on a diving drone
+  judges the shot where the drone will be when the barrels are up (`ai.rs`,
+  the `air` tier).
+- **Online.** A seat's client tracks its own turret on the world it draws
+  (`Game::track_shown_seat`) - the world the room rewinds the enemies to
+  when it judges the seat's rounds - aims its provisional rounds with it
+  and sends the swing with its pose (`IntentMsg::track`); the room takes it
+  within the cone and the slew (`take_claim`) and keeps its own target for
+  the bracket. Every tank's swing, target and lock reach the replicas
+  (`TankState::track`, `target`, `tank_flags::LOCKED`; protocol 44), and a
+  gun tower's bullet carries variant 1 so a replica flies it at the tower's
+  speed. The predictor runs the same spin and the same round schedule
+  (`net/predict.rs`), and a replica's barrels turn for each `Fired` the
+  room reports (`Tank::kick_minigun`).
 
 The module's art (`tools/spritegen/tankdesign/lines/vanguard.py`): cell 0 is
 the bundle at rest, cells 1-3 its three turning steps (the dark gap between

@@ -304,6 +304,14 @@ impl Game {
                 // A shield takes the hit instead and what landed is 0,
                 // which is what the event reports.
                 let landed = self.hurt_tank(f, entity, Hurt::hit(d, effects.cause, Some(shooter), at));
+                // A seat's minigun round staggers an enemy it lands on: it
+                // can't simply drive out of the stream. A seat is never
+                // staggered.
+                if matches!(landed, Some(Landed { killed: false, .. })) && effects.cause == HitCause::Bullet && shooter.is_player() && !seat {
+                    let mut q = self.world.query_one::<&mut Tank>(entity);
+                    let tank = q.get().expect("hit target always has a Tank");
+                    tank.stagger_timer = tuning().minigun_stagger_seconds;
+                }
                 if let (Some(Landed { killed: false, .. }), Some((dir, speed))) = (landed, effects.knockback) {
                     let mut q = self.world.query_one::<&mut Tank>(entity);
                     let tank = q.get().expect("hit target always has a Tank");

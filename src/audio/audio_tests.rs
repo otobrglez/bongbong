@@ -1042,6 +1042,35 @@ fn a_grenades_fuse_beeps_with_its_lamp_quicker_as_it_nears_going_off() {
     assert!(first >= 1 && last > 2 * first, "{first} beeps in its first second, {last} in its last");
 }
 
+/// A seat's own minigun turret locking on a tank chirps once a target,
+/// for its own player alone: held, it says nothing more; a new target
+/// (the kill chain's next) chirps again.
+#[test]
+fn a_minigun_lock_chirps_once_a_target_for_its_own_seat() {
+    let mut game = game_on(OPEN);
+    tank_mut(&mut game, 0, |t| {
+        t.disarm();
+        t.minigun_ammo = 40;
+    });
+    let lock = |game: &mut Game, target: usize| {
+        tank_mut(game, 0, |t| {
+            t.minigun_target = Some(target);
+            t.minigun_lock = crate::tuning::tuning().minigun_lock_seconds;
+        })
+    };
+    let mut w = super::watch::Watchers::default();
+    watch(&mut w, &game, &[0], 0.0);
+    lock(&mut game, 5);
+    assert_eq!(count(&watch(&mut w, &game, &[0], 0.1).1, ids::LOCK_ACQUIRED), 1, "the lock chirps");
+    assert_eq!(count(&watch(&mut w, &game, &[0], 0.2).1, ids::LOCK_ACQUIRED), 0, "held, it says nothing more");
+    lock(&mut game, 6);
+    assert_eq!(count(&watch(&mut w, &game, &[0], 0.3).1, ids::LOCK_ACQUIRED), 1, "a new target chirps again");
+    let mut other = super::watch::Watchers::default();
+    watch(&mut other, &game, &[], 0.0);
+    lock(&mut game, 7);
+    assert_eq!(count(&watch(&mut other, &game, &[], 0.4).1, ids::LOCK_ACQUIRED), 0, "a window not playing the seat hears nothing");
+}
+
 /// A seat's minigun spins up from rest at the press; its flamethrower
 /// lights, snaps shut when let go and sputters when it runs dry.
 #[test]

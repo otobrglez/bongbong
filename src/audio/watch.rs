@@ -1123,6 +1123,7 @@ impl Watchers {
                 special: tank.special(),
                 shells: tank.shells_ammo,
                 tubes: tank.missile_tubes_empty,
+                locked: tank.minigun_locked().then_some(tank.minigun_target).flatten(),
             };
             self.arm_ears.insert(slot, ear);
             if mine && down {
@@ -1143,6 +1144,11 @@ impl Watchers {
             }
             if !mine {
                 continue;
+            }
+            // Its own minigun turret locking on a tank, a new one each time:
+            // the soft chirp, by its player only.
+            if ear.locked.is_some() && ear.locked != was.locked {
+                plays.push(Play::new(ids::LOCK_ACQUIRED.0, at).source(source).for_seat(slot));
             }
             // Back: a special that fires again, offline a moment ago - not
             // one a crate just brought.
@@ -1380,6 +1386,8 @@ struct ArmsEar {
     special: Option<crate::tank::ActiveWeapon>,
     shells: i32,
     tubes: u8,
+    /// The tank its minigun turret is locked on (`Tank::minigun_locked`).
+    locked: Option<usize>,
 }
 
 impl ArmsEar {

@@ -121,7 +121,7 @@ Non-goals
   - **Calibre.** `tank_damage_factor` (`src/tuning.rs:3481`) runs 0.75 to 1.60. `Tank::twin_gun()` is at `src/tank.rs:1604`.
   - **Tread state.** `Game::driving()` (`src/simulation/wear.rs:86`) gives each hull's tread state: `Surface` (Grass, Road, Sand, Ford, Deep, Ice; `src/wear.rs:157`), `Roll` (Rolling, Sliding, Pivoting; `src/wear.rs:247`), measured speed, `speeding_up` and `wet`. `tank.throttle` is at `src/tank.rs:1069`.
   - **Blasts.** Radii run 28 px (jet cannon) to 208 px (the rod's shove), through `Game::blast` (`src/simulation/combat.rs:394`). The fx shock ladder (`src/tuning.rs:4564-4601`; rod 1.5, kill 1.0, grenade and fuel 0.9, barrel 0.7 ... EMP 0.25) is a ready loudness ladder.
-  - **Speeds.** Shell 522 px/s, minigun round 596, missile 345, helicopter up to 320, jet 264 (`Game::aircraft()`, `src/simulation/air_support.rs:328`).
+  - **Speeds.** Shell 522 px/s, minigun round 1,200 (a gun tower's 596), missile 345, helicopter up to 320, jet 264 (`Game::aircraft()`, `src/simulation/air_support.rs:328`).
 - **Materials.** `Material` (`src/obstacle.rs:74`) has 24 variants and no `ALL`. `Material::blocks_sound` (`src/obstacle.rs:505`) already exists for the sonic hammer: walls, towers, the volcano and doors, glass included.
   - `weather::Occluders::reach` (`src/weather.rs:560`) is an Amanatides-Woo cell walk over 32 px cells, the base for occlusion.
   - `Game::sound_blocks` (`src/simulation/sonic.rs:229`) is the hammer's own blocking grid.

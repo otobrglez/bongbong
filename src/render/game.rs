@@ -1507,6 +1507,7 @@ impl Game {
         });
 
         self.paint_standing_hit(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true }, fx.flashes());
+        self.paint_locks(&mut GpuCanvas::culled(d, textures, cull));
 
         // The dust a sonic hammer's wave lifts and the shards of the panes
         // it shatters (docs/sonic-hammer.md): lingering, so lit with the
