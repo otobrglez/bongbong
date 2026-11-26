@@ -441,6 +441,12 @@ Contents: [Layout](#layout), [App, session and data](#app-session-and-data),
   first uneven frame ends it (a hitch, the slowed end of a round; not a frame of no time). A clock
   in step keeps half a step to a step and a half owed, so going in or out moves the picture by
   half a step at most, never a whole one.
+- `keys.rs` — a keyboard seat's steering, headless and pure. `Steer` keeps the seat's held
+  direction keys in the order they went down and `update(down)` returns the newest still held, so
+  a second arrow pressed while one is held turns the tank at once and letting it go hands back to
+  the first; keys that go down on one frame stand Up, Down, Left, Right. `app.rs` keeps one per
+  keyboard seat (arrows, WASD) and feeds it raylib's held keys in `gather_intents`; the touch
+  stick's direction applies only when no key is held.
 - `knock.rs` — `Knock {speed, mass_exponent, max_speed, skid}` and **the one mass rule**,
   `Knock::velocity(mass_factor) = min(speed / mass_factor^exponent, max_speed)`: the presets
   `blast` (`blast_knock_mass_exponent`, `blast_knock_max_speed`, a `blast_skid_max_seconds` skid
