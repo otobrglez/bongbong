@@ -889,7 +889,17 @@ impl<T: Transport> OnlineRound<T> {
         self.pending_fire = false;
         self.pending_lamp = false;
         let shots = self.predict_shots();
+        // The own seat's minigun turret, tracked on the world this client
+        // draws (`Game::track_shown_seat`): it aims the provisional rounds
+        // and, owning the hull, goes to the room as the seat's claim.
+        let track = match (self.seat(), self.replica.as_mut()) {
+            (Some(seat), Some(replica)) => replica.track_shown_seat(seat as usize, crate::PHYSICS_FIXED_DT),
+            _ => None,
+        };
         if let Some(predictor) = self.predictor.as_mut() {
+            if let Some(track) = track {
+                predictor.set_minigun_track(track);
+            }
             // The knob is live: read each tick, so a shot pressed after
             // it was turned on is drawn and one after it was turned off
             // is not. Shots are drawn only with the own tank predicted -
@@ -900,7 +910,7 @@ impl<T: Transport> OnlineRound<T> {
             // Owning the hull, the packet says where this tick left it,
             // and the room puts the seat there (§4.14).
             if self.client_hull && let Some(pose) = predictor.pose() {
-                msg = msg.with_pose(pose);
+                msg = msg.with_pose(pose).with_track(track.unwrap_or(0.0));
             }
             // A rod's reticle stands where this client has it, on the
             // room's copy too (docs/rod-from-god.md "The reticle report").

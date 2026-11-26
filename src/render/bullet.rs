@@ -66,14 +66,16 @@ pub fn draw_bullet_light(d: &mut impl RaylibDraw, bullet: &Bullet, wells: &crate
         return;
     }
     let dir = heading(bullet.rotation);
-    let length = tuning().bullet_tracer_length;
-    // In a gravity well's pull the tracer follows the curve it came by.
     let t = tuning();
+    // A tank's every few rounds draws long and white-hot down its length.
+    let long = !bullet.owner.is_tower() && bullet.id % t.bullet_long_tracer_every.max(1) == 0;
+    let length = t.bullet_tracer_length * if long { t.bullet_long_tracer_scale } else { 1.0 };
+    // In a gravity well's pull the tracer follows the curve it came by.
     if let Some(path) = crate::well::curved_streak(bullet.drawn(), bullet.velocity, length, wells, &t) {
         crate::render::shot_fx::curved_streak(d, &path, 2.0, fade(crate::pyro::alpha(FIRE[5], 0.66), strength), crate::pyro::alpha(FIRE[3], 0.0));
     } else {
         streak(d, bullet.drawn(), dir, length, 2.0, fade(crate::pyro::alpha(FIRE[5], 0.66), strength), crate::pyro::alpha(FIRE[3], 0.0));
     }
-    streak(d, bullet.drawn(), dir, length * 0.5, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[6], 0.4), strength));
+    streak(d, bullet.drawn(), dir, length * if long { 0.75 } else { 0.5 }, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[6], 0.4), strength));
     glow(d, bullet.drawn(), 5.0, fade(crate::pyro::alpha(FIRE[6], 0.78), strength));
 }

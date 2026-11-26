@@ -158,6 +158,16 @@ pub fn take_pose(game: &mut Game, seat: usize, pose: Option<SeatPose>, reach_tic
     }
 }
 
+/// Hand the round one seat's minigun turret claim for this tick
+/// (`IntentMsg::track`, docs/BULLETS_SPEC.md §8 "Online"), before the tick
+/// runs: an owned seat's client tracks its own turret on the world it
+/// draws - the one its rounds are judged against, rewound - and the room
+/// takes that swing within the cone and the slew
+/// (`Game::claim_minigun_track`).
+pub fn take_track(game: &mut Game, seat: usize, track: Option<f32>) {
+    game.claim_minigun_track(seat, track);
+}
+
 /// Hand the round one seat's hold report for this tick
 /// (`net::mailbox::Mailbox::hold_ticks`, docs/gauss-rail.md "The hold
 /// report"), before the tick runs: a charge-and-hold trigger counts the
@@ -321,10 +331,38 @@ cells."8,8" = { kind = "start" }
     /// vouches for, then run the update.
     fn room_tick(game: &mut Game, mailbox: &Mailbox, now: Instant) -> PoseOutcome {
         let read = mailbox.read(now);
+        take_track(game, 0, read.and_then(|m| m.track()));
         let outcome = take_pose(game, 0, read.and_then(|m| m.pose()), mailbox.pose_reach_ticks());
         let (width, height) = game.map.field_size();
         game.update(Input::single(read.map(|m| m.intent()).unwrap_or_default()), PHYSICS_FIXED_DT, width, height);
         outcome
+    }
+
+    /// **An owned seat's minigun turret swings where its client says**
+    /// (`IntentMsg::track`, docs/BULLETS_SPEC.md §8 "Online"): a claim in
+    /// reach is taken as sent, one past what the turret slews in a tick is
+    /// taken only that far, and none puts the room's own tracking back.
+    #[test]
+    fn an_owned_seats_minigun_claim_is_taken_within_the_slew() {
+        let mut game = open_round();
+        game.debug_set_tank(0, &crate::simulation::debug::TankPatch { minigun_ammo: Some(100), ..Default::default() }).expect("seat 0");
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        let pose = game.seat_pose(0).expect("the seat");
+        let track = |game: &Game| game.tank_snapshots()[0].minigun_track;
+        let t = crate::tuning::tuning();
+        let most = t.minigun_track_slew_deg * t.minigun_chain_slew_factor * PHYSICS_FIXED_DT;
+        mailbox.post(IntentMsg { tick: 0, ..IntentMsg::default() }.with_pose(pose).with_track(2.0), now);
+        room_tick(&mut game, &mailbox, now);
+        assert_eq!(track(&game), 2.0, "a claim in reach is taken as sent");
+        mailbox.post(IntentMsg { tick: 1, ..IntentMsg::default() }.with_pose(pose).with_track(29.0), now);
+        room_tick(&mut game, &mailbox, now);
+        assert!((track(&game) - (2.0 + most)).abs() < 0.01, "a jump only as far as the turret slews: {}", track(&game));
+        // No enemy on this field: with no claim the room's turret comes back
+        // to the hull's line on its own.
+        mailbox.post(IntentMsg { tick: 2, ..IntentMsg::default() }, now);
+        room_tick(&mut game, &mailbox, now);
+        assert!(track(&game) < 2.0 + most, "the room tracks it again: {}", track(&game));
     }
 
     /// **The burst that ends a stall is taken; a jump is not**

@@ -523,6 +523,7 @@ impl Room {
         // tick, and told if it is refused or moved.
         authority::take_hold(game, 0, self.mailbox.hold_ticks());
         authority::take_reticle(game, 0, self.mailbox.reticle());
+        authority::take_track(game, 0, read.and_then(|m| m.track()));
         let applied = match authority::take_pose(game, 0, read.and_then(|m| m.pose()), self.mailbox.pose_reach_ticks()) {
             PoseOutcome::Applied(at) => Some(at),
             PoseOutcome::Refused(_, answer) => {

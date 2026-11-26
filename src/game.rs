@@ -386,6 +386,10 @@ impl AftermathAir {
     }
 }
 
+/// The red of an enemy minigun's lock bracket on a seat (`Game::paint_locks`):
+/// the palette's brightest red.
+const LOCK_WARNING: Color = Color::new(0xFF, 0x42, 0x1A, 255);
+
 /// What `Game::paint_standing` draws besides the field itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PaintOptions {
@@ -1090,6 +1094,43 @@ impl Game {
         crate::air_support::paint_shadows(c, &self.aircraft(), self.time);
     }
 
+    /// The minigun turrets' lock brackets (docs/BULLETS_SPEC.md §8): four
+    /// 2 px corners round each tank a tracking turret holds, over every
+    /// standing thing. Round an enemy a seat's turret tracks, in that
+    /// seat's team colour, closing in as the lock comes; round a seat an
+    /// enemy's turret is locked on, in red - the warning.
+    pub fn paint_locks(&self, c: &mut impl Canvas) {
+        let lock_seconds = crate::tuning::tuning().minigun_lock_seconds;
+        let tanks: Vec<(usize, crate::Position, crate::Position, bool)> = self
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| !t.is_wreck())
+            .map(|t| (t.owner_slot(), t.drawn().position, t.hull_bbox_world().1, t.is_player()))
+            .collect();
+        for tracker in self.world.query::<&Tank>().iter() {
+            let Some(slot) = tracker.minigun_target else { continue };
+            if tracker.is_wreck() {
+                continue;
+            }
+            let Some(&(_, at, half, seat_held)) = tanks.iter().find(|(s, ..)| *s == slot) else { continue };
+            let (color, pad) = match tracker.player_index() {
+                Some(seat) => {
+                    let left = if lock_seconds > 0.0 { 1.0 - (tracker.minigun_lock / lock_seconds).clamp(0.0, 1.0) } else { 0.0 };
+                    (crate::tank::team_color(seat as u8), (6.0 * left).round() as i32)
+                }
+                None if tracker.minigun_locked() && seat_held => (LOCK_WARNING, 0),
+                None => continue,
+            };
+            let (x0, x1) = ((at.x - half.x).floor() as i32 - 4 - pad, (at.x + half.x).ceil() as i32 + 4 + pad);
+            let (y0, y1) = ((at.y - half.y).floor() as i32 - 4 - pad, (at.y + half.y).ceil() as i32 + 4 + pad);
+            for (x, y, sx, sy) in [(x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1)] {
+                c.fill_rect(if sx > 0 { x } else { x - 5 }, if sy > 0 { y } else { y - 1 }, 6, 2, color);
+                c.fill_rect(if sx > 0 { x } else { x - 1 }, if sy > 0 { y } else { y - 5 }, 2, 6, color);
+            }
+        }
+    }
+
     /// What flies, over everything that stands: the FPV drones' bodies
     /// (their lamps are the glowing pass's), then air support's aircraft
     /// over them - it flies highest.
@@ -1109,6 +1150,7 @@ impl Game {
         self.paint_air_shadows(c);
         self.paint_tiles(c);
         self.paint_standing(c, opts);
+        self.paint_locks(c);
         self.paint_air(c);
     }
 }

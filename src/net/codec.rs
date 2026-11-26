@@ -242,9 +242,9 @@ mod tests {
         let bytes = encode(&Msg::Intent(IntentMsg { tick: 5, move_dir: 4, face: 2, fire: false, ..IntentMsg::default() }));
         // tick, move_dir, face, fire, lamp, then the pose an unowned
         // packet leaves at zero - owned, x, y, dir, vx, vy, rvx, rvy - the
-        // view tick and fraction before the first snapshot, and no rod
-        // reticle.
-        assert_eq!(bytes, vec![kind::INTENT, 5, 4, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        // view tick and fraction before the first snapshot, no rod
+        // reticle and no minigun turret claim.
+        assert_eq!(bytes, vec![kind::INTENT, 5, 4, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]

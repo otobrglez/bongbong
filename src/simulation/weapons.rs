@@ -306,8 +306,9 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
                     f.muzzle_flashes.push(Shockwave::new(muzzle));
                     burst.opening = false;
                 }
+                burst.timer = crate::tuning::tick_timer(tuning().minigun_round_gap(burst.fired));
                 burst.bullets_remaining -= 1;
-                burst.timer = crate::tuning::tick_timer(tuning().minigun_round_ticks());
+                burst.fired += 1;
                 tank.minigun_burst = Some(burst);
             }
         } else {
@@ -413,12 +414,12 @@ pub(super) fn dispatch_fire_from(
                 f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Minigun.name() });
                 let spinup = t.minigun_spinup_ticks(tank.minigun_spin);
                 let rounds = t.minigun_burst_size.max(1);
-                let mut burst = MinigunBurst { bullets_remaining: rounds, timer: crate::tuning::tick_timer(spinup), aim_offset, opening: true };
+                let mut burst = MinigunBurst { bullets_remaining: rounds, timer: crate::tuning::tick_timer(spinup), aim_offset, opening: true, fired: 0 };
                 if spinup == 0 {
                     tank.minigun_ammo -= 1;
                     let muzzle = fire_bullet(physics, f, tank, owner, aim_offset);
                     f.muzzle_flashes.push(Shockwave::new(muzzle));
-                    burst = MinigunBurst { bullets_remaining: rounds - 1, timer: crate::tuning::tick_timer(t.minigun_round_ticks()), opening: false, ..burst };
+                    burst = MinigunBurst { bullets_remaining: rounds - 1, timer: crate::tuning::tick_timer(t.minigun_round_gap(0)), opening: false, fired: 1, ..burst };
                 }
                 tank.minigun_burst = Some(burst);
                 tank.fire_cooldown = t.minigun_burst_cooldown_seconds(spinup, rounds);
@@ -816,19 +817,22 @@ impl Projectile for Bullet {
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Bullet::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().minigun_bullet_hit_half_extent }
-    /// One shared range for player and enemy, chassis-scaled only; a
-    /// tower's bullets carry the gun tower's own range. A round that has
-    /// glanced is spent: what it meets after takes nothing (and the range
-    /// of nothing rolls no RNG).
+    /// A seat's range or an enemy's - half a seat's, as with shells -
+    /// chassis-scaled; a tower's bullets carry the gun tower's own range.
+    /// A round that has glanced is spent: what it meets after takes
+    /// nothing (and the range of nothing rolls no RNG).
     fn damage_range(&self) -> (f32, f32) {
         if self.glanced {
             return (0.0, 0.0);
         }
-        if self.owner.is_tower() {
-            return side_damage(self.owner, self.shooter_row);
-        }
-        let factor = tuning().tank_damage_factor[self.shooter_row as usize];
-        (tuning().minigun_bullet_damage_min * factor, tuning().minigun_bullet_damage_max * factor)
+        let t = tuning();
+        let (min, max) = match self.owner {
+            Owner::Tower { .. } => return side_damage(self.owner, self.shooter_row),
+            Owner::Player(_) => (t.minigun_bullet_damage_min, t.minigun_bullet_damage_max),
+            Owner::Enemy(_) => (t.minigun_enemy_damage_min, t.minigun_enemy_damage_max),
+        };
+        let factor = t.tank_damage_factor[self.shooter_row as usize];
+        (min * factor, max * factor)
     }
     /// No per-bullet shove: a burst of them would read as juddering.
     fn knockback_speed() -> Option<f32> { None }

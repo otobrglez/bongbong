@@ -5,8 +5,9 @@
 //! ticking). Mirrors `shell::Shell`'s shape (position, velocity, rotation,
 //! owner, state, timer, shadow_offset) - the same "individually-simulated
 //! moving projectile", a different weapon and a much shorter state machine
-//! (see `BulletState`): rounds leave every `minigun_round_ticks`, far too
-//! close for a multi-frame wind-up/impact sequence to read. The brass each
+//! (see `BulletState`): rounds leave one to two ticks apart
+//! (`Tuning::minigun_round_tick`), far too close for a multi-frame
+//! wind-up/impact sequence to read. The brass each
 //! round throws out of the port is presentation only (`casings.rs`). No
 //! `variant`/chassis-colour row unlike `Shell` - every
 //! bullet shares one small piece of art regardless of shooter chassis (see
@@ -111,6 +112,19 @@ impl Bullet {
         self.smooth.drawn(crate::pose::Pose::at(self.position)).position
     }
 
+    /// A bullet's flight speed, px/s: a gun tower's (`tower`) at
+    /// `gun_tower_bullet_speed`, a tank's at `minigun_bullet_speed`.
+    pub fn speed(tower: bool) -> f32 {
+        if tower { tuning().gun_tower_bullet_speed } else { tuning().minigun_bullet_speed }
+    }
+
+    /// The wire's bullet variant (`net::wire::ShotState::variant`): 1 for a
+    /// gun tower's round, 0 for a tank's - what a replica sizes its speed by
+    /// (`speed`).
+    pub fn wire_variant(&self) -> u8 {
+        u8::from(self.owner.is_tower())
+    }
+
     /// A bullet at a pose somebody else worked out, for drawing only: a
     /// client's provisional bullet (`net::predict`), rebuilt into the
     /// replica each frame like `Shell::at`. Never meets anything.
@@ -135,16 +149,20 @@ impl Bullet {
 
     /// Create a bullet at the minigun module's muzzle, beside the main gun
     /// (`tank_art::MINIGUN_MUZZLE`), boresighted: it flies along the line
-    /// from that muzzle to the gun line's point `minigun_boresight_px`
-    /// ahead of the pivot, so a burst lands where the gun points in the
-    /// band a tank engages in. One muzzle for every bullet, whatever the
+    /// from that muzzle to the point `minigun_boresight_px` ahead of the
+    /// pivot on the turret's heading (`Tank::minigun_aim`, the hull's
+    /// facing swung by the tracking turret), so a burst lands where the
+    /// gun points in the band a tank engages in. One muzzle for every bullet, whatever the
     /// module's barrels draw. `aim_offset` bundles this bullet's shared
     /// burst misfire skew plus its own fresh spread jitter - see
     /// `simulation::fire_bullet`, which computes that sum before calling
     /// this.
     pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32) -> Bullet {
-        let position = tank.turret_point(crate::tank_art::MINIGUN_MUZZLE[tank.row as usize]);
-        let facing = tank.rotation.to_radians();
+        // The tracking turret's heading: the muzzle and the boresight both
+        // swing with it, so a round leaves the slewed barrels along it.
+        let heading = tank.minigun_aim();
+        let position = tank.turret_point_at(crate::tank_art::MINIGUN_MUZZLE[tank.row as usize], heading);
+        let facing = heading.to_radians();
         let sight = tuning().minigun_boresight_px;
         let (sx, sy) = (tank.position.x + math::sin(facing) * sight, tank.position.y - math::cos(facing) * sight);
         let rotation = math::atan2(sx - position.x, -(sy - position.y)).to_degrees() + aim_offset;

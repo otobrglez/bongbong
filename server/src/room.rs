@@ -1367,6 +1367,7 @@ impl Room {
         // Each seat's reticle report: the cell its client has a rod's
         // reticle on.
         let mut reticles: Vec<(usize, u16)> = Vec::new();
+        let mut tracks: Vec<(usize, Option<f32>)> = Vec::new();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
                 && s.connected()
@@ -1375,6 +1376,7 @@ impl Room {
                 let read = s.mailbox.read(now.into_std());
                 input.seats[i] = read.map(|m| m.intent()).unwrap_or_default();
                 poses.push((i, read.and_then(|m| m.pose()), s.mailbox.pose_reach_ticks()));
+                tracks.push((i, read.and_then(|m| m.track())));
                 views.push((i, read.map_or((0, 0), |m| (m.view_tick, m.view_frac))));
                 holds.push((i, s.mailbox.hold_ticks()));
                 reticles.push((i, s.mailbox.reticle()));
@@ -1412,6 +1414,11 @@ impl Room {
         // (docs/rod-from-god.md "The reticle report").
         for &(i, reticle) in &reticles {
             authority::take_reticle(game, i, reticle);
+        }
+        // An owned seat's minigun turret swings where its client tracks
+        // it, within the cone and the slew (docs/BULLETS_SPEC.md §8).
+        for &(i, track) in &tracks {
+            authority::take_track(game, i, track);
         }
         // A client that owns its hull is put where it says before the
         // tick runs, and the seat is released to the room's own driving

@@ -57,7 +57,7 @@ use crate::net::events::WireEvent;
 use crate::net::events::WireHitTarget;
 use crate::net::wire::{
     AirState,
-    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, TowerState, WeaponKind, Welcome, dequantise_bank, dequantise_charge, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, bong_flags, tank_flags, tile_flags, tower_flags,
+    DroneState, GrenadeState, MissileState, ShotKind, ShotState, Snapshot, TankState, TowerState, WeaponKind, Welcome, dequantise_bank, dequantise_charge, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_track, dequantise_velocity, dir_from_index, crate_flags, dequantise_health, bong_flags, tank_flags, tile_flags, tower_flags,
 };
 use crate::tower::{Glob, OozePuddle, TeslaBolt, TowerKind, TowerRuin};
 use crate::laser::{LaserBeam, LaserVariant};
@@ -1091,6 +1091,14 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         set_timer(&mut tank.hit_flash_timer, on(tank_flags::HIT), knobs.health_ring_hit_seconds);
         set_timer(&mut tank.heat_shield_timer, on(tank_flags::HEAT_SHIELD), knobs.heat_shield_seconds);
         tank.flame_held = on(tank_flags::FLAME);
+        // The minigun's turret: its swing, what it tracks and whether it
+        // is locked - except the turret this client tracks itself, its own
+        // seat's (`Game::track_shown_seat`), which a snapshot leaves be.
+        if !tank.minigun_local {
+            tank.minigun_track = dequantise_track(t.track);
+            tank.minigun_target = (t.target > 0).then(|| t.target as usize - 1);
+            tank.minigun_lock = if on(tank_flags::LOCKED) { knobs.minigun_lock_seconds } else { 0.0 };
+        }
         let weapon: ActiveWeapon = t.weapon.into();
         // The wire names the live weapon alone - a tank carries one
         // special at a time (`Tank::take_weapon`) - so the other stocks are
@@ -1397,11 +1405,11 @@ fn apply_shots(game: &mut Game, s: &Snapshot) {
                     let mut q = game.world.query_one::<&mut Bullet>(entity);
                     if let Ok(bullet) = q.get() {
                         // A deflected shot changes hands in flight.
-                        bullet.owner = shot_owner(sh);
+                        bullet.owner = bullet_owner(sh);
                         bullet.prev_position = bullet.position;
                         bullet.position = position;
                         bullet.rotation = rotation;
-                        bullet.velocity = dir * knobs.minigun_bullet_speed;
+                        bullet.velocity = dir * Bullet::speed(sh.variant == 1);
                         let state = BulletState::from_col(sh.state as i32).unwrap_or(BulletState::Flying);
                         if bullet.state != state {
                             bullet.state = state;
@@ -1536,6 +1544,14 @@ fn shot_owner(sh: &ShotState) -> Owner {
     if sh.owner == crate::net::wire::NO_SEAT { REPLICA_OWNER } else { Owner::Player(sh.owner) }
 }
 
+/// A bullet's owner on the replica: `shot_owner`, or a gun tower on that
+/// side for a tower's round (`Bullet::wire_variant` 1), so it flies at the
+/// tower's speed and encodes back to the same variant.
+fn bullet_owner(sh: &ShotState) -> Owner {
+    let owner = shot_owner(sh);
+    if sh.variant == 1 { Owner::Tower { side: owner.side(), cell: 0 } } else { owner }
+}
+
 fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32, dir: Vec2) {
     let knobs = tuning();
     let id = sh.id as u32;
@@ -1565,11 +1581,11 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 state: BulletState::from_col(sh.state as i32).unwrap_or(BulletState::Flying),
                 position,
                 smooth: crate::pose::Smooth::default(),
-                velocity: dir * knobs.minigun_bullet_speed,
+                velocity: dir * Bullet::speed(sh.variant == 1),
                 rotation,
                 timer: 0.0,
                 done: false,
-                owner,
+                owner: bullet_owner(sh),
                 shooter_row: 0,
                 shadow_offset: shadow_offset(
                     sh.id,

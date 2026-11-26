@@ -447,7 +447,7 @@ impl Game {
             (None, None) => None,
         };
         if let Some((pos, vel, lead)) = aimed {
-            let flight = pos.distance_to(tower.position) / t.minigun_bullet_speed.max(1.0);
+            let flight = pos.distance_to(tower.position) / t.gun_tower_bullet_speed.max(1.0);
             let aim = pos + vel * (flight * lead);
             let want = heading_to(tower.position, aim);
             tower.heading = turn_toward(tower.heading, want, t.gun_tower_turn_deg_per_second * f.dt);
@@ -484,7 +484,7 @@ impl Game {
         let rotation = tower.heading + spread;
         let dir = unit(rotation);
         let at = tower.position + dir * GUN_MUZZLE_PX;
-        let mut bullet = Bullet::at(0, at, at, dir * t.minigun_bullet_speed, rotation, 0, tower.owner(tower_cell_id(cell)));
+        let mut bullet = Bullet::at(0, at, at, dir * t.gun_tower_bullet_speed, rotation, 0, tower.owner(tower_cell_id(cell)));
         bullet.state = BulletState::Muzzle;
         bullet.shadow_offset = t.minigun_bullet_shadow_offset_min;
         bullet.passed_over.push(tower.entity);

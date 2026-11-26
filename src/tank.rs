@@ -250,10 +250,11 @@ pub struct PendingPlasmaShot {
 }
 
 /// A minigun burst in progress - see `Tank::minigun_burst`: the rounds one
-/// pull of the trigger still owes, one every `Tuning::minigun_round_ticks`
-/// once the barrels are up to speed (`Tank::minigun_spin`). It outlives its
-/// last round by that round's own beat, so the burst a held trigger starts
-/// as this one ends keeps the stream's time.
+/// pull of the trigger still owes, on the round schedule
+/// (`Tuning::minigun_round_gap`) once the barrels are up to speed
+/// (`Tank::minigun_spin`). It outlives its last round by that round's own
+/// beat, so the burst a held trigger starts as this one ends keeps the
+/// stream's time.
 #[derive(Clone, Copy)]
 pub struct MinigunBurst {
     /// Rounds still to leave. 0 while the last round's beat runs out.
@@ -269,6 +270,9 @@ pub struct MinigunBurst {
     pub aim_offset: f32,
     /// Its first round is still to leave: the one that lights the muzzle.
     pub opening: bool,
+    /// Rounds it has fired: where it stands on the round schedule, so the
+    /// next gap is `minigun_round_gap(fired - 1)`.
+    pub fired: u32,
 }
 
 /// A seeker-missile volley in progress: `missiles_remaining` more to leave
@@ -759,6 +763,30 @@ pub struct Tank {
     /// `minigun_burst` for. Presentation only, never set in a round that
     /// simulates.
     pub minigun_show: f32,
+    /// How far the minigun's turret has swung off the hull's heading,
+    /// degrees (clockwise positive), within the tracking cone
+    /// (`Game::track_minigun_phase`): its rounds leave along
+    /// `rotation + minigun_track` (`minigun_aim`). 0 whenever the minigun
+    /// is not the weapon in hand. Simulation state: online it is on the
+    /// wire, and an owned seat's comes from its client (`minigun_claim`).
+    pub minigun_track: f32,
+    /// The slot of the tank the minigun's turret is tracking, if any.
+    pub minigun_target: Option<usize>,
+    /// Seconds the turret has stayed on `minigun_target`: past
+    /// `minigun_lock_seconds` it is locked (`minigun_locked`).
+    pub minigun_lock: f32,
+    /// Seconds left of a kill chain: the turret slews at
+    /// `minigun_chain_slew_factor` times its rate after a locked target is
+    /// wrecked.
+    pub minigun_chain: f32,
+    /// An owned seat's turret swing as its client sent it, waiting for the
+    /// tracking phase to check it against the cone and the slew and take
+    /// it (`Game::claim_minigun_track`). `None` the rest of the time.
+    pub minigun_claim: Option<f32>,
+    /// A client tracks this turret itself - its own seat's, on the
+    /// replica (`Game::track_shown_seat`) - so a snapshot leaves its swing,
+    /// target and lock be. Presentation only.
+    pub minigun_local: bool,
     /// A seeker-missile volley in progress (`MissileVolley`), ticked with
     /// the other queued shots so a volley always completes unless the tank
     /// is wrecked. `None` the rest of the time.
@@ -787,7 +815,8 @@ pub struct Tank {
     /// few frames. Read only by `draw_tank`/`draw_tank_shadow` - nothing
     /// gameplay-relevant should ever key off this.
     pub visual_rotation: f32,
-    /// Turret-only sprite facing angle in degrees, eased toward `rotation`
+    /// Turret-only sprite facing angle in degrees, eased toward
+    /// `turret_goal` (the hull's `rotation`, or the minigun's tracking aim)
     /// independently of `visual_rotation` (see
     /// `ease_turret_visual_rotation`/`TANK_TURRET_VISUAL_TURN_SPEED_DEG`) -
     /// faster than the hull's own ease, so the turret visibly leads a turn
@@ -1057,6 +1086,10 @@ pub struct Tank {
     /// corrodes at `bio_slime_dps` and drives at `bio_slime_speed_factor`
     /// of its pace. Set, never added to; water washes it off.
     pub slime_timer: f32,
+    /// Seconds left of a minigun stagger: an enemy hit by a seat's minigun
+    /// round drives at `minigun_stagger_pace` of its pace while positive
+    /// (`stagger_pace`). Set, never added to; a seat is never staggered.
+    pub stagger_timer: f32,
     /// Cells of oil prints still on its treads (`simulation::oil`): set
     /// in an oil pool, spent a cell at a time, washed off in water.
     pub oil_load: u8,
@@ -1196,6 +1229,12 @@ impl Default for Tank {
             minigun_burst: None,
             minigun_spin: 0.0,
             minigun_show: 0.0,
+            minigun_track: 0.0,
+            minigun_target: None,
+            minigun_lock: 0.0,
+            minigun_chain: 0.0,
+            minigun_claim: None,
+            minigun_local: false,
             missile_volley: None,
             missile_tubes_empty: 0,
             damage_variant: 0,
@@ -1229,6 +1268,7 @@ impl Default for Tank {
             hit_by_enemy: None,
             wrecked_by: None,
             slime_timer: 0.0,
+            stagger_timer: 0.0,
             oil_load: 0,
             oil_cell: None,
             tread: Tread::default(),
@@ -1434,6 +1474,30 @@ impl Tank {
         if self.is_slimed() { tuning().bio_slime_speed_factor } else { 1.0 }
     }
 
+    /// The fraction of its pace a minigun stagger leaves this tank: exactly
+    /// 1 when it is not staggered.
+    pub fn stagger_pace(&self) -> f32 {
+        if self.stagger_timer > 0.0 { tuning().minigun_stagger_pace } else { 1.0 }
+    }
+
+    /// The heading the minigun fires along: the hull's, swung by the
+    /// tracking turret (`minigun_track`).
+    pub fn minigun_aim(&self) -> f32 {
+        self.rotation + self.minigun_track
+    }
+
+    /// Whether the minigun's turret has held its target long enough to be
+    /// locked on it.
+    pub fn minigun_locked(&self) -> bool {
+        self.minigun_target.is_some() && self.minigun_lock >= tuning().minigun_lock_seconds
+    }
+
+    /// The heading the turret sprite eases toward: the minigun's aim while
+    /// it is the weapon in hand, the hull's otherwise.
+    pub fn turret_goal(&self) -> f32 {
+        if self.active_weapon() == ActiveWeapon::Minigun { self.minigun_aim() } else { self.rotation }
+    }
+
     /// How much of a shield is left, 0..=1: `shield_hp` over
     /// `shield_capacity` (what a pickup or a spawn roll sets it to), clamped
     /// so a pool pushed past the knob still reads as full. The HUD gauge
@@ -1615,7 +1679,13 @@ impl Tank {
     /// turret's frame (`tank_art`: x to the right, y toward the tail), put
     /// in the world at the tank's facing - where a module's shot leaves.
     pub fn turret_point(&self, local: (f32, f32)) -> Position {
-        let (sin, cos) = math::sin_cos(self.rotation.to_radians());
+        self.turret_point_at(local, self.rotation)
+    }
+
+    /// `turret_point` with the turret turned to `heading` (degrees) rather
+    /// than the hull's facing: the minigun's muzzle on its tracking turret.
+    pub fn turret_point_at(&self, local: (f32, f32), heading: f32) -> Position {
+        let (sin, cos) = math::sin_cos(heading.to_radians());
         let (x, y) = (local.0 * self.scale, local.1 * self.scale);
         Position::new(self.position.x + x * cos - y * sin, self.position.y + x * sin + y * cos)
     }
@@ -2427,7 +2497,7 @@ impl Tank {
     /// hull does. Called once per frame for every tank, alongside
     /// `ease_visual_rotation`.
     pub fn ease_turret_visual_rotation(&mut self, dt: f32) {
-        let mut diff = (self.rotation - self.turret_visual_rotation) % 360.0;
+        let mut diff = (self.turret_goal() - self.turret_visual_rotation) % 360.0;
         if diff > 180.0 {
             diff -= 360.0;
         } else if diff < -180.0 {

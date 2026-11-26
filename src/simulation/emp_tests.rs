@@ -262,7 +262,7 @@ fn an_enemys_tell_lapses_when_it_is_struck() {
 fn a_burst_and_a_volley_stop_short_and_keep_their_rounds() {
     let mut tk = Tank::default();
     tk.minigun_ammo = 30;
-    tk.minigun_burst = Some(crate::tank::MinigunBurst { bullets_remaining: 4, timer: 0.05, aim_offset: 0.0, opening: false });
+    tk.minigun_burst = Some(crate::tank::MinigunBurst { bullets_remaining: 4, timer: 0.05, aim_offset: 0.0, opening: false, fired: 0 });
     tk.missile_volley = Some(crate::tank::MissileVolley { missiles_remaining: 3, timer: 0.1, next_tube: 1 });
     tk.pending_shot = Some(crate::tank::PendingShot { timer: 0.1, aim_offset: 0.0, lateral_offset: 4.0 });
     tk.flame_held = true;

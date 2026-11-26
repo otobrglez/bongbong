@@ -33,7 +33,7 @@
 //! the key is held - `drive_player`'s rule. A press opens a `Press`: the
 //! first shot at once and the rest on their own delays (a twin barrel's
 //! second shell `tank_twin_shot_delay_seconds` on, a minigun burst's
-//! bullets `Tuning::minigun_round_ticks` apart after the barrels' spin-up,
+//! bullets on the round schedule (`Tuning::minigun_round_tick`) after the barrels' spin-up,
 //! which this client counts as the room does), each spawned from the sandbox's
 //! pose on the frame it is due, as the server's `tick_queued_shots` would,
 //! and from where the room's copy leaves, before the tick's step
@@ -690,6 +690,13 @@ impl Predictor {
         self.shots_enabled = on;
     }
 
+    /// The minigun turret's swing this client tracks for its own seat
+    /// (`Game::track_shown_seat`), degrees off the hull: what the sandbox's
+    /// provisional rounds leave along, as the room's do with the claim.
+    pub fn set_minigun_track(&mut self, track: f32) {
+        self.sandbox.set_seat_minigun_track(self.seat, track);
+    }
+
     /// The tick the next `step` will stamp.
     pub fn tick(&self) -> u32 {
         self.tick
@@ -962,16 +969,15 @@ impl Predictor {
                 }
                 // The room's burst (`weapons::dispatch_fire_from`): its
                 // first round after what is left of the barrels' spin-up,
-                // the rest a round's ticks apart.
+                // the rest on the round schedule.
                 let rounds = t.minigun_burst_size.max(1);
                 let burst = (rounds as i32).min(left);
                 let spread = t.minigun_bullet_spread_deg;
                 let press = self.next_press;
                 let spinup = t.minigun_spinup_ticks(self.gun_spin);
-                let every = t.minigun_round_ticks();
                 let pending = (0..burst)
                     .map(|k| Pending {
-                        due_ticks: spinup + k as u32 * every,
+                        due_ticks: spinup + t.minigun_round_tick(k as u32),
                         lateral: 0.0,
                         aim: (hash01(press, k as u32) * 2.0 - 1.0) * spread,
                     })
@@ -2201,8 +2207,7 @@ mod tests {
         assert_eq!(kinds, [ProvisionalKind::Bullet], "the first bullet of the burst, and no shell");
         // The rest of the burst leaves on the room's tick grid while held.
         let burst = tuning().minigun_burst_size.max(1) as usize;
-        let every = tuning().minigun_round_ticks() as usize;
-        for _ in 0..(burst - 1) * every {
+        for _ in 0..tuning().minigun_round_tick(burst as u32 - 1) {
             predictor.step(press());
         }
         assert_eq!(predictor.provisional_count(), burst, "the whole burst is on screen");

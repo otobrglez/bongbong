@@ -362,6 +362,9 @@ pub struct Fx {
     impacts_started: u32,
     /// The hulls and tiles a hit has just lit up.
     flashes: Vec<Flash>,
+    /// Minigun rounds landed on each hull, by its slot: a hull flashes on
+    /// the first and every `bullet_hit_flash_every`-th, not on every one.
+    bullet_hits: std::collections::BTreeMap<usize, u32>,
     /// The cells of the tiles burning at the last `observe`: a tile that
     /// dies in one of them burnt out, and falls in as ash.
     burning: HashSet<(i32, i32)>,
@@ -1245,12 +1248,24 @@ impl Fx {
                     // A shot landing on a hull: a shower of hot sparks, a
                     // couple of dark flecks of armour and a wisp of smoke.
                     // Tiles are `tile_chip`'s.
-                    Event::Hit { target: target @ (HitTarget::Player { .. } | HitTarget::Enemy { .. }), x, y, .. } => {
+                    Event::Hit { target: target @ (HitTarget::Player { .. } | HitTarget::Enemy { .. }), x, y, cause, .. } => {
                         let at = Position::new(x, y);
-                        match target {
-                            HitTarget::Player { player } => self.flash(Flashed::Tank(player as usize)),
-                            HitTarget::Enemy { slot } => self.flash(Flashed::Tank(slot)),
-                            _ => {}
+                        let slot = match target {
+                            HitTarget::Player { player } => player as usize,
+                            HitTarget::Enemy { slot } => slot,
+                            _ => unreachable!("matched a tank"),
+                        };
+                        // A minigun stream lights the hull on its first
+                        // round and every few after, not 45 times a second.
+                        let lit = if cause == HitCause::Bullet {
+                            let n = self.bullet_hits.entry(slot).or_insert(0);
+                            *n += 1;
+                            (*n - 1) % tuning().bullet_hit_flash_every.max(1) == 0
+                        } else {
+                            true
+                        };
+                        if lit {
+                            self.flash(Flashed::Tank(slot));
                         }
                         self.burst(at, ParticleKind::Spark, self.count(tuning().shot_hit_sparks), 190.0, &[WHITE_T, FIRE_T, EMBER_T]);
                         self.burst(at, ParticleKind::Chip, self.count(2), 90.0, &[STONE_DK, STONE_MD]);

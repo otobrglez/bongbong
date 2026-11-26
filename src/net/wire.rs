@@ -91,6 +91,19 @@ pub fn dequantise_velocity(q: i8) -> f32 {
 
 /// Degrees (any range, 0 = up, clockwise positive like `Tank::rotation`)
 /// to one of `HEADING_STEPS` steps around the turn, rounded to the
+/// Quarter degrees in an `i8`: the minigun turret's swing off the hull
+/// (`Tank::minigun_track`), which never passes the tracking cone - ±31.75°
+/// reaches every cone the knob table allows a seat at its default.
+pub const TRACK_STEPS_PER_DEGREE: f32 = 4.0;
+
+pub fn quantise_track(degrees: f32) -> i8 {
+    (degrees * TRACK_STEPS_PER_DEGREE).round().clamp(i8::MIN as f32, i8::MAX as f32) as i8
+}
+
+pub fn dequantise_track(q: i8) -> f32 {
+    q as f32 / TRACK_STEPS_PER_DEGREE
+}
+
 /// nearest. A non-finite angle has no step and becomes 0.
 pub fn quantise_heading(degrees: f32) -> u8 {
     if !degrees.is_finite() {
@@ -410,6 +423,11 @@ pub struct IntentMsg {
     /// for none, on every packet while a rod's charge runs - the release's
     /// included. The room puts the seat's reticle there.
     pub reticle: u16,
+    /// The minigun turret's swing off the hull's heading as this client
+    /// tracks it (`Tank::minigun_track`, `quantise_track`), meaningful
+    /// with `owned`: the room takes it as the seat's claim, within the cone
+    /// and the slew (`Game::claim_minigun_track`).
+    pub track: i8,
 }
 
 impl IntentMsg {
@@ -433,7 +451,20 @@ impl IntentMsg {
             view_tick: 0,
             view_frac: 0,
             reticle: 0,
+            track: 0,
         }
+    }
+
+    /// The same packet carrying the minigun turret's swing this client
+    /// tracks for its own hull (`track`'s encoding).
+    pub fn with_track(mut self, degrees: f32) -> IntentMsg {
+        self.track = quantise_track(degrees);
+        self
+    }
+
+    /// The turret swing an owned packet claims, degrees.
+    pub fn track(&self) -> Option<f32> {
+        self.owned.then(|| dequantise_track(self.track))
     }
 
     /// The same packet saying where the client's rod reticle stands
@@ -533,6 +564,9 @@ pub mod tank_flags {
     pub const FLAME: u8 = 1 << 5;
     /// A heat shield is on (docs/volcano.md).
     pub const HEAT_SHIELD: u8 = 1 << 6;
+    /// The minigun's turret is locked on `TankState::target`
+    /// (`Tank::minigun_locked`): what draws the lock bracket.
+    pub const LOCKED: u8 = 1 << 7;
 }
 
 
@@ -590,6 +624,12 @@ pub struct TankState {
     /// Its rod's reticle (`Tank::reticle`, docs/rod-from-god.md): the cell
     /// it stands on as `encode::cell_index` plus one, 0 for none.
     pub reticle: u16,
+    /// The minigun turret's swing off `dir` (`Tank::minigun_track`,
+    /// `quantise_track`): 0 unless it carries the minigun.
+    pub track: i8,
+    /// The slot its minigun turret tracks plus one (`Tank::minigun_target`),
+    /// 0 for none.
+    pub target: u8,
 }
 
 /// One live projectile, keyed by a per-round id the server hands out.

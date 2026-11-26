@@ -600,6 +600,8 @@ mod tests {
             shells: rng.random_range(0..12),
             charge: if rng.random_range(0..4) == 0 { rng.random_range(1..200) } else { 0 },
             reticle: if rng.random_range(0..6) == 0 { rng.random_range(1..600) } else { 0 },
+            track: if rng.random_range(0..4) == 0 { rng.random_range(-120..120) } else { 0 },
+            target: if rng.random_range(0..4) == 0 { rng.random_range(1..12) } else { 0 },
         }
     }
 
@@ -1149,6 +1151,8 @@ mod tests {
                 shells: 10,
                 charge: 0,
                 reticle: 0,
+                track: 0,
+                target: 0,
             })
             .collect();
         let shots = (0..24u16)
@@ -1244,8 +1248,9 @@ mod tests {
         // it (protocol 31); the loose drums' list one, the delta two for
         // them (protocol 37); the towers', the globs', the ooze's and the
         // coats' lists one each, the delta one for all four while none of
-        // them changed (protocol 41).
-        assert!(full <= 508, "full snapshot {full} B");
+        // them changed (protocol 41); every tank two for its minigun
+        // turret's swing and target (protocol 44).
+        assert!(full <= 524, "full snapshot {full} B");
         assert!(moving <= 218, "moving delta {moving} B");
         assert!(busy <= 284, "busy delta {busy} B");
         assert!(idle <= 70, "idle delta {idle} B");
